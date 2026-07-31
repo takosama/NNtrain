@@ -1,0 +1,83 @@
+namespace NNtrain;
+
+/// <summary>
+/// Owns one tensor's incoming graph edges and local reverse-mode operation.
+/// </summary>
+internal sealed class AutogradNode
+{
+    private static readonly Action NoBackward = static () => { };
+
+    private readonly Tensor[] _parents;
+    private readonly long[] _parentDataVersions;
+    private readonly bool _isDetached;
+    private Action _backwardAction = NoBackward;
+    private bool _hasBackwardAction;
+
+    internal AutogradNode(IEnumerable<Tensor>? parents = null)
+        : this(parents, isDetached: false)
+    {
+    }
+
+    private AutogradNode(IEnumerable<Tensor>? parents, bool isDetached)
+    {
+        _parents = parents?.ToArray() ?? [];
+        if (_parents.Any(static parent => parent is null))
+        {
+            throw new ArgumentException(
+                "An autograd node cannot contain a null parent.",
+                nameof(parents));
+        }
+
+        _parentDataVersions = _parents
+            .Select(static parent => parent.DataVersion)
+            .ToArray();
+        _isDetached = isDetached;
+        Parents = Array.AsReadOnly(_parents);
+    }
+
+    internal IReadOnlyList<Tensor> Parents { get; }
+    internal bool IsLeaf => _parents.Length == 0;
+    internal bool IsDetached => _isDetached;
+
+    internal static AutogradNode Detached()
+        => new([], isDetached: true);
+
+    internal Action BackwardAction
+    {
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            if (_isDetached)
+                return;
+
+            if (_hasBackwardAction)
+            {
+                throw new InvalidOperationException(
+                    "The backward action for an autograd node can only be assigned once.");
+            }
+
+            _backwardAction = value;
+            _hasBackwardAction = true;
+        }
+    }
+
+    internal void RunBackward() => _backwardAction();
+
+    internal void ValidateParentVersions()
+    {
+        for (int index = 0; index < _parents.Length; index++)
+        {
+            Tensor parent = _parents[index];
+            if (parent.DataVersion == _parentDataVersions[index])
+                continue;
+
+            string identity = string.IsNullOrEmpty(parent.Name)
+                ? $"with shape [{string.Join(", ", parent.Shape)}]"
+                : $"'{parent.Name}'";
+
+            throw new InvalidOperationException(
+                $"Cannot run Backward because parent tensor {identity} changed after " +
+                "the forward pass. Build a new forward graph before calling Backward again.");
+        }
+    }
+}

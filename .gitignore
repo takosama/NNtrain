@@ -1,0 +1,16 @@
+# Visual Studio and user-specific files
+.vs/
+*.user
+*.suo
+
+# .NET build outputs
+**/bin/
+**/obj/
+TestResults/
+
+# BenchmarkDotNet generated reports and executables
+BenchmarkDotNet.Artifacts/
+
+# OS files
+.DS_Store
+Thumbs.db
