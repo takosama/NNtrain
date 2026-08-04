@@ -29,7 +29,7 @@ public sealed class TrainingIntegrationTests
                 LabelPath = evaluation.LabelPath,
             },
             Epochs = 1,
-            StepsPerEpoch = 2,
+            BatchSize = 2,
             LearningRate = 0.001f,
             Seed = 7,
             Model = new ModelConfiguration
@@ -41,11 +41,41 @@ public sealed class TrainingIntegrationTests
                 InitializationScale = 0.01f,
             },
         };
-        TrainingComponents components =
-            TrainingComposition.Create(configuration);
+        var trainingDataset = new Mnist(
+            configuration.TrainingData.ImagePath,
+            configuration.TrainingData.LabelPath);
+        var evaluationDataset = new Mnist(
+            configuration.EvaluationData.ImagePath,
+            configuration.EvaluationData.LabelPath);
+        var model = new TransformerClassifier(
+            trainingDataset.Rows,
+            trainingDataset.Columns,
+            configuration.Model.Heads,
+            configuration.Model.HiddenSize,
+            configuration.Model.Layers,
+            trainingDataset.ClassCount,
+            new Random(configuration.Model.Seed),
+            configuration.Model.InitializationScale);
+        var optimizer = new AdamW(
+            model.Parameters(),
+            new AdamWOptions
+            {
+                LearningRate = configuration.LearningRate,
+            });
+        var trainer = new Trainer(
+            model,
+            trainingDataset,
+            evaluationDataset,
+            optimizer,
+            new TrainerOptions
+            {
+                Epochs = configuration.Epochs,
+                StepsPerEpoch = 2,
+                RandomSeed = configuration.Seed,
+            });
 
         TrainingEpochResult result =
-            Assert.Single(components.Trainer.Run());
+            Assert.Single(trainer.Run());
 
         Assert.Equal(1, result.Epoch);
         Assert.Equal(2, result.TrainingSteps);
@@ -54,7 +84,7 @@ public sealed class TrainingIntegrationTests
         Assert.InRange(result.Training.Accuracy, 0f, 1f);
         Assert.True(float.IsFinite(result.Evaluation.Loss));
         Assert.InRange(result.Evaluation.Accuracy, 0f, 1f);
-        Assert.Equal(2, components.Optimizer.CaptureState().Step);
+        Assert.Equal(2, optimizer.CaptureState().Step);
     }
 
     [Fact]
@@ -77,7 +107,7 @@ public sealed class TrainingIntegrationTests
                 "labelPath": "missing/eval-labels.idx1-ubyte"
               },
               "epochs": 1,
-              "stepsPerEpoch": 2,
+              "batchSize": 2,
               "model": {
                 "layers": 1
               }
@@ -103,6 +133,96 @@ public sealed class TrainingIntegrationTests
                 "train-images.idx3-ubyte"),
             error.ToString());
         Assert.Contains("training configuration", error.ToString());
+    }
+
+    [Fact]
+    public void ProgramDisplaysLossForEveryTrainingBatch()
+    {
+        using var directory = new TemporaryDirectory();
+        DatasetFiles training = WriteDataset(
+            directory.Root,
+            "train",
+            [0, 1, 2]);
+        DatasetFiles evaluation = WriteDataset(directory.Root, "eval", [0]);
+        string configurationPath = Path.Combine(directory.Root, "training.json");
+        File.WriteAllText(
+            configurationPath,
+            $$"""
+            {
+              "trainingData": {
+                "imagePath": "{{training.ImagePath.Replace("\\", "\\\\")}}",
+                "labelPath": "{{training.LabelPath.Replace("\\", "\\\\")}}"
+              },
+              "evaluationData": {
+                "imagePath": "{{evaluation.ImagePath.Replace("\\", "\\\\")}}",
+                "labelPath": "{{evaluation.LabelPath.Replace("\\", "\\\\")}}"
+              },
+              "epochs": 1,
+              "batchSize": 2,
+              "model": { "heads": 1, "hiddenSize": 2, "layers": 1 }
+            }
+            """);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        int exitCode = Program.Run(
+            ["--config", configurationPath],
+            output,
+            error);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        Assert.Contains(
+            $"workers = {Environment.ProcessorCount}",
+            output.ToString());
+        Assert.Contains("epoch 1, batch 1/2, loss = ", output.ToString());
+        Assert.Contains("epoch 1, batch 2/2, loss = ", output.ToString());
+        Assert.Contains("epoch 1, train loss = ", output.ToString());
+        Assert.Contains("epoch 1, eval 100%", output.ToString());
+    }
+
+    [Fact]
+    public void ProgramTrainsAndEvaluatesCifar100WithoutReplacingMnist()
+    {
+        using var directory = new TemporaryDirectory();
+        string trainingPath = WriteCifar100Dataset(
+            directory.Root,
+            "train.bin",
+            [42]);
+        string evaluationPath = WriteCifar100Dataset(
+            directory.Root,
+            "test.bin",
+            [42]);
+        string configurationPath = Path.Combine(directory.Root, "cifar.json");
+        File.WriteAllText(
+            configurationPath,
+            $$"""
+            {
+              "trainingData": {
+                "type": "cifar100",
+                "dataPath": "{{trainingPath.Replace("\\", "\\\\")}}"
+              },
+              "evaluationData": {
+                "type": "cifar100",
+                "dataPath": "{{evaluationPath.Replace("\\", "\\\\")}}"
+              },
+              "epochs": 1,
+              "batchSize": 1,
+              "model": { "heads": 1, "hiddenSize": 2, "layers": 1 }
+            }
+            """);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        int exitCode = Program.Run(
+            ["--config", configurationPath],
+            output,
+            error);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        Assert.Contains("epoch 1, batch 1/1, loss = ", output.ToString());
+        Assert.Contains("epoch 1, eval 100%", output.ToString());
     }
 
     private static DatasetFiles WriteDataset(
@@ -137,6 +257,27 @@ public sealed class TrainingIntegrationTests
         BinaryPrimitives.WriteInt32BigEndian(
             destination.AsSpan(offset, sizeof(int)),
             value);
+    }
+
+    private static string WriteCifar100Dataset(
+        string root,
+        string fileName,
+        byte[] fineLabels)
+    {
+        const int recordSize = 3074;
+        var data = new byte[fineLabels.Length * recordSize];
+
+        for (int index = 0; index < fineLabels.Length; index++)
+        {
+            int recordOffset = index * recordSize;
+            data[recordOffset] = 0;
+            data[recordOffset + 1] = fineLabels[index];
+            data[recordOffset + 2] = (byte)(64 + index);
+        }
+
+        string path = Path.Combine(root, fileName);
+        File.WriteAllBytes(path, data);
+        return path;
     }
 
     private readonly record struct DatasetFiles(

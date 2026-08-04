@@ -1,7 +1,17 @@
+using System.Runtime.Intrinsics;
+
 namespace NNtrain;
 
 partial class Tensor
 {
+    private enum BinaryOperation
+    {
+        Add,
+        Subtract,
+        Multiply,
+        Divide,
+    }
+
     private delegate float BinaryForward(float left, float right);
 
     private delegate (float Left, float Right) BinaryDerivative(
@@ -11,6 +21,7 @@ partial class Tensor
     private static Tensor ApplyBinaryElementwise(
         Tensor left,
         Tensor right,
+        BinaryOperation operation,
         BinaryForward forward,
         BinaryDerivative derivative)
     {
@@ -22,11 +33,19 @@ partial class Tensor
         BinaryBroadcastPlan plan = BinaryBroadcastPlan.Create(left, right);
         float[] resultData = new float[plan.ElementCount];
 
-        for (int index = 0; index < plan.ElementCount; index++)
+        if (!TryApplyBinaryForwardSimd(
+            left,
+            right,
+            plan,
+            operation,
+            resultData))
         {
-            resultData[index] = forward(
-                plan.LeftValue(left, index),
-                plan.RightValue(right, index));
+            for (int index = 0; index < plan.ElementCount; index++)
+            {
+                resultData[index] = forward(
+                    plan.LeftValue(left, index),
+                    plan.RightValue(right, index));
+            }
         }
 
         var result = new Tensor(
@@ -35,7 +54,13 @@ partial class Tensor
             [left, right]);
 
         result.Node.BackwardAction = () =>
-            AccumulateBinaryGradients(left, right, result, plan, derivative);
+            AccumulateBinaryGradients(
+                left,
+                right,
+                result,
+                plan,
+                operation,
+                derivative);
 
         return result;
     }
@@ -45,8 +70,19 @@ partial class Tensor
         Tensor right,
         Tensor result,
         BinaryBroadcastPlan plan,
+        BinaryOperation operation,
         BinaryDerivative derivative)
     {
+        if (TryAccumulateBinaryGradientsSimd(
+            left,
+            right,
+            result,
+            plan,
+            operation))
+        {
+            return;
+        }
+
         float reducedLeftGradient = 0f;
         float reducedRightGradient = 0f;
 
@@ -75,6 +111,262 @@ partial class Tensor
             left._grad[0] += reducedLeftGradient;
         if (plan.RightIsScalar)
             right._grad[0] += reducedRightGradient;
+    }
+
+    private static bool TryApplyBinaryForwardSimd(
+        Tensor left,
+        Tensor right,
+        BinaryBroadcastPlan plan,
+        BinaryOperation operation,
+        float[] destination)
+    {
+        if (!CanUseSimd(plan.ElementCount))
+            return false;
+
+        int vectorWidth = Vector256<float>.Count;
+        int vectorizedLength =
+            plan.ElementCount - plan.ElementCount % vectorWidth;
+        int index = 0;
+        var leftScalar = plan.LeftIsScalar
+            ? Vector256.Create(left._data[0])
+            : default;
+        var rightScalar = plan.RightIsScalar
+            ? Vector256.Create(right._data[0])
+            : default;
+
+        for (; index < vectorizedLength; index += vectorWidth)
+        {
+            var leftVector = plan.LeftIsScalar
+                ? leftScalar
+                : LoadVector256(left._data, index);
+            var rightVector = plan.RightIsScalar
+                ? rightScalar
+                : LoadVector256(right._data, index);
+
+            Vector256<float> resultVector = operation switch
+            {
+                BinaryOperation.Add => leftVector + rightVector,
+                BinaryOperation.Subtract => leftVector - rightVector,
+                BinaryOperation.Multiply => leftVector * rightVector,
+                BinaryOperation.Divide => leftVector / rightVector,
+                _ => throw new InvalidOperationException(
+                    $"Unknown binary operation '{operation}'."),
+            };
+            StoreVector256(resultVector, destination, index);
+        }
+
+        for (; index < plan.ElementCount; index++)
+        {
+            float leftValue = plan.LeftValue(left, index);
+            float rightValue = plan.RightValue(right, index);
+            destination[index] = operation switch
+            {
+                BinaryOperation.Add => leftValue + rightValue,
+                BinaryOperation.Subtract => leftValue - rightValue,
+                BinaryOperation.Multiply => leftValue * rightValue,
+                BinaryOperation.Divide => leftValue / rightValue,
+                _ => throw new InvalidOperationException(
+                    $"Unknown binary operation '{operation}'."),
+            };
+        }
+
+        return true;
+    }
+
+    private static bool TryAccumulateBinaryGradientsSimd(
+        Tensor left,
+        Tensor right,
+        Tensor result,
+        BinaryBroadcastPlan plan,
+        BinaryOperation operation)
+    {
+        if (!CanUseSimd(plan.ElementCount))
+            return false;
+
+        if (!plan.LeftIsScalar && !plan.RightIsScalar)
+        {
+            switch (operation)
+            {
+                case BinaryOperation.Add:
+                    AddScaledValues(
+                        left._grad, 0, result._grad, 0, 1f, plan.ElementCount);
+                    AddScaledValues(
+                        right._grad, 0, result._grad, 0, 1f, plan.ElementCount);
+                    return true;
+                case BinaryOperation.Subtract:
+                    AddScaledValues(
+                        left._grad, 0, result._grad, 0, 1f, plan.ElementCount);
+                    AddScaledValues(
+                        right._grad, 0, result._grad, 0, -1f, plan.ElementCount);
+                    return true;
+                case BinaryOperation.Multiply:
+                    AddProductValues(
+                        left._grad,
+                        0,
+                        right._data,
+                        0,
+                        result._grad,
+                        0,
+                        1f,
+                        plan.ElementCount);
+                    AddProductValues(
+                        right._grad,
+                        0,
+                        left._data,
+                        0,
+                        result._grad,
+                        0,
+                        1f,
+                        plan.ElementCount);
+                    return true;
+                case BinaryOperation.Divide:
+                    AccumulateDivisionGradientsSimd(left, right, result);
+                    return true;
+            }
+        }
+
+        if (plan.RightIsScalar && !plan.LeftIsScalar)
+        {
+            float scalar = right._data[0];
+            switch (operation)
+            {
+                case BinaryOperation.Add:
+                    AddScaledValues(
+                        left._grad, 0, result._grad, 0, 1f, plan.ElementCount);
+                    right._grad[0] += SumValues(
+                        result._grad, 0, plan.ElementCount);
+                    return true;
+                case BinaryOperation.Subtract:
+                    AddScaledValues(
+                        left._grad, 0, result._grad, 0, 1f, plan.ElementCount);
+                    right._grad[0] -= SumValues(
+                        result._grad, 0, plan.ElementCount);
+                    return true;
+                case BinaryOperation.Multiply:
+                    AddScaledValues(
+                        left._grad,
+                        0,
+                        result._grad,
+                        0,
+                        scalar,
+                        plan.ElementCount);
+                    right._grad[0] += DotProduct(
+                        left._data,
+                        0,
+                        result._grad,
+                        0,
+                        plan.ElementCount);
+                    return true;
+                case BinaryOperation.Divide:
+                    AddScaledValues(
+                        left._grad,
+                        0,
+                        result._grad,
+                        0,
+                        1f / scalar,
+                        plan.ElementCount);
+                    right._grad[0] -= DotProduct(
+                            left._data,
+                            0,
+                            result._grad,
+                            0,
+                            plan.ElementCount)
+                        / (scalar * scalar);
+                    return true;
+            }
+        }
+
+        if (plan.LeftIsScalar && !plan.RightIsScalar)
+        {
+            float scalar = left._data[0];
+            switch (operation)
+            {
+                case BinaryOperation.Add:
+                    left._grad[0] += SumValues(
+                        result._grad, 0, plan.ElementCount);
+                    AddScaledValues(
+                        right._grad, 0, result._grad, 0, 1f, plan.ElementCount);
+                    return true;
+                case BinaryOperation.Subtract:
+                    left._grad[0] += SumValues(
+                        result._grad, 0, plan.ElementCount);
+                    AddScaledValues(
+                        right._grad, 0, result._grad, 0, -1f, plan.ElementCount);
+                    return true;
+                case BinaryOperation.Multiply:
+                    left._grad[0] += DotProduct(
+                        right._data,
+                        0,
+                        result._grad,
+                        0,
+                        plan.ElementCount);
+                    AddScaledValues(
+                        right._grad,
+                        0,
+                        result._grad,
+                        0,
+                        scalar,
+                        plan.ElementCount);
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void AccumulateDivisionGradientsSimd(
+        Tensor left,
+        Tensor right,
+        Tensor result)
+    {
+        int length = result.Numel;
+        int vectorWidth = Vector256<float>.Count;
+        int vectorizedLength = length - length % vectorWidth;
+        int index = 0;
+        Vector256<float> minusOne = Vector256.Create(-1f);
+
+        for (; index < vectorizedLength; index += vectorWidth)
+        {
+            Vector256<float> leftValue = LoadVector256(
+                left._data,
+                index);
+            Vector256<float> rightValue = LoadVector256(
+                right._data,
+                index);
+            Vector256<float> gradient = LoadVector256(
+                result._grad,
+                index);
+            Vector256<float> leftGradient = LoadVector256(
+                left._grad,
+                index);
+            Vector256<float> rightGradient = LoadVector256(
+                right._grad,
+                index);
+
+            StoreVector256(
+                leftGradient + gradient / rightValue,
+                left._grad,
+                index);
+            StoreVector256(
+                rightGradient
+                    + minusOne
+                        * leftValue
+                        * gradient
+                        / (rightValue * rightValue),
+                        right._grad,
+                        index);
+        }
+
+        for (; index < length; index++)
+        {
+            float rightValue = right._data[index];
+            float gradient = result._grad[index];
+            left._grad[index] += gradient / rightValue;
+            right._grad[index] +=
+                -left._data[index]
+                * gradient
+                / (rightValue * rightValue);
+        }
     }
 
     private readonly struct BinaryBroadcastPlan

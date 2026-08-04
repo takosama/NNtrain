@@ -3,7 +3,7 @@ namespace NNtrain;
 /// <summary>
 /// Controls whether forward operations record automatic-differentiation history.
 /// </summary>
-internal static class AutogradContext
+public static class AutogradContext
 {
     private static readonly AsyncLocal<int> NoGradDepth = new();
 
@@ -12,7 +12,7 @@ internal static class AutogradContext
     /// <summary>
     /// Disables graph recording until the returned scope is disposed.
     /// </summary>
-    internal static IDisposable NoGrad()
+    public static IDisposable NoGrad()
     {
         NoGradDepth.Value++;
         return new NoGradScope();

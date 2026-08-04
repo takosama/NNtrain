@@ -25,6 +25,26 @@ public sealed class NoGradTests
     }
 
     [Fact]
+    public void NoGradAllocatesGradientStorageOnlyWhenItIsNeeded()
+    {
+        var input = Tensor.From1D([2f, 3f]);
+        Tensor detached;
+
+        using (AutogradContext.NoGrad())
+            detached = input * input;
+
+        Assert.False(detached.HasGradientBuffer);
+        AssertClose([0f, 0f], detached.Grad);
+        Assert.False(detached.HasGradientBuffer);
+
+        Tensor tracked = detached * Tensor.Scalar(2f);
+        tracked.Sum().Backward();
+
+        Assert.True(detached.HasGradientBuffer);
+        AssertClose([2f, 2f], detached.Grad);
+    }
+
+    [Fact]
     public void RecordingResumesWhenScopeIsDisposed()
     {
         var input = Tensor.Scalar(3f);

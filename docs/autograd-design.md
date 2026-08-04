@@ -153,6 +153,9 @@ its returned scope is disposed:
    disposed, including exception paths.
 8. Scope depth is stored in `AsyncLocal`, so the state follows the logical async
    execution context without becoming a process-wide global switch.
+9. Detached operation results allocate gradient storage lazily. If a detached
+   result is later used by a recorded operation, its leaf gradient buffer is
+   created before that graph is built.
 
 Callers must dispose the scope, normally with `using`. Concurrent forward work
 can use independent execution contexts. Concurrent mutation or `Backward` on

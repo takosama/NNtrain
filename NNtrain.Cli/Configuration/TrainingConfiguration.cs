@@ -20,9 +20,11 @@ sealed record TrainingConfiguration
 
     public int Epochs { get; init; } = 200;
 
-    public int StepsPerEpoch { get; init; } = 256;
+    public int BatchSize { get; init; } = 32;
 
     public float LearningRate { get; init; } = 1e-4f;
+
+    public bool UseSimd { get; init; } = true;
 
     public int Seed { get; init; } = 1234;
 
@@ -82,12 +84,12 @@ sealed record TrainingConfiguration
                 "Epoch count must be positive.");
         }
 
-        if (StepsPerEpoch <= 0)
+        if (BatchSize <= 0)
         {
             throw new ArgumentOutOfRangeException(
-                nameof(StepsPerEpoch),
-                StepsPerEpoch,
-                "Steps per epoch must be positive.");
+                nameof(BatchSize),
+                BatchSize,
+                "Batch size must be positive.");
         }
 
         if (!float.IsFinite(LearningRate) || LearningRate <= 0f)
@@ -111,35 +113,87 @@ sealed record TrainingConfiguration
 
 sealed record DatasetConfiguration
 {
+    internal const string MnistType = "mnist";
+    internal const string Cifar100Type = "cifar100";
+
+    public string Type { get; init; } = MnistType;
+
     public string ImagePath { get; init; } = string.Empty;
 
     public string LabelPath { get; init; } = string.Empty;
 
+    public string DataPath { get; init; } = string.Empty;
+
     internal void Validate(string role)
     {
-        if (string.IsNullOrWhiteSpace(ImagePath))
+        if (string.IsNullOrWhiteSpace(Type))
         {
             throw new ArgumentException(
-                $"{role} image path cannot be null, empty, or whitespace.",
-                nameof(ImagePath));
+                $"{role} dataset type cannot be null, empty, or whitespace.",
+                nameof(Type));
         }
 
-        if (string.IsNullOrWhiteSpace(LabelPath))
+        if (IsType(MnistType))
         {
-            throw new ArgumentException(
-                $"{role} label path cannot be null, empty, or whitespace.",
-                nameof(LabelPath));
+            if (string.IsNullOrWhiteSpace(ImagePath))
+            {
+                throw new ArgumentException(
+                    $"{role} image path cannot be null, empty, or " +
+                    "whitespace.",
+                    nameof(ImagePath));
+            }
+
+            if (string.IsNullOrWhiteSpace(LabelPath))
+            {
+                throw new ArgumentException(
+                    $"{role} label path cannot be null, empty, or " +
+                    "whitespace.",
+                    nameof(LabelPath));
+            }
+
+            return;
         }
+
+        if (IsType(Cifar100Type))
+        {
+            if (string.IsNullOrWhiteSpace(DataPath))
+            {
+                throw new ArgumentException(
+                    $"{role} CIFAR-100 data path cannot be null, empty, " +
+                    "or whitespace.",
+                    nameof(DataPath));
+            }
+
+            return;
+        }
+
+        throw new ArgumentException(
+            $"Unsupported {role.ToLowerInvariant()} dataset type '{Type}'. " +
+            $"Supported types are '{MnistType}' and '{Cifar100Type}'.",
+            nameof(Type));
     }
 
     internal DatasetConfiguration ResolvePaths(string configurationDirectory)
     {
+        if (IsType(Cifar100Type))
+        {
+            return this with
+            {
+                DataPath = Path.GetFullPath(
+                    DataPath,
+                    configurationDirectory),
+            };
+        }
+
         return this with
         {
             ImagePath = Path.GetFullPath(ImagePath, configurationDirectory),
             LabelPath = Path.GetFullPath(LabelPath, configurationDirectory),
         };
     }
+
+    internal bool IsType(string expectedType)
+        => string.Equals(Type, expectedType, StringComparison.OrdinalIgnoreCase);
 }
 
 sealed record ModelConfiguration
@@ -187,6 +241,17 @@ sealed record ModelConfiguration
                 nameof(InitializationScale),
                 InitializationScale,
                 "Initialization scale must be finite and positive.");
+        }
+    }
+
+    internal void ValidateForModelWidth(int modelWidth)
+    {
+        if (modelWidth % Heads != 0)
+        {
+            throw new ArgumentException(
+                $"Attention head count '{Heads}' must evenly divide model " +
+                $"width '{modelWidth}'.",
+                nameof(Heads));
         }
     }
 }

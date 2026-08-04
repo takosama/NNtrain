@@ -151,6 +151,39 @@ public sealed class AdamWStateTests
         Assert.Contains("incompatible shape", exception.Message);
     }
 
+    [Fact]
+    public void RestoreRejectsOptionsThatCouldCorruptParameters()
+    {
+        var optimizer = new AdamW(
+            [CreateParameter([1f], [1], "weight")]);
+        AdamWState state = optimizer.CaptureState() with
+        {
+            Options = new AdamWOptions { Beta1 = 1f },
+        };
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            () => optimizer.RestoreState(state));
+
+        Assert.Equal("state", exception.ParamName);
+    }
+
+    [Fact]
+    public void RestoreRejectsAStateThatCannotAdvanceAnotherStep()
+    {
+        var optimizer = new AdamW(
+            [CreateParameter([1f], [1], "weight")]);
+        AdamWState state = optimizer.CaptureState() with
+        {
+            Step = int.MaxValue,
+        };
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => optimizer.RestoreState(state));
+
+        Assert.Equal("state", exception.ParamName);
+        Assert.Contains("another optimizer step", exception.Message);
+    }
+
     private static Parameter CreateParameter(
         float[] data,
         int[] shape,

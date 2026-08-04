@@ -109,6 +109,103 @@ public sealed class TensorCharacterizationTests
     }
 
     [Fact]
+    public void MatMulTransposedRightMatchesExplicitTransposeAndGradients()
+    {
+        var optimizedLeft = Tensor.From2D(new float[,]
+        {
+            { 1f, 2f, 3f },
+            { 4f, 5f, 6f },
+        });
+        var optimizedRight = Tensor.From2D(new float[,]
+        {
+            { 7f, 8f, 9f },
+            { 10f, 11f, 12f },
+        });
+        var referenceLeft = Tensor.From2D(new float[,]
+        {
+            { 1f, 2f, 3f },
+            { 4f, 5f, 6f },
+        });
+        var referenceRight = Tensor.From2D(new float[,]
+        {
+            { 7f, 8f, 9f },
+            { 10f, 11f, 12f },
+        });
+
+        Tensor optimized =
+            optimizedLeft.MatMulTransposedRight(optimizedRight);
+        Tensor reference =
+            referenceLeft.MatMul(referenceRight.Transpose());
+        optimized.Sum().Backward();
+        reference.Sum().Backward();
+
+        AssertClose(reference.Data, optimized.Data);
+        AssertClose(referenceLeft.Grad, optimizedLeft.Grad);
+        AssertClose(referenceRight.Grad, optimizedRight.Grad);
+    }
+
+    [Fact]
+    public void FusedTransposedMatMulAndBiasMatchesSeparateOperations()
+    {
+        var optimizedInput = Tensor.From2D(new float[,]
+        {
+            { 1f, 2f },
+            { 3f, 4f },
+        });
+        var optimizedWeight = Tensor.From2D(new float[,]
+        {
+            { 5f, 6f },
+            { 7f, 8f },
+            { 9f, 10f },
+        });
+        Tensor optimizedBias = Tensor.From1D([0.5f, 1f, 1.5f]);
+        var referenceInput = Tensor.From2D(new float[,]
+        {
+            { 1f, 2f },
+            { 3f, 4f },
+        });
+        var referenceWeight = Tensor.From2D(new float[,]
+        {
+            { 5f, 6f },
+            { 7f, 8f },
+            { 9f, 10f },
+        });
+        Tensor referenceBias = Tensor.From1D([0.5f, 1f, 1.5f]);
+
+        Tensor optimized = optimizedInput.MatMulTransposedRightAddRow(
+            optimizedWeight,
+            optimizedBias);
+        Tensor reference = referenceInput
+            .MatMul(referenceWeight.Transpose())
+            .AddRowWise(referenceBias);
+        optimized.Sum().Backward();
+        reference.Sum().Backward();
+
+        AssertClose(reference.Data, optimized.Data);
+        AssertClose(referenceInput.Grad, optimizedInput.Grad);
+        AssertClose(referenceWeight.Grad, optimizedWeight.Grad);
+        AssertClose(referenceBias.Grad, optimizedBias.Grad);
+    }
+
+    [Fact]
+    public void ReshapeSharesStorageWithoutChangingGradientSemantics()
+    {
+        var parameter = new Parameter(
+            [1f, 2f, 3f, 4f],
+            [4],
+            "value",
+            WeightDecayPolicy.Exclude);
+        Tensor reshaped = parameter.T.Reshape(2, 2);
+
+        using (Tensor.DataMutation mutation = parameter.BeginUpdate())
+            mutation.Values[2] = 9f;
+
+        Assert.Equal(9f, reshaped.Data[2]);
+        Assert.Throws<InvalidOperationException>(
+            () => reshaped.Sum().Backward());
+    }
+
+    [Fact]
     public void ActivationsAndRowWiseAdditionHaveExpectedBehavior()
     {
         var x = new Tensor([-2f, 0f, 3f, -1f], [2, 2]);
@@ -137,6 +234,16 @@ public sealed class TensorCharacterizationTests
             AssertClose(softmax.Data[i], MathF.Exp(logSoftmax.Data[i]));
         Assert.All(softmax.Data, value => Assert.True(float.IsFinite(value)));
         Assert.All(logSoftmax.Data, value => Assert.True(float.IsFinite(value)));
+    }
+
+    [Fact]
+    public void LogSoftmaxPreservesProbabilitiesWhenLargeLogitsAreEqual()
+    {
+        Tensor result = Tensor.From1D([1e20f, 1e20f])
+            .LogSoftmaxLastDim();
+
+        float expected = -MathF.Log(2f);
+        AssertClose([expected, expected], result.Data, 1e-6f);
     }
 
     [Fact]

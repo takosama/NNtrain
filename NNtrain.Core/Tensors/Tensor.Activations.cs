@@ -5,15 +5,65 @@ partial class Tensor
     public Tensor Relu()
     {
         float[] y = new float[Numel];
-        for (int i = 0; i < Numel; i++)
+        int i = 0;
+        if (CanUseSimd(Numel))
+        {
+            int vectorWidth = Vector256<float>.Count;
+            int vectorizedLength = Numel - Numel % vectorWidth;
+            Vector256<float> zero = Vector256<float>.Zero;
+
+            for (; i < vectorizedLength; i += vectorWidth)
+            {
+                Vector256<float> value = LoadVector256(_data, i);
+                StoreVector256(
+                    Vector256.ConditionalSelect(
+                        Vector256.GreaterThan(value, zero),
+                        value,
+                        zero),
+                    y,
+                    i);
+            }
+        }
+
+        for (; i < Numel; i++)
             y[i] = _data[i] > 0f ? _data[i] : 0f;
 
         var t = new Tensor(y, _shape, new[] { this });
 
         t.Node.BackwardAction = () =>
         {
-            for (int i = 0; i < Numel; i++)
-                _grad[i] += (_data[i] > 0f ? 1f : 0f) * t._grad[i];
+            int index = 0;
+            if (CanUseSimd(Numel))
+            {
+                int vectorWidth = Vector256<float>.Count;
+                int vectorizedLength = Numel - Numel % vectorWidth;
+                Vector256<float> zero = Vector256<float>.Zero;
+
+                for (; index < vectorizedLength; index += vectorWidth)
+                {
+                    Vector256<float> value = LoadVector256(
+                        _data,
+                        index);
+                    Vector256<float> gradient = LoadVector256(
+                        t._grad,
+                        index);
+                    Vector256<float> contribution =
+                        Vector256.ConditionalSelect(
+                            Vector256.GreaterThan(value, zero),
+                            gradient,
+                            zero);
+                    StoreVector256(
+                        LoadVector256(_grad, index) + contribution,
+                        _grad,
+                        index);
+                }
+            }
+
+            for (; index < Numel; index++)
+            {
+                _grad[index] +=
+                    (_data[index] > 0f ? 1f : 0f) * t._grad[index];
+            }
         };
 
         return t;
@@ -32,8 +82,29 @@ partial class Tensor
 
         float[] y = new float[Numel];
         for (int r = 0; r < rows; r++)
-            for (int c = 0; c < cols; c++)
-                y[r * cols + c] = _data[r * cols + c] + rowVec._data[c];
+        {
+            int rowOffset = r * cols;
+            int c = 0;
+            if (CanUseSimd(cols))
+            {
+                int vectorWidth = Vector256<float>.Count;
+                int vectorizedLength = cols - cols % vectorWidth;
+                for (; c < vectorizedLength; c += vectorWidth)
+                {
+                    StoreVector256(
+                        LoadVector256(_data, rowOffset + c)
+                            + LoadVector256(rowVec._data, c),
+                        y,
+                        rowOffset + c);
+                }
+            }
+
+            for (; c < cols; c++)
+            {
+                y[rowOffset + c] =
+                    _data[rowOffset + c] + rowVec._data[c];
+            }
+        }
 
         var t = new Tensor(y, _shape, new[] { this, rowVec });
 
@@ -41,12 +112,21 @@ partial class Tensor
         {
             for (int r = 0; r < rows; r++)
             {
-                for (int c = 0; c < cols; c++)
-                {
-                    float g = t._grad[r * cols + c];
-                    _grad[r * cols + c] += g;
-                    rowVec._grad[c] += g;
-                }
+                int rowOffset = r * cols;
+                AddScaledValues(
+                    _grad,
+                    rowOffset,
+                    t._grad,
+                    rowOffset,
+                    1f,
+                    cols);
+                AddScaledValues(
+                    rowVec._grad,
+                    0,
+                    t._grad,
+                    rowOffset,
+                    1f,
+                    cols);
             }
         };
 
@@ -70,28 +150,31 @@ partial class Tensor
                 sum += y[i];
             }
 
-            for (int i = 0; i < n; i++)
-                y[i] /= sum;
+            MultiplyValues(y, 0, 1f / sum, y, 0, n);
 
             var t = new Tensor(y, _shape, new[] { this });
 
             t.Node.BackwardAction = () =>
             {
-                float dot = 0f;
-                for (int i = 0; i < n; i++)
-                    dot += t._grad[i] * t._data[i];
-
-                for (int i = 0; i < n; i++)
-                    _grad[i] += t._data[i] * (t._grad[i] - dot);
+                float dot = DotProduct(t._grad, 0, t._data, 0, n);
+                AccumulateSoftmaxGradient(
+                    _grad,
+                    0,
+                    t._data,
+                    0,
+                    t._grad,
+                    0,
+                    n,
+                    dot);
             };
 
             return t;
         }
 
-        if (Rank == 2)
+        if (Rank >= 2)
         {
-            int rows = _shape[0];
-            int cols = _shape[1];
+            int cols = _shape[^1];
+            int rows = Numel / cols;
             float[] y = new float[Numel];
 
             for (int r = 0; r < rows; r++)
@@ -111,29 +194,47 @@ partial class Tensor
                     sum += e;
                 }
 
-                for (int c = 0; c < cols; c++)
-                    y[r * cols + c] /= sum;
+                MultiplyValues(
+                    y,
+                    r * cols,
+                    1f / sum,
+                    y,
+                    r * cols,
+                    cols);
             }
 
             var t = new Tensor(y, _shape, new[] { this });
 
             t.Node.BackwardAction = () =>
             {
-                for (int r = 0; r < rows; r++)
+                void BackwardRow(int r)
                 {
-                    float dot = 0f;
-                    for (int c = 0; c < cols; c++)
-                        dot += t._grad[r * cols + c] * t._data[r * cols + c];
-
-                    for (int c = 0; c < cols; c++)
-                        _grad[r * cols + c] += t._data[r * cols + c] * (t._grad[r * cols + c] - dot);
+                    int rowOffset = r * cols;
+                    float dot = DotProduct(
+                        t._grad,
+                        rowOffset,
+                        t._data,
+                        rowOffset,
+                        cols);
+                    AccumulateSoftmaxGradient(
+                        _grad,
+                        rowOffset,
+                        t._data,
+                        rowOffset,
+                        t._grad,
+                        rowOffset,
+                        cols,
+                        dot);
                 }
+
+                RunBatches(rows, cols, BackwardRow);
             };
 
             return t;
         }
 
-        throw new NotSupportedException("SoftmaxLastDim supports rank1/rank2 only");
+        throw new NotSupportedException(
+            "SoftmaxLastDim requires a tensor with at least one dimension.");
     }
 
     public Tensor LogSoftmaxLastDim()
@@ -150,14 +251,14 @@ partial class Tensor
             for (int i = 0; i < n; i++)
                 sumExp += MathF.Exp(_data[i] - max);
 
-            float logSumExp = MathF.Log(sumExp) + max;
+            float logSumExpOfShiftedValues = MathF.Log(sumExp);
 
             float[] y = new float[n];
             float[] softmax = new float[n];
 
             for (int i = 0; i < n; i++)
             {
-                y[i] = _data[i] - logSumExp;
+                y[i] = (_data[i] - max) - logSumExpOfShiftedValues;
                 softmax[i] = MathF.Exp(y[i]);
             }
 
@@ -165,21 +266,25 @@ partial class Tensor
 
             t.Node.BackwardAction = () =>
             {
-                float gradSum = 0f;
-                for (int i = 0; i < n; i++)
-                    gradSum += t._grad[i];
-
-                for (int i = 0; i < n; i++)
-                    _grad[i] += t._grad[i] - softmax[i] * gradSum;
+                float gradSum = SumValues(t._grad, 0, n);
+                AccumulateLogSoftmaxGradient(
+                    _grad,
+                    0,
+                    softmax,
+                    0,
+                    t._grad,
+                    0,
+                    n,
+                    gradSum);
             };
 
             return t;
         }
 
-        if (Rank == 2)
+        if (Rank >= 2)
         {
-            int rows = _shape[0];
-            int cols = _shape[1];
+            int cols = _shape[^1];
+            int rows = Numel / cols;
 
             float[] y = new float[Numel];
             float[] softmax = new float[Numel];
@@ -197,12 +302,13 @@ partial class Tensor
                 for (int c = 0; c < cols; c++)
                     sumExp += MathF.Exp(_data[r * cols + c] - max);
 
-                float logSumExp = MathF.Log(sumExp) + max;
+                float logSumExpOfShiftedValues = MathF.Log(sumExp);
 
                 for (int c = 0; c < cols; c++)
                 {
                     int idx = r * cols + c;
-                    y[idx] = _data[idx] - logSumExp;
+                    y[idx] =
+                        (_data[idx] - max) - logSumExpOfShiftedValues;
                     softmax[idx] = MathF.Exp(y[idx]);
                 }
             }
@@ -211,24 +317,32 @@ partial class Tensor
 
             t.Node.BackwardAction = () =>
             {
-                for (int r = 0; r < rows; r++)
+                void BackwardRow(int r)
                 {
-                    float gradSum = 0f;
-                    for (int c = 0; c < cols; c++)
-                        gradSum += t._grad[r * cols + c];
-
-                    for (int c = 0; c < cols; c++)
-                    {
-                        int idx = r * cols + c;
-                        _grad[idx] += t._grad[idx] - softmax[idx] * gradSum;
-                    }
+                    int rowOffset = r * cols;
+                    float gradSum = SumValues(
+                        t._grad,
+                        rowOffset,
+                        cols);
+                    AccumulateLogSoftmaxGradient(
+                        _grad,
+                        rowOffset,
+                        softmax,
+                        rowOffset,
+                        t._grad,
+                        rowOffset,
+                        cols,
+                        gradSum);
                 }
+
+                RunBatches(rows, cols, BackwardRow);
             };
 
             return t;
         }
 
-        throw new NotSupportedException("LogSoftmaxLastDim supports rank1/rank2 only");
+        throw new NotSupportedException(
+            "LogSoftmaxLastDim requires a tensor with at least one dimension.");
     }
     public Tensor LayerNormLastDim(Tensor gamma, Tensor beta, float eps = 1e-5f)
     {
@@ -248,60 +362,62 @@ partial class Tensor
                     $"LayerNorm parameters must have shape [{n}], but gamma is {ShapeText(gamma)} " +
                     $"and beta is {ShapeText(beta)}.");
 
-            float mean = 0f;
-            for (int i = 0; i < n; i++) mean += _data[i];
-            mean /= n;
-
-            float var = 0f;
-            for (int i = 0; i < n; i++)
-            {
-                float d = _data[i] - mean;
-                var += d * d;
-            }
-            var /= n;
+            float mean = SumValues(_data, 0, n) / n;
+            float var = SumSquaredDifferences(_data, 0, n, mean) / n;
 
             float inv = 1f / MathF.Sqrt(var + eps);
             float[] xhat = new float[n];
             float[] y = new float[n];
 
-            for (int i = 0; i < n; i++)
-            {
-                xhat[i] = (_data[i] - mean) * inv;
-                y[i] = xhat[i] * gamma._data[i] + beta._data[i];
-            }
+            NormalizeAffineValues(
+                _data,
+                0,
+                gamma._data,
+                beta._data,
+                mean,
+                inv,
+                xhat,
+                0,
+                y,
+                0,
+                n);
 
             var t = new Tensor(y, _shape, new[] { this, gamma, beta });
 
             t.Node.BackwardAction = () =>
             {
-                float sumDxhat = 0f;
-                float sumDxhatXhat = 0f;
-
-                for (int i = 0; i < n; i++)
-                {
-                    float g = t._grad[i];
-                    beta._grad[i] += g;
-                    gamma._grad[i] += g * xhat[i];
-
-                    float dxhat = g * gamma._data[i];
-                    sumDxhat += dxhat;
-                    sumDxhatXhat += dxhat * xhat[i];
-                }
-
-                for (int i = 0; i < n; i++)
-                {
-                    float dxhat = t._grad[i] * gamma._data[i];
-                    _grad[i] += (inv / n) * (n * dxhat - sumDxhat - xhat[i] * sumDxhatXhat);
-                }
+                AccumulateLayerNormParameterGradients(
+                    t._grad,
+                    0,
+                    gamma._data,
+                    xhat,
+                    0,
+                    gamma._grad,
+                    beta._grad,
+                    n,
+                    out float sumDxhat,
+                    out float sumDxhatXhat);
+                AccumulateLayerNormInputGradient(
+                    _grad,
+                    0,
+                    t._grad,
+                    0,
+                    gamma._data,
+                    xhat,
+                    0,
+                    n,
+                    inv,
+                    sumDxhat,
+                    sumDxhatXhat);
             };
 
             return t;
         }
 
-        if (Rank == 2)
+        if (Rank >= 2)
         {
-            int rows = _shape[0];
-            int cols = _shape[1];
+            int cols = _shape[^1];
+            int rows = Numel / cols;
 
             if (gamma._shape[0] != cols || beta._shape[0] != cols)
                 throw new ArgumentException(
@@ -314,87 +430,135 @@ partial class Tensor
 
             for (int r = 0; r < rows; r++)
             {
-                float mean = 0f;
-                for (int c = 0; c < cols; c++)
-                    mean += _data[r * cols + c];
-                mean /= cols;
-
-                float var = 0f;
-                for (int c = 0; c < cols; c++)
-                {
-                    float d = _data[r * cols + c] - mean;
-                    var += d * d;
-                }
-                var /= cols;
+                int rowOffset = r * cols;
+                float mean = SumValues(_data, rowOffset, cols) / cols;
+                float var = SumSquaredDifferences(
+                    _data,
+                    rowOffset,
+                    cols,
+                    mean) / cols;
 
                 float inv = 1f / MathF.Sqrt(var + eps);
                 invs[r] = inv;
 
-                for (int c = 0; c < cols; c++)
-                {
-                    int idx = r * cols + c;
-                    xhat[idx] = (_data[idx] - mean) * inv;
-                    y[idx] = xhat[idx] * gamma._data[c] + beta._data[c];
-                }
+                NormalizeAffineValues(
+                    _data,
+                    rowOffset,
+                    gamma._data,
+                    beta._data,
+                    mean,
+                    inv,
+                    xhat,
+                    rowOffset,
+                    y,
+                    rowOffset,
+                    cols);
             }
 
             var t = new Tensor(y, _shape, new[] { this, gamma, beta });
 
             t.Node.BackwardAction = () =>
             {
-                for (int r = 0; r < rows; r++)
+                void BackwardInputRow(int r)
                 {
-                    float sumDxhat = 0f;
-                    float sumDxhatXhat = 0f;
-
-                    for (int c = 0; c < cols; c++)
-                    {
-                        int idx = r * cols + c;
-                        float g = t._grad[idx];
-                        beta._grad[c] += g;
-                        gamma._grad[c] += g * xhat[idx];
-
-                        float dxhat = g * gamma._data[c];
-                        sumDxhat += dxhat;
-                        sumDxhatXhat += dxhat * xhat[idx];
-                    }
-
-                    for (int c = 0; c < cols; c++)
-                    {
-                        int idx = r * cols + c;
-                        float dxhat = t._grad[idx] * gamma._data[c];
-                        _grad[idx] += (invs[r] / cols) * (cols * dxhat - sumDxhat - xhat[idx] * sumDxhatXhat);
-                    }
+                    int rowOffset = r * cols;
+                    ComputeLayerNormGradientSums(
+                        t._grad,
+                        rowOffset,
+                        gamma._data,
+                        xhat,
+                        rowOffset,
+                        cols,
+                        out float sumDxhat,
+                        out float sumDxhatXhat);
+                    AccumulateLayerNormInputGradient(
+                        _grad,
+                        rowOffset,
+                        t._grad,
+                        rowOffset,
+                        gamma._data,
+                        xhat,
+                        rowOffset,
+                        cols,
+                        invs[r],
+                        sumDxhat,
+                        sumDxhatXhat);
                 }
+
+                RunBatches(rows, cols, BackwardInputRow);
+
+                void BackwardParameter(int c)
+                {
+                    float gammaGradient = 0f;
+                    float betaGradient = 0f;
+                    for (int r = 0; r < rows; r++)
+                    {
+                        int index = r * cols + c;
+                        float gradient = t._grad[index];
+                        betaGradient += gradient;
+                        gammaGradient += gradient * xhat[index];
+                    }
+
+                    gamma._grad[c] += gammaGradient;
+                    beta._grad[c] += betaGradient;
+                }
+
+                RunBatches(cols, rows, BackwardParameter);
             };
 
             return t;
         }
 
-        throw new NotSupportedException("LayerNormLastDim supports rank1/rank2 only");
+        throw new NotSupportedException(
+            "LayerNormLastDim requires a tensor with at least one dimension.");
     }
 
     public Tensor CausalMask(float fillValue = -1e9f)
     {
-        CheckRank(2);
+        if (Rank < 2)
+        {
+            throw new InvalidOperationException(
+                "CausalMask requires a tensor with at least two " +
+                "dimensions.");
+        }
 
-        int rows = _shape[0];
-        int cols = _shape[1];
+        int rows = _shape[^2];
+        int cols = _shape[^1];
+        int matrixCount = Numel / (rows * cols);
         float[] y = (float[])_data.Clone();
 
-        for (int r = 0; r < rows; r++)
-            for (int c = 0; c < cols; c++)
-                if (c > r)
-                    y[r * cols + c] = fillValue;
+        for (int matrix = 0; matrix < matrixCount; matrix++)
+        {
+            int matrixOffset = matrix * rows * cols;
+            for (int r = 0; r < rows; r++)
+            {
+                for (int c = 0; c < cols; c++)
+                {
+                    if (c > r)
+                        y[matrixOffset + r * cols + c] = fillValue;
+                }
+            }
+        }
 
         var t = new Tensor(y, _shape, new[] { this });
 
         t.Node.BackwardAction = () =>
         {
-            for (int r = 0; r < rows; r++)
-                for (int c = 0; c < cols; c++)
-                    if (c <= r)
-                        _grad[r * cols + c] += t._grad[r * cols + c];
+            for (int matrix = 0; matrix < matrixCount; matrix++)
+            {
+                int matrixOffset = matrix * rows * cols;
+                for (int r = 0; r < rows; r++)
+                {
+                    int copiedColumns = Math.Min(r + 1, cols);
+                    AddScaledValues(
+                        _grad,
+                        matrixOffset + r * cols,
+                        t._grad,
+                        matrixOffset + r * cols,
+                        1f,
+                        copiedColumns);
+                }
+            }
         };
 
         return t;

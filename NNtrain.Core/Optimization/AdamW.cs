@@ -35,9 +35,9 @@ public class AdamW : IOptimizer
             _parameters.Add(parameter);
         }
 
-        _state = CreateInitialState(
-            _parameters,
-            options ?? new AdamWOptions());
+        AdamWOptions effectiveOptions = options ?? new AdamWOptions();
+        ValidateOptions(effectiveOptions, nameof(options));
+        _state = CreateInitialState(_parameters, effectiveOptions);
     }
 
     public AdamWState CaptureState()
@@ -60,51 +60,117 @@ public class AdamW : IOptimizer
 
     public void Step()
     {
+        if (_state.Step == int.MaxValue)
+        {
+            throw new InvalidOperationException(
+                "AdamW cannot advance beyond Int32.MaxValue steps.");
+        }
+
         _state = _state with { Step = _state.Step + 1 };
         AdamWOptions options = _state.Options;
 
         float bc1 = 1f - MathF.Pow(options.Beta1, _state.Step);
         float bc2 = 1f - MathF.Pow(options.Beta2, _state.Step);
 
-        for (int parameterIndex = 0;
-            parameterIndex < _parameters.Count;
-            parameterIndex++)
+        void UpdateParameter(int parameterIndex)
         {
             Parameter p = _parameters[parameterIndex];
             AdamWParameterState parameterState =
                 _state.ParameterStates[parameterIndex];
             using Tensor.DataMutation mutation = p.BeginUpdate();
             Span<float> data = mutation.Values;
-            IReadOnlyList<float> grad = p.T.Grad;
+            float[] grad = p.T.GradientBuffer;
             float[] m = parameterState.FirstMoment;
             float[] v = parameterState.SecondMoment;
 
             bool applyWeightDecay =
                 p.WeightDecay == WeightDecayPolicy.Apply
                 || (options.Decay1D && p.T.Rank == 1);
+            int length = p.T.Numel;
+            int index = 0;
 
-            for (int i = 0; i < p.T.Numel; i++)
+            if (Tensor.SimdEnabled
+                && Vector256.IsHardwareAccelerated
+                && length >= Vector256<float>.Count)
             {
-                float g = grad[i];
+                int vectorWidth = Vector256<float>.Count;
+                int vectorizedLength = length - length % vectorWidth;
+                Vector256<float> beta1 = Vector256.Create(options.Beta1);
+                Vector256<float> beta2 = Vector256.Create(options.Beta2);
+                Vector256<float> oneMinusBeta1 =
+                    Vector256.Create(1f - options.Beta1);
+                Vector256<float> oneMinusBeta2 =
+                    Vector256.Create(1f - options.Beta2);
+                Vector256<float> inverseBc1 = Vector256.Create(1f / bc1);
+                Vector256<float> inverseBc2 = Vector256.Create(1f / bc2);
+                Vector256<float> learningRate =
+                    Vector256.Create(options.LearningRate);
+                Vector256<float> epsilon =
+                    Vector256.Create(options.Epsilon);
+                Vector256<float> decay = Vector256.Create(
+                    options.LearningRate * options.WeightDecay);
+
+                for (; index < vectorizedLength; index += vectorWidth)
+                {
+                    Vector256<float> gradient = grad.Length == 0
+                        ? Vector256<float>.Zero
+                        : Vector256.LoadUnsafe(ref grad[index]);
+                    Vector256<float> firstMoment =
+                        beta1 * Vector256.LoadUnsafe(ref m[index])
+                        + oneMinusBeta1 * gradient;
+                    Vector256<float> secondMoment =
+                        beta2 * Vector256.LoadUnsafe(ref v[index])
+                        + oneMinusBeta2 * gradient * gradient;
+                    firstMoment.StoreUnsafe(ref m[index]);
+                    secondMoment.StoreUnsafe(ref v[index]);
+
+                    Vector256<float> parameter =
+                        Vector256.LoadUnsafe(ref data[index]);
+                    if (applyWeightDecay)
+                        parameter -= decay * parameter;
+                    parameter -= learningRate
+                        * (firstMoment * inverseBc1)
+                        / (Vector256.Sqrt(secondMoment * inverseBc2)
+                            + epsilon);
+                    parameter.StoreUnsafe(ref data[index]);
+                }
+            }
+
+            for (; index < length; index++)
+            {
+                float g = grad.Length == 0 ? 0f : grad[index];
 
                 // Adam
-                m[i] = options.Beta1 * m[i] + (1f - options.Beta1) * g;
-                v[i] = options.Beta2 * v[i] + (1f - options.Beta2) * g * g;
+                m[index] = options.Beta1 * m[index]
+                    + (1f - options.Beta1) * g;
+                v[index] = options.Beta2 * v[index]
+                    + (1f - options.Beta2) * g * g;
 
-                float mHat = m[i] / bc1;
-                float vHat = v[i] / bc2;
+                float mHat = m[index] / bc1;
+                float vHat = v[index] / bc2;
 
                 // AdamW: decoupled weight decay
                 if (applyWeightDecay)
-                    data[i] -=
-                        options.LearningRate * options.WeightDecay * data[i];
+                    data[index] -= options.LearningRate
+                        * options.WeightDecay
+                        * data[index];
 
-                data[i] -=
+                data[index] -=
                     options.LearningRate
                     * mHat
                     / (MathF.Sqrt(vHat) + options.Epsilon);
             }
         }
+
+        long totalElements = 0;
+        foreach (Parameter parameter in _parameters)
+            totalElements += parameter.T.Numel;
+
+        if (_parameters.Count > 1 && totalElements >= 32_768)
+            Parallel.For(0, _parameters.Count, UpdateParameter);
+        else
+            for (int index = 0; index < _parameters.Count; index++)
+                UpdateParameter(index);
     }
 
     private static AdamWState CreateInitialState(
@@ -139,10 +205,11 @@ public class AdamW : IOptimizer
                 nameof(state));
         }
 
-        if (state.Step < 0)
+        if (state.Step < 0 || state.Step == int.MaxValue)
         {
             throw new ArgumentException(
-                "AdamW state step cannot be negative.",
+                "AdamW state step must be non-negative and leave room for " +
+                "another optimizer step.",
                 nameof(state));
         }
 
@@ -152,6 +219,8 @@ public class AdamW : IOptimizer
                 "AdamW state options cannot be null.",
                 nameof(state));
         }
+
+        ValidateOptions(state.Options, nameof(state));
 
         if (state.ParameterStates is null)
         {
@@ -228,6 +297,57 @@ public class AdamW : IOptimizer
                     "incompatible length.",
                     nameof(state));
             }
+        }
+    }
+
+    private static void ValidateOptions(
+        AdamWOptions options,
+        string parameterName)
+    {
+        if (!float.IsFinite(options.LearningRate)
+            || options.LearningRate <= 0f)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                options.LearningRate,
+                "AdamW learning rate must be finite and positive.");
+        }
+
+        if (!float.IsFinite(options.Beta1)
+            || options.Beta1 < 0f
+            || options.Beta1 >= 1f)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                options.Beta1,
+                "AdamW beta1 must be finite and in the range [0, 1).");
+        }
+
+        if (!float.IsFinite(options.Beta2)
+            || options.Beta2 < 0f
+            || options.Beta2 >= 1f)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                options.Beta2,
+                "AdamW beta2 must be finite and in the range [0, 1).");
+        }
+
+        if (!float.IsFinite(options.Epsilon) || options.Epsilon <= 0f)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                options.Epsilon,
+                "AdamW epsilon must be finite and positive.");
+        }
+
+        if (!float.IsFinite(options.WeightDecay)
+            || options.WeightDecay < 0f)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                options.WeightDecay,
+                "AdamW weight decay must be finite and non-negative.");
         }
     }
 

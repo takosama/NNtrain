@@ -14,7 +14,7 @@ class FeedForward : Module
 
     public Tensor Forward(Tensor x) // (T, D)
     {
-        return Fc2.ForwardBatch(Fc1.ForwardBatch(x).Relu());
+        return Fc2.ForwardBatch(Fc1.ForwardBatchRelu(x));
     }
 
 }

@@ -31,4 +31,13 @@ class LayerNorm : Module
         return x.LayerNormLastDim(Gamma.T, Beta.T, _eps);
     }
 
+    public Tensor ForwardResidual(Tensor x, Tensor residual)
+    {
+        return x.AddLayerNormLastDim(
+            residual,
+            Gamma.T,
+            Beta.T,
+            _eps);
+    }
+
 }

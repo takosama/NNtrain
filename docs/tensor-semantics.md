@@ -18,6 +18,8 @@ Graph ownership and execution responsibilities are defined in
 ## Data and gradients
 
 - Data passed to the public constructor is copied.
+- `Reshape` is a view operation and shares its value storage with its input;
+  it does not copy the elements.
 - `Data`, `Grad`, and `Shape` expose read-only views.
 - Tensor operations and optimizers mutate the underlying buffers only through
   internal APIs.
@@ -29,6 +31,9 @@ Graph ownership and execution responsibilities are defined in
   must perform a fresh forward pass before the next `Backward`.
 - Operations inside `AutogradContext.NoGrad()` compute normal forward values but
   return detached leaves that do not propagate gradients to their inputs.
+- Detached operation results allocate their gradient buffers lazily. Reading
+  `Grad` still returns zeros, and a buffer is allocated if the result later
+  participates as a leaf in a recorded graph.
 - A non-scalar output requires a seed containing one value per output element.
 
 ## Broadcasting
@@ -46,6 +51,8 @@ dimension broadcasting is not supported.
 - `Slice`, `Concat`, softmax, log-softmax, and layer normalization support rank
   one and rank two as documented by their APIs.
 - `Transpose` requires rank two.
+- `MatMulTransposedRight` computes `[m, k] × [n, k]ᵀ` without materializing the
+  transpose. `MatMulTransposedRightAddRow` additionally fuses a row-wise bias.
 - `MatMul` supports rank1 × rank1, rank2 × rank1, and rank2 × rank2.
 - Unsupported rank combinations throw `NotSupportedException`.
 - Invalid argument values throw `ArgumentException` or

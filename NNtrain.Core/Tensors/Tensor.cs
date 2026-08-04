@@ -11,7 +11,7 @@ namespace NNtrain;
 public partial class Tensor
 {
     private readonly float[] _data;
-    private readonly float[] _grad;
+    private float[] _grad;
     private readonly int[] _shape;
     private long _dataVersion;
 
@@ -25,8 +25,10 @@ public partial class Tensor
     public int Rank => _shape.Length;
     public int Numel => _data.Length;
 
-    internal Span<float> MutableGrad => _grad;
+    internal Span<float> MutableGrad => EnsureGradientBuffer();
+    internal float[] GradientBuffer => _grad;
     internal long DataVersion => _dataVersion;
+    internal bool HasGradientBuffer => _grad.Length != 0;
 
     public Tensor(float[] data, int[] shape, string name = "")
     {
@@ -34,14 +36,46 @@ public partial class Tensor
         ValidateShape(shape, data.Length);
 
         _data = (float[])data.Clone();
-        _grad = new float[data.Length];
+        _grad = [];
         _shape = (int[])shape.Clone();
         Name = name ?? throw new ArgumentNullException(nameof(name));
 
         Data = Array.AsReadOnly(_data);
-        Grad = Array.AsReadOnly(_grad);
+        Grad = new GradientView(this);
         Shape = Array.AsReadOnly(_shape);
 
+        Node = new AutogradNode();
+    }
+
+    /// <summary>
+    /// Creates a leaf tensor without copying a newly allocated data array.
+    /// The caller must not mutate the array after ownership is transferred.
+    /// </summary>
+    public static Tensor FromOwnedData(
+        float[] data,
+        int[] shape,
+        string name = "")
+    {
+        ArgumentNullException.ThrowIfNull(data);
+        ValidateShape(shape, data.Length);
+
+        return new Tensor(data, shape, name, takeOwnership: true);
+    }
+
+    private Tensor(
+        float[] data,
+        int[] shape,
+        string name,
+        bool takeOwnership)
+    {
+        _data = takeOwnership ? data : (float[])data.Clone();
+        _grad = [];
+        _shape = (int[])shape.Clone();
+        Name = name ?? throw new ArgumentNullException(nameof(name));
+
+        Data = Array.AsReadOnly(_data);
+        Grad = new GradientView(this);
+        Shape = Array.AsReadOnly(_shape);
         Node = new AutogradNode();
     }
 
@@ -52,17 +86,25 @@ public partial class Tensor
         ValidateShape(shape, data.Length);
 
         _data = data;
-        _grad = new float[data.Length];
+        bool isRecording = AutogradContext.IsRecordingEnabled;
+        _grad = isRecording ? new float[data.Length] : [];
         _shape = (int[])shape.Clone();
         Name = name ?? throw new ArgumentNullException(nameof(name));
 
         Data = Array.AsReadOnly(_data);
-        Grad = Array.AsReadOnly(_grad);
+        Grad = new GradientView(this);
         Shape = Array.AsReadOnly(_shape);
 
-        Node = AutogradContext.IsRecordingEnabled
-            ? new AutogradNode(prev)
-            : AutogradNode.Detached();
+        if (isRecording)
+        {
+            foreach (Tensor parent in prev)
+                parent.EnsureGradientBuffer();
+            Node = new AutogradNode(prev);
+        }
+        else
+        {
+            Node = AutogradNode.Detached();
+        }
     }
 
     public static Tensor Scalar(float value, string name = "")
@@ -119,6 +161,13 @@ public partial class Tensor
 
     internal void ClearGradient() => _grad.AsSpan().Clear();
 
+    private float[] EnsureGradientBuffer()
+    {
+        if (_grad.Length == 0)
+            _grad = new float[Numel];
+        return _grad;
+    }
+
     internal DataMutation BeginDataMutation() => new(this);
 
     internal ref struct DataMutation
@@ -146,6 +195,60 @@ public partial class Tensor
 
             _owner = null;
         }
+    }
+
+    private sealed class GradientView(Tensor owner)
+        : IList<float>, IReadOnlyList<float>
+    {
+        public int Count => owner.Numel;
+        public bool IsReadOnly => true;
+
+        public float this[int index]
+        {
+            get
+            {
+                ArgumentOutOfRangeException.ThrowIfNegative(index);
+                if (index >= Count)
+                    throw new ArgumentOutOfRangeException(nameof(index));
+                return owner._grad.Length == 0 ? 0f : owner._grad[index];
+            }
+            set => throw new NotSupportedException();
+        }
+
+        public IEnumerator<float> GetEnumerator()
+        {
+            for (int index = 0; index < Count; index++)
+                yield return this[index];
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
+            => GetEnumerator();
+
+        public int IndexOf(float item)
+        {
+            for (int index = 0; index < Count; index++)
+            {
+                if (this[index].Equals(item))
+                    return index;
+            }
+
+            return -1;
+        }
+
+        public bool Contains(float item) => IndexOf(item) >= 0;
+
+        public void CopyTo(float[] array, int arrayIndex)
+        {
+            ArgumentNullException.ThrowIfNull(array);
+            for (int index = 0; index < Count; index++)
+                array[arrayIndex + index] = this[index];
+        }
+
+        public void Add(float item) => throw new NotSupportedException();
+        public void Clear() => throw new NotSupportedException();
+        public void Insert(int index, float item) => throw new NotSupportedException();
+        public bool Remove(float item) => throw new NotSupportedException();
+        public void RemoveAt(int index) => throw new NotSupportedException();
     }
 
     private static int NumelOf(int[] shape)

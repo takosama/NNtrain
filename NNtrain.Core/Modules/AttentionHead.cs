@@ -27,7 +27,7 @@ class AttentionHead : Module
         Tensor k = Wk.ForwardBatch(x); // (T, Dh)
         Tensor v = Wv.ForwardBatch(x); // (T, Dh)
 
-        Tensor scores = q.MatMul(k.Transpose()) * Tensor.Scalar(_scale); // (T, T)
+        Tensor scores = q.MatMulTransposedRight(k) * Tensor.Scalar(_scale); // (T, T)
         if (_causal)
             scores = scores.CausalMask();
 

@@ -11,7 +11,6 @@ the assembly boundary, rather than the namespace, defines ownership.
 | `NNtrain.Core` | Tensor operations, autograd, modules, optimizers, training contracts, and `Trainer` |
 | `NNtrain.Data` | Concrete dataset adapters such as the MNIST IDX reader |
 | `NNtrain.Cli` | JSON configuration, object composition, console reporting, and process exit codes |
-| `NNtrain.Benchmarks` | Reproducible performance and allocation baselines for Core learning workloads |
 | `NNtrain.Core.Tests` | Pure Core unit and characterization tests |
 | `NNtrain.IntegrationTests` | Dataset parsing, CLI configuration, and end-to-end training-flow tests |
 
@@ -28,7 +27,6 @@ NNtrain.Cli ───────→ NNtrain.Data ───────→ NNtra
 
 NNtrain.Core.Tests ─────────────────────→ NNtrain.Core
 NNtrain.IntegrationTests ───────────────→ Core, Data, Cli
-NNtrain.Benchmarks ─────────────────────→ NNtrain.Core
 ```
 
 `NNtrain.Core` has no project references. `NNtrain.Data` references only Core.

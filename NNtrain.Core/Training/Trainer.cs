@@ -33,13 +33,14 @@ public sealed class Trainer
     }
 
     public IReadOnlyList<TrainingEpochResult> Run(
-        Action<TrainingEpochResult>? onEpochCompleted = null)
+        Action<TrainingEpochResult>? onEpochCompleted = null,
+        Action<TrainingBatchResult>? onBatchCompleted = null)
     {
         var results = new List<TrainingEpochResult>(_options.Epochs);
 
         for (int epoch = 1; epoch <= _options.Epochs; epoch++)
         {
-            TrainingMetrics training = TrainEpoch();
+            TrainingMetrics training = TrainEpoch(epoch, onBatchCompleted);
             TrainingMetrics evaluation = Evaluate();
             var result = new TrainingEpochResult(
                 epoch,
@@ -54,7 +55,9 @@ public sealed class Trainer
         return results.AsReadOnly();
     }
 
-    private TrainingMetrics TrainEpoch()
+    private TrainingMetrics TrainEpoch(
+        int epoch,
+        Action<TrainingBatchResult>? onBatchCompleted)
     {
         float lossSum = 0f;
         int correct = 0;
@@ -66,6 +69,13 @@ public sealed class Trainer
             lossSum += result.Loss;
             if (result.IsCorrect)
                 correct++;
+            onBatchCompleted?.Invoke(
+                new TrainingBatchResult(
+                    epoch,
+                    step + 1,
+                    _options.StepsPerEpoch,
+                    result.Loss,
+                    result.IsCorrect));
         }
 
         stopwatch.Stop();
@@ -121,21 +131,17 @@ public sealed class Trainer
     {
         var inputValues = new float[dataset.ImageSize];
         int answer = dataset.ReadSample(index, inputValues);
-        var input = new Tensor(
+        var input = Tensor.FromOwnedData(
             inputValues,
             [dataset.Rows, dataset.Columns],
             "classifierInput");
-        var targetValues = new float[dataset.ClassCount];
-        targetValues[answer] = 1f;
-        Tensor target = Tensor.From1D(targetValues, "classifierTarget");
-        return new Sample(input, target, answer);
+        return new Sample(input, answer);
     }
 
     private ForwardResult Forward(Sample sample)
     {
         Tensor logits = _model.Forward(sample.Input);
-        Tensor logProbabilities = logits.LogSoftmaxLastDim();
-        Tensor loss = -(sample.Target * logProbabilities).Sum();
+        Tensor loss = logits.CrossEntropyWithLogits([sample.Answer]);
         int prediction = ArgMax(logits.Data);
         return new ForwardResult(loss, prediction == sample.Answer);
     }
@@ -208,7 +214,6 @@ public sealed class Trainer
 
     private readonly record struct Sample(
         Tensor Input,
-        Tensor Target,
         int Answer);
 
     private readonly record struct ForwardResult(

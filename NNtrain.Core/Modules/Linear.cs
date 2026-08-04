@@ -32,9 +32,39 @@ class Linear : Module
         return W.T.MatMul(x) + B.T;
     }
 
-    public Tensor ForwardBatch(Tensor x) // x: (batch, in)
+    public Tensor ForwardBatch(Tensor x) // x: (..., in)
     {
-        return x.MatMul(W.T.Transpose()).AddRowWise(B.T);
+        ArgumentNullException.ThrowIfNull(x);
+
+        if (x.Rank == 3)
+        {
+            int batch = x.Shape[0];
+            int rows = x.Shape[1];
+            int inputFeatures = x.Shape[2];
+            Tensor flattened = x.Reshape(batch * rows, inputFeatures);
+            Tensor projected = flattened.MatMulTransposedRightAddRow(W.T, B.T);
+            return projected.Reshape(batch, rows, W.T.Shape[0]);
+        }
+
+        return x.MatMulTransposedRightAddRow(W.T, B.T);
+    }
+
+    public Tensor ForwardBatchRelu(Tensor x)
+    {
+        ArgumentNullException.ThrowIfNull(x);
+
+        if (x.Rank == 3)
+        {
+            int batch = x.Shape[0];
+            int rows = x.Shape[1];
+            int inputFeatures = x.Shape[2];
+            Tensor flattened = x.Reshape(batch * rows, inputFeatures);
+            Tensor projected = flattened
+                .MatMulTransposedRightAddRowRelu(W.T, B.T);
+            return projected.Reshape(batch, rows, W.T.Shape[0]);
+        }
+
+        return x.MatMulTransposedRightAddRowRelu(W.T, B.T);
     }
 
 }

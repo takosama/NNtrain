@@ -2,7 +2,6 @@
   <Project Path="NNtrain.Core/NNtrain.Core.csproj" />
   <Project Path="NNtrain.Data/NNtrain.Data.csproj" />
   <Project Path="NNtrain.Cli/NNtrain.Cli.csproj" />
-  <Project Path="NNtrain.Benchmarks/NNtrain.Benchmarks.csproj" />
   <Project Path="NNtrain.Core.Tests/NNtrain.Core.Tests.csproj" />
   <Project Path="NNtrain.IntegrationTests/NNtrain.IntegrationTests.csproj" />
 </Solution>
