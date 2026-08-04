@@ -26,8 +26,8 @@ class TransformerBlock : Module
 
     public Tensor Forward(Tensor x) // (T, D)
     {
-        var h1 = Ln1.Forward(x + Attn.Forward(x));     // residual + norm
-        var h2 = Ln2.Forward(h1 + Ffn.Forward(h1));    // residual + norm
+        var h1 = Ln1.ForwardResidual(x, Attn.Forward(x));
+        var h2 = Ln2.ForwardResidual(h1, Ffn.Forward(h1));
         return h2;
     }
 

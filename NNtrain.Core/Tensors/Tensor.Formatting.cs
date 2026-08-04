@@ -30,7 +30,7 @@ partial class Tensor
     public string GradString()
     {
         if (Rank == 1)
-            return "[" + string.Join(", ", _grad.Select(v => v.ToString("F4"))) + "]";
+            return "[" + string.Join(", ", Grad.Select(v => v.ToString("F4"))) + "]";
 
         if (Rank == 2)
         {
@@ -41,12 +41,12 @@ partial class Tensor
             {
                 string[] vals = new string[cols];
                 for (int c = 0; c < cols; c++)
-                    vals[c] = _grad[r * cols + c].ToString("F4");
+                    vals[c] = Grad[r * cols + c].ToString("F4");
                 lines[r] = "[" + string.Join(", ", vals) + "]";
             }
             return string.Join(Environment.NewLine, lines);
         }
 
-        return "[" + string.Join(", ", _grad.Select(v => v.ToString("F4"))) + "]";
+        return "[" + string.Join(", ", Grad.Select(v => v.ToString("F4"))) + "]";
     }
 }

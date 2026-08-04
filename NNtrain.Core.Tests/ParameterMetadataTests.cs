@@ -32,12 +32,12 @@ public sealed class ParameterMetadataTests
             numClasses: 3,
             rng: new Random(43));
 
-        Linear queryProjection = model.Blocks[0].Attn.Heads[0].Wq;
+        Linear qkvProjection = model.Blocks[0].Attn.Qkv;
 
         Assert.Same(model, model.Pos.Owner);
         Assert.Equal(WeightDecayPolicy.Apply, model.Pos.WeightDecay);
-        Assert.Same(queryProjection, queryProjection.W.Owner);
-        Assert.NotSame(model, queryProjection.W.Owner);
+        Assert.Same(qkvProjection, qkvProjection.W.Owner);
+        Assert.NotSame(model, qkvProjection.W.Owner);
         Assert.All(model.Parameters(), parameter => Assert.NotNull(parameter.Owner));
         Assert.All(
             model.Parameters(),

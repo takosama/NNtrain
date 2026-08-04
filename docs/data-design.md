@@ -77,7 +77,7 @@ JSON object containing:
 
 - `trainingData` and `evaluationData`, each containing `imagePath` and
   `labelPath`;
-- `epochs`, `stepsPerEpoch`, `learningRate`, and the sampling `seed`;
+- `epochs`, `batchSize`, `learningRate`, and the shuffling `seed`;
 - model `heads`, `hiddenSize`, `layers`, initialization `seed`, and
   `initializationScale`.
 
@@ -85,6 +85,11 @@ Relative dataset paths are resolved from the JSON file location rather than the
 process working directory. Unknown JSON properties are rejected to catch
 misspelled settings. Counts and positive floating-point settings are validated
 before dataset or model construction.
+
+Each CLI epoch shuffles and consumes every training sample once. Forward passes
+within a mini-batch use `Parallel.For` with `Environment.ProcessorCount`
+workers. Backward passes then accumulate in deterministic batch order because
+parameter gradient buffers are shared. Evaluation inference is fully parallel.
 
 See `training.example.json` at the repository root for a complete configuration.
 

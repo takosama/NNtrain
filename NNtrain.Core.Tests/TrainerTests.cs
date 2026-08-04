@@ -22,9 +22,10 @@ public sealed class TrainerTests
                 RandomSeed = 17,
             });
         var reported = new List<TrainingEpochResult>();
+        var reportedBatches = new List<TrainingBatchResult>();
 
         IReadOnlyList<TrainingEpochResult> results =
-            trainer.Run(reported.Add);
+            trainer.Run(reported.Add, reportedBatches.Add);
 
         Assert.Equal(6, trainingDataset.ReadCount);
         Assert.Equal(2, evaluationDataset.ReadCount);
@@ -46,9 +47,29 @@ public sealed class TrainerTests
             optimizer.Operations);
         Assert.Equal(results, reported);
         Assert.Collection(
+            reportedBatches,
+            result => AssertBatch(result, 1, 1),
+            result => AssertBatch(result, 1, 2),
+            result => AssertBatch(result, 1, 3),
+            result => AssertBatch(result, 2, 1),
+            result => AssertBatch(result, 2, 2),
+            result => AssertBatch(result, 2, 3));
+        Assert.Collection(
             results,
             result => AssertEpoch(result, expectedEpoch: 1),
             result => AssertEpoch(result, expectedEpoch: 2));
+    }
+
+    private static void AssertBatch(
+        TrainingBatchResult result,
+        int expectedEpoch,
+        int expectedBatch)
+    {
+        Assert.Equal(expectedEpoch, result.Epoch);
+        Assert.Equal(expectedBatch, result.Batch);
+        Assert.Equal(3, result.TotalBatches);
+        Assert.InRange(result.Loss, 0.3132f, 0.3133f);
+        Assert.True(result.IsCorrect);
     }
 
     [Theory]

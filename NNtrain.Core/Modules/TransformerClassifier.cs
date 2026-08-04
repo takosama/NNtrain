@@ -57,13 +57,57 @@ public class TransformerClassifier : Module, IClassificationModel
 
     public Tensor Forward(Tensor x)
     {
-        var h = x + Pos.T;
+        return ForwardFromEmbedding(Embed(x));
+    }
+
+    public Tensor ForwardBatch(Tensor x)
+    {
+        ArgumentNullException.ThrowIfNull(x);
+        if (x.Rank != 3)
+        {
+            throw new InvalidOperationException(
+                "ForwardBatch requires input shaped " +
+                "[batch, sequence, features].");
+        }
+
+        return Forward(x);
+    }
+
+    public Tensor Embed(Tensor x)
+    {
+        ArgumentNullException.ThrowIfNull(x);
+        if (x.Rank == 2)
+            return x + Pos.T;
+        if (x.Rank == 3)
+            return x.AddBatchWise(Pos.T);
+
+        throw new InvalidOperationException(
+            "Transformer input must have rank 2 or rank 3.");
+    }
+
+    public Tensor ForwardFromEmbedding(Tensor embedding)
+    {
+        ArgumentNullException.ThrowIfNull(embedding);
+        Tensor h = embedding;
 
         for (int i = 0; i < _blocks.Length; i++)
             h = _blocks[i].Forward(h);
 
-        var flat = h.Reshape(SeqLen * DModel);
-        return Head.Forward(flat);
+        if (h.Rank == 2)
+        {
+            var flat = h.Reshape(SeqLen * DModel);
+            return Head.Forward(flat);
+        }
+
+        if (h.Rank == 3)
+        {
+            int batch = h.Shape[0];
+            var flat = h.Reshape(batch, SeqLen * DModel);
+            return Head.ForwardBatch(flat);
+        }
+
+        throw new InvalidOperationException(
+            "Transformer embedding must have rank 2 or rank 3.");
     }
 
 }

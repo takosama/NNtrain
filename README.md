@@ -11,7 +11,6 @@ optimizers, dataset boundaries, and training orchestration in C#/.NET 10.
 - `NNtrain.Cli`: JSON configuration and the command-line application
 - `NNtrain.Core.Tests`: Core unit and characterization tests
 - `NNtrain.IntegrationTests`: dataset, configuration, and learning-flow tests
-- `NNtrain.Benchmarks`: BenchmarkDotNet performance baselines
 
 ## Build and test
 
@@ -29,12 +28,9 @@ dotnet run --configuration Release --project NNtrain.Cli -- `
   --config training.example.json
 ```
 
-## Run benchmarks
-
-```powershell
-dotnet run --configuration Release --project NNtrain.Benchmarks -- `
-  --filter "*TrainingBenchmarks*"
-```
-
-The Debug/Release baseline and measurement requirements are documented in
-[`docs/performance-benchmarking.md`](docs/performance-benchmarking.md).
+Training prints the loss after every batch and aggregate training/evaluation
+metrics after every epoch. Every training sample is shuffled and processed once
+per epoch; `batchSize` controls how many sample gradients are averaged before
+each optimizer update. Batch forward passes and evaluation use all logical CPU
+cores. Backward accumulation remains ordered to avoid races in shared parameter
+gradient buffers.

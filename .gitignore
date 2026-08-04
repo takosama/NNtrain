@@ -8,6 +8,9 @@
 **/obj/
 TestResults/
 
+# Local training datasets
+data/
+
 # BenchmarkDotNet generated reports and executables
 BenchmarkDotNet.Artifacts/
 

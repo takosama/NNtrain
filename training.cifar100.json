@@ -1,0 +1,22 @@
+{
+  "trainingData": {
+    "type": "cifar100",
+    "dataPath": "data/cifar-100-binary/train.bin"
+  },
+  "evaluationData": {
+    "type": "cifar100",
+    "dataPath": "data/cifar-100-binary/test.bin"
+  },
+  "epochs": 200,
+  "batchSize":256 ,
+  "learningRate": 0.0003,
+  "useSimd": true,
+  "seed": 1234,
+  "model": {
+    "heads": 8,
+    "hiddenSize": 512,
+    "layers": 8,
+    "seed": 43,
+    "initializationScale": 0.02
+  }
+}

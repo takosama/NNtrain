@@ -45,9 +45,9 @@ public sealed class ModuleParameterRegistrationTests
 
         Parameter[] parameters = model.Parameters().ToArray();
 
-        Assert.Equal(47, parameters.Length);
+        Assert.Equal(27, parameters.Length);
         Assert.Same(model.Pos, parameters[0]);
-        Assert.Same(model.Blocks[0].Attn.Heads[0].Wq.W, parameters[1]);
+        Assert.Same(model.Blocks[0].Attn.Qkv.W, parameters[1]);
         Assert.Same(model.Head.W, parameters[^2]);
         Assert.Same(model.Head.B, parameters[^1]);
         Assert.Equal(

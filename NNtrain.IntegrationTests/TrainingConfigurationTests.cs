@@ -20,8 +20,9 @@ public sealed class TrainingConfigurationTests
                 "labelPath": "data/eval-labels.idx1-ubyte"
               },
               "epochs": 7,
-              "stepsPerEpoch": 11,
+              "batchSize": 11,
               "learningRate": 0.025,
+              "useSimd": false,
               "seed": 42,
               "model": {
                 "heads": 2,
@@ -49,8 +50,9 @@ public sealed class TrainingConfigurationTests
             Path.Combine(directory.Root, "data", "eval-labels.idx1-ubyte"),
             configuration.EvaluationData.LabelPath);
         Assert.Equal(7, configuration.Epochs);
-        Assert.Equal(11, configuration.StepsPerEpoch);
+        Assert.Equal(11, configuration.BatchSize);
         Assert.Equal(0.025f, configuration.LearningRate);
+        Assert.False(configuration.UseSimd);
         Assert.Equal(42, configuration.Seed);
         Assert.Equal(2, configuration.Model.Heads);
         Assert.Equal(64, configuration.Model.HiddenSize);
@@ -81,19 +83,94 @@ public sealed class TrainingConfigurationTests
             TrainingConfiguration.Load(configurationPath);
 
         Assert.Equal(200, configuration.Epochs);
-        Assert.Equal(256, configuration.StepsPerEpoch);
+        Assert.Equal(32, configuration.BatchSize);
         Assert.Equal(1e-4f, configuration.LearningRate);
+        Assert.True(configuration.UseSimd);
         Assert.Equal(1234, configuration.Seed);
         Assert.Equal(1, configuration.Model.Heads);
         Assert.Equal(128, configuration.Model.HiddenSize);
         Assert.Equal(32, configuration.Model.Layers);
         Assert.Equal(0, configuration.Model.Seed);
         Assert.Equal(0.02f, configuration.Model.InitializationScale);
+        Assert.Equal(
+            DatasetConfiguration.MnistType,
+            configuration.TrainingData.Type);
+        Assert.Equal(
+            DatasetConfiguration.MnistType,
+            configuration.EvaluationData.Type);
+    }
+
+    [Fact]
+    public void LoadReadsCifar100DataPathsWithoutChangingMnistFields()
+    {
+        using var directory = new TemporaryDirectory();
+        string configurationPath = directory.WriteConfiguration(
+            """
+            {
+              "trainingData": {
+                "type": "cifar100",
+                "dataPath": "data/cifar-100-binary/train.bin"
+              },
+              "evaluationData": {
+                "type": "cifar100",
+                "dataPath": "data/cifar-100-binary/test.bin"
+              }
+            }
+            """);
+
+        TrainingConfiguration configuration =
+            TrainingConfiguration.Load(configurationPath);
+
+        Assert.Equal(
+            Path.Combine(
+                directory.Root,
+                "data",
+                "cifar-100-binary",
+                "train.bin"),
+            configuration.TrainingData.DataPath);
+        Assert.Equal(
+            Path.Combine(
+                directory.Root,
+                "data",
+                "cifar-100-binary",
+                "test.bin"),
+            configuration.EvaluationData.DataPath);
+        Assert.Equal(string.Empty, configuration.TrainingData.ImagePath);
+        Assert.Equal(string.Empty, configuration.TrainingData.LabelPath);
+    }
+
+    [Fact]
+    public void Cifar100ConfigurationRequiresADataPath()
+    {
+        var configuration = new DatasetConfiguration
+        {
+            Type = DatasetConfiguration.Cifar100Type,
+        };
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => configuration.Validate("Training"));
+
+        Assert.Equal("DataPath", exception.ParamName);
+    }
+
+    [Fact]
+    public void RejectsUnknownDatasetTypes()
+    {
+        var configuration = new DatasetConfiguration
+        {
+            Type = "unknown",
+        };
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => configuration.Validate("Training"));
+
+        Assert.Equal("Type", exception.ParamName);
+        Assert.Contains("Unsupported", exception.Message);
     }
 
     [Theory]
     [InlineData("epochs", "Epochs")]
-    [InlineData("steps", "StepsPerEpoch")]
+    [InlineData("batchSize", "BatchSize")]
     [InlineData("learningRate", "LearningRate")]
     [InlineData("heads", "Heads")]
     [InlineData("hiddenSize", "HiddenSize")]
@@ -116,7 +193,7 @@ public sealed class TrainingConfigurationTests
                 LabelPath = "eval-labels",
             },
             Epochs = setting == "epochs" ? 0 : 1,
-            StepsPerEpoch = setting == "steps" ? 0 : 1,
+            BatchSize = setting == "batchSize" ? 0 : 1,
             LearningRate = setting == "learningRate" ? 0f : 0.1f,
             Model = new ModelConfiguration
             {
@@ -155,6 +232,18 @@ public sealed class TrainingConfigurationTests
 
         Assert.Throws<JsonException>(
             () => TrainingConfiguration.Load(configurationPath));
+    }
+
+    [Fact]
+    public void ModelHeadsMustEvenlyDivideTheModelWidth()
+    {
+        var model = new ModelConfiguration { Heads = 3 };
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => model.ValidateForModelWidth(28));
+
+        Assert.Equal("Heads", exception.ParamName);
+        Assert.Contains("evenly divide", exception.Message);
     }
 
     private sealed class TemporaryDirectory : IDisposable

@@ -6,6 +6,7 @@ partial class Tensor
         => ApplyBinaryElementwise(
             left,
             right,
+            BinaryOperation.Add,
             static (leftValue, rightValue) => leftValue + rightValue,
             static (_, _) => (1f, 1f));
 
@@ -13,6 +14,7 @@ partial class Tensor
         => ApplyBinaryElementwise(
             left,
             right,
+            BinaryOperation.Subtract,
             static (leftValue, rightValue) => leftValue - rightValue,
             static (_, _) => (1f, -1f));
 
@@ -21,15 +23,25 @@ partial class Tensor
         ArgumentNullException.ThrowIfNull(value);
 
         float[] resultData = new float[value.Numel];
-        for (int index = 0; index < value.Numel; index++)
-            resultData[index] = -value._data[index];
+        MultiplyValues(
+            value._data,
+            0,
+            -1f,
+            resultData,
+            0,
+            value.Numel);
 
         var result = new Tensor(resultData, value._shape, [value]);
 
         result.Node.BackwardAction = () =>
         {
-            for (int index = 0; index < value.Numel; index++)
-                value._grad[index] -= result._grad[index];
+            AddScaledValues(
+                value._grad,
+                0,
+                result._grad,
+                0,
+                -1f,
+                value.Numel);
         };
 
         return result;
@@ -39,6 +51,7 @@ partial class Tensor
         => ApplyBinaryElementwise(
             left,
             right,
+            BinaryOperation.Multiply,
             static (leftValue, rightValue) => leftValue * rightValue,
             static (leftValue, rightValue) => (rightValue, leftValue));
 
@@ -46,6 +59,7 @@ partial class Tensor
         => ApplyBinaryElementwise(
             left,
             right,
+            BinaryOperation.Divide,
             static (leftValue, rightValue) => leftValue / rightValue,
             static (leftValue, rightValue) =>
                 (1f / rightValue, -leftValue / (rightValue * rightValue)));
@@ -73,9 +87,7 @@ partial class Tensor
 
     public Tensor Sum()
     {
-        float sum = 0f;
-        for (int index = 0; index < Numel; index++)
-            sum += _data[index];
+        float sum = SumValues(_data, 0, Numel);
 
         var result = new Tensor([sum], [1], [this]);
 
