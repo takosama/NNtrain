@@ -19,7 +19,7 @@ public sealed class AdamWOptionsTests
     };
 
     [Fact]
-    public void DefaultsMatchThePreviousAdamWConstructorDefaults()
+    public void DefaultsUseConfiguredAdamWHyperparameters()
     {
         var options = new AdamWOptions();
 
@@ -27,7 +27,7 @@ public sealed class AdamWOptionsTests
         Assert.Equal(0.9f, options.Beta1);
         Assert.Equal(0.999f, options.Beta2);
         Assert.Equal(1e-8f, options.Epsilon);
-        Assert.Equal(1e-2f, options.WeightDecay);
+        Assert.Equal(5e-2f, options.WeightDecay);
         Assert.False(options.Decay1D);
     }
 

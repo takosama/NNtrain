@@ -10,7 +10,7 @@ public sealed record AdamWOptions
 
     public float Epsilon { get; init; } = 1e-8f;
 
-    public float WeightDecay { get; init; } = 1e-2f;
+    public float WeightDecay { get; init; } = 5e-2f;
 
     public bool Decay1D { get; init; }
 }

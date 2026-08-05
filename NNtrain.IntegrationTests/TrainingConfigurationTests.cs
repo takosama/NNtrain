@@ -22,6 +22,7 @@ public sealed class TrainingConfigurationTests
               "epochs": 7,
               "batchSize": 11,
               "learningRate": 0.025,
+              "weightDecay": 0.04,
               "labelSmoothing": 0.2,
               "useSimd": false,
               "seed": 42,
@@ -53,6 +54,7 @@ public sealed class TrainingConfigurationTests
         Assert.Equal(7, configuration.Epochs);
         Assert.Equal(11, configuration.BatchSize);
         Assert.Equal(0.025f, configuration.LearningRate);
+        Assert.Equal(0.04f, configuration.WeightDecay);
         Assert.Equal(0.2f, configuration.LabelSmoothing);
         Assert.False(configuration.UseSimd);
         Assert.Equal(42, configuration.Seed);
@@ -87,6 +89,7 @@ public sealed class TrainingConfigurationTests
         Assert.Equal(200, configuration.Epochs);
         Assert.Equal(32, configuration.BatchSize);
         Assert.Equal(1e-4f, configuration.LearningRate);
+        Assert.Equal(0.05f, configuration.WeightDecay);
         Assert.Equal(0.1f, configuration.LabelSmoothing);
         Assert.True(configuration.UseSimd);
         Assert.Equal(1234, configuration.Seed);
@@ -263,6 +266,33 @@ public sealed class TrainingConfigurationTests
             configuration.Validate);
 
         Assert.Equal("LabelSmoothing", exception.ParamName);
+    }
+
+    [Theory]
+    [InlineData(-0.01f)]
+    [InlineData(float.NaN)]
+    [InlineData(float.PositiveInfinity)]
+    public void RejectsInvalidWeightDecay(float weightDecay)
+    {
+        var configuration = new TrainingConfiguration
+        {
+            TrainingData = new DatasetConfiguration
+            {
+                ImagePath = "train-images",
+                LabelPath = "train-labels",
+            },
+            EvaluationData = new DatasetConfiguration
+            {
+                ImagePath = "eval-images",
+                LabelPath = "eval-labels",
+            },
+            WeightDecay = weightDecay,
+        };
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            configuration.Validate);
+
+        Assert.Equal("WeightDecay", exception.ParamName);
     }
 
     [Fact]

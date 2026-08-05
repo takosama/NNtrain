@@ -77,8 +77,9 @@ JSON object containing:
 
 - `trainingData` and `evaluationData`, each containing `imagePath` and
   `labelPath`;
-- `epochs`, `batchSize`, `learningRate`, `labelSmoothing`, and the shuffling
-  `seed`; label smoothing defaults to `0.1` and must be in `[0, 1)`;
+- `epochs`, `batchSize`, `learningRate`, `weightDecay`, `labelSmoothing`, and
+  the shuffling `seed`; weight decay defaults to `0.05`; label smoothing
+  defaults to `0.1` and must be in `[0, 1)`;
 - model `heads`, `hiddenSize`, `layers`, initialization `seed`, and
   `initializationScale`.
 

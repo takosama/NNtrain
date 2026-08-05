@@ -63,6 +63,7 @@ class Program
                 new AdamWOptions
                 {
                     LearningRate = config.LearningRate,
+                    WeightDecay = config.WeightDecay,
                 });
             var random = new Random(config.Seed);
             int[] trainingOrder = Enumerable.Range(0, trainData.Count).ToArray();
@@ -72,6 +73,8 @@ class Program
                 $"simd = {GetSimdStatus()}");
             output.WriteLine(
                 $"label smoothing = {config.LabelSmoothing:F3}");
+            output.WriteLine(
+                $"weight decay = {config.WeightDecay:F3}");
 
             for (int epoch = 1; epoch <= config.Epochs; epoch++)
             {

@@ -61,6 +61,7 @@ public sealed class TrainingIntegrationTests
             new AdamWOptions
             {
                 LearningRate = configuration.LearningRate,
+                WeightDecay = configuration.WeightDecay,
             });
         var trainer = new Trainer(
             model,

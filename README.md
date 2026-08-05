@@ -35,3 +35,4 @@ each optimizer update. Batch forward passes and evaluation use all logical CPU
 cores. Backward accumulation remains ordered to avoid races in shared parameter
 gradient buffers. Cross entropy uses PyTorch-style label smoothing with a
 default value of `0.1`; set `labelSmoothing` to `0` to recover one-hot targets.
+AdamW weight decay defaults to `0.05` and can be changed with `weightDecay`.
