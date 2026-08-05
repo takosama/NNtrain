@@ -141,7 +141,9 @@ public sealed class Trainer
     private ForwardResult Forward(Sample sample)
     {
         Tensor logits = _model.Forward(sample.Input);
-        Tensor loss = logits.CrossEntropyWithLogits([sample.Answer]);
+        Tensor loss = logits.CrossEntropyWithLogits(
+            [sample.Answer],
+            _options.LabelSmoothing);
         int prediction = ArgMax(logits.Data);
         return new ForwardResult(loss, prediction == sample.Answer);
     }
@@ -162,6 +164,16 @@ public sealed class Trainer
                 nameof(TrainerOptions.StepsPerEpoch),
                 _options.StepsPerEpoch,
                 "Steps per epoch must be positive.");
+        }
+
+        if (!float.IsFinite(_options.LabelSmoothing)
+            || _options.LabelSmoothing < 0f
+            || _options.LabelSmoothing >= 1f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(TrainerOptions.LabelSmoothing),
+                _options.LabelSmoothing,
+                "Label smoothing must be finite and in the range [0, 1).");
         }
 
         ValidateDataset(_trainingDataset, "Training");

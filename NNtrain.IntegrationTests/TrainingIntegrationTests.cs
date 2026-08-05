@@ -61,6 +61,7 @@ public sealed class TrainingIntegrationTests
             new AdamWOptions
             {
                 LearningRate = configuration.LearningRate,
+                WeightDecay = configuration.WeightDecay,
             });
         var trainer = new Trainer(
             model,
@@ -72,6 +73,7 @@ public sealed class TrainingIntegrationTests
                 Epochs = configuration.Epochs,
                 StepsPerEpoch = 2,
                 RandomSeed = configuration.Seed,
+                LabelSmoothing = configuration.LabelSmoothing,
             });
 
         TrainingEpochResult result =

@@ -10,6 +10,8 @@
   "epochs": 200,
   "batchSize": 16,
   "learningRate": 0.0003,
+  "weightDecay": 0.05,
+  "labelSmoothing": 0.1,
   "seed": 1234,
   "model": {
     "heads": 4,

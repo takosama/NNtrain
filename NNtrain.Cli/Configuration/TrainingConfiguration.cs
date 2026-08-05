@@ -24,6 +24,10 @@ sealed record TrainingConfiguration
 
     public float LearningRate { get; init; } = 1e-4f;
 
+    public float WeightDecay { get; init; } = 0.05f;
+
+    public float LabelSmoothing { get; init; } = 0.1f;
+
     public bool UseSimd { get; init; } = true;
 
     public int Seed { get; init; } = 1234;
@@ -98,6 +102,24 @@ sealed record TrainingConfiguration
                 nameof(LearningRate),
                 LearningRate,
                 "Learning rate must be finite and positive.");
+        }
+
+        if (!float.IsFinite(WeightDecay) || WeightDecay < 0f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(WeightDecay),
+                WeightDecay,
+                "Weight decay must be finite and non-negative.");
+        }
+
+        if (!float.IsFinite(LabelSmoothing)
+            || LabelSmoothing < 0f
+            || LabelSmoothing >= 1f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(LabelSmoothing),
+                LabelSmoothing,
+                "Label smoothing must be finite and in the range [0, 1).");
         }
 
         if (Model is null)

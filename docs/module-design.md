@@ -80,7 +80,7 @@ leaking into the common interface.
 
 Phase 5-5 moves every AdamW hyperparameter into the immutable
 `AdamWOptions` value object. AdamW now accepts only its managed parameters and
-an optional options object; omitting the object retains the previous defaults.
+an optional options object; omitting the object uses the defaults below.
 
 | Option | Default |
 | --- | --- |
@@ -88,7 +88,7 @@ an optional options object; omitting the object retains the previous defaults.
 | `Beta1` | `0.9` |
 | `Beta2` | `0.999` |
 | `Epsilon` | `1e-8` |
-| `WeightDecay` | `1e-2` |
+| `WeightDecay` | `5e-2` |
 | `Decay1D` | `false` |
 
 Configuration remains specific to AdamW and is deliberately absent from

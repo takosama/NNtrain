@@ -163,6 +163,44 @@ public sealed class TensorFusedOperationTests
     }
 
     [Fact]
+    public void LabelSmoothedCrossEntropyMatchesUniformTargetMixture()
+    {
+        const int batch = 3;
+        const int classes = 5;
+        const float smoothing = 0.1f;
+        float[] values = Pattern(batch * classes, 17, 0.11f);
+        int[] labels = [0, 3, 1];
+        float[] smoothedTargets = new float[batch * classes];
+        for (int row = 0; row < batch; row++)
+        {
+            for (int column = 0; column < classes; column++)
+            {
+                smoothedTargets[row * classes + column] =
+                    smoothing / classes;
+            }
+
+            smoothedTargets[row * classes + labels[row]] +=
+                1f - smoothing;
+        }
+
+        var fusedInput = new Tensor(values, [batch, classes]);
+        var referenceInput = new Tensor(values, [batch, classes]);
+
+        Tensor fused = fusedInput.CrossEntropyWithLogits(
+            labels,
+            smoothing);
+        Tensor reference = (Tensor.Scalar(0f)
+            - (new Tensor(smoothedTargets, [batch, classes])
+                * referenceInput.LogSoftmaxLastDim()).Sum())
+            / Tensor.Scalar(batch);
+        fused.Backward();
+        reference.Backward();
+
+        AssertClose(reference.Data, fused.Data, 2e-5f);
+        AssertClose(referenceInput.Grad, fusedInput.Grad, 2e-5f);
+    }
+
+    [Fact]
     public void OwnedTensorSkipsCopyAndAllocatesGradientLazily()
     {
         float[] values = [1f, 2f, 3f, 4f];

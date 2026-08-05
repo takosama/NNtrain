@@ -68,7 +68,7 @@ public sealed class TrainerTests
         Assert.Equal(expectedEpoch, result.Epoch);
         Assert.Equal(expectedBatch, result.Batch);
         Assert.Equal(3, result.TotalBatches);
-        Assert.InRange(result.Loss, 0.3132f, 0.3133f);
+        Assert.InRange(result.Loss, 0.3632f, 0.3633f);
         Assert.True(result.IsCorrect);
     }
 
@@ -110,6 +110,25 @@ public sealed class TrainerTests
         Assert.Contains("does not match model input shape", exception.Message);
     }
 
+    [Theory]
+    [InlineData(-0.01f)]
+    [InlineData(1f)]
+    [InlineData(float.NaN)]
+    public void RejectsInvalidLabelSmoothing(float smoothing)
+    {
+        var options = new TrainerOptions { LabelSmoothing = smoothing };
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            () => new Trainer(
+                new FakeModel(),
+                new FakeDataset(),
+                new FakeDataset(),
+                new CountingOptimizer(),
+                options));
+
+        Assert.Equal("LabelSmoothing", exception.ParamName);
+    }
+
     [Fact]
     public void RejectsDatasetAndModelClassCountMismatch()
     {
@@ -130,10 +149,10 @@ public sealed class TrainerTests
         Assert.Equal(expectedEpoch, result.Epoch);
         Assert.Equal(3, result.TrainingSteps);
         Assert.Equal(1, result.EvaluationSamples);
-        Assert.InRange(result.Training.Loss, 0.3132f, 0.3133f);
+        Assert.InRange(result.Training.Loss, 0.3632f, 0.3633f);
         Assert.Equal(1f, result.Training.Accuracy);
         Assert.True(result.Training.Elapsed >= TimeSpan.Zero);
-        Assert.InRange(result.Evaluation.Loss, 0.3132f, 0.3133f);
+        Assert.InRange(result.Evaluation.Loss, 0.3632f, 0.3633f);
         Assert.Equal(1f, result.Evaluation.Accuracy);
         Assert.True(result.Evaluation.Elapsed >= TimeSpan.Zero);
     }
