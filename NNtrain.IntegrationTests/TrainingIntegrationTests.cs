@@ -72,6 +72,7 @@ public sealed class TrainingIntegrationTests
                 Epochs = configuration.Epochs,
                 StepsPerEpoch = 2,
                 RandomSeed = configuration.Seed,
+                LabelSmoothing = configuration.LabelSmoothing,
             });
 
         TrainingEpochResult result =

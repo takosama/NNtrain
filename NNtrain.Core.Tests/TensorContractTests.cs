@@ -136,6 +136,21 @@ public sealed class TensorContractTests
             () => tensor.LayerNormLastDim(gamma, beta, float.NaN));
     }
 
+    [Theory]
+    [InlineData(-0.01f)]
+    [InlineData(1f)]
+    [InlineData(float.NaN)]
+    [InlineData(float.PositiveInfinity)]
+    public void CrossEntropyRejectsInvalidLabelSmoothing(float smoothing)
+    {
+        Tensor logits = Tensor.From1D([1f, 0f]);
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            () => logits.CrossEntropyWithLogits([0], smoothing));
+
+        Assert.Equal("labelSmoothing", exception.ParamName);
+    }
+
     [Fact]
     public void ToStringUsesDataFormatting()
     {

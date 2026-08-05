@@ -10,6 +10,7 @@
   "epochs": 200,
   "batchSize":256 ,
   "learningRate": 0.0003,
+  "labelSmoothing": 0.1,
   "useSimd": true,
   "seed": 1234,
   "model": {

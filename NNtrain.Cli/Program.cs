@@ -70,6 +70,8 @@ class Program
                 $"workers = {Environment.ProcessorCount}");
             output.WriteLine(
                 $"simd = {GetSimdStatus()}");
+            output.WriteLine(
+                $"label smoothing = {config.LabelSmoothing:F3}");
 
             for (int epoch = 1; epoch <= config.Epochs; epoch++)
             {
@@ -95,7 +97,8 @@ class Program
                         samplesInBatch);
                     Tensor logits = model.ForwardBatch(samples.Input);
                     Tensor loss = logits.CrossEntropyWithLogits(
-                        samples.Answers);
+                        samples.Answers,
+                        config.LabelSmoothing);
                     float batchLoss = loss.Data[0];
 
                     loss.Backward();
@@ -141,7 +144,8 @@ class Program
                             samplesInBatch);
                         Tensor logits = model.ForwardBatch(samples.Input);
                         Tensor loss = logits.CrossEntropyWithLogits(
-                            samples.Answers);
+                            samples.Answers,
+                            config.LabelSmoothing);
                         evalLoss += loss.Data[0] * samplesInBatch;
                         evalCorrectCount += CountCorrect(
                             logits.Data,
