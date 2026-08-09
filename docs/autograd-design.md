@@ -44,7 +44,8 @@ Gradients follow these rules:
    been cleared, while a leaf output retains earlier gradients and accumulates
    the new seed.
 5. `Tensor.ZeroGrad()` clears only that tensor. `Parameter.ZeroGrad()`,
-   `Module.ZeroGrad()`, and `AdamW.ZeroGrad()` explicitly clear parameter leaves.
+   `Module.ZeroGrad()`, and optimizer `ZeroGrad()` explicitly clear parameter
+   leaves.
 6. Seed shape is validated before any gradient is cleared or changed. A rejected
    backward request therefore leaves all existing gradients unchanged.
 
@@ -84,10 +85,10 @@ The same retained graph may run `Backward` more than once sequentially:
    remains reachable; there is currently no automatic graph release.
 
 Forward values used by derivative rules must remain unchanged. Tensor data has
-an internal version that advances whenever `Parameter.Step`, `Module.Step`, or
-`AdamW.Step` updates it. Each `AutogradNode` records its parents' versions during
-the forward pass. `Backward` rejects a stale graph before clearing or changing
-any gradient and instructs the caller to perform a fresh forward pass.
+an internal version that advances whenever an optimizer updates a Parameter.
+Each `AutogradNode` records its parents' versions during the forward pass.
+`Backward` rejects a stale graph before clearing or changing any gradient and
+instructs the caller to perform a fresh forward pass.
 
 Repeated calls are defined as sequential operations. Concurrent `Backward`
 calls on the same graph are not supported.

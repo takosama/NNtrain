@@ -5,6 +5,11 @@ namespace NNtrain;
 
 sealed record TrainingConfiguration
 {
+    internal const string GainShareAdamWOptimizer = "gainshareadamw";
+    internal const string LionOptimizer = "lion";
+    internal const string NekoMuonOptimizer = "nekomuon";
+    internal const string AdamWOptimizer = "adamw";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         AllowTrailingCommas = true,
@@ -22,13 +27,43 @@ sealed record TrainingConfiguration
 
     public int BatchSize { get; init; } = 32;
 
-    public float LearningRate { get; init; } = 1e-4f;
+    public string Optimizer { get; init; } = GainShareAdamWOptimizer;
 
-    public float WeightDecay { get; init; } = 0.05f;
+    public float LearningRate { get; init; } = 3e-4f;
+
+    public float AuxiliaryLearningRate { get; init; } = 3e-4f;
+
+    public float WeightDecay { get; init; } = 5e-4f;
+
+    public int GainShareBlockDepth { get; init; } = 1;
+
+    public float GainShareBeta1 { get; init; } = 0.9f;
+
+    public float GainShareBeta2 { get; init; } = 0.999f;
+
+    public float GainShareEpsilon { get; init; } = 1e-8f;
+
+    public float GainShareRho { get; init; } = 0.95f;
+
+    public float GainShareGamma { get; init; } = 1f;
+
+    public float GainShareMinScale { get; init; } = 0.5f;
+
+    public float GainShareMaxScale { get; init; } = 2f;
 
     public float LabelSmoothing { get; init; } = 0.1f;
 
+    public int WarmupEpochs { get; init; }
+
+    public float MinimumLearningRateRatio { get; init; } = 0.01f;
+
+    public int EarlyStoppingPatience { get; init; }
+
+    public float EarlyStoppingMinimumDelta { get; init; } = 1e-4f;
+
     public bool UseSimd { get; init; } = true;
+
+    public bool ShowLossGraph { get; init; } = true;
 
     public int Seed { get; init; } = 1234;
 
@@ -96,6 +131,20 @@ sealed record TrainingConfiguration
                 "Batch size must be positive.");
         }
 
+        if (!IsOptimizer(GainShareAdamWOptimizer)
+            && !IsOptimizer(LionOptimizer)
+            && !IsOptimizer(NekoMuonOptimizer)
+            && !IsOptimizer(AdamWOptimizer))
+        {
+            throw new ArgumentException(
+                $"Unsupported optimizer '{Optimizer}'. Supported " +
+                $"optimizers are '{GainShareAdamWOptimizer}', " +
+                $"'{LionOptimizer}', " +
+                $"'{NekoMuonOptimizer}', and " +
+                $"'{AdamWOptimizer}'.",
+                nameof(Optimizer));
+        }
+
         if (!float.IsFinite(LearningRate) || LearningRate <= 0f)
         {
             throw new ArgumentOutOfRangeException(
@@ -104,12 +153,84 @@ sealed record TrainingConfiguration
                 "Learning rate must be finite and positive.");
         }
 
+        if (!float.IsFinite(AuxiliaryLearningRate)
+            || AuxiliaryLearningRate <= 0f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(AuxiliaryLearningRate),
+                AuxiliaryLearningRate,
+                "Auxiliary AdamW learning rate must be finite and positive.");
+        }
+
         if (!float.IsFinite(WeightDecay) || WeightDecay < 0f)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(WeightDecay),
                 WeightDecay,
                 "Weight decay must be finite and non-negative.");
+        }
+
+        if (GainShareBlockDepth < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(GainShareBlockDepth),
+                GainShareBlockDepth,
+                "GainShare block depth must be non-negative.");
+        }
+
+        ValidateGainShareUnitInterval(
+            GainShareBeta1,
+            nameof(GainShareBeta1),
+            "beta1");
+        ValidateGainShareUnitInterval(
+            GainShareBeta2,
+            nameof(GainShareBeta2),
+            "beta2");
+
+        if (!float.IsFinite(GainShareEpsilon)
+            || GainShareEpsilon <= 0f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(GainShareEpsilon),
+                GainShareEpsilon,
+                "GainShare epsilon must be finite and positive.");
+        }
+
+        if (!float.IsFinite(GainShareRho)
+            || GainShareRho < 0f
+            || GainShareRho >= 1f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(GainShareRho),
+                GainShareRho,
+                "GainShare rho must be finite and in [0, 1).");
+        }
+
+        if (!float.IsFinite(GainShareGamma) || GainShareGamma < 0f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(GainShareGamma),
+                GainShareGamma,
+                "GainShare gamma must be finite and non-negative.");
+        }
+
+        if (!float.IsFinite(GainShareMinScale)
+            || GainShareMinScale <= 0f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(GainShareMinScale),
+                GainShareMinScale,
+                "GainShare minimum scale must be finite and positive.");
+        }
+
+        if (!float.IsFinite(GainShareMaxScale)
+            || GainShareMaxScale < GainShareMinScale)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(GainShareMaxScale),
+                GainShareMaxScale,
+                "GainShare maximum scale must be finite and not less " +
+                "than the minimum scale.");
         }
 
         if (!float.IsFinite(LabelSmoothing)
@@ -122,6 +243,44 @@ sealed record TrainingConfiguration
                 "Label smoothing must be finite and in the range [0, 1).");
         }
 
+        if (WarmupEpochs < 0 || WarmupEpochs >= Epochs)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(WarmupEpochs),
+                WarmupEpochs,
+                "Warmup epochs must be non-negative and less than the " +
+                "total epoch count.");
+        }
+
+        if (!float.IsFinite(MinimumLearningRateRatio)
+            || MinimumLearningRateRatio <= 0f
+            || MinimumLearningRateRatio > 1f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(MinimumLearningRateRatio),
+                MinimumLearningRateRatio,
+                "Minimum learning-rate ratio must be finite and in " +
+                "the range (0, 1].");
+        }
+
+        if (EarlyStoppingPatience < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(EarlyStoppingPatience),
+                EarlyStoppingPatience,
+                "Early-stopping patience must be non-negative.");
+        }
+
+        if (!float.IsFinite(EarlyStoppingMinimumDelta)
+            || EarlyStoppingMinimumDelta < 0f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(EarlyStoppingMinimumDelta),
+                EarlyStoppingMinimumDelta,
+                "Early-stopping minimum delta must be finite and " +
+                "non-negative.");
+        }
+
         if (Model is null)
         {
             throw new ArgumentException(
@@ -131,6 +290,26 @@ sealed record TrainingConfiguration
 
         Model.Validate();
     }
+
+    private static void ValidateGainShareUnitInterval(
+        float value,
+        string parameterName,
+        string settingName)
+    {
+        if (!float.IsFinite(value) || value < 0f || value >= 1f)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                value,
+                $"GainShare {settingName} must be finite and in [0, 1).");
+        }
+    }
+
+    internal bool IsOptimizer(string expectedOptimizer)
+        => string.Equals(
+            Optimizer,
+            expectedOptimizer,
+            StringComparison.OrdinalIgnoreCase);
 }
 
 sealed record DatasetConfiguration
@@ -145,6 +324,13 @@ sealed record DatasetConfiguration
     public string LabelPath { get; init; } = string.Empty;
 
     public string DataPath { get; init; } = string.Empty;
+
+    public int PatchSize { get; init; } = 4;
+
+    public bool Normalize { get; init; }
+
+    public Cifar100AugmentationConfiguration Augmentation { get; init; } =
+        new();
 
     internal void Validate(string role)
     {
@@ -186,6 +372,25 @@ sealed record DatasetConfiguration
                     nameof(DataPath));
             }
 
+            if (Augmentation is null)
+            {
+                throw new ArgumentException(
+                    $"{role} CIFAR-100 augmentation configuration cannot " +
+                    "be null.",
+                    nameof(Augmentation));
+            }
+
+            if (PatchSize <= 0 || 32 % PatchSize != 0)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(PatchSize),
+                    PatchSize,
+                    $"{role} CIFAR-100 patch size must be a positive " +
+                    "divisor of 32.");
+            }
+
+            Augmentation.Validate(role);
+
             return;
         }
 
@@ -218,6 +423,27 @@ sealed record DatasetConfiguration
         => string.Equals(Type, expectedType, StringComparison.OrdinalIgnoreCase);
 }
 
+sealed record Cifar100AugmentationConfiguration
+{
+    public int RandomCropPadding { get; init; } = 4;
+
+    public bool HorizontalFlip { get; init; } = true;
+
+    public bool VerticalFlip { get; init; }
+
+    internal void Validate(string role)
+    {
+        if (RandomCropPadding < 0 || RandomCropPadding > 32)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(RandomCropPadding),
+                RandomCropPadding,
+                $"{role} CIFAR-100 random crop padding must be between " +
+                "0 and 32.");
+        }
+    }
+}
+
 sealed record ModelConfiguration
 {
     public int Heads { get; init; } = 1;
@@ -229,6 +455,8 @@ sealed record ModelConfiguration
     public int Seed { get; init; }
 
     public float InitializationScale { get; init; } = 0.02f;
+
+    public float Dropout { get; init; }
 
     internal void Validate()
     {
@@ -263,6 +491,14 @@ sealed record ModelConfiguration
                 nameof(InitializationScale),
                 InitializationScale,
                 "Initialization scale must be finite and positive.");
+        }
+
+        if (!float.IsFinite(Dropout) || Dropout < 0f || Dropout >= 1f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(Dropout),
+                Dropout,
+                "Dropout probability must be finite and in [0, 1).");
         }
     }
 

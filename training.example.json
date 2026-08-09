@@ -9,15 +9,30 @@
   },
   "epochs": 200,
   "batchSize": 16,
+  "optimizer": "gainshareadamw",
   "learningRate": 0.0003,
-  "weightDecay": 0.05,
+  "weightDecay": 0.0005,
+  "gainShareBlockDepth": 1,
+  "gainShareBeta1": 0.9,
+  "gainShareBeta2": 0.999,
+  "gainShareEpsilon": 1e-8,
+  "gainShareRho": 0.95,
+  "gainShareGamma": 1.0,
+  "gainShareMinScale": 0.5,
+  "gainShareMaxScale": 2.0,
   "labelSmoothing": 0.1,
+  "warmupEpochs": 0,
+  "minimumLearningRateRatio": 0.01,
+  "earlyStoppingPatience": 0,
+  "earlyStoppingMinimumDelta": 0.0001,
+  "showLossGraph": true,
   "seed": 1234,
   "model": {
     "heads": 4,
     "hiddenSize": 128,
     "layers": 8,
     "seed": 43,
-    "initializationScale": 0.02
+    "initializationScale": 0.02,
+    "dropout": 0.0
   }
 }

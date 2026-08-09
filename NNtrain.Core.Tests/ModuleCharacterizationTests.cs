@@ -30,6 +30,38 @@ public sealed class ModuleCharacterizationTests
     }
 
     [Fact]
+    public void TransformerSeparatesHiddenMatrixWeightsFromAuxiliaryParameters()
+    {
+        var model = new TransformerClassifier(
+            seqLen: 2,
+            dModel: 4,
+            numHeads: 2,
+            dHidden: 8,
+            numLayers: 1,
+            numClasses: 3,
+            rng: new Random(11));
+
+        Parameter[] all = model.Parameters().ToArray();
+        Parameter[] hidden = model.HiddenWeightParameters.ToArray();
+        Parameter[] auxiliary = model.AuxiliaryParameters.ToArray();
+
+        Assert.Equal(4, hidden.Length);
+        Assert.Equal(11, auxiliary.Length);
+        Assert.All(hidden, parameter => Assert.Equal(2, parameter.T.Rank));
+        Assert.DoesNotContain(model.Pos, hidden);
+        Assert.DoesNotContain(model.Head.W, hidden);
+        Assert.DoesNotContain(model.Head.B, hidden);
+        Assert.Contains(model.Pos, auxiliary);
+        Assert.Contains(model.Head.W, auxiliary);
+        Assert.Contains(model.Head.B, auxiliary);
+        Assert.Empty(hidden.Intersect(auxiliary, ReferenceEqualityComparer.Instance));
+        Assert.Equal(
+            all.ToHashSet(ReferenceEqualityComparer.Instance),
+            hidden.Concat(auxiliary)
+                .ToHashSet(ReferenceEqualityComparer.Instance));
+    }
+
+    [Fact]
     public void LinearForwardAndBackwardAreDeterministic()
     {
         var linear = new Linear(2, 2, new Random(123), initScale: 0.1f);

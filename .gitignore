@@ -14,6 +14,10 @@ data/
 # BenchmarkDotNet generated reports and executables
 BenchmarkDotNet.Artifacts/
 
+# Generated training reports and checkpoints
+*.loss*.html
+*.best-model.json
+
 # OS files
 .DS_Store
 Thumbs.db

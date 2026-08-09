@@ -6,3 +6,10 @@ public interface IOptimizer
 
     void Step();
 }
+
+public interface ILearningRateAdjustable
+{
+    float LearningRate { get; }
+
+    void SetLearningRate(float learningRate);
+}

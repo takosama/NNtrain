@@ -48,8 +48,9 @@ The built-in policy is:
 | LayerNorm `Gamma` and `Beta` | `Exclude` |
 | Transformer positional parameter (`Pos`) | `Apply` |
 
-AdamW consumes this policy directly. `AdamWOptions.Decay1D` remains available
-as a compatibility override for one-dimensional parameters.
+AdamW, GainShareAdamW, Lion, and NekoMuon consume this policy directly. Their
+`Decay1D` options
+remain available as compatibility overrides for one-dimensional parameters.
 
 ## Optimizer-only parameter updates
 
@@ -58,8 +59,10 @@ can clear gradients through those objects, but it cannot update parameter data
 through them.
 
 Parameter data mutation is exposed only as an internal, versioned update scope
-for optimizer implementations. AdamW acquires that scope from each Parameter,
-applies its update, and disposes the scope to advance the Tensor data version.
+for optimizer implementations. AdamW, GainShareAdamW, Lion, and NekoMuon
+acquire that scope
+from each Parameter, apply their updates, and dispose the scope to advance the
+Tensor data version.
 This keeps stale-graph detection intact while making the optimizer the single
 public owner of learning updates.
 
@@ -72,9 +75,75 @@ implementations:
 - `ZeroGrad()` clears gradients for all parameters managed by the optimizer.
 - `Step()` applies one update using the currently accumulated gradients.
 
-AdamW implements this contract, and the application entry point stores it as an
-`IOptimizer`. Algorithm-specific configuration remains on AdamW rather than
-leaking into the common interface.
+AdamW, GainShareAdamW, Lion, and NekoMuon implement this contract, and the
+application entry point stores the selected implementation as an `IOptimizer`.
+Algorithm-specific configuration remains on each optimizer rather than leaking
+into the common interface.
+
+`CompositeOptimizer` forwards the same lifecycle operations to disjoint child
+optimizers. The CLI uses it for NekoMuon training: matrix weights inside
+Transformer blocks are assigned to NekoMuon, while positional embeddings, the
+classifier head, biases, and LayerNorm parameters are assigned to AdamW. The
+auxiliary AdamW uses learning rate `3e-4`, betas `(0.9, 0.95)`, epsilon `1e-8`,
+and the configured weight decay.
+
+## GainShareAdamW options
+
+GainShareAdamW is the CLI default. `Module.MakeGainShareParameterGroups()`
+builds stable, disjoint groups from the module tree; depth one gives positional
+parameters, each Transformer block, and the classifier head their own groups.
+For each group, GainShare computes non-negative gradient/update alignment,
+smooths it with rho, clamps the relative scale, and then globally normalizes all
+scales so the squared Adam update norm is preserved before decoupled decay.
+
+| Option | Default |
+| --- | --- |
+| `LearningRate` | `3e-4` |
+| `Beta1` | `0.9` |
+| `Beta2` | `0.999` |
+| `Epsilon` | `1e-8` |
+| `Rho` | `0.95` |
+| `Gamma` | `1.0` |
+| `MinScale` | `0.5` |
+| `MaxScale` | `2.0` |
+| `WeightDecay` | `5e-4` |
+| `Decay1D` | `false` |
+
+## Lion options
+
+Lion applies the sign of the interpolation between the previous momentum and
+current gradient, then updates the momentum EMA. Weight decay is decoupled from
+that signed update.
+
+| Option | Default |
+| --- | --- |
+| `LearningRate` | `3e-4` |
+| `Beta1` | `0.9` |
+| `Beta2` | `0.99` |
+| `WeightDecay` | `1e-2` |
+| `Decay1D` | `false` |
+
+## NekoMuon options
+
+NekoMuon is available for hidden matrix weights. It maintains
+bias-corrected fast and slow gradient EMAs. Their positive
+cosine alignment and the persistent slow component form a confidence score.
+An EMA of that score selects a continuous Newton-Schulz depth: the integer
+portion runs full iterations and the fractional portion interpolates toward
+the next iteration. Muon's Frobenius normalization, quintic Newton-Schulz
+coefficients, transpose optimization, and rectangular-matrix final scaling are
+then applied to the update.
+
+| Option | Default |
+| --- | --- |
+| `LearningRate` | `3e-4` |
+| `BetaFast` | `0.9` |
+| `BetaSlow` | `0.99` |
+| `Rho` | `0.9` |
+| `Epsilon` | `1e-7` |
+| `MaxNewtonSchulzSteps` | `5` |
+| `WeightDecay` | `1e-2` |
+| `Decay1D` | `false` |
 
 ## AdamW options
 
@@ -91,9 +160,9 @@ an optional options object; omitting the object uses the defaults below.
 | `WeightDecay` | `5e-2` |
 | `Decay1D` | `false` |
 
-Configuration remains specific to AdamW and is deliberately absent from
-`IOptimizer`. Adding another optimizer therefore does not expand the common
-lifecycle contract.
+Configuration remains specific to each implementation and is deliberately
+absent from `IOptimizer`. Supporting GainShareAdamW, Lion, and NekoMuon
+therefore does not expand the common lifecycle contract.
 
 ## Duplicate parameter detection
 
@@ -106,22 +175,25 @@ Detection occurs at three boundaries:
 2. `Module.RegisterModule` rejects the same direct child twice, while recursive
    parameter enumeration rejects shared children and parameters reached through
    multiple paths.
-3. AdamW materializes and validates its input before allocating optimizer state;
-   supplying the same Parameter more than once throws instead of updating it
-   twice.
+3. AdamW, GainShareAdamW, Lion, and NekoMuon materialize and validate their
+   input before
+   allocating optimizer state; supplying the same Parameter more than once
+   throws instead of updating it twice.
 
 `Module.ZeroGrad()` completes recursive validation before clearing any gradient,
 so an invalid module graph cannot cause a partial clear.
 
 ## Optimizer state
 
-Phase 5-7 replaces AdamW's Parameter-keyed state dictionaries with a versioned,
-ordered `AdamWState` structure. A state snapshot contains:
+AdamW, GainShareAdamW, Lion, and NekoMuon expose versioned, ordered state
+structures. A state snapshot contains:
 
 - the state format version and completed step count;
-- the AdamW options needed to continue with the same update rule;
-- one slot per Parameter containing its stable index, name, shape, first moment,
-  and second moment.
+- the optimizer options needed to continue with the same update rule;
+- one slot per Parameter containing its stable index, name, shape, and required
+  moment buffers (one for Lion, two for AdamW/GainShareAdamW, and fast/slow plus
+  confidence for NekoMuon); GainShareAdamW additionally stores parameter-group
+  membership and the alignment EMA for every group.
 
 Slots follow the stable `Module.Parameters()` order established in phase 5-1.
 Names do not need to be globally unique because index and shape are validated
@@ -130,5 +202,7 @@ together. Parameter object references are not stored in the snapshot.
 `CaptureState()` returns a deep copy suitable for serialization.
 `RestoreState()` validates the format version and complete Parameter layout
 before replacing the live optimizer state, and also makes a defensive copy.
-The model's Parameter data is a separate checkpoint concern and must be restored
-before the optimizer state.
+`Module.CaptureState()` snapshots all parameter values in stable registration
+order. `Module.RestoreState()` validates the full index/name/shape layout before
+mutating any parameter, which lets the CLI save and restore the best evaluated
+model independently of optimizer moment state.

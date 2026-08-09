@@ -59,6 +59,9 @@ public sealed class Trainer
         int epoch,
         Action<TrainingBatchResult>? onBatchCompleted)
     {
+        if (_model is Module module)
+            module.Train();
+
         float lossSum = 0f;
         int correct = 0;
         var stopwatch = Stopwatch.StartNew();
@@ -88,10 +91,15 @@ public sealed class Trainer
     private TrainingStepResult TrainStep()
     {
         int sampleIndex = _random.Next(_trainingDataset.Count);
-        Sample sample = ReadSample(_trainingDataset, sampleIndex);
+        Sample sample = ReadSample(
+            _trainingDataset,
+            sampleIndex,
+            useTrainingAugmentation: true);
 
         _optimizer.ZeroGrad();
-        ForwardResult forward = Forward(sample);
+        ForwardResult forward = Forward(
+            sample,
+            _options.LabelSmoothing);
         float lossValue = forward.Loss.Data[0];
 
         forward.Loss.Backward();
@@ -102,6 +110,9 @@ public sealed class Trainer
 
     private TrainingMetrics Evaluate()
     {
+        if (_model is Module module)
+            module.Eval();
+
         float lossSum = 0f;
         int correct = 0;
         var stopwatch = Stopwatch.StartNew();
@@ -110,8 +121,11 @@ public sealed class Trainer
         {
             for (int index = 0; index < _evaluationDataset.Count; index++)
             {
-                Sample sample = ReadSample(_evaluationDataset, index);
-                ForwardResult forward = Forward(sample);
+                Sample sample = ReadSample(
+                    _evaluationDataset,
+                    index,
+                    useTrainingAugmentation: false);
+                ForwardResult forward = Forward(sample, labelSmoothing: 0f);
                 lossSum += forward.Loss.Data[0];
                 if (forward.IsCorrect)
                     correct++;
@@ -127,10 +141,13 @@ public sealed class Trainer
 
     private Sample ReadSample(
         IImageClassificationDataset dataset,
-        int index)
+        int index,
+        bool useTrainingAugmentation)
     {
         var inputValues = new float[dataset.ImageSize];
-        int answer = dataset.ReadSample(index, inputValues);
+        int answer = useTrainingAugmentation
+            ? dataset.ReadTrainingSample(index, inputValues, _random)
+            : dataset.ReadSample(index, inputValues);
         var input = Tensor.FromOwnedData(
             inputValues,
             [dataset.Rows, dataset.Columns],
@@ -138,12 +155,12 @@ public sealed class Trainer
         return new Sample(input, answer);
     }
 
-    private ForwardResult Forward(Sample sample)
+    private ForwardResult Forward(Sample sample, float labelSmoothing)
     {
         Tensor logits = _model.Forward(sample.Input);
         Tensor loss = logits.CrossEntropyWithLogits(
             [sample.Answer],
-            _options.LabelSmoothing);
+            labelSmoothing);
         int prediction = ArgMax(logits.Data);
         return new ForwardResult(loss, prediction == sample.Answer);
     }

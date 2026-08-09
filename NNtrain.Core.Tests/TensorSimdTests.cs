@@ -119,6 +119,64 @@ public sealed class TensorSimdTests
         }
     }
 
+    [Fact]
+    public void ScalarAndVector256ParallelLionProduceEquivalentStates()
+    {
+        bool previous = Tensor.SimdEnabled;
+        try
+        {
+            LionResult scalar = RunLion(useSimd: false);
+            LionResult vector256 = RunLion(useSimd: true);
+
+            AssertClose(scalar.Parameters, vector256.Parameters, 2e-6f);
+            AssertClose(scalar.Momenta, vector256.Momenta, 2e-6f);
+        }
+        finally
+        {
+            Tensor.SimdEnabled = previous;
+        }
+    }
+
+    [Fact]
+    public void ScalarAndVector256ParallelNekoMuonProduceEquivalentStates()
+    {
+        bool previous = Tensor.SimdEnabled;
+        try
+        {
+            NekoMuonResult scalar = RunNekoMuon(useSimd: false);
+            NekoMuonResult vector256 = RunNekoMuon(useSimd: true);
+
+            AssertClose(scalar.Parameters, vector256.Parameters, 3e-5f);
+            AssertClose(scalar.FastMoments, vector256.FastMoments, 2e-6f);
+            AssertClose(scalar.SlowMoments, vector256.SlowMoments, 2e-6f);
+            AssertClose(scalar.Confidences, vector256.Confidences, 2e-6f);
+        }
+        finally
+        {
+            Tensor.SimdEnabled = previous;
+        }
+    }
+
+    [Fact]
+    public void ScalarAndVector256GainShareAdamWProduceEquivalentStates()
+    {
+        bool previous = Tensor.SimdEnabled;
+        try
+        {
+            GainShareResult scalar = RunGainShare(useSimd: false);
+            GainShareResult vector256 = RunGainShare(useSimd: true);
+
+            AssertClose(scalar.Parameters, vector256.Parameters, 2e-5f);
+            AssertClose(scalar.FirstMoments, vector256.FirstMoments, 2e-6f);
+            AssertClose(scalar.SecondMoments, vector256.SecondMoments, 2e-6f);
+            AssertClose(scalar.AlignmentEmas, vector256.AlignmentEmas, 2e-5f);
+        }
+        finally
+        {
+            Tensor.SimdEnabled = previous;
+        }
+    }
+
     private static ElementwiseResult RunElementwise(bool useSimd)
     {
         Tensor.SimdEnabled = useSimd;
@@ -287,6 +345,167 @@ public sealed class TensorSimdTests
                 .ToArray());
     }
 
+    private static LionResult RunLion(bool useSimd)
+    {
+        Tensor.SimdEnabled = useSimd;
+        const int parameterLength = 20_000;
+        var parameters = new[]
+        {
+            new Parameter(
+                Enumerable.Range(0, parameterLength)
+                    .Select(index => (index % 31 - 15) * 0.01f)
+                    .ToArray(),
+                [parameterLength],
+                "first",
+                WeightDecayPolicy.Apply),
+            new Parameter(
+                Enumerable.Range(0, parameterLength)
+                    .Select(index => (index % 23 - 11) * 0.013f)
+                    .ToArray(),
+                [parameterLength],
+                "second",
+                WeightDecayPolicy.Exclude),
+        };
+        for (int parameter = 0; parameter < parameters.Length; parameter++)
+        {
+            Span<float> gradient = parameters[parameter].T.MutableGrad;
+            for (int index = 0; index < gradient.Length; index++)
+            {
+                gradient[index] =
+                    (index % 17 - 8) * (0.002f + parameter * 0.001f);
+            }
+        }
+
+        var optimizer = new Lion(
+            parameters,
+            new LionOptions
+            {
+                LearningRate = 0.003f,
+                WeightDecay = 0.01f,
+                Decay1D = true,
+            });
+        optimizer.Step();
+        optimizer.Step();
+        LionState state = optimizer.CaptureState();
+
+        return new LionResult(
+            parameters.SelectMany(parameter => parameter.T.Data).ToArray(),
+            state.ParameterStates
+                .SelectMany(parameter => parameter.Momentum)
+                .ToArray());
+    }
+
+    private static NekoMuonResult RunNekoMuon(bool useSimd)
+    {
+        Tensor.SimdEnabled = useSimd;
+        const int rows = 32;
+        const int columns = 1024;
+        int parameterLength = rows * columns;
+        var parameters = new[]
+        {
+            new Parameter(
+                Enumerable.Range(0, parameterLength)
+                    .Select(index => (index % 31 - 15) * 0.01f)
+                    .ToArray(),
+                [rows, columns],
+                "first",
+                WeightDecayPolicy.Apply),
+            new Parameter(
+                Enumerable.Range(0, parameterLength)
+                    .Select(index => (index % 23 - 11) * 0.013f)
+                    .ToArray(),
+                [rows, columns],
+                "second",
+                WeightDecayPolicy.Exclude),
+        };
+        for (int parameter = 0; parameter < parameters.Length; parameter++)
+        {
+            Span<float> gradient = parameters[parameter].T.MutableGrad;
+            for (int index = 0; index < gradient.Length; index++)
+            {
+                gradient[index] =
+                    (index % 17 - 8) * (0.002f + parameter * 0.001f);
+            }
+        }
+
+        var optimizer = new NekoMuon(
+            parameters,
+            new NekoMuonOptions
+            {
+                LearningRate = 0.003f,
+                MaxNewtonSchulzSteps = 3,
+                WeightDecay = 0.01f,
+            });
+        optimizer.Step();
+        NekoMuonState state = optimizer.CaptureState();
+
+        return new NekoMuonResult(
+            parameters.SelectMany(parameter => parameter.T.Data).ToArray(),
+            state.ParameterStates
+                .SelectMany(parameter => parameter.FastMoment)
+                .ToArray(),
+            state.ParameterStates
+                .SelectMany(parameter => parameter.SlowMoment)
+                .ToArray(),
+            state.ParameterStates
+                .Select(parameter => parameter.Confidence)
+                .ToArray());
+    }
+
+    private static GainShareResult RunGainShare(bool useSimd)
+    {
+        Tensor.SimdEnabled = useSimd;
+        const int length = 32 * 1024;
+        var parameters = new[]
+        {
+            new Parameter(
+                Enumerable.Range(0, length)
+                    .Select(index => (index % 29 - 14) * 0.01f)
+                    .ToArray(),
+                [32, 1024],
+                "first",
+                WeightDecayPolicy.Apply),
+            new Parameter(
+                Enumerable.Range(0, length)
+                    .Select(index => (index % 19 - 9) * 0.015f)
+                    .ToArray(),
+                [32, 1024],
+                "second",
+                WeightDecayPolicy.Exclude),
+        };
+        for (int parameter = 0; parameter < parameters.Length; parameter++)
+        {
+            Span<float> gradient = parameters[parameter].T.MutableGrad;
+            for (int index = 0; index < gradient.Length; index++)
+            {
+                gradient[index] =
+                    (index % 17 - 8) * (0.002f + parameter * 0.001f);
+            }
+        }
+
+        var optimizer = new GainShareAdamW(
+            [[parameters[0]], [parameters[1]]],
+            new GainShareAdamWOptions
+            {
+                LearningRate = 3e-4f,
+                WeightDecay = 5e-4f,
+            });
+        optimizer.Step();
+        GainShareAdamWState state = optimizer.CaptureState();
+
+        return new GainShareResult(
+            parameters.SelectMany(parameter => parameter.T.Data).ToArray(),
+            state.ParameterStates
+                .SelectMany(parameter => parameter.FirstMoment)
+                .ToArray(),
+            state.ParameterStates
+                .SelectMany(parameter => parameter.SecondMoment)
+                .ToArray(),
+            state.GroupStates
+                .Select(group => (float)(group.AlignmentEma ?? 0d))
+                .ToArray());
+    }
+
     private sealed record ElementwiseResult(
         float[] Output,
         float[] LeftGradient,
@@ -310,4 +529,20 @@ public sealed class TensorSimdTests
         float[] Parameters,
         float[] FirstMoments,
         float[] SecondMoments);
+
+    private sealed record LionResult(
+        float[] Parameters,
+        float[] Momenta);
+
+    private sealed record NekoMuonResult(
+        float[] Parameters,
+        float[] FastMoments,
+        float[] SlowMoments,
+        float[] Confidences);
+
+    private sealed record GainShareResult(
+        float[] Parameters,
+        float[] FirstMoments,
+        float[] SecondMoments,
+        float[] AlignmentEmas);
 }

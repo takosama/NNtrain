@@ -37,9 +37,12 @@ projects they exercise. Core must never add a reference to Data or Cli.
 
 Only cross-assembly contracts and composition types are public. These include
 `Tensor`, `Module`, `Parameter`, `TransformerClassifier`, the optimizer and
-dataset interfaces, `AdamW`, and `Trainer` with their options/results. Internal
-layer implementations and autograd graph details remain internal and are made
-visible only to `NNtrain.Core.Tests`. Integration tests use Core's public API;
+dataset interfaces, `AdamW`, `GainShareAdamW`, `Lion`, and `Trainer` with their
+options/results. `NekoMuon` is also public; every stateful optimizer exposes
+versioned state records.
+Internal layer implementations and autograd graph details remain internal and
+are made visible only to `NNtrain.Core.Tests`. Integration tests use Core's
+public API;
 only the CLI grants them access to its process-level test seam. Production
 projects do not use friend-assembly access to cross a boundary.
 

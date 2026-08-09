@@ -71,6 +71,27 @@ public sealed class ModuleParameterRegistrationTests
             gradient => Assert.Equal(0f, gradient));
     }
 
+    [Fact]
+    public void GainShareBlockDepthOneGroupsImmediateModelBlocks()
+    {
+        var model = new TransformerClassifier(
+            seqLen: 2,
+            dModel: 4,
+            numHeads: 2,
+            dHidden: 8,
+            numLayers: 2,
+            numClasses: 3,
+            rng: new Random(41));
+
+        IReadOnlyList<IReadOnlyList<Parameter>> groups =
+            model.MakeGainShareParameterGroups(blockDepth: 1);
+
+        Assert.Equal([1, 12, 12, 2], groups.Select(group => group.Count));
+        Assert.Equal(
+            model.Parameters().ToArray(),
+            groups.SelectMany(group => group).ToArray());
+    }
+
     private sealed class InterleavedModule : Module
     {
         internal InterleavedModule()

@@ -21,17 +21,33 @@ public sealed class TrainingConfigurationTests
               },
               "epochs": 7,
               "batchSize": 11,
+              "optimizer": "adamw",
               "learningRate": 0.025,
+              "auxiliaryLearningRate": 0.0007,
               "weightDecay": 0.04,
+              "gainShareBlockDepth": 2,
+              "gainShareBeta1": 0.7,
+              "gainShareBeta2": 0.8,
+              "gainShareEpsilon": 0.00001,
+              "gainShareRho": 0.8,
+              "gainShareGamma": 0.75,
+              "gainShareMinScale": 0.25,
+              "gainShareMaxScale": 3.0,
               "labelSmoothing": 0.2,
+              "warmupEpochs": 2,
+              "minimumLearningRateRatio": 0.03,
+              "earlyStoppingPatience": 5,
+              "earlyStoppingMinimumDelta": 0.002,
               "useSimd": false,
+              "showLossGraph": false,
               "seed": 42,
               "model": {
                 "heads": 2,
                 "hiddenSize": 64,
                 "layers": 3,
                 "seed": 9,
-                "initializationScale": 0.03
+                "initializationScale": 0.03,
+                "dropout": 0.15
               }
             }
             """);
@@ -53,16 +69,32 @@ public sealed class TrainingConfigurationTests
             configuration.EvaluationData.LabelPath);
         Assert.Equal(7, configuration.Epochs);
         Assert.Equal(11, configuration.BatchSize);
+        Assert.Equal("adamw", configuration.Optimizer);
         Assert.Equal(0.025f, configuration.LearningRate);
+        Assert.Equal(0.0007f, configuration.AuxiliaryLearningRate);
         Assert.Equal(0.04f, configuration.WeightDecay);
+        Assert.Equal(2, configuration.GainShareBlockDepth);
+        Assert.Equal(0.7f, configuration.GainShareBeta1);
+        Assert.Equal(0.8f, configuration.GainShareBeta2);
+        Assert.Equal(0.00001f, configuration.GainShareEpsilon);
+        Assert.Equal(0.8f, configuration.GainShareRho);
+        Assert.Equal(0.75f, configuration.GainShareGamma);
+        Assert.Equal(0.25f, configuration.GainShareMinScale);
+        Assert.Equal(3f, configuration.GainShareMaxScale);
         Assert.Equal(0.2f, configuration.LabelSmoothing);
+        Assert.Equal(2, configuration.WarmupEpochs);
+        Assert.Equal(0.03f, configuration.MinimumLearningRateRatio);
+        Assert.Equal(5, configuration.EarlyStoppingPatience);
+        Assert.Equal(0.002f, configuration.EarlyStoppingMinimumDelta);
         Assert.False(configuration.UseSimd);
+        Assert.False(configuration.ShowLossGraph);
         Assert.Equal(42, configuration.Seed);
         Assert.Equal(2, configuration.Model.Heads);
         Assert.Equal(64, configuration.Model.HiddenSize);
         Assert.Equal(3, configuration.Model.Layers);
         Assert.Equal(9, configuration.Model.Seed);
         Assert.Equal(0.03f, configuration.Model.InitializationScale);
+        Assert.Equal(0.15f, configuration.Model.Dropout);
     }
 
     [Fact]
@@ -88,16 +120,34 @@ public sealed class TrainingConfigurationTests
 
         Assert.Equal(200, configuration.Epochs);
         Assert.Equal(32, configuration.BatchSize);
-        Assert.Equal(1e-4f, configuration.LearningRate);
-        Assert.Equal(0.05f, configuration.WeightDecay);
+        Assert.Equal(
+            TrainingConfiguration.GainShareAdamWOptimizer,
+            configuration.Optimizer);
+        Assert.Equal(3e-4f, configuration.LearningRate);
+        Assert.Equal(3e-4f, configuration.AuxiliaryLearningRate);
+        Assert.Equal(5e-4f, configuration.WeightDecay);
+        Assert.Equal(1, configuration.GainShareBlockDepth);
+        Assert.Equal(0.9f, configuration.GainShareBeta1);
+        Assert.Equal(0.999f, configuration.GainShareBeta2);
+        Assert.Equal(1e-8f, configuration.GainShareEpsilon);
+        Assert.Equal(0.95f, configuration.GainShareRho);
+        Assert.Equal(1f, configuration.GainShareGamma);
+        Assert.Equal(0.5f, configuration.GainShareMinScale);
+        Assert.Equal(2f, configuration.GainShareMaxScale);
         Assert.Equal(0.1f, configuration.LabelSmoothing);
+        Assert.Equal(0, configuration.WarmupEpochs);
+        Assert.Equal(0.01f, configuration.MinimumLearningRateRatio);
+        Assert.Equal(0, configuration.EarlyStoppingPatience);
+        Assert.Equal(1e-4f, configuration.EarlyStoppingMinimumDelta);
         Assert.True(configuration.UseSimd);
+        Assert.True(configuration.ShowLossGraph);
         Assert.Equal(1234, configuration.Seed);
         Assert.Equal(1, configuration.Model.Heads);
         Assert.Equal(128, configuration.Model.HiddenSize);
         Assert.Equal(32, configuration.Model.Layers);
         Assert.Equal(0, configuration.Model.Seed);
         Assert.Equal(0.02f, configuration.Model.InitializationScale);
+        Assert.Equal(0f, configuration.Model.Dropout);
         Assert.Equal(
             DatasetConfiguration.MnistType,
             configuration.TrainingData.Type);
@@ -115,11 +165,25 @@ public sealed class TrainingConfigurationTests
             {
               "trainingData": {
                 "type": "cifar100",
-                "dataPath": "data/cifar-100-binary/train.bin"
+                "dataPath": "data/cifar-100-binary/train.bin",
+                "patchSize": 4,
+                "normalize": true,
+                "augmentation": {
+                  "randomCropPadding": 4,
+                  "horizontalFlip": true,
+                  "verticalFlip": false
+                }
               },
               "evaluationData": {
                 "type": "cifar100",
-                "dataPath": "data/cifar-100-binary/test.bin"
+                "dataPath": "data/cifar-100-binary/test.bin",
+                "patchSize": 4,
+                "normalize": true,
+                "augmentation": {
+                  "randomCropPadding": 0,
+                  "horizontalFlip": false,
+                  "verticalFlip": false
+                }
               }
             }
             """);
@@ -143,6 +207,64 @@ public sealed class TrainingConfigurationTests
             configuration.EvaluationData.DataPath);
         Assert.Equal(string.Empty, configuration.TrainingData.ImagePath);
         Assert.Equal(string.Empty, configuration.TrainingData.LabelPath);
+        Assert.Equal(4, configuration.TrainingData.PatchSize);
+        Assert.Equal(4, configuration.EvaluationData.PatchSize);
+        Assert.True(configuration.TrainingData.Normalize);
+        Assert.Equal(
+            4,
+            configuration.TrainingData.Augmentation.RandomCropPadding);
+        Assert.True(
+            configuration.TrainingData.Augmentation.HorizontalFlip);
+        Assert.False(
+            configuration.TrainingData.Augmentation.VerticalFlip);
+        Assert.True(configuration.EvaluationData.Normalize);
+        Assert.Equal(
+            0,
+            configuration.EvaluationData.Augmentation.RandomCropPadding);
+        Assert.False(
+            configuration.EvaluationData.Augmentation.HorizontalFlip);
+        Assert.False(
+            configuration.EvaluationData.Augmentation.VerticalFlip);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(33)]
+    public void Cifar100ConfigurationRejectsInvalidCropPadding(int padding)
+    {
+        var configuration = new DatasetConfiguration
+        {
+            Type = DatasetConfiguration.Cifar100Type,
+            DataPath = "train.bin",
+            Augmentation = new Cifar100AugmentationConfiguration
+            {
+                RandomCropPadding = padding,
+            },
+        };
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            () => configuration.Validate("Training"));
+
+        Assert.Equal("RandomCropPadding", exception.ParamName);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(3)]
+    [InlineData(33)]
+    public void Cifar100ConfigurationRejectsInvalidPatchSize(int patchSize)
+    {
+        var configuration = new DatasetConfiguration
+        {
+            Type = DatasetConfiguration.Cifar100Type,
+            DataPath = "train.bin",
+            PatchSize = patchSize,
+        };
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            () => configuration.Validate("Training"));
+
+        Assert.Equal("PatchSize", exception.ParamName);
     }
 
     [Fact]
@@ -174,10 +296,29 @@ public sealed class TrainingConfigurationTests
         Assert.Contains("Unsupported", exception.Message);
     }
 
+    [Fact]
+    public void RejectsUnknownOptimizers()
+    {
+        TrainingConfiguration configuration = CreateValidConfiguration() with
+        {
+            Optimizer = "sgd",
+        };
+
+        var exception = Assert.Throws<ArgumentException>(
+            configuration.Validate);
+
+        Assert.Equal("Optimizer", exception.ParamName);
+        Assert.Contains("gainshareadamw", exception.Message);
+        Assert.Contains("lion", exception.Message);
+        Assert.Contains("nekomuon", exception.Message);
+        Assert.Contains("adamw", exception.Message);
+    }
+
     [Theory]
     [InlineData("epochs", "Epochs")]
     [InlineData("batchSize", "BatchSize")]
     [InlineData("learningRate", "LearningRate")]
+    [InlineData("auxiliaryLearningRate", "AuxiliaryLearningRate")]
     [InlineData("heads", "Heads")]
     [InlineData("hiddenSize", "HiddenSize")]
     [InlineData("layers", "Layers")]
@@ -201,6 +342,8 @@ public sealed class TrainingConfigurationTests
             Epochs = setting == "epochs" ? 0 : 1,
             BatchSize = setting == "batchSize" ? 0 : 1,
             LearningRate = setting == "learningRate" ? 0f : 0.1f,
+            AuxiliaryLearningRate =
+                setting == "auxiliaryLearningRate" ? 0f : 0.01f,
             Model = new ModelConfiguration
             {
                 Heads = setting == "heads" ? 0 : 1,
@@ -296,6 +439,135 @@ public sealed class TrainingConfigurationTests
     }
 
     [Fact]
+    public void RejectsNegativeGainShareBlockDepth()
+    {
+        TrainingConfiguration configuration = CreateValidConfiguration() with
+        {
+            GainShareBlockDepth = -1,
+        };
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            configuration.Validate);
+
+        Assert.Equal("GainShareBlockDepth", exception.ParamName);
+    }
+
+    [Theory]
+    [InlineData(-0.1f)]
+    [InlineData(1f)]
+    [InlineData(float.NaN)]
+    public void RejectsInvalidGainShareRho(float rho)
+    {
+        TrainingConfiguration configuration = CreateValidConfiguration() with
+        {
+            GainShareRho = rho,
+        };
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            configuration.Validate);
+
+        Assert.Equal("GainShareRho", exception.ParamName);
+    }
+
+    [Theory]
+    [InlineData(-0.1f)]
+    [InlineData(1f)]
+    [InlineData(float.NaN)]
+    public void RejectsInvalidGainShareBeta1(float beta1)
+    {
+        TrainingConfiguration configuration = CreateValidConfiguration() with
+        {
+            GainShareBeta1 = beta1,
+        };
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            configuration.Validate);
+
+        Assert.Equal("GainShareBeta1", exception.ParamName);
+    }
+
+    [Theory]
+    [InlineData(0f)]
+    [InlineData(-1f)]
+    [InlineData(float.NaN)]
+    public void RejectsInvalidGainShareEpsilon(float epsilon)
+    {
+        TrainingConfiguration configuration = CreateValidConfiguration() with
+        {
+            GainShareEpsilon = epsilon,
+        };
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            configuration.Validate);
+
+        Assert.Equal("GainShareEpsilon", exception.ParamName);
+    }
+
+    [Fact]
+    public void RejectsGainShareMaximumBelowMinimum()
+    {
+        TrainingConfiguration configuration = CreateValidConfiguration() with
+        {
+            GainShareMinScale = 1f,
+            GainShareMaxScale = 0.5f,
+        };
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            configuration.Validate);
+
+        Assert.Equal("GainShareMaxScale", exception.ParamName);
+    }
+
+    [Theory]
+    [InlineData(-0.1f)]
+    [InlineData(1f)]
+    [InlineData(float.NaN)]
+    public void RejectsInvalidDropout(float dropout)
+    {
+        TrainingConfiguration configuration = CreateValidConfiguration() with
+        {
+            Model = new ModelConfiguration { Dropout = dropout },
+        };
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            configuration.Validate);
+
+        Assert.Equal("Dropout", exception.ParamName);
+    }
+
+    [Fact]
+    public void RejectsWarmupThatConsumesEveryEpoch()
+    {
+        TrainingConfiguration configuration = CreateValidConfiguration() with
+        {
+            Epochs = 5,
+            WarmupEpochs = 5,
+        };
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            configuration.Validate);
+
+        Assert.Equal("WarmupEpochs", exception.ParamName);
+    }
+
+    [Theory]
+    [InlineData(0f)]
+    [InlineData(1.01f)]
+    [InlineData(float.NaN)]
+    public void RejectsInvalidMinimumLearningRateRatio(float ratio)
+    {
+        TrainingConfiguration configuration = CreateValidConfiguration() with
+        {
+            MinimumLearningRateRatio = ratio,
+        };
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            configuration.Validate);
+
+        Assert.Equal("MinimumLearningRateRatio", exception.ParamName);
+    }
+
+    [Fact]
     public void ModelHeadsMustEvenlyDivideTheModelWidth()
     {
         var model = new ModelConfiguration { Heads = 3 };
@@ -305,6 +577,23 @@ public sealed class TrainingConfigurationTests
 
         Assert.Equal("Heads", exception.ParamName);
         Assert.Contains("evenly divide", exception.Message);
+    }
+
+    private static TrainingConfiguration CreateValidConfiguration()
+    {
+        return new TrainingConfiguration
+        {
+            TrainingData = new DatasetConfiguration
+            {
+                ImagePath = "train-images",
+                LabelPath = "train-labels",
+            },
+            EvaluationData = new DatasetConfiguration
+            {
+                ImagePath = "eval-images",
+                LabelPath = "eval-labels",
+            },
+        };
     }
 
     private sealed class TemporaryDirectory : IDisposable

@@ -69,6 +69,32 @@ public sealed class DuplicateParameterRegistrationTests
     }
 
     [Fact]
+    public void LionRejectsTheSameParameterTwice()
+    {
+        var parameter = CreateParameter("weight");
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => new Lion([parameter, parameter]));
+
+        Assert.Equal("parameters", exception.ParamName);
+        Assert.Contains("'weight'", exception.Message);
+        Assert.Contains("more than once", exception.Message);
+    }
+
+    [Fact]
+    public void NekoMuonRejectsTheSameParameterTwice()
+    {
+        var parameter = CreateParameter("weight");
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => new NekoMuon([parameter, parameter]));
+
+        Assert.Equal("parameters", exception.ParamName);
+        Assert.Contains("'weight'", exception.Message);
+        Assert.Contains("more than once", exception.Message);
+    }
+
+    [Fact]
     public void EqualNamesDoNotCountAsDuplicateParameters()
     {
         var first = CreateParameter("weight");

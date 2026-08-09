@@ -15,6 +15,52 @@ public sealed class OptimizerInterfaceTests
     }
 
     [Fact]
+    public void LionImplementsTheOptimizerContract()
+    {
+        var parameter = CreateParameter("weight");
+
+        IOptimizer optimizer = new Lion([parameter]);
+
+        Assert.IsType<Lion>(optimizer);
+    }
+
+    [Fact]
+    public void GainShareAdamWImplementsTheOptimizerContract()
+    {
+        var parameter = CreateParameter("weight");
+
+        IOptimizer optimizer = new GainShareAdamW([[parameter]]);
+
+        Assert.IsType<GainShareAdamW>(optimizer);
+    }
+
+    [Fact]
+    public void NekoMuonImplementsTheOptimizerContract()
+    {
+        var parameter = CreateParameter("weight");
+
+        IOptimizer optimizer = new NekoMuon([parameter]);
+
+        Assert.IsType<NekoMuon>(optimizer);
+    }
+
+    [Fact]
+    public void CompositeOptimizerForwardsEachLifecycleOperationOnce()
+    {
+        var first = new CountingOptimizer();
+        var second = new CountingOptimizer();
+        IOptimizer optimizer = new CompositeOptimizer(first, second);
+
+        optimizer.ZeroGrad();
+        optimizer.Step();
+
+        Assert.Equal(1, first.ZeroGradCalls);
+        Assert.Equal(1, first.StepCalls);
+        Assert.Equal(1, second.ZeroGradCalls);
+        Assert.Equal(1, second.StepCalls);
+    }
+
+    [Fact]
     public void StepCanBeInvokedThroughTheOptimizerContract()
     {
         var parameter = CreateParameter("weight");
@@ -66,5 +112,16 @@ public sealed class OptimizerInterfaceTests
             [1],
             name,
             WeightDecayPolicy.Exclude);
+    }
+
+    private sealed class CountingOptimizer : IOptimizer
+    {
+        internal int ZeroGradCalls { get; private set; }
+
+        internal int StepCalls { get; private set; }
+
+        public void ZeroGrad() => ZeroGradCalls++;
+
+        public void Step() => StepCalls++;
     }
 }

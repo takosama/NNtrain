@@ -3,6 +3,8 @@
 public class TransformerClassifier : Module, IClassificationModel
 {
     private readonly TransformerBlock[] _blocks;
+    private readonly Parameter[] _hiddenWeightParameters;
+    private readonly Parameter[] _auxiliaryParameters;
 
     internal IReadOnlyList<TransformerBlock> Blocks { get; }
     internal Linear Head { get; }
@@ -24,9 +26,18 @@ public class TransformerClassifier : Module, IClassificationModel
         int numLayers,
         int numClasses,
         Random? rng = null,
-        float initScale = 0.02f)
+        float initScale = 0.02f,
+        float dropout = 0f)
     {
         rng ??= new Random(1);
+
+        if (!float.IsFinite(dropout) || dropout < 0f || dropout >= 1f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(dropout),
+                dropout,
+                "Dropout probability must be finite and in [0, 1).");
+        }
 
         SeqLen = seqLen;
         DModel = dModel;
@@ -34,7 +45,16 @@ public class TransformerClassifier : Module, IClassificationModel
 
         _blocks = new TransformerBlock[numLayers];
         for (int i = 0; i < numLayers; i++)
-            _blocks[i] = new TransformerBlock(dModel, numHeads, dHidden, false, rng, initScale);
+        {
+            _blocks[i] = new TransformerBlock(
+                dModel,
+                numHeads,
+                dHidden,
+                false,
+                rng,
+                initScale,
+                dropout);
+        }
 
         float[] pos = new float[seqLen * dModel];
         for (int i = 0; i < pos.Length; i++)
@@ -53,7 +73,24 @@ public class TransformerClassifier : Module, IClassificationModel
         Head = RegisterModule(
             new Linear(seqLen * dModel, numClasses, rng, initScale));
         Blocks = Array.AsReadOnly(_blocks);
+
+        _hiddenWeightParameters = _blocks
+            .SelectMany(block => block.Parameters())
+            .Where(parameter => parameter.T.Rank >= 2)
+            .ToArray();
+        var hiddenWeightSet = new HashSet<Parameter>(
+            _hiddenWeightParameters,
+            ReferenceEqualityComparer.Instance);
+        _auxiliaryParameters = Parameters()
+            .Where(parameter => !hiddenWeightSet.Contains(parameter))
+            .ToArray();
     }
+
+    public IReadOnlyList<Parameter> HiddenWeightParameters
+        => Array.AsReadOnly(_hiddenWeightParameters);
+
+    public IReadOnlyList<Parameter> AuxiliaryParameters
+        => Array.AsReadOnly(_auxiliaryParameters);
 
     public Tensor Forward(Tensor x)
     {

@@ -1,13 +1,13 @@
-﻿namespace NNtrain;
+namespace NNtrain;
 
-public class AdamW : IOptimizer, ILearningRateAdjustable
+public sealed class Lion : IOptimizer, ILearningRateAdjustable
 {
     private readonly List<Parameter> _parameters;
-    private AdamWState _state;
+    private LionState _state;
 
-    public AdamW(
+    public Lion(
         IEnumerable<Parameter> parameters,
-        AdamWOptions? options = null)
+        LionOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(parameters);
 
@@ -27,7 +27,7 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
             if (!seenParameters.Add(parameter))
             {
                 throw new ArgumentException(
-                    $"Parameter '{parameter.Name}' was supplied to AdamW " +
+                    $"Parameter '{parameter.Name}' was supplied to Lion " +
                     "more than once.",
                     nameof(parameters));
             }
@@ -35,15 +35,13 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
             _parameters.Add(parameter);
         }
 
-        AdamWOptions effectiveOptions = options ?? new AdamWOptions();
+        LionOptions effectiveOptions = options ?? new LionOptions();
         ValidateOptions(effectiveOptions, nameof(options));
         _state = CreateInitialState(_parameters, effectiveOptions);
     }
 
-    public AdamWState CaptureState()
-    {
-        return CloneState(_state);
-    }
+    public LionState CaptureState()
+        => CloneState(_state);
 
     public float LearningRate => _state.Options.LearningRate;
 
@@ -54,7 +52,7 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
             throw new ArgumentOutOfRangeException(
                 nameof(learningRate),
                 learningRate,
-                "AdamW learning rate must be finite and positive.");
+                "Lion learning rate must be finite and positive.");
         }
 
         _state = _state with
@@ -63,7 +61,7 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
         };
     }
 
-    public void RestoreState(AdamWState state)
+    public void RestoreState(LionState state)
     {
         ArgumentNullException.ThrowIfNull(state);
         ValidateState(state);
@@ -72,8 +70,8 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
 
     public void ZeroGrad()
     {
-        foreach (var p in _parameters)
-            p.ZeroGrad();
+        foreach (Parameter parameter in _parameters)
+            parameter.ZeroGrad();
     }
 
     public void Step()
@@ -81,30 +79,26 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
         if (_state.Step == int.MaxValue)
         {
             throw new InvalidOperationException(
-                "AdamW cannot advance beyond Int32.MaxValue steps.");
+                "Lion cannot advance beyond Int32.MaxValue steps.");
         }
 
         _state = _state with { Step = _state.Step + 1 };
-        AdamWOptions options = _state.Options;
-
-        float bc1 = 1f - MathF.Pow(options.Beta1, _state.Step);
-        float bc2 = 1f - MathF.Pow(options.Beta2, _state.Step);
+        LionOptions options = _state.Options;
 
         void UpdateParameter(int parameterIndex)
         {
-            Parameter p = _parameters[parameterIndex];
-            AdamWParameterState parameterState =
+            Parameter parameter = _parameters[parameterIndex];
+            LionParameterState parameterState =
                 _state.ParameterStates[parameterIndex];
-            using Tensor.DataMutation mutation = p.BeginUpdate();
+            using Tensor.DataMutation mutation = parameter.BeginUpdate();
             Span<float> data = mutation.Values;
-            float[] grad = p.T.GradientBuffer;
-            float[] m = parameterState.FirstMoment;
-            float[] v = parameterState.SecondMoment;
+            float[] gradientBuffer = parameter.T.GradientBuffer;
+            float[] momentum = parameterState.Momentum;
 
             bool applyWeightDecay =
-                p.WeightDecay == WeightDecayPolicy.Apply
-                || (options.Decay1D && p.T.Rank == 1);
-            int length = p.T.Numel;
+                parameter.WeightDecay == WeightDecayPolicy.Apply
+                || (options.Decay1D && parameter.T.Rank == 1);
+            int length = parameter.T.Numel;
             int index = 0;
 
             if (Tensor.SimdEnabled
@@ -119,64 +113,69 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
                     Vector256.Create(1f - options.Beta1);
                 Vector256<float> oneMinusBeta2 =
                     Vector256.Create(1f - options.Beta2);
-                Vector256<float> inverseBc1 = Vector256.Create(1f / bc1);
-                Vector256<float> inverseBc2 = Vector256.Create(1f / bc2);
                 Vector256<float> learningRate =
                     Vector256.Create(options.LearningRate);
-                Vector256<float> epsilon =
-                    Vector256.Create(options.Epsilon);
                 Vector256<float> decay = Vector256.Create(
                     options.LearningRate * options.WeightDecay);
+                Vector256<float> zero = Vector256<float>.Zero;
+                Vector256<float> one = Vector256.Create(1f);
+                Vector256<float> minusOne = Vector256.Create(-1f);
 
                 for (; index < vectorizedLength; index += vectorWidth)
                 {
-                    Vector256<float> gradient = grad.Length == 0
-                        ? Vector256<float>.Zero
-                        : Vector256.LoadUnsafe(ref grad[index]);
-                    Vector256<float> firstMoment =
-                        beta1 * Vector256.LoadUnsafe(ref m[index])
+                    Vector256<float> gradient = gradientBuffer.Length == 0
+                        ? zero
+                        : Vector256.LoadUnsafe(ref gradientBuffer[index]);
+                    Vector256<float> previousMomentum =
+                        Vector256.LoadUnsafe(ref momentum[index]);
+                    Vector256<float> direction =
+                        beta1 * previousMomentum
                         + oneMinusBeta1 * gradient;
-                    Vector256<float> secondMoment =
-                        beta2 * Vector256.LoadUnsafe(ref v[index])
-                        + oneMinusBeta2 * gradient * gradient;
-                    firstMoment.StoreUnsafe(ref m[index]);
-                    secondMoment.StoreUnsafe(ref v[index]);
+                    Vector256<float> sign = Vector256.ConditionalSelect(
+                        Vector256.GreaterThan(direction, zero),
+                        one,
+                        Vector256.ConditionalSelect(
+                            Vector256.LessThan(direction, zero),
+                            minusOne,
+                            direction));
 
-                    Vector256<float> parameter =
+                    Vector256<float> parameterValues =
                         Vector256.LoadUnsafe(ref data[index]);
                     if (applyWeightDecay)
-                        parameter -= decay * parameter;
-                    parameter -= learningRate
-                        * (firstMoment * inverseBc1)
-                        / (Vector256.Sqrt(secondMoment * inverseBc2)
-                            + epsilon);
-                    parameter.StoreUnsafe(ref data[index]);
+                        parameterValues -= decay * parameterValues;
+                    parameterValues -= learningRate * sign;
+                    parameterValues.StoreUnsafe(ref data[index]);
+
+                    Vector256<float> nextMomentum =
+                        beta2 * previousMomentum
+                        + oneMinusBeta2 * gradient;
+                    nextMomentum.StoreUnsafe(ref momentum[index]);
                 }
             }
 
             for (; index < length; index++)
             {
-                float g = grad.Length == 0 ? 0f : grad[index];
+                float gradient = gradientBuffer.Length == 0
+                    ? 0f
+                    : gradientBuffer[index];
+                float direction = options.Beta1 * momentum[index]
+                    + (1f - options.Beta1) * gradient;
+                float sign = direction > 0f
+                    ? 1f
+                    : direction < 0f
+                        ? -1f
+                        : direction;
 
-                // Adam
-                m[index] = options.Beta1 * m[index]
-                    + (1f - options.Beta1) * g;
-                v[index] = options.Beta2 * v[index]
-                    + (1f - options.Beta2) * g * g;
-
-                float mHat = m[index] / bc1;
-                float vHat = v[index] / bc2;
-
-                // AdamW: decoupled weight decay
                 if (applyWeightDecay)
+                {
                     data[index] -= options.LearningRate
                         * options.WeightDecay
                         * data[index];
+                }
 
-                data[index] -=
-                    options.LearningRate
-                    * mHat
-                    / (MathF.Sqrt(vHat) + options.Epsilon);
+                data[index] -= options.LearningRate * sign;
+                momentum[index] = options.Beta2 * momentum[index]
+                    + (1f - options.Beta2) * gradient;
             }
         }
 
@@ -191,42 +190,41 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
                 UpdateParameter(index);
     }
 
-    private static AdamWState CreateInitialState(
+    private static LionState CreateInitialState(
         IReadOnlyList<Parameter> parameters,
-        AdamWOptions options)
+        LionOptions options)
     {
-        AdamWParameterState[] parameterStates = parameters
+        LionParameterState[] parameterStates = parameters
             .Select((parameter, index) =>
-                new AdamWParameterState(
+                new LionParameterState(
                     index,
                     parameter.Name,
                     parameter.T.Shape.ToArray(),
-                    new float[parameter.T.Numel],
                     new float[parameter.T.Numel]))
             .ToArray();
 
-        return new AdamWState(
-            AdamWState.CurrentFormatVersion,
+        return new LionState(
+            LionState.CurrentFormatVersion,
             0,
             options with { },
             parameterStates);
     }
 
-    private void ValidateState(AdamWState state)
+    private void ValidateState(LionState state)
     {
-        if (state.FormatVersion != AdamWState.CurrentFormatVersion)
+        if (state.FormatVersion != LionState.CurrentFormatVersion)
         {
             throw new ArgumentException(
-                $"Unsupported AdamW state format version " +
+                $"Unsupported Lion state format version " +
                 $"'{state.FormatVersion}'. Expected " +
-                $"'{AdamWState.CurrentFormatVersion}'.",
+                $"'{LionState.CurrentFormatVersion}'.",
                 nameof(state));
         }
 
         if (state.Step < 0 || state.Step == int.MaxValue)
         {
             throw new ArgumentException(
-                "AdamW state step must be non-negative and leave room for " +
+                "Lion state step must be non-negative and leave room for " +
                 "another optimizer step.",
                 nameof(state));
         }
@@ -234,7 +232,7 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
         if (state.Options is null)
         {
             throw new ArgumentException(
-                "AdamW state options cannot be null.",
+                "Lion state options cannot be null.",
                 nameof(state));
         }
 
@@ -243,14 +241,14 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
         if (state.ParameterStates is null)
         {
             throw new ArgumentException(
-                "AdamW parameter states cannot be null.",
+                "Lion parameter states cannot be null.",
                 nameof(state));
         }
 
         if (state.ParameterStates.Length != _parameters.Count)
         {
             throw new ArgumentException(
-                $"AdamW state contains {state.ParameterStates.Length} " +
+                $"Lion state contains {state.ParameterStates.Length} " +
                 $"parameter slots, but the optimizer manages " +
                 $"{_parameters.Count}.",
                 nameof(state));
@@ -259,20 +257,19 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
         for (int index = 0; index < _parameters.Count; index++)
         {
             Parameter parameter = _parameters[index];
-            AdamWParameterState parameterState =
-                state.ParameterStates[index];
+            LionParameterState parameterState = state.ParameterStates[index];
 
             if (parameterState is null)
             {
                 throw new ArgumentException(
-                    $"AdamW parameter state at index {index} cannot be null.",
+                    $"Lion parameter state at index {index} cannot be null.",
                     nameof(state));
             }
 
             if (parameterState.Index != index)
             {
                 throw new ArgumentException(
-                    $"AdamW parameter state index '{parameterState.Index}' " +
+                    $"Lion parameter state index '{parameterState.Index}' " +
                     $"does not match slot '{index}'.",
                     nameof(state));
             }
@@ -283,7 +280,7 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
                 StringComparison.Ordinal))
             {
                 throw new ArgumentException(
-                    $"AdamW parameter state at index {index} is named " +
+                    $"Lion parameter state at index {index} is named " +
                     $"'{parameterState.Name}', but the optimizer parameter " +
                     $"is named '{parameter.Name}'.",
                     nameof(state));
@@ -293,25 +290,16 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
                 || !parameterState.Shape.SequenceEqual(parameter.T.Shape))
             {
                 throw new ArgumentException(
-                    $"AdamW parameter state for '{parameter.Name}' has an " +
+                    $"Lion parameter state for '{parameter.Name}' has an " +
                     "incompatible shape.",
                     nameof(state));
             }
 
-            if (parameterState.FirstMoment is null
-                || parameterState.FirstMoment.Length != parameter.T.Numel)
+            if (parameterState.Momentum is null
+                || parameterState.Momentum.Length != parameter.T.Numel)
             {
                 throw new ArgumentException(
-                    $"AdamW first moment for '{parameter.Name}' has an " +
-                    "incompatible length.",
-                    nameof(state));
-            }
-
-            if (parameterState.SecondMoment is null
-                || parameterState.SecondMoment.Length != parameter.T.Numel)
-            {
-                throw new ArgumentException(
-                    $"AdamW second moment for '{parameter.Name}' has an " +
+                    $"Lion momentum for '{parameter.Name}' has an " +
                     "incompatible length.",
                     nameof(state));
             }
@@ -319,7 +307,7 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
     }
 
     private static void ValidateOptions(
-        AdamWOptions options,
+        LionOptions options,
         string parameterName)
     {
         if (!float.IsFinite(options.LearningRate)
@@ -328,7 +316,7 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
             throw new ArgumentOutOfRangeException(
                 parameterName,
                 options.LearningRate,
-                "AdamW learning rate must be finite and positive.");
+                "Lion learning rate must be finite and positive.");
         }
 
         if (!float.IsFinite(options.Beta1)
@@ -338,7 +326,7 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
             throw new ArgumentOutOfRangeException(
                 parameterName,
                 options.Beta1,
-                "AdamW beta1 must be finite and in the range [0, 1).");
+                "Lion beta1 must be finite and in the range [0, 1).");
         }
 
         if (!float.IsFinite(options.Beta2)
@@ -348,15 +336,7 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
             throw new ArgumentOutOfRangeException(
                 parameterName,
                 options.Beta2,
-                "AdamW beta2 must be finite and in the range [0, 1).");
-        }
-
-        if (!float.IsFinite(options.Epsilon) || options.Epsilon <= 0f)
-        {
-            throw new ArgumentOutOfRangeException(
-                parameterName,
-                options.Epsilon,
-                "AdamW epsilon must be finite and positive.");
+                "Lion beta2 must be finite and in the range [0, 1).");
         }
 
         if (!float.IsFinite(options.WeightDecay)
@@ -365,24 +345,23 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
             throw new ArgumentOutOfRangeException(
                 parameterName,
                 options.WeightDecay,
-                "AdamW weight decay must be finite and non-negative.");
+                "Lion weight decay must be finite and non-negative.");
         }
     }
 
-    private static AdamWState CloneState(AdamWState state)
+    private static LionState CloneState(LionState state)
     {
-        return new AdamWState(
+        return new LionState(
             state.FormatVersion,
             state.Step,
             state.Options with { },
             state.ParameterStates
                 .Select(parameterState =>
-                    new AdamWParameterState(
+                    new LionParameterState(
                         parameterState.Index,
                         parameterState.Name,
                         parameterState.Shape.ToArray(),
-                        parameterState.FirstMoment.ToArray(),
-                        parameterState.SecondMoment.ToArray()))
+                        parameterState.Momentum.ToArray()))
                 .ToArray());
     }
 }

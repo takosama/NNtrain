@@ -13,4 +13,13 @@ public interface IImageClassificationDataset
     int ClassCount { get; }
 
     int ReadSample(int index, Span<float> destination);
+
+    int ReadTrainingSample(
+        int index,
+        Span<float> destination,
+        Random random)
+    {
+        ArgumentNullException.ThrowIfNull(random);
+        return ReadSample(index, destination);
+    }
 }

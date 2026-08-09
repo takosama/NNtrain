@@ -76,17 +76,37 @@ Phase 6-6 moves run settings out of `Program`. The `--config` CLI option loads a
 JSON object containing:
 
 - `trainingData` and `evaluationData`, each containing `imagePath` and
-  `labelPath`;
-- `epochs`, `batchSize`, `learningRate`, `weightDecay`, `labelSmoothing`, and
-  the shuffling `seed`; weight decay defaults to `0.05`; label smoothing
-  defaults to `0.1` and must be in `[0, 1)`;
-- model `heads`, `hiddenSize`, `layers`, initialization `seed`, and
-  `initializationScale`.
+  `labelPath` for MNIST, or `dataPath` for CIFAR-100; CIFAR-100 also accepts
+  `patchSize` (default `4`), `normalize`, and an `augmentation` object
+  containing `randomCropPadding`, `horizontalFlip`, and `verticalFlip`;
+- `epochs`, `batchSize`, `optimizer`, `learningRate`,
+  `auxiliaryLearningRate`, `weightDecay`, `labelSmoothing`, `warmupEpochs`,
+  `minimumLearningRateRatio`, `earlyStoppingPatience`,
+  `earlyStoppingMinimumDelta`, and the shuffling
+  `seed`; GainShareAdamW is the default optimizer with learning rate `3e-4`
+  and weight decay `5e-4`; `gainShareBlockDepth`, `gainShareBeta1`,
+  `gainShareBeta2`, `gainShareEpsilon`, `gainShareRho`, `gainShareGamma`,
+  `gainShareMinScale`, and `gainShareMaxScale` configure its block updates;
+  label smoothing defaults to `0.1` and must be in `[0, 1)`; supported
+  optimizer names are `gainshareadamw`, `nekomuon`, `lion`, and `adamw`;
+- `showLossGraph`, which defaults to `true`; the CLI writes an automatically
+  refreshing HTML plot next to the configuration file and adds connected train
+  and evaluation loss points after every epoch;
+- model `heads`, `hiddenSize`, `layers`, initialization `seed`,
+  `initializationScale`, and residual `dropout` probability.
 
 Relative dataset paths are resolved from the JSON file location rather than the
 process working directory. Unknown JSON properties are rejected to catch
 misspelled settings. Counts and positive floating-point settings are validated
 before dataset or model construction.
+
+The checked-in CIFAR-100 configuration normalizes both training and evaluation
+pixels with the training-set channel means `(0.50707516, 0.48654887,
+0.44091784)` and standard deviations `(0.26733429, 0.25643846, 0.27615047)`.
+The reader directly lays each image out as 64 row-major 4x4 patch tokens, each
+containing 48 channel-first values, without allocating a second image buffer.
+Training uses four-pixel zero-padded random crops and horizontal flips. Vertical
+flips are disabled. Evaluation performs normalization without augmentation.
 
 Each CLI epoch shuffles and consumes every training sample once. Forward passes
 within a mini-batch use `Parallel.For` with `Environment.ProcessorCount`
@@ -109,6 +129,7 @@ Missing files report whether the training/evaluation image/label file is absent,
 the resolved path, and where to correct it. `Program` only handles CLI/config
 loading, composition, `Trainer.Run()`, reporting, and user-facing errors.
 
-Checkpoint persistence remains outside Trainer. A later checkpoint component
-can use the exposed model and AdamW from `TrainingComponents` together with the
-epoch-completed callback, without modifying the epoch or step implementation.
+The CLI retains the model state with the lowest evaluation loss, restores it
+after training or early stopping, and atomically writes it beside the selected
+configuration as `*.best-model.json`. Optimizer moments are not included in
+this inference-oriented best-model checkpoint.

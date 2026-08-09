@@ -152,7 +152,7 @@ public sealed class TrainerTests
         Assert.InRange(result.Training.Loss, 0.3632f, 0.3633f);
         Assert.Equal(1f, result.Training.Accuracy);
         Assert.True(result.Training.Elapsed >= TimeSpan.Zero);
-        Assert.InRange(result.Evaluation.Loss, 0.3632f, 0.3633f);
+        Assert.InRange(result.Evaluation.Loss, 0.3132f, 0.3133f);
         Assert.Equal(1f, result.Evaluation.Accuracy);
         Assert.True(result.Evaluation.Elapsed >= TimeSpan.Zero);
     }
