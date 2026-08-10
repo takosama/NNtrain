@@ -3,6 +3,7 @@
 public class AdamW : IOptimizer, ILearningRateAdjustable
 {
     private readonly List<Parameter> _parameters;
+    private readonly long _totalElements;
     private AdamWState _state;
 
     public AdamW(
@@ -34,6 +35,9 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
 
             _parameters.Add(parameter);
         }
+
+        _totalElements = _parameters.Sum(
+            parameter => (long)parameter.T.Numel);
 
         AdamWOptions effectiveOptions = options ?? new AdamWOptions();
         ValidateOptions(effectiveOptions, nameof(options));
@@ -72,8 +76,17 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
 
     public void ZeroGrad()
     {
-        foreach (var p in _parameters)
-            p.ZeroGrad();
+        if (_parameters.Count > 1 && _totalElements >= 32_768)
+        {
+            Tensor.RunParallel(
+                0,
+                _parameters.Count,
+                index => _parameters[index].ZeroGrad());
+            return;
+        }
+
+        foreach (Parameter parameter in _parameters)
+            parameter.ZeroGrad();
     }
 
     public void Step()
@@ -180,12 +193,8 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
             }
         }
 
-        long totalElements = 0;
-        foreach (Parameter parameter in _parameters)
-            totalElements += parameter.T.Numel;
-
-        if (_parameters.Count > 1 && totalElements >= 32_768)
-            Parallel.For(0, _parameters.Count, UpdateParameter);
+        if (_parameters.Count > 1 && _totalElements >= 32_768)
+            Tensor.RunParallel(0, _parameters.Count, UpdateParameter);
         else
             for (int index = 0; index < _parameters.Count; index++)
                 UpdateParameter(index);

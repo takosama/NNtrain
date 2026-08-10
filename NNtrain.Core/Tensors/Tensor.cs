@@ -14,6 +14,9 @@ public partial class Tensor
     private float[] _grad;
     private readonly int[] _shape;
     private long _dataVersion;
+    private readonly object _transposeCacheLock = new();
+    private float[]? _transposedDataCache;
+    private long _transposedDataVersion = -1;
 
     internal AutogradNode Node { get; }
 
@@ -169,6 +172,56 @@ public partial class Tensor
     }
 
     internal DataMutation BeginDataMutation() => new(this);
+
+    internal float[] GetTransposedData2D()
+    {
+        CheckRank(2);
+        long version = _dataVersion;
+        float[]? cached = _transposedDataCache;
+        if (cached is not null && _transposedDataVersion == version)
+            return cached;
+
+        lock (_transposeCacheLock)
+        {
+            if (_transposedDataCache is not null
+                && _transposedDataVersion == version)
+            {
+                return _transposedDataCache;
+            }
+
+            int rows = _shape[0];
+            int columns = _shape[1];
+            var transposed = new float[_data.Length];
+            const int BlockSize = 32;
+            for (int columnBlock = 0;
+                columnBlock < columns;
+                columnBlock += BlockSize)
+            {
+                int columnEnd = Math.Min(columns, columnBlock + BlockSize);
+                for (int rowBlock = 0;
+                    rowBlock < rows;
+                    rowBlock += BlockSize)
+                {
+                    int rowEnd = Math.Min(rows, rowBlock + BlockSize);
+                    for (int column = columnBlock;
+                        column < columnEnd;
+                        column++)
+                    {
+                        int destination = column * rows + rowBlock;
+                        for (int row = rowBlock; row < rowEnd; row++)
+                        {
+                            transposed[destination++] =
+                                _data[row * columns + column];
+                        }
+                    }
+                }
+            }
+
+            _transposedDataCache = transposed;
+            _transposedDataVersion = version;
+            return transposed;
+        }
+    }
 
     internal ref struct DataMutation
     {

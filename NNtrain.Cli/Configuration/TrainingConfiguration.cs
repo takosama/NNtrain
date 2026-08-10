@@ -27,6 +27,10 @@ sealed record TrainingConfiguration
 
     public int BatchSize { get; init; } = 32;
 
+    public int? MicroBatchSize { get; init; }
+
+    public int MicroBatchCount { get; init; } = 1;
+
     public string Optimizer { get; init; } = GainShareAdamWOptimizer;
 
     public float LearningRate { get; init; } = 3e-4f;
@@ -129,6 +133,30 @@ sealed record TrainingConfiguration
                 nameof(BatchSize),
                 BatchSize,
                 "Batch size must be positive.");
+        }
+
+        if (MicroBatchSize.HasValue && MicroBatchSize.Value <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(MicroBatchSize),
+                MicroBatchSize,
+                "Micro-batch size must be positive when specified.");
+        }
+
+        if (MicroBatchCount <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(MicroBatchCount),
+                MicroBatchCount,
+                "Micro-batch count must be positive.");
+        }
+
+        if ((long)ResolvedMicroBatchSize * MicroBatchCount > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(MicroBatchCount),
+                MicroBatchCount,
+                "Effective batch size must not exceed Int32.MaxValue.");
         }
 
         if (!IsOptimizer(GainShareAdamWOptimizer)
@@ -310,6 +338,11 @@ sealed record TrainingConfiguration
             Optimizer,
             expectedOptimizer,
             StringComparison.OrdinalIgnoreCase);
+
+    internal int ResolvedMicroBatchSize => MicroBatchSize ?? BatchSize;
+
+    internal int EffectiveBatchSize
+        => checked(ResolvedMicroBatchSize * MicroBatchCount);
 }
 
 sealed record DatasetConfiguration

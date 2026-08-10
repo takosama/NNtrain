@@ -10,4 +10,8 @@
     <ProjectReference Include="..\NNtrain.Core\NNtrain.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Parquet.Net" Version="6.0.3" />
+  </ItemGroup>
+
 </Project>

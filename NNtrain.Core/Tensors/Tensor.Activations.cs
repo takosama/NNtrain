@@ -138,17 +138,10 @@ partial class Tensor
         if (Rank == 1)
         {
             int n = _shape[0];
-            float max = _data[0];
-            for (int i = 1; i < n; i++)
-                if (_data[i] > max) max = _data[i];
+            float max = MaxValues(_data, 0, n);
 
             float[] y = new float[n];
-            float sum = 0f;
-            for (int i = 0; i < n; i++)
-            {
-                y[i] = MathF.Exp(_data[i] - max);
-                sum += y[i];
-            }
+            float sum = ExpShiftedValues(_data, 0, max, y, 0, n);
 
             MultiplyValues(y, 0, 1f / sum, y, 0, n);
 
@@ -177,31 +170,28 @@ partial class Tensor
             int rows = Numel / cols;
             float[] y = new float[Numel];
 
-            for (int r = 0; r < rows; r++)
+            void ForwardRow(int r)
             {
-                float max = _data[r * cols];
-                for (int c = 1; c < cols; c++)
-                {
-                    float v = _data[r * cols + c];
-                    if (v > max) max = v;
-                }
-
-                float sum = 0f;
-                for (int c = 0; c < cols; c++)
-                {
-                    float e = MathF.Exp(_data[r * cols + c] - max);
-                    y[r * cols + c] = e;
-                    sum += e;
-                }
+                int rowOffset = r * cols;
+                float max = MaxValues(_data, rowOffset, cols);
+                float sum = ExpShiftedValues(
+                    _data,
+                    rowOffset,
+                    max,
+                    y,
+                    rowOffset,
+                    cols);
 
                 MultiplyValues(
                     y,
-                    r * cols,
+                    rowOffset,
                     1f / sum,
                     y,
-                    r * cols,
+                    rowOffset,
                     cols);
             }
+
+            RunBatches(rows, cols, ForwardRow);
 
             var t = new Tensor(y, _shape, new[] { this });
 
@@ -243,24 +233,27 @@ partial class Tensor
         {
             int n = _shape[0];
 
-            float max = _data[0];
-            for (int i = 1; i < n; i++)
-                if (_data[i] > max) max = _data[i];
-
-            float sumExp = 0f;
-            for (int i = 0; i < n; i++)
-                sumExp += MathF.Exp(_data[i] - max);
-
-            float logSumExpOfShiftedValues = MathF.Log(sumExp);
+            float max = MaxValues(_data, 0, n);
 
             float[] y = new float[n];
             float[] softmax = new float[n];
-
-            for (int i = 0; i < n; i++)
-            {
-                y[i] = (_data[i] - max) - logSumExpOfShiftedValues;
-                softmax[i] = MathF.Exp(y[i]);
-            }
+            float sumExp = ExpShiftedValues(
+                _data,
+                0,
+                max,
+                softmax,
+                0,
+                n);
+            float logSumExpOfShiftedValues = MathF.Log(sumExp);
+            SubtractShiftAndScalarValues(
+                _data,
+                0,
+                max,
+                logSumExpOfShiftedValues,
+                y,
+                0,
+                n);
+            MultiplyValues(softmax, 0, 1f / sumExp, softmax, 0, n);
 
             var t = new Tensor(y, _shape, new[] { this });
 
@@ -289,29 +282,36 @@ partial class Tensor
             float[] y = new float[Numel];
             float[] softmax = new float[Numel];
 
-            for (int r = 0; r < rows; r++)
+            void ForwardRow(int r)
             {
-                float max = _data[r * cols];
-                for (int c = 1; c < cols; c++)
-                {
-                    float v = _data[r * cols + c];
-                    if (v > max) max = v;
-                }
-
-                float sumExp = 0f;
-                for (int c = 0; c < cols; c++)
-                    sumExp += MathF.Exp(_data[r * cols + c] - max);
-
+                int rowOffset = r * cols;
+                float max = MaxValues(_data, rowOffset, cols);
+                float sumExp = ExpShiftedValues(
+                    _data,
+                    rowOffset,
+                    max,
+                    softmax,
+                    rowOffset,
+                    cols);
                 float logSumExpOfShiftedValues = MathF.Log(sumExp);
-
-                for (int c = 0; c < cols; c++)
-                {
-                    int idx = r * cols + c;
-                    y[idx] =
-                        (_data[idx] - max) - logSumExpOfShiftedValues;
-                    softmax[idx] = MathF.Exp(y[idx]);
-                }
+                SubtractShiftAndScalarValues(
+                    _data,
+                    rowOffset,
+                    max,
+                    logSumExpOfShiftedValues,
+                    y,
+                    rowOffset,
+                    cols);
+                MultiplyValues(
+                    softmax,
+                    rowOffset,
+                    1f / sumExp,
+                    softmax,
+                    rowOffset,
+                    cols);
             }
+
+            RunBatches(rows, cols, ForwardRow);
 
             var t = new Tensor(y, _shape, new[] { this });
 
@@ -428,7 +428,7 @@ partial class Tensor
             float[] xhat = new float[Numel];
             float[] invs = new float[rows];
 
-            for (int r = 0; r < rows; r++)
+            void ForwardRow(int r)
             {
                 int rowOffset = r * cols;
                 float mean = SumValues(_data, rowOffset, cols) / cols;
@@ -454,6 +454,8 @@ partial class Tensor
                     rowOffset,
                     cols);
             }
+
+            RunBatches(rows, cols, ForwardRow);
 
             var t = new Tensor(y, _shape, new[] { this, gamma, beta });
 

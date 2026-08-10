@@ -7,6 +7,8 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
     private const float NewtonSchulzC = 2.0315f;
 
     private readonly List<Parameter> _parameters;
+    private readonly long _totalElements;
+    private readonly NekoMuonWorkspace[] _workspaces;
     private NekoMuonState _state;
 
     public NekoMuon(
@@ -39,9 +41,13 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
             _parameters.Add(parameter);
         }
 
+        _totalElements = _parameters.Sum(
+            parameter => (long)parameter.T.Numel);
+
         NekoMuonOptions effectiveOptions = options ?? new NekoMuonOptions();
         ValidateOptions(effectiveOptions, nameof(options));
         _state = CreateInitialState(_parameters, effectiveOptions);
+        _workspaces = _parameters.Select(CreateWorkspace).ToArray();
     }
 
     public NekoMuonState CaptureState()
@@ -74,6 +80,15 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
 
     public void ZeroGrad()
     {
+        if (_parameters.Count > 1 && _totalElements >= 32_768)
+        {
+            Tensor.RunParallel(
+                0,
+                _parameters.Count,
+                index => _parameters[index].ZeroGrad());
+            return;
+        }
+
         foreach (Parameter parameter in _parameters)
             parameter.ZeroGrad();
     }
@@ -101,9 +116,9 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
             float[] gradientBuffer = parameter.T.GradientBuffer;
             float[] fast = parameterState.FastMoment;
             float[] slow = parameterState.SlowMoment;
-            int length = parameter.T.Numel;
-            var fastHat = new float[length];
-            var slowHat = new float[length];
+            NekoMuonWorkspace workspace = _workspaces[parameterIndex];
+            float[] fastHat = workspace.FastHat;
+            float[] slowHat = workspace.SlowHat;
 
             UpdateMoments(
                 gradientBuffer,
@@ -140,7 +155,7 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
             bool transpose = originalRows > originalColumns;
             int rows = Math.Min(originalRows, originalColumns);
             int columns = Math.Max(originalRows, originalColumns);
-            var x = new float[length];
+            float[] x = workspace.X;
             InitializeMuonMatrix(
                 fastHat,
                 x,
@@ -149,9 +164,9 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
                 transpose,
                 options.Epsilon);
 
-            var next = new float[length];
-            var gram = new float[rows * rows];
-            var gramSquared = new float[rows * rows];
+            float[] next = workspace.Next;
+            float[] gram = workspace.Gram;
+            float[] gramSquared = workspace.GramSquared;
             for (int step = 0; step < wholeSteps; step++)
             {
                 NewtonSchulz(
@@ -192,12 +207,8 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
             ApplyUpdate(parameter, update, finalScale, options);
         }
 
-        long totalElements = 0;
-        foreach (Parameter parameter in _parameters)
-            totalElements += parameter.T.Numel;
-
-        if (_parameters.Count > 1 && totalElements >= 32_768)
-            Parallel.For(0, _parameters.Count, UpdateParameter);
+        if (_parameters.Count > 1 && _totalElements >= 32_768)
+            Tensor.RunParallel(0, _parameters.Count, UpdateParameter);
         else
             for (int index = 0; index < _parameters.Count; index++)
                 UpdateParameter(index);
@@ -266,6 +277,21 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
         }
     }
 
+    private static NekoMuonWorkspace CreateWorkspace(Parameter parameter)
+    {
+        int length = parameter.T.Numel;
+        GetMatrixShape(parameter, out int originalRows, out int originalColumns);
+        int rows = Math.Min(originalRows, originalColumns);
+        int gramLength = checked(rows * rows);
+        return new NekoMuonWorkspace(
+            new float[length],
+            new float[length],
+            new float[length],
+            new float[length],
+            new float[gramLength],
+            new float[gramLength]);
+    }
+
     private static float CalculateConfidenceRaw(
         float[] fastHat,
         float[] slowHat,
@@ -276,7 +302,28 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
         double slowNormSquared = 0d;
         double residualNormSquared = 0d;
 
-        for (int index = 0; index < fastHat.Length; index++)
+        int index = 0;
+        if (Tensor.SimdEnabled
+            && Vector256.IsHardwareAccelerated
+            && fastHat.Length >= Vector256<float>.Count)
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = fastHat.Length - fastHat.Length % width;
+            for (; index < vectorizedLength; index += width)
+            {
+                Vector256<float> fast =
+                    Vector256.LoadUnsafe(ref fastHat[index]);
+                Vector256<float> slow =
+                    Vector256.LoadUnsafe(ref slowHat[index]);
+                Vector256<float> residual = fast - slow;
+                dot += Vector256.Sum(fast * slow);
+                fastNormSquared += Vector256.Sum(fast * fast);
+                slowNormSquared += Vector256.Sum(slow * slow);
+                residualNormSquared += Vector256.Sum(residual * residual);
+            }
+        }
+
+        for (; index < fastHat.Length; index++)
         {
             double fast = fastHat[index];
             double slow = slowHat[index];
@@ -322,8 +369,23 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
         float epsilon)
     {
         double normSquared = 0d;
-        foreach (float value in source)
-            normSquared += (double)value * value;
+        int index = 0;
+        if (Tensor.SimdEnabled
+            && Vector256.IsHardwareAccelerated
+            && source.Length >= Vector256<float>.Count)
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = source.Length - source.Length % width;
+            for (; index < vectorizedLength; index += width)
+            {
+                Vector256<float> values =
+                    Vector256.LoadUnsafe(ref source[index]);
+                normSquared += Vector256.Sum(values * values);
+            }
+        }
+
+        for (; index < source.Length; index++)
+            normSquared += (double)source[index] * source[index];
         float inverseNorm = 1f / ((float)Math.Sqrt(normSquared) + epsilon);
 
         if (!transpose)
@@ -369,14 +431,14 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
         {
             for (int column = 0; column < rows; column++)
             {
-                double sum = 0d;
-                for (int inner = 0; inner < rows; inner++)
-                {
-                    sum += gram[row * rows + inner]
-                        * gram[inner * rows + column];
-                }
-
-                gramSquared[row * rows + column] = (float)sum;
+                // Gram is symmetric, so its column is also available as a
+                // contiguous row. This turns the O(rows^3) product into
+                // SIMD dot products without transposing or gathering.
+                gramSquared[row * rows + column] = (float)DotAsDouble(
+                    gram,
+                    row * rows,
+                    column * rows,
+                    rows);
             }
         }
 
@@ -432,6 +494,36 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
                 * values[secondOffset + index];
         }
 
+        return sum;
+    }
+
+    private static double DotAsDouble(
+        float[] values,
+        int firstOffset,
+        int secondOffset,
+        int length)
+    {
+        int index = 0;
+        double sum = 0d;
+        if (Tensor.SimdEnabled
+            && Vector256.IsHardwareAccelerated
+            && length >= Vector256<float>.Count)
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            for (; index < vectorizedLength; index += width)
+            {
+                sum += Vector256.Sum(
+                    Vector256.LoadUnsafe(ref values[firstOffset + index])
+                    * Vector256.LoadUnsafe(ref values[secondOffset + index]));
+            }
+        }
+
+        for (; index < length; index++)
+        {
+            sum += values[firstOffset + index]
+                * values[secondOffset + index];
+        }
         return sum;
     }
 
@@ -742,6 +834,14 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
                 "NekoMuon weight decay must be finite and non-negative.");
         }
     }
+
+    private sealed record NekoMuonWorkspace(
+        float[] FastHat,
+        float[] SlowHat,
+        float[] X,
+        float[] Next,
+        float[] Gram,
+        float[] GramSquared);
 
     private static void ValidateUnitInterval(
         float value,

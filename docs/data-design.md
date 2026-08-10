@@ -79,7 +79,7 @@ JSON object containing:
   `labelPath` for MNIST, or `dataPath` for CIFAR-100; CIFAR-100 also accepts
   `patchSize` (default `4`), `normalize`, and an `augmentation` object
   containing `randomCropPadding`, `horizontalFlip`, and `verticalFlip`;
-- `epochs`, `batchSize`, `optimizer`, `learningRate`,
+- `epochs`, `microBatchSize`, `microBatchCount`, `optimizer`, `learningRate`,
   `auxiliaryLearningRate`, `weightDecay`, `labelSmoothing`, `warmupEpochs`,
   `minimumLearningRateRatio`, `earlyStoppingPatience`,
   `earlyStoppingMinimumDelta`, and the shuffling
@@ -89,6 +89,8 @@ JSON object containing:
   `gainShareMinScale`, and `gainShareMaxScale` configure its block updates;
   label smoothing defaults to `0.1` and must be in `[0, 1)`; supported
   optimizer names are `gainshareadamw`, `nekomuon`, `lion`, and `adamw`;
+  `microBatchSize * microBatchCount` is the effective training batch size;
+  the legacy `batchSize` setting remains a fallback for `microBatchSize`;
 - `showLossGraph`, which defaults to `true`; the CLI writes an automatically
   refreshing HTML plot next to the configuration file and adds connected train
   and evaluation loss points after every epoch;

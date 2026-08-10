@@ -120,6 +120,66 @@ public sealed class TensorSimdTests
     }
 
     [Fact]
+    public void ParallelWorkerCountCanBeAutomaticOrExplicitlyLimited()
+    {
+        int previous = Tensor.MaxDegreeOfParallelism;
+        try
+        {
+            Tensor.MaxDegreeOfParallelism = 3;
+
+            Assert.Equal(3, Tensor.MaxDegreeOfParallelism);
+            Assert.Equal(3, Tensor.EffectiveMaxDegreeOfParallelism);
+
+            Tensor.MaxDegreeOfParallelism = 0;
+            Assert.Equal(
+                Environment.ProcessorCount,
+                Tensor.EffectiveMaxDegreeOfParallelism);
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => Tensor.MaxDegreeOfParallelism = -1);
+        }
+        finally
+        {
+            Tensor.MaxDegreeOfParallelism = previous;
+        }
+    }
+
+    [Fact]
+    public void LargeCrossEntropyUsesMemoryBoundedSimdBackward()
+    {
+        bool previous = Tensor.SimdEnabled;
+        try
+        {
+            Tensor.SimdEnabled = true;
+            const int rows = 257;
+            const int columns = 4096;
+            var logits = new Tensor(
+                new float[rows * columns],
+                [rows, columns]);
+            int[] labels = Enumerable.Range(0, rows)
+                .Select(row => row % columns)
+                .ToArray();
+
+            Tensor loss = logits.CrossEntropyWithLogits(labels);
+            loss.Backward();
+
+            AssertClose(MathF.Log(columns), loss.Data[0], 2e-5f);
+            float nonTarget = 1f / (rows * columns);
+            float target = nonTarget - 1f / rows;
+            AssertClose(target, logits.Grad[0], 2e-6f);
+            AssertClose(nonTarget, logits.Grad[1], 2e-6f);
+            int lastOffset = (rows - 1) * columns;
+            AssertClose(
+                target,
+                logits.Grad[lastOffset + labels[^1]],
+                2e-6f);
+        }
+        finally
+        {
+            Tensor.SimdEnabled = previous;
+        }
+    }
+
+    [Fact]
     public void ScalarAndVector256ParallelLionProduceEquivalentStates()
     {
         bool previous = Tensor.SimdEnabled;
@@ -154,6 +214,50 @@ public sealed class TensorSimdTests
         finally
         {
             Tensor.SimdEnabled = previous;
+        }
+    }
+
+    [Fact]
+    public void ScalarAndVector256GptTrainingStepsProduceEquivalentResults()
+    {
+        bool previous = Tensor.SimdEnabled;
+        try
+        {
+            GptStepResult scalar = RunGptTrainingStep(useSimd: false);
+            GptStepResult vector256 = RunGptTrainingStep(useSimd: true);
+
+            AssertClose([scalar.Loss], [vector256.Loss], 3e-4f);
+            AssertClose(scalar.Logits, vector256.Logits, 4e-4f);
+            AssertClose(scalar.Gradients, vector256.Gradients, 6e-4f);
+            AssertClose(scalar.Parameters, vector256.Parameters, 6e-4f);
+        }
+        finally
+        {
+            Tensor.SimdEnabled = previous;
+        }
+    }
+
+    [Fact]
+    public void SingleAndMultiThreadedGptTrainingStepsAreEquivalent()
+    {
+        int previous = Tensor.MaxDegreeOfParallelism;
+        try
+        {
+            GptStepResult single = RunGptTrainingStep(
+                useSimd: true,
+                maxDegreeOfParallelism: 1);
+            GptStepResult parallel = RunGptTrainingStep(
+                useSimd: true,
+                maxDegreeOfParallelism: 4);
+
+            AssertClose([single.Loss], [parallel.Loss], 3e-4f);
+            AssertClose(single.Logits, parallel.Logits, 4e-4f);
+            AssertClose(single.Gradients, parallel.Gradients, 6e-4f);
+            AssertClose(single.Parameters, parallel.Parameters, 6e-4f);
+        }
+        finally
+        {
+            Tensor.MaxDegreeOfParallelism = previous;
         }
     }
 
@@ -452,6 +556,53 @@ public sealed class TensorSimdTests
                 .ToArray());
     }
 
+    private static GptStepResult RunGptTrainingStep(
+        bool useSimd,
+        int maxDegreeOfParallelism = 0)
+    {
+        Tensor.SimdEnabled = useSimd;
+        Tensor.MaxDegreeOfParallelism = maxDegreeOfParallelism;
+        var model = new GptRinWikiJp(
+            vocabularySize: BpeTokenizer.BaseVocabularySize,
+            contextLength: 4,
+            dModel: 16,
+            numHeads: 4,
+            dHidden: 32,
+            numLayers: 1,
+            rng: new Random(29),
+            dropout: 0f);
+        var optimizer = new CompositeOptimizer(
+            new NekoMuon(
+                model.HiddenWeightParameters,
+                new NekoMuonOptions
+                {
+                    LearningRate = 3e-4f,
+                    MaxNewtonSchulzSteps = 3,
+                }),
+            new AdamW(
+                model.AuxiliaryParameters,
+                new AdamWOptions { LearningRate = 3e-4f }));
+        int[] input = [1, 4, 5, 6, 1, 7, 8, 9];
+        int[] targets = [4, 5, 6, 2, 7, 8, 9, 2];
+
+        optimizer.ZeroGrad();
+        Tensor logits = model.Forward(input, 2, 4);
+        Tensor loss = logits.CrossEntropyWithLogits(targets);
+        loss.Backward();
+        float[] gradients = model.Parameters()
+            .SelectMany(parameter => parameter.T.Grad)
+            .ToArray();
+        optimizer.Step();
+
+        return new GptStepResult(
+            loss.Data[0],
+            logits.Data.ToArray(),
+            gradients,
+            model.Parameters()
+                .SelectMany(parameter => parameter.T.Data)
+                .ToArray());
+    }
+
     private static GainShareResult RunGainShare(bool useSimd)
     {
         Tensor.SimdEnabled = useSimd;
@@ -539,6 +690,12 @@ public sealed class TensorSimdTests
         float[] FastMoments,
         float[] SlowMoments,
         float[] Confidences);
+
+    private sealed record GptStepResult(
+        float Loss,
+        float[] Logits,
+        float[] Gradients,
+        float[] Parameters);
 
     private sealed record GainShareResult(
         float[] Parameters,

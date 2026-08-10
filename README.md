@@ -21,24 +21,21 @@ dotnet test NNtrain.slnx --configuration Release --no-build
 
 ## Run training
 
-Copy `training.example.json`, update its MNIST file paths, and run:
+The default `training.example.json` is configured for the Japanese Wikipedia
+GPT task. Place the Parquet shards under `data/wiki` and run:
 
 ```powershell
 dotnet run --configuration Release --project NNtrain.Cli -- `
   --config training.example.json
 ```
 
-Training prints the loss after every batch and aggregate training/evaluation
-metrics after every epoch. Every training sample is shuffled and processed once
-per epoch; `batchSize` controls how many sample gradients are averaged before
-each optimizer update. Batch forward passes and evaluation use all logical CPU
-cores. Backward accumulation remains ordered to avoid races in shared parameter
-gradient buffers. Training cross entropy uses PyTorch-style label smoothing
-with a default value of `0.1`; evaluation always reports unsmoothed cross
-entropy. Set `labelSmoothing` to `0` to recover one-hot training targets.
-When `showLossGraph` is enabled, the CLI opens an HTML graph beside the selected
-configuration file. Training and evaluation loss are plotted as connected
-epoch points, and the browser refreshes the graph automatically.
+With no arguments the CLI selects `training.wiki-jp.json` when it is present,
+then falls back to `training.example.json`. The selected absolute path and the
+effective batch/model settings are printed before training. The GPT run
+trains or loads the BPE tokenizer, reads bounded Wikipedia data, trains the
+causal language model, writes the loss graph and checkpoint, and generates a
+sample continuation. Image-classification examples remain available in the
+separate CIFAR-100 configuration.
 The CIFAR-100 configuration normalizes RGB channels using the training-set
 statistics. Each 32x32 RGB image is emitted directly as 64 row-major 4x4 patch
 tokens with 48 channel-first features per token. Its training augmentation uses
@@ -55,3 +52,58 @@ The CIFAR-100 profile applies five warmup epochs followed by cosine learning-
 rate decay, residual dropout `0.1`, and early stopping after 15 epochs without
 an evaluation-loss improvement. At exit, the best model weights are restored
 and saved beside the configuration as `*.best-model.json`.
+
+## Train Japanese Wikipedia GPT
+
+`training.wiki-jp.json` reads the sharded Parquet files under `data/wiki`,
+trains a reversible UTF-8 byte-level BPE tokenizer when one does not already
+exist, streams the corpus, and trains the decoder-only
+`GptRinWikiJp` model:
+
+```powershell
+dotnet run --configuration Release --project NNtrain.Cli -- `
+  --config training.wiki-jp.json
+```
+
+The default GPT profile uses a 4096-token BPE vocabulary, reads every Parquet
+document (`maxTrainingDocuments: 0`), and uses up to 4096 tokens from each
+document. `maxTrainingTokens: 0` selects the streaming path, so the complete
+tokenized corpus is not retained in memory. The tokenizer and best checkpoint
+paths are controlled by `tokenizerPath` and `checkpointPath`.
+The GPT profile uses `optimizer: "nekomuon"`: NekoMuon updates Transformer
+matrix weights, while an auxiliary AdamW updates embeddings, normalization
+parameters, biases, and the language-model output head. Their learning rates
+are controlled independently by `learningRate` and `auxiliaryLearningRate`.
+With `useSimd: true`, GPT training uses hardware-accelerated Vector256 kernels
+for fused token/position embeddings, linear algebra, normalization, softmax
+reductions, cross-entropy, and NekoMuon/AdamW updates. Startup output reports
+whether Vector256 acceleration is available on the current CPU.
+Wide projection linear layers cache a blocked transpose of unchanged weight
+matrices so the output dimension can be processed as contiguous SIMD vectors;
+square and large-input matrices keep the cache-friendly dot-product kernel. Softmax,
+attention, and cross-entropy use a vectorized polynomial exponential, with a
+Vector128 fallback for narrow attention heads. Large cross-entropy batches
+recompute probabilities during backward
+instead of retaining a vocabulary-sized probability buffer. Dropout fills its
+mask in bulk, and NekoMuon reuses per-parameter workspaces to reduce allocation
+and garbage-collection overhead.
+The same kernels use `Parallel.For` for independent rows, attention heads,
+embedding-gradient groups, loss rows, and optimizer parameter groups. Set
+`maxDegreeOfParallelism` to `0` to use the runtime-selected worker count, or to
+a positive number to cap the number of worker threads.
+When `showLossGraph` is enabled, the graph is refreshed every
+`graphUpdateSteps` optimizer steps (100 by default) and at every epoch end. Its
+horizontal axis is epoch progress; validation loss is added at epoch boundaries.
+Every `datasetSampleEverySteps` steps (1000 by default), a random Wikipedia
+article from the retained sample pool is split in half. The end of the first
+half is used as the prompt, and the dataset continuation and model continuation
+are printed together for comparison. The final post-training sample uses the
+same dataset-continuation flow rather than a fixed prompt.
+
+After training, load the saved tokenizer and checkpoint and generate from a
+prompt without retraining:
+
+```powershell
+dotnet run --configuration Release --project NNtrain.Cli -- `
+  --config training.wiki-jp.json --generate "日本の歴史は"
+```

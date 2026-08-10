@@ -2,6 +2,8 @@ namespace NNtrain;
 
 partial class Tensor
 {
+    private const int MaximumCachedCrossEntropyProbabilities = 1 << 20;
+
     /// <summary>
     /// Computes mean cross entropy directly from rank-1 or rank-2 logits
     /// and integer class labels.
@@ -49,37 +51,47 @@ partial class Tensor
             }
         }
 
-        float[] probabilities = new float[Numel];
         float[] rowLosses = new float[rows];
+        float[] rowMaximums = new float[rows];
+        float[] rowInverseSums = new float[rows];
+        float[]? cachedProbabilities = Numel
+            <= MaximumCachedCrossEntropyProbabilities
+                ? new float[Numel]
+                : null;
         void ForwardRow(int row)
         {
             int offset = row * columns;
-            float maximum = _data[offset];
-            for (int column = 1; column < columns; column++)
-            {
-                float value = _data[offset + column];
-                if (value > maximum)
-                    maximum = value;
-            }
+            float maximum = MaxValues(_data, offset, columns);
+            rowMaximums[row] = maximum;
 
-            float sum = 0f;
-            float logitSum = 0f;
-            for (int column = 0; column < columns; column++)
+            float logitSum = SumValues(_data, offset, columns);
+            float sum;
+            if (cachedProbabilities is null)
             {
-                logitSum += _data[offset + column];
-                float probability =
-                    MathF.Exp(_data[offset + column] - maximum);
-                probabilities[offset + column] = probability;
-                sum += probability;
+                sum = SumExpShiftedValues(
+                    _data,
+                    offset,
+                    maximum,
+                    columns);
             }
-
-            MultiplyValues(
-                probabilities,
-                offset,
-                1f / sum,
-                probabilities,
-                offset,
-                columns);
+            else
+            {
+                sum = ExpShiftedValues(
+                    _data,
+                    offset,
+                    maximum,
+                    cachedProbabilities,
+                    offset,
+                    columns);
+                MultiplyValues(
+                    cachedProbabilities,
+                    offset,
+                    1f / sum,
+                    cachedProbabilities,
+                    offset,
+                    columns);
+            }
+            rowInverseSums[row] = 1f / sum;
             float logNormalizer = maximum + MathF.Log(sum);
             float negativeLogLikelihood = logNormalizer
                 - _data[offset + retainedLabels[row]];
@@ -101,35 +113,32 @@ partial class Tensor
             void BackwardRow(int row)
             {
                 int offset = row * columns;
-                int column = 0;
-                if (CanUseSimd(columns))
+                if (cachedProbabilities is null)
                 {
-                    int vectorWidth = Vector256<float>.Count;
-                    int vectorizedLength =
-                        columns - columns % vectorWidth;
-                    Vector256<float> scaleVector =
-                        Vector256.Create(scale);
-                    Vector256<float> uniformTargetVector =
-                        Vector256.Create(uniformTarget);
-                    for (; column < vectorizedLength; column += vectorWidth)
-                    {
-                        StoreVector256(
-                            LoadVector256(_grad, offset + column)
-                                + LoadVector256(
-                                    probabilities,
-                                    offset + column)
-                                    * scaleVector
-                                - uniformTargetVector,
-                            _grad,
-                            offset + column);
-                    }
+                    AccumulateNormalizedExpGradient(
+                        _grad,
+                        offset,
+                        _data,
+                        offset,
+                        rowMaximums[row],
+                        scale * rowInverseSums[row],
+                        uniformTarget,
+                        columns);
                 }
-
-                for (; column < columns; column++)
+                else
                 {
-                    _grad[offset + column] +=
-                        probabilities[offset + column] * scale
-                        - uniformTarget;
+                    AddScaledValues(
+                        _grad,
+                        offset,
+                        cachedProbabilities,
+                        offset,
+                        scale,
+                        columns);
+                    AddConstantValuesInPlace(
+                        _grad,
+                        offset,
+                        -uniformTarget,
+                        columns);
                 }
                 _grad[offset + retainedLabels[row]] -= trueTarget;
             }

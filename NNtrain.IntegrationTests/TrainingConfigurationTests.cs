@@ -21,6 +21,8 @@ public sealed class TrainingConfigurationTests
               },
               "epochs": 7,
               "batchSize": 11,
+              "microBatchSize": 5,
+              "microBatchCount": 3,
               "optimizer": "adamw",
               "learningRate": 0.025,
               "auxiliaryLearningRate": 0.0007,
@@ -69,6 +71,10 @@ public sealed class TrainingConfigurationTests
             configuration.EvaluationData.LabelPath);
         Assert.Equal(7, configuration.Epochs);
         Assert.Equal(11, configuration.BatchSize);
+        Assert.Equal(5, configuration.MicroBatchSize);
+        Assert.Equal(5, configuration.ResolvedMicroBatchSize);
+        Assert.Equal(3, configuration.MicroBatchCount);
+        Assert.Equal(15, configuration.EffectiveBatchSize);
         Assert.Equal("adamw", configuration.Optimizer);
         Assert.Equal(0.025f, configuration.LearningRate);
         Assert.Equal(0.0007f, configuration.AuxiliaryLearningRate);
@@ -120,6 +126,10 @@ public sealed class TrainingConfigurationTests
 
         Assert.Equal(200, configuration.Epochs);
         Assert.Equal(32, configuration.BatchSize);
+        Assert.Null(configuration.MicroBatchSize);
+        Assert.Equal(32, configuration.ResolvedMicroBatchSize);
+        Assert.Equal(1, configuration.MicroBatchCount);
+        Assert.Equal(32, configuration.EffectiveBatchSize);
         Assert.Equal(
             TrainingConfiguration.GainShareAdamWOptimizer,
             configuration.Optimizer);
@@ -317,6 +327,8 @@ public sealed class TrainingConfigurationTests
     [Theory]
     [InlineData("epochs", "Epochs")]
     [InlineData("batchSize", "BatchSize")]
+    [InlineData("microBatchSize", "MicroBatchSize")]
+    [InlineData("microBatchCount", "MicroBatchCount")]
     [InlineData("learningRate", "LearningRate")]
     [InlineData("auxiliaryLearningRate", "AuxiliaryLearningRate")]
     [InlineData("heads", "Heads")]
@@ -341,6 +353,8 @@ public sealed class TrainingConfigurationTests
             },
             Epochs = setting == "epochs" ? 0 : 1,
             BatchSize = setting == "batchSize" ? 0 : 1,
+            MicroBatchSize = setting == "microBatchSize" ? 0 : 1,
+            MicroBatchCount = setting == "microBatchCount" ? 0 : 1,
             LearningRate = setting == "learningRate" ? 0f : 0.1f,
             AuxiliaryLearningRate =
                 setting == "auxiliaryLearningRate" ? 0f : 0.01f,
@@ -358,6 +372,22 @@ public sealed class TrainingConfigurationTests
             configuration.Validate);
 
         Assert.Equal(parameterName, exception.ParamName);
+    }
+
+    [Fact]
+    public void RejectsAnOverflowingEffectiveBatchSize()
+    {
+        TrainingConfiguration configuration = CreateValidConfiguration() with
+        {
+            MicroBatchSize = int.MaxValue,
+            MicroBatchCount = 2,
+        };
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            configuration.Validate);
+
+        Assert.Equal("MicroBatchCount", exception.ParamName);
+        Assert.Contains("Effective batch size", exception.Message);
     }
 
     [Fact]

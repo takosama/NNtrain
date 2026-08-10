@@ -192,7 +192,7 @@ partial class Tensor
         if (batchCount > 1
             && workPerBatch * batchCount >= ParallelWorkThreshold)
         {
-            Parallel.For(0, batchCount, action);
+            RunParallel(0, batchCount, action);
             return;
         }
 

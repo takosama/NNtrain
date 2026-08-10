@@ -14,7 +14,7 @@ internal sealed class LossGraph
     private const int Top = 72;
     private const int Bottom = 72;
 
-    private readonly List<EpochLoss> _losses = [];
+    private readonly List<LossPoint> _losses = [];
     private readonly int _totalEpochs;
 
     internal LossGraph(string path, int totalEpochs)
@@ -35,16 +35,22 @@ internal sealed class LossGraph
     internal string Path { get; }
 
     internal void AddEpoch(int epoch, float trainingLoss, float evaluationLoss)
+        => AddPoint(epoch, trainingLoss, evaluationLoss);
+
+    internal void AddPoint(
+        float epoch,
+        float trainingLoss,
+        float? evaluationLoss = null)
     {
-        if (epoch <= 0 || epoch > _totalEpochs)
+        if (!float.IsFinite(epoch) || epoch <= 0f || epoch > _totalEpochs)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(epoch),
                 epoch,
-                $"Epoch must be between 1 and {_totalEpochs}.");
+                $"Epoch must be greater than 0 and at most {_totalEpochs}.");
         }
 
-        if (_losses.Count > 0 && epoch <= _losses[^1].Epoch)
+        if (_losses.Count > 0 && epoch < _losses[^1].Epoch)
         {
             throw new ArgumentException(
                 "Loss graph epochs must be added in increasing order.",
@@ -52,8 +58,20 @@ internal sealed class LossGraph
         }
 
         ValidateLoss(trainingLoss, nameof(trainingLoss));
-        ValidateLoss(evaluationLoss, nameof(evaluationLoss));
-        _losses.Add(new EpochLoss(epoch, trainingLoss, evaluationLoss));
+        if (evaluationLoss.HasValue)
+            ValidateLoss(evaluationLoss.Value, nameof(evaluationLoss));
+        var point = new LossPoint(epoch, trainingLoss, evaluationLoss);
+        if (_losses.Count > 0
+            && epoch == _losses[^1].Epoch
+            && evaluationLoss.HasValue
+            && !_losses[^1].Evaluation.HasValue)
+        {
+            _losses[^1] = point;
+        }
+        else
+        {
+            _losses.Add(point);
+        }
     }
 
     internal void Write()
@@ -89,8 +107,8 @@ internal sealed class LossGraph
 
     private string BuildHtml()
     {
-        int currentEpoch = _losses.Count == 0 ? 0 : _losses[^1].Epoch;
-        int xMaximum = Math.Max(1, currentEpoch);
+        float currentEpoch = _losses.Count == 0 ? 0f : _losses[^1].Epoch;
+        float xMaximum = currentEpoch > 0f ? currentEpoch : 1f;
         GetYRange(out float yMinimum, out float yMaximum);
         int plotWidth = Width - Left - Right;
         int plotHeight = Height - Top - Bottom;
@@ -110,9 +128,13 @@ internal sealed class LossGraph
         html.AppendLine("</head><body><main>");
         html.AppendLine("<h1>Loss by epoch</h1>");
         html.Append("<p>epoch ")
-            .Append(currentEpoch)
+            .Append(EpochNumber(currentEpoch))
             .Append(" / ")
             .Append(_totalEpochs)
+            .Append(" · train points ")
+            .Append(_losses.Count)
+            .Append(" · eval points ")
+            .Append(_losses.Count(loss => loss.Evaluation.HasValue))
             .AppendLine(" · 1秒ごとに自動更新</p>");
         html.Append("<svg viewBox=\"0 0 ")
             .Append(Width)
@@ -174,10 +196,13 @@ internal sealed class LossGraph
             return;
         }
 
-        float dataMinimum = _losses.Min(loss =>
-            MathF.Min(loss.Training, loss.Evaluation));
-        float dataMaximum = _losses.Max(loss =>
-            MathF.Max(loss.Training, loss.Evaluation));
+        IEnumerable<float> values = _losses.Select(loss => loss.Training)
+            .Concat(
+                _losses
+                    .Where(loss => loss.Evaluation.HasValue)
+                    .Select(loss => loss.Evaluation!.Value));
+        float dataMinimum = values.Min();
+        float dataMaximum = values.Max();
         minimum = MathF.Min(0f, dataMinimum);
         maximum = MathF.Max(1e-6f, dataMaximum);
         float range = maximum - minimum;
@@ -214,26 +239,25 @@ internal sealed class LossGraph
 
     private static void AppendXAxisLabels(
         StringBuilder html,
-        int xMaximum,
+        float xMaximum,
         int plotWidth,
         int plotHeight)
     {
-        int tickCount = Math.Min(5, xMaximum);
-        var epochs = new SortedSet<int>();
+        const int tickCount = 5;
+        var epochs = new SortedSet<float>();
         for (int tick = 0; tick <= tickCount; tick++)
         {
-            int epoch = 1 + (int)Math.Round(
-                (xMaximum - 1) * (double)tick / Math.Max(1, tickCount));
+            float epoch = xMaximum * tick / tickCount;
             epochs.Add(epoch);
         }
 
-        foreach (int epoch in epochs)
+        foreach (float epoch in epochs)
         {
             float x = XCoordinate(epoch, xMaximum, plotWidth);
             html.Append("<text x=\"").Append(Number(x))
                 .Append("\" y=\"").Append(Top + plotHeight + 26)
                 .Append("\" text-anchor=\"middle\">")
-                .Append(epoch)
+                .Append(EpochNumber(epoch))
                 .AppendLine("</text>");
         }
     }
@@ -242,23 +266,26 @@ internal sealed class LossGraph
         StringBuilder html,
         string lineClass,
         string pointClass,
-        Func<EpochLoss, float> selector,
-        int xMaximum,
+        Func<LossPoint, float?> selector,
+        float xMaximum,
         float yMinimum,
         float yMaximum,
         int plotWidth,
         int plotHeight)
     {
-        if (_losses.Count == 0)
+        LossPoint[] points = _losses
+            .Where(loss => selector(loss).HasValue)
+            .ToArray();
+        if (points.Length == 0)
             return;
 
         html.Append("<polyline class=\"").Append(lineClass)
             .Append("\" points=\"");
-        foreach (EpochLoss loss in _losses)
+        foreach (LossPoint loss in points)
         {
             float x = XCoordinate(loss.Epoch, xMaximum, plotWidth);
             float y = YCoordinate(
-                selector(loss),
+                selector(loss)!.Value,
                 yMinimum,
                 yMaximum,
                 plotHeight);
@@ -266,26 +293,29 @@ internal sealed class LossGraph
         }
         html.AppendLine("\"/>");
 
-        foreach (EpochLoss loss in _losses)
+        foreach (LossPoint loss in points)
         {
-            float value = selector(loss);
+            float value = selector(loss)!.Value;
             float x = XCoordinate(loss.Epoch, xMaximum, plotWidth);
             float y = YCoordinate(value, yMinimum, yMaximum, plotHeight);
             html.Append("<circle class=\"").Append(pointClass)
                 .Append("\" cx=\"").Append(Number(x))
                 .Append("\" cy=\"").Append(Number(y))
                 .AppendLine("\" r=\"5\">");
-            html.Append("<title>epoch ").Append(loss.Epoch)
+            html.Append("<title>epoch ").Append(EpochNumber(loss.Epoch))
                 .Append(": ")
                 .Append(value.ToString("0.000000", CultureInfo.InvariantCulture))
                 .AppendLine("</title></circle>");
         }
     }
 
-    private static float XCoordinate(int epoch, int xMaximum, int plotWidth)
-        => xMaximum == 1
+    private static float XCoordinate(
+        float epoch,
+        float xMaximum,
+        int plotWidth)
+        => xMaximum == 0f
             ? Left
-            : Left + (epoch - 1f) / (xMaximum - 1f) * plotWidth;
+            : Left + epoch / xMaximum * plotWidth;
 
     private static float YCoordinate(
         float value,
@@ -296,6 +326,19 @@ internal sealed class LossGraph
 
     private static string Number(float value)
         => value.ToString("0.###", CultureInfo.InvariantCulture);
+
+    private static string EpochNumber(float value)
+    {
+        float magnitude = MathF.Abs(value);
+        string format = magnitude switch
+        {
+            >= 1f => "0.###",
+            >= 0.01f => "0.####",
+            >= 0.001f => "0.#####",
+            _ => "0.######",
+        };
+        return value.ToString(format, CultureInfo.InvariantCulture);
+    }
 
     private static void ValidateLoss(float loss, string parameterName)
     {
@@ -308,8 +351,8 @@ internal sealed class LossGraph
         }
     }
 
-    private readonly record struct EpochLoss(
-        int Epoch,
+    private readonly record struct LossPoint(
+        float Epoch,
         float Training,
-        float Evaluation);
+        float? Evaluation);
 }

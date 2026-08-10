@@ -6,6 +6,7 @@ namespace NNtrain;
 partial class Tensor
 {
     private static int _simdEnabled = 1;
+    private static int _maxDegreeOfParallelism;
 
     /// <summary>
     /// Gets or sets whether tensor operations may use hardware-accelerated
@@ -25,10 +26,86 @@ partial class Tensor
     public static bool IsSimdHardwareAccelerated
         => Vector256.IsHardwareAccelerated;
 
+    /// <summary>
+    /// Gets or sets the maximum number of worker threads used by tensor and
+    /// optimizer <see cref="Parallel.For(int, int, Action{int})"/> kernels.
+    /// Zero selects the runtime default.
+    /// </summary>
+    public static int MaxDegreeOfParallelism
+    {
+        get => Volatile.Read(ref _maxDegreeOfParallelism);
+        set
+        {
+            if (value < 0)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(value),
+                    value,
+                    "Maximum parallelism must be non-negative; zero means " +
+                    "automatic.");
+            }
+            Volatile.Write(ref _maxDegreeOfParallelism, value);
+        }
+    }
+
+    public static int EffectiveMaxDegreeOfParallelism
+        => MaxDegreeOfParallelism == 0
+            ? Environment.ProcessorCount
+            : MaxDegreeOfParallelism;
+
+    internal static void RunParallel(
+        int fromInclusive,
+        int toExclusive,
+        Action<int> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        int count = toExclusive - fromInclusive;
+        int configured = MaxDegreeOfParallelism;
+        if (count <= 1
+            || configured == 1
+            || (configured == 0 && Environment.ProcessorCount == 1))
+        {
+            for (int index = fromInclusive; index < toExclusive; index++)
+                action(index);
+            return;
+        }
+
+        if (configured == 0)
+        {
+            Parallel.For(fromInclusive, toExclusive, action);
+            return;
+        }
+
+        Parallel.For(
+            fromInclusive,
+            toExclusive,
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = configured,
+            },
+            action);
+    }
+
     private static bool CanUseSimd(int length)
         => SimdEnabled
             && Vector256.IsHardwareAccelerated
             && length >= Vector256<float>.Count;
+
+    private static bool CanUseVector128(int length)
+        => SimdEnabled
+            && Vector128.IsHardwareAccelerated
+            && length >= Vector128<float>.Count;
+
+    private static bool CanUseTransposedRightKernel(int inputWidth, int outputWidth)
+    {
+        // The output-vectorized outer-product kernel is most useful for a much
+        // wider projection (notably the vocabulary head). For square-ish
+        // Transformer matrices, contiguous input/weight dot products avoid a
+        // per-step transpose and have better cache locality.
+        return inputWidth <= 128
+            && CanUseSimd(outputWidth)
+            && outputWidth >= 4L * inputWidth;
+    }
 
     private static Vector256<float> LoadVector256(
         float[] values,
@@ -37,6 +114,17 @@ partial class Tensor
 
     private static void StoreVector256(
         Vector256<float> vector,
+        float[] destination,
+        int offset)
+        => vector.StoreUnsafe(ref destination[offset]);
+
+    private static Vector128<float> LoadVector128(
+        float[] values,
+        int offset)
+        => Vector128.LoadUnsafe(ref values[offset]);
+
+    private static void StoreVector128(
+        Vector128<float> vector,
         float[] destination,
         int offset)
         => vector.StoreUnsafe(ref destination[offset]);
@@ -69,6 +157,17 @@ partial class Tensor
                     destination,
                     destinationOffset + index);
             }
+        }
+
+        if (CanUseVector128(length - index))
+        {
+            StoreVector128(
+                LoadVector128(destination, destinationOffset + index)
+                    + LoadVector128(source, sourceOffset + index)
+                        * Vector128.Create(scale),
+                destination,
+                destinationOffset + index);
+            index += Vector128<float>.Count;
         }
 
         for (; index < length; index++)
@@ -105,11 +204,425 @@ partial class Tensor
             }
         }
 
+        if (CanUseVector128(length - index))
+        {
+            StoreVector128(
+                LoadVector128(source, sourceOffset + index)
+                    * Vector128.Create(scale),
+                destination,
+                destinationOffset + index);
+            index += Vector128<float>.Count;
+        }
+
         for (; index < length; index++)
         {
             destination[destinationOffset + index] =
                 source[sourceOffset + index] * scale;
         }
+    }
+
+    private static void AddValues(
+        float[] left,
+        int leftOffset,
+        float[] right,
+        int rightOffset,
+        float[] destination,
+        int destinationOffset,
+        int length)
+    {
+        int index = 0;
+        if (CanUseSimd(length))
+        {
+            int vectorWidth = Vector256<float>.Count;
+            int vectorizedLength = length - length % vectorWidth;
+            for (; index < vectorizedLength; index += vectorWidth)
+            {
+                StoreVector256(
+                    LoadVector256(left, leftOffset + index)
+                        + LoadVector256(right, rightOffset + index),
+                    destination,
+                    destinationOffset + index);
+            }
+        }
+
+        if (CanUseVector128(length - index))
+        {
+            StoreVector128(
+                LoadVector128(left, leftOffset + index)
+                    + LoadVector128(right, rightOffset + index),
+                destination,
+                destinationOffset + index);
+            index += Vector128<float>.Count;
+        }
+
+        for (; index < length; index++)
+        {
+            destination[destinationOffset + index] =
+                left[leftOffset + index] + right[rightOffset + index];
+        }
+    }
+
+    private static void MultiplyElementwiseValues(
+        float[] left,
+        int leftOffset,
+        float[] right,
+        int rightOffset,
+        float[] destination,
+        int destinationOffset,
+        int length)
+    {
+        int index = 0;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            for (; index < vectorizedLength; index += width)
+            {
+                StoreVector256(
+                    LoadVector256(left, leftOffset + index)
+                        * LoadVector256(right, rightOffset + index),
+                    destination,
+                    destinationOffset + index);
+            }
+        }
+
+
+        if (CanUseVector128(length - index))
+        {
+            StoreVector128(
+                LoadVector128(left, leftOffset + index)
+                    * LoadVector128(right, rightOffset + index),
+                destination,
+                destinationOffset + index);
+            index += Vector128<float>.Count;
+        }
+
+        for (; index < length; index++)
+        {
+            destination[destinationOffset + index] =
+                left[leftOffset + index] * right[rightOffset + index];
+        }
+    }
+
+    private static void AddConstantValuesInPlace(
+        float[] values,
+        int offset,
+        float constant,
+        int length)
+    {
+        int index = 0;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            Vector256<float> constantVector = Vector256.Create(constant);
+            for (; index < vectorizedLength; index += width)
+            {
+                StoreVector256(
+                    LoadVector256(values, offset + index) + constantVector,
+                    values,
+                    offset + index);
+            }
+        }
+
+
+        if (CanUseVector128(length - index))
+        {
+            StoreVector128(
+                LoadVector128(values, offset + index)
+                    + Vector128.Create(constant),
+                values,
+                offset + index);
+            index += Vector128<float>.Count;
+        }
+
+        for (; index < length; index++)
+            values[offset + index] += constant;
+    }
+
+    private static float MaxValues(
+        float[] values,
+        int offset,
+        int length)
+    {
+        if (length <= 0)
+            throw new ArgumentOutOfRangeException(nameof(length));
+
+        int index = 1;
+        float maximum = values[offset];
+        if (CanUseSimd(length))
+        {
+            int vectorWidth = Vector256<float>.Count;
+            int vectorizedLength = length - length % vectorWidth;
+            Vector256<float> maximumVector = LoadVector256(values, offset);
+            index = vectorWidth;
+            for (; index < vectorizedLength; index += vectorWidth)
+            {
+                maximumVector = Vector256.Max(
+                    maximumVector,
+                    LoadVector256(values, offset + index));
+            }
+
+            for (int lane = 0; lane < vectorWidth; lane++)
+                maximum = MathF.Max(maximum, maximumVector.GetElement(lane));
+        }
+
+        for (; index < length; index++)
+            maximum = MathF.Max(maximum, values[offset + index]);
+        return maximum;
+    }
+
+    private static float ExpShiftedValues(
+        float[] source,
+        int sourceOffset,
+        float shift,
+        float[] destination,
+        int destinationOffset,
+        int length)
+    {
+        int index = 0;
+        float sum = 0f;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            Vector256<float> shiftVector = Vector256.Create(shift);
+            Vector256<float> sumVector = Vector256<float>.Zero;
+
+            for (; index < vectorizedLength; index += width)
+            {
+                Vector256<float> result = ExpVector(Vector256.Max(
+                    LoadVector256(source, sourceOffset + index)
+                        - shiftVector,
+                    Vector256.Create(-87.33654f)));
+                StoreVector256(
+                    result,
+                    destination,
+                    destinationOffset + index);
+                sumVector += result;
+            }
+            sum = Vector256.Sum(sumVector);
+        }
+
+        for (; index < length; index++)
+        {
+            float result = MathF.Exp(source[sourceOffset + index] - shift);
+            destination[destinationOffset + index] = result;
+            sum += result;
+        }
+        return sum;
+    }
+
+    private static float SumExpShiftedValues(
+        float[] source,
+        int sourceOffset,
+        float shift,
+        int length)
+    {
+        int index = 0;
+        float sum = 0f;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            Vector256<float> shiftVector = Vector256.Create(shift);
+            Vector256<float> minimum = Vector256.Create(-87.33654f);
+            Vector256<float> sumVector = Vector256<float>.Zero;
+            for (; index < vectorizedLength; index += width)
+            {
+                sumVector += ExpVector(Vector256.Max(
+                    LoadVector256(source, sourceOffset + index)
+                        - shiftVector,
+                    minimum));
+            }
+            sum = Vector256.Sum(sumVector);
+        }
+
+        for (; index < length; index++)
+            sum += MathF.Exp(source[sourceOffset + index] - shift);
+        return sum;
+    }
+
+    private static void AccumulateNormalizedExpGradient(
+        float[] destination,
+        int destinationOffset,
+        float[] logits,
+        int logitsOffset,
+        float maximum,
+        float probabilityScale,
+        float uniformTarget,
+        int length)
+    {
+        int index = 0;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            Vector256<float> maximumVector = Vector256.Create(maximum);
+            Vector256<float> minimum = Vector256.Create(-87.33654f);
+            Vector256<float> scaleVector = Vector256.Create(probabilityScale);
+            Vector256<float> uniformVector = Vector256.Create(uniformTarget);
+            for (; index < vectorizedLength; index += width)
+            {
+                Vector256<float> probability = ExpVector(Vector256.Max(
+                    LoadVector256(logits, logitsOffset + index)
+                        - maximumVector,
+                    minimum));
+                StoreVector256(
+                    LoadVector256(destination, destinationOffset + index)
+                        + probability * scaleVector
+                        - uniformVector,
+                    destination,
+                    destinationOffset + index);
+            }
+        }
+
+        for (; index < length; index++)
+        {
+            destination[destinationOffset + index] +=
+                MathF.Exp(logits[logitsOffset + index] - maximum)
+                    * probabilityScale
+                - uniformTarget;
+        }
+    }
+
+    private static Vector256<float> ExpVector(Vector256<float> value)
+    {
+        Vector256<float> exponent = Vector256.Floor(
+            value * Vector256.Create(1.44269504088896341f)
+                + Vector256.Create(0.5f));
+        value -= exponent * Vector256.Create(0.693359375f);
+        value -= exponent * Vector256.Create(-2.12194440e-4f);
+        Vector256<float> square = value * value;
+
+        Vector256<float> polynomial =
+            Vector256.Create(1.9875691500e-4f);
+        polynomial = polynomial * value
+            + Vector256.Create(1.3981999507e-3f);
+        polynomial = polynomial * value
+            + Vector256.Create(8.3334519073e-3f);
+        polynomial = polynomial * value
+            + Vector256.Create(4.1665795894e-2f);
+        polynomial = polynomial * value
+            + Vector256.Create(1.6666665459e-1f);
+        polynomial = polynomial * value
+            + Vector256.Create(5.0000001201e-1f);
+        polynomial = polynomial * square + value + Vector256.Create(1f);
+
+        Vector256<int> exponentBits =
+            (Vector256.ConvertToInt32(exponent) + Vector256.Create(127)) << 23;
+        return polynomial * exponentBits.AsSingle();
+    }
+
+    private static void SubtractShiftAndScalarValues(
+        float[] source,
+        int sourceOffset,
+        float shift,
+        float scalar,
+        float[] destination,
+        int destinationOffset,
+        int length)
+    {
+        int index = 0;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            Vector256<float> shiftVector = Vector256.Create(shift);
+            Vector256<float> scalarVector = Vector256.Create(scalar);
+            for (; index < vectorizedLength; index += width)
+            {
+                StoreVector256(
+                    (LoadVector256(source, sourceOffset + index)
+                        - shiftVector)
+                        - scalarVector,
+                    destination,
+                    destinationOffset + index);
+            }
+        }
+
+        for (; index < length; index++)
+        {
+            destination[destinationOffset + index] =
+                (source[sourceOffset + index] - shift) - scalar;
+        }
+    }
+
+    private static void ReluValuesInPlace(
+        float[] values,
+        int offset,
+        int length)
+    {
+        int index = 0;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            Vector256<float> zero = Vector256<float>.Zero;
+            for (; index < vectorizedLength; index += width)
+            {
+                Vector256<float> value = LoadVector256(
+                    values,
+                    offset + index);
+                StoreVector256(
+                    Vector256.ConditionalSelect(
+                        Vector256.GreaterThan(value, zero),
+                        value,
+                        zero),
+                    values,
+                    offset + index);
+            }
+        }
+
+        for (; index < length; index++)
+        {
+            float value = values[offset + index];
+            values[offset + index] = value > 0f ? value : 0f;
+        }
+    }
+
+    private static float DotProductMaskedByPositive(
+        float[] gradient,
+        int gradientOffset,
+        float[] activation,
+        int activationOffset,
+        float[] weight,
+        int weightOffset,
+        int length)
+    {
+        int index = 0;
+        float sum = 0f;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            Vector256<float> zero = Vector256<float>.Zero;
+            Vector256<float> sumVector = zero;
+            for (; index < vectorizedLength; index += width)
+            {
+                Vector256<float> activationVector = LoadVector256(
+                    activation,
+                    activationOffset + index);
+                Vector256<float> maskedGradient =
+                    Vector256.ConditionalSelect(
+                        Vector256.GreaterThan(activationVector, zero),
+                        LoadVector256(gradient, gradientOffset + index),
+                        zero);
+                sumVector += maskedGradient
+                    * LoadVector256(weight, weightOffset + index);
+            }
+            sum = Vector256.Sum(sumVector);
+        }
+
+        for (; index < length; index++)
+        {
+            if (activation[activationOffset + index] > 0f)
+            {
+                sum += gradient[gradientOffset + index]
+                    * weight[weightOffset + index];
+            }
+        }
+        return sum;
     }
 
     private static void AddProductValues(

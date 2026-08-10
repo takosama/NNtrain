@@ -280,11 +280,31 @@ partial class Tensor
         }
 
         float[] y = new float[m * n];
+        bool useOutputVectorization = CanUseTransposedRightKernel(k, n);
+        float[]? transposedOther = useOutputVectorization
+            ? other.GetTransposedData2D()
+            : null;
 
         void ForwardRow(int r)
         {
             int leftRow = r * k;
             int outputRow = r * n;
+            if (transposedOther is not null)
+            {
+                Array.Copy(rowBias._data, 0, y, outputRow, n);
+                for (int inner = 0; inner < k; inner++)
+                {
+                    AddScaledValues(
+                        y,
+                        outputRow,
+                        transposedOther,
+                        inner * n,
+                        _data[leftRow + inner],
+                        n);
+                }
+                return;
+            }
+
             for (int c = 0; c < n; c++)
             {
                 y[outputRow + c] = rowBias._data[c] + DotProduct(
@@ -305,6 +325,20 @@ partial class Tensor
             {
                 int leftRow = r * k;
                 int outputRow = r * n;
+                if (transposedOther is not null)
+                {
+                    for (int inner = 0; inner < k; inner++)
+                    {
+                        _grad[leftRow + inner] += DotProduct(
+                            result._grad,
+                            outputRow,
+                            transposedOther,
+                            inner * n,
+                            n);
+                    }
+                    return;
+                }
+
                 for (int c = 0; c < n; c++)
                 {
                     int rightRow = c * k;
@@ -356,29 +390,31 @@ partial class Tensor
     {
         int index = 0;
         float sum = 0f;
-        if (!CanUseSimd(length))
+        if (CanUseSimd(length))
         {
-            for (; index < length; index++)
-            {
-                sum += left[leftOffset + index]
-                    * right[rightOffset + index];
-            }
+            int vectorWidth = Vector256<float>.Count;
+            int vectorizedLength = length - length % vectorWidth;
+            Vector256<float> sumVector = Vector256<float>.Zero;
 
-            return sum;
+            for (; index < vectorizedLength; index += vectorWidth)
+            {
+                Vector256<float> leftVector = LoadVector256(
+                    left,
+                    leftOffset + index);
+                Vector256<float> rightVector = LoadVector256(
+                    right,
+                    rightOffset + index);
+                sumVector += leftVector * rightVector;
+            }
+            sum = Vector256.Sum(sumVector);
         }
 
-        int vectorWidth = Vector256<float>.Count;
-        int vectorizedLength = length - length % vectorWidth;
-
-        for (; index < vectorizedLength; index += vectorWidth)
+        if (CanUseVector128(length - index))
         {
-            Vector256<float> leftVector = LoadVector256(
-                left,
-                leftOffset + index);
-            Vector256<float> rightVector = LoadVector256(
-                right,
-                rightOffset + index);
-            sum += Vector256.Sum(leftVector * rightVector);
+            sum += Vector128.Sum(
+                LoadVector128(left, leftOffset + index)
+                    * LoadVector128(right, rightOffset + index));
+            index += Vector128<float>.Count;
         }
 
         for (; index < length; index++)

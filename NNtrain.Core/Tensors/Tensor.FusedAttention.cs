@@ -87,24 +87,27 @@ partial class Tensor
                         maximum = score;
                 }
 
-                float sum = 0f;
-                for (int key = 0; key <= lastKey; key++)
-                {
-                    float probability = MathF.Exp(
-                        probabilities[probabilityRow + key] - maximum);
-                    probabilities[probabilityRow + key] = probability;
-                    sum += probability;
-                }
-
-                float inverseSum = 1f / sum;
+                int activeKeyCount = lastKey + 1;
+                float sum = ExpShiftedValues(
+                    probabilities,
+                    probabilityRow,
+                    maximum,
+                    probabilities,
+                    probabilityRow,
+                    activeKeyCount);
+                MultiplyValues(
+                    probabilities,
+                    probabilityRow,
+                    1f / sum,
+                    probabilities,
+                    probabilityRow,
+                    activeKeyCount);
                 int outputOffset = outputBatchOffset
                     + query * modelWidth
                     + headOffset;
                 for (int key = 0; key <= lastKey; key++)
                 {
-                    float probability =
-                        probabilities[probabilityRow + key] * inverseSum;
-                    probabilities[probabilityRow + key] = probability;
+                    float probability = probabilities[probabilityRow + key];
                     int valueOffset = projectedBatchOffset
                         + key * projectedWidth
                         + 2 * modelWidth

@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace NNtrain;
 
 partial class Tensor
@@ -21,14 +23,24 @@ partial class Tensor
         float scale = 1f / (1f - probability);
         var mask = new float[Numel];
         var output = new float[Numel];
+        Span<uint> randomBits = MemoryMarshal.Cast<float, uint>(mask.AsSpan());
+        random.NextBytes(MemoryMarshal.AsBytes(randomBits));
+        uint dropThreshold = (uint)(probability * (uint.MaxValue + 1d));
         for (int index = 0; index < Numel; index++)
         {
-            float multiplier = random.NextSingle() < probability
+            float multiplier = randomBits[index] < dropThreshold
                 ? 0f
                 : scale;
             mask[index] = multiplier;
-            output[index] = _data[index] * multiplier;
         }
+        MultiplyElementwiseValues(
+            _data,
+            0,
+            mask,
+            0,
+            output,
+            0,
+            Numel);
 
         var result = new Tensor(output, _shape, new[] { this });
         result.Node.BackwardAction = () =>

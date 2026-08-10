@@ -22,7 +22,8 @@
     }
   },
   "epochs": 200,
-  "batchSize": 512,
+  "microBatchSize": 256,
+  "microBatchCount":1,
   "optimizer": "gainshareadamw",
   "learningRate": 0.0003,
   "weightDecay": 0.0005,
@@ -43,9 +44,9 @@
   "showLossGraph": true,
   "seed": 1234,
   "model": {
-    "heads":8,
-    "hiddenSize": 256,
-    "layers": 4,
+    "heads":16,
+    "hiddenSize": 512,
+    "layers": 16,
     "seed": 43,
     "initializationScale": 0.02,
     "dropout": 0.1

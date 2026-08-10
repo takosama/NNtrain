@@ -24,10 +24,31 @@ partial class Tensor
         }
 
         float[] output = new float[checked(rows * outputWidth)];
+        bool useOutputVectorization = CanUseTransposedRightKernel(inputWidth, outputWidth);
+        float[]? transposedOther = useOutputVectorization
+            ? other.GetTransposedData2D()
+            : null;
         void ForwardRow(int row)
         {
             int inputOffset = row * inputWidth;
             int outputOffset = row * outputWidth;
+            if (transposedOther is not null)
+            {
+                Array.Copy(rowBias._data, 0, output, outputOffset, outputWidth);
+                for (int inner = 0; inner < inputWidth; inner++)
+                {
+                    AddScaledValues(
+                        output,
+                        outputOffset,
+                        transposedOther,
+                        inner * outputWidth,
+                        _data[inputOffset + inner],
+                        outputWidth);
+                }
+                ReluValuesInPlace(output, outputOffset, outputWidth);
+                return;
+            }
+
             for (int column = 0; column < outputWidth; column++)
             {
                 float value = rowBias._data[column] + DotProduct(
@@ -55,6 +76,23 @@ partial class Tensor
             {
                 int inputOffset = row * inputWidth;
                 int outputOffset = row * outputWidth;
+                if (transposedOther is not null)
+                {
+                    for (int inner = 0; inner < inputWidth; inner++)
+                    {
+                        _grad[inputOffset + inner] +=
+                            DotProductMaskedByPositive(
+                                result._grad,
+                                outputOffset,
+                                result._data,
+                                outputOffset,
+                                transposedOther,
+                                inner * outputWidth,
+                                outputWidth);
+                    }
+                    return;
+                }
+
                 for (int column = 0; column < outputWidth; column++)
                 {
                     if (result._data[outputOffset + column] <= 0f)

@@ -19,6 +19,7 @@ class Program
         ArgumentNullException.ThrowIfNull(error);
 
         string configurationPath;
+        string? generatePrompt = null;
         if (args.Length == 0)
         {
             configurationPath = FindDefaultConfiguration();
@@ -31,15 +32,46 @@ class Program
         {
             configurationPath = args[1];
         }
+        else if (args.Length == 4
+            && string.Equals(
+                args[0],
+                "--config",
+                StringComparison.OrdinalIgnoreCase)
+            && string.Equals(
+                args[2],
+                "--generate",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            configurationPath = args[1];
+            generatePrompt = args[3];
+        }
         else
         {
             error.WriteLine(
-                "Usage: NNtrain.Cli [--config <training-config.json>]");
+                "Usage: NNtrain.Cli [--config <training-config.json>] " +
+                "[--generate <prompt>]");
             return 1;
         }
 
         try
         {
+            if (WikiTrainingConfiguration.IsWikiConfiguration(
+                configurationPath))
+            {
+                return WikiLanguageModelCommand.Run(
+                    configurationPath,
+                    generatePrompt,
+                    output,
+                    error,
+                    openLossGraph);
+            }
+            if (generatePrompt is not null)
+            {
+                throw new ArgumentException(
+                    "--generate can only be used with a gpt_rin_wiki_jp " +
+                    "configuration.");
+            }
+
             TrainingConfiguration config =
                 TrainingConfiguration.Load(configurationPath);
             Tensor.SimdEnabled = config.UseSimd;
@@ -85,6 +117,10 @@ class Program
                 $"workers = {Environment.ProcessorCount}");
             output.WriteLine(
                 $"simd = {GetSimdStatus()}");
+            output.WriteLine(
+                $"micro batch = {config.ResolvedMicroBatchSize} samples x " +
+                $"{config.MicroBatchCount} accumulation(s), effective " +
+                $"batch {config.EffectiveBatchSize}");
             output.WriteLine(
                 $"optimizer = {config.Optimizer.ToLowerInvariant()}");
             output.WriteLine(
@@ -160,42 +196,67 @@ class Program
                 int trainCorrect = 0;
                 var trainTimer = Stopwatch.StartNew();
                 Shuffle(trainingOrder, shuffleRandom);
-                int batchCount =
-                    (trainData.Count + config.BatchSize - 1)
-                    / config.BatchSize;
+                int microBatchSize = config.ResolvedMicroBatchSize;
+                int microBatchTotal = DivideRoundUp(
+                    trainData.Count,
+                    microBatchSize);
+                int updateTotal = DivideRoundUp(
+                    microBatchTotal,
+                    config.MicroBatchCount);
 
-                for (int batch = 0; batch < batchCount; batch++)
+                for (int update = 0; update < updateTotal; update++)
                 {
                     optimizer.ZeroGrad();
-                    int batchStart = batch * config.BatchSize;
-                    int samplesInBatch = Math.Min(
-                        config.BatchSize,
-                        trainData.Count - batchStart);
-                    BatchSamples samples = ReadBatch(
-                        trainData,
-                        trainingOrder,
-                        batchStart,
-                        samplesInBatch,
-                        augmentationRandom);
-                    Tensor logits = model.ForwardBatch(samples.Input);
-                    Tensor loss = logits.CrossEntropyWithLogits(
-                        samples.Answers,
-                        config.LabelSmoothing);
-                    float batchLoss = loss.Data[0];
+                    int firstMicroBatch = update * config.MicroBatchCount;
+                    int microBatchesInUpdate = Math.Min(
+                        config.MicroBatchCount,
+                        microBatchTotal - firstMicroBatch);
+                    int updateStart = firstMicroBatch * microBatchSize;
+                    int samplesInUpdate = Math.Min(
+                        config.EffectiveBatchSize,
+                        trainData.Count - updateStart);
 
-                    loss.Backward();
-                    trainLoss += batchLoss * samplesInBatch;
-                    trainCorrect += CountCorrect(
-                        logits.Data,
-                        samples.Answers,
-                        trainData.ClassCount);
+                    for (int accumulation = 0;
+                        accumulation < microBatchesInUpdate;
+                        accumulation++)
+                    {
+                        int microBatch = firstMicroBatch + accumulation;
+                        int microBatchStart = microBatch * microBatchSize;
+                        int samplesInMicroBatch = Math.Min(
+                            microBatchSize,
+                            trainData.Count - microBatchStart);
+                        BatchSamples samples = ReadBatch(
+                            trainData,
+                            trainingOrder,
+                            microBatchStart,
+                            samplesInMicroBatch,
+                            augmentationRandom);
+                        Tensor logits = model.ForwardBatch(samples.Input);
+                        Tensor loss = logits.CrossEntropyWithLogits(
+                            samples.Answers,
+                            config.LabelSmoothing);
+                        float microBatchLoss = loss.Data[0];
+                        float gradientWeight =
+                            (float)samplesInMicroBatch / samplesInUpdate;
+
+                        loss.Backward([gradientWeight]);
+                        trainLoss +=
+                            microBatchLoss * samplesInMicroBatch;
+                        trainCorrect += CountCorrect(
+                            logits.Data,
+                            samples.Answers,
+                            trainData.ClassCount);
+
+                        output.WriteLine(
+                            $"epoch {epoch}, " +
+                            $"microbatch {microBatch + 1}/" +
+                            $"{microBatchTotal}, accumulation " +
+                            $"{accumulation + 1}/{microBatchesInUpdate}, " +
+                            $"update {update + 1}/{updateTotal}, " +
+                            $"loss = {microBatchLoss:F6}");
+                    }
 
                     optimizer.Step();
-
-                    output.WriteLine(
-                        $"epoch {epoch}, " +
-                        $"batch {batch + 1}/{batchCount}, " +
-                        $"loss = {batchLoss:F6}");
                 }
 
                 trainTimer.Stop();
@@ -205,9 +266,9 @@ class Program
                 int completedEvaluationSamples = 0;
                 int lastEvalPercent = -1;
                 var evalTimer = Stopwatch.StartNew();
-                int evaluationBatchCount =
-                    (evalData.Count + config.BatchSize - 1)
-                    / config.BatchSize;
+                int evaluationBatchCount = DivideRoundUp(
+                    evalData.Count,
+                    microBatchSize);
 
                 model.Eval();
                 using (AutogradContext.NoGrad())
@@ -216,9 +277,9 @@ class Program
                         batch < evaluationBatchCount;
                         batch++)
                     {
-                        int batchStart = batch * config.BatchSize;
+                        int batchStart = batch * microBatchSize;
                         int samplesInBatch = Math.Min(
-                            config.BatchSize,
+                            microBatchSize,
                             evalData.Count - batchStart);
                         BatchSamples samples = ReadBatch(
                             evalData,
@@ -330,6 +391,16 @@ class Program
             error.WriteLine($"Error: {exception.Message}");
             return 2;
         }
+    }
+
+    internal static int DivideRoundUp(int value, int divisor)
+    {
+        if (value < 0)
+            throw new ArgumentOutOfRangeException(nameof(value));
+        if (divisor <= 0)
+            throw new ArgumentOutOfRangeException(nameof(divisor));
+
+        return value / divisor + (value % divisor == 0 ? 0 : 1);
     }
 
     private static void Shuffle(int[] values, Random random)
@@ -512,9 +583,13 @@ class Program
         File.Move(temporaryPath, path, overwrite: true);
     }
 
-    private static string FindDefaultConfiguration()
+    internal static string FindDefaultConfiguration()
     {
-        const string fileName = "training.example.json";
+        string[] fileNames =
+        [
+            "training.wiki-jp.json",
+            "training.example.json",
+        ];
 
         foreach (string startPath in new[]
         {
@@ -525,15 +600,22 @@ class Program
             DirectoryInfo? directory = new DirectoryInfo(startPath);
             while (directory is not null)
             {
-                string candidate = Path.Combine(directory.FullName, fileName);
-                if (File.Exists(candidate))
-                    return candidate;
+                foreach (string fileName in fileNames)
+                {
+                    string candidate = Path.Combine(
+                        directory.FullName,
+                        fileName);
+                    if (File.Exists(candidate))
+                        return candidate;
+                }
 
                 directory = directory.Parent;
             }
         }
 
-        return Path.Combine(Environment.CurrentDirectory, fileName);
+        return Path.Combine(
+            Environment.CurrentDirectory,
+            fileNames[0]);
     }
 
     private static IImageClassificationDataset CreateDataset(

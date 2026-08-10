@@ -205,7 +205,7 @@ public sealed class GainShareAdamW : IOptimizer, ILearningRateAdjustable
         foreach (Parameter parameter in _parameters)
             totalElements += parameter.T.Numel;
         if (_parameters.Count > 1 && totalElements >= 32_768)
-            Parallel.For(0, _parameters.Count, ComputeDirection);
+            Tensor.RunParallel(0, _parameters.Count, ComputeDirection);
         else
             for (int index = 0; index < _parameters.Count; index++)
                 ComputeDirection(index);
@@ -340,7 +340,7 @@ public sealed class GainShareAdamW : IOptimizer, ILearningRateAdjustable
         }
 
         if (_parameters.Count > 1 && totalElements >= 32_768)
-            Parallel.For(0, _parameters.Count, UpdateParameter);
+            Tensor.RunParallel(0, _parameters.Count, UpdateParameter);
         else
             for (int index = 0; index < _parameters.Count; index++)
                 UpdateParameter(index);

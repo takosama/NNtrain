@@ -184,7 +184,7 @@ public sealed class Lion : IOptimizer, ILearningRateAdjustable
             totalElements += parameter.T.Numel;
 
         if (_parameters.Count > 1 && totalElements >= 32_768)
-            Parallel.For(0, _parameters.Count, UpdateParameter);
+            Tensor.RunParallel(0, _parameters.Count, UpdateParameter);
         else
             for (int index = 0; index < _parameters.Count; index++)
                 UpdateParameter(index);

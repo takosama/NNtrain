@@ -17,6 +17,9 @@ BenchmarkDotNet.Artifacts/
 # Generated training reports and checkpoints
 *.loss*.html
 *.best-model.json
+*.wiki-model.json
+training.wiki-jp.model.json
+*-bpe.json
 
 # OS files
 .DS_Store

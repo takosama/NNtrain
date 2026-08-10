@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Text.Json;
 using NNtrain;
 using Xunit;
 
@@ -138,7 +139,7 @@ public sealed class TrainingIntegrationTests
     }
 
     [Fact]
-    public void ProgramDisplaysLossForEveryTrainingBatch()
+    public void ProgramDisplaysLossForEveryTrainingMicroBatch()
     {
         using var directory = new TemporaryDirectory();
         DatasetFiles training = WriteDataset(
@@ -160,7 +161,8 @@ public sealed class TrainingIntegrationTests
                 "labelPath": "{{evaluation.LabelPath.Replace("\\", "\\\\")}}"
               },
               "epochs": 1,
-              "batchSize": 2,
+              "microBatchSize": 2,
+              "microBatchCount": 2,
               "model": { "heads": 1, "hiddenSize": 2, "layers": 1 }
             }
             """);
@@ -177,6 +179,9 @@ public sealed class TrainingIntegrationTests
         Assert.Contains(
             $"workers = {Environment.ProcessorCount}",
             output.ToString());
+        Assert.Contains(
+            "micro batch = 2 samples x 2 accumulation(s), effective batch 4",
+            output.ToString());
         Assert.Contains("optimizer = gainshareadamw", output.ToString());
         Assert.Contains("learning rate = 0.000300", output.ToString());
         Assert.Contains(
@@ -185,8 +190,14 @@ public sealed class TrainingIntegrationTests
             "scale [0.500, 2.000]",
             output.ToString());
         Assert.Contains("weight decay = 0.000500", output.ToString());
-        Assert.Contains("epoch 1, batch 1/2, loss = ", output.ToString());
-        Assert.Contains("epoch 1, batch 2/2, loss = ", output.ToString());
+        Assert.Contains(
+            "epoch 1, microbatch 1/2, accumulation 1/2, " +
+            "update 1/1, loss = ",
+            output.ToString());
+        Assert.Contains(
+            "epoch 1, microbatch 2/2, accumulation 2/2, " +
+            "update 1/1, loss = ",
+            output.ToString());
         Assert.Contains("epoch 1, train loss = ", output.ToString());
         Assert.Contains("epoch 1, eval 100%", output.ToString());
         string lossGraphPath = Path.ChangeExtension(
@@ -206,6 +217,112 @@ public sealed class TrainingIntegrationTests
         Assert.Contains(
             $"checkpoint = {checkpointPath}",
             output.ToString());
+    }
+
+    [Fact]
+    public void GradientAccumulationMatchesOneEquivalentFullBatch()
+    {
+        using var directory = new TemporaryDirectory();
+        DatasetFiles training = WriteDataset(
+            directory.Root,
+            "train",
+            [0, 1, 2]);
+        DatasetFiles evaluation = WriteDataset(
+            directory.Root,
+            "eval",
+            [0, 1]);
+
+        string WriteConfiguration(
+            string fileName,
+            int microBatchSize,
+            int microBatchCount)
+        {
+            string path = Path.Combine(directory.Root, fileName);
+            File.WriteAllText(
+                path,
+                $$"""
+                {
+                  "trainingData": {
+                    "imagePath": "{{training.ImagePath.Replace("\\", "\\\\")}}",
+                    "labelPath": "{{training.LabelPath.Replace("\\", "\\\\")}}"
+                  },
+                  "evaluationData": {
+                    "imagePath": "{{evaluation.ImagePath.Replace("\\", "\\\\")}}",
+                    "labelPath": "{{evaluation.LabelPath.Replace("\\", "\\\\")}}"
+                  },
+                  "epochs": 1,
+                  "microBatchSize": {{microBatchSize}},
+                  "microBatchCount": {{microBatchCount}},
+                  "optimizer": "adamw",
+                  "learningRate": 0.001,
+                  "labelSmoothing": 0,
+                  "showLossGraph": false,
+                  "seed": 17,
+                  "model": {
+                    "heads": 1,
+                    "hiddenSize": 2,
+                    "layers": 1,
+                    "seed": 19,
+                    "dropout": 0
+                  }
+                }
+                """);
+            return path;
+        }
+
+        string fullBatchPath = WriteConfiguration("full.json", 3, 1);
+        string accumulatedPath = WriteConfiguration("accumulated.json", 2, 2);
+        using var fullOutput = new StringWriter();
+        using var accumulatedOutput = new StringWriter();
+        using var fullError = new StringWriter();
+        using var accumulatedError = new StringWriter();
+
+        Assert.Equal(
+            0,
+            Program.Run(
+                ["--config", fullBatchPath],
+                fullOutput,
+                fullError));
+        Assert.Equal(
+            0,
+            Program.Run(
+                ["--config", accumulatedPath],
+                accumulatedOutput,
+                accumulatedError));
+        Assert.Equal(string.Empty, fullError.ToString());
+        Assert.Equal(string.Empty, accumulatedError.ToString());
+
+        CheckpointSnapshot full = ReadCheckpoint(fullBatchPath);
+        CheckpointSnapshot accumulated = ReadCheckpoint(accumulatedPath);
+        Assert.InRange(
+            accumulated.EvaluationLoss,
+            full.EvaluationLoss - 1e-5f,
+            full.EvaluationLoss + 1e-5f);
+        Assert.Equal(
+            full.Model.Parameters.Length,
+            accumulated.Model.Parameters.Length);
+
+        for (int parameterIndex = 0;
+            parameterIndex < full.Model.Parameters.Length;
+            parameterIndex++)
+        {
+            ModuleParameterState expected =
+                full.Model.Parameters[parameterIndex];
+            ModuleParameterState actual =
+                accumulated.Model.Parameters[parameterIndex];
+            Assert.Equal(expected.Name, actual.Name);
+            Assert.Equal(expected.Shape, actual.Shape);
+            Assert.Equal(expected.Values.Length, actual.Values.Length);
+            for (int valueIndex = 0;
+                valueIndex < expected.Values.Length;
+                valueIndex++)
+            {
+                Assert.InRange(
+                    actual.Values[valueIndex],
+                    expected.Values[valueIndex] - 1e-5f,
+                    expected.Values[valueIndex] + 1e-5f);
+            }
+        }
     }
 
     [Fact]
@@ -246,7 +363,7 @@ public sealed class TrainingIntegrationTests
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, error.ToString());
         Assert.Contains("early stopping at epoch 3", output.ToString());
-        Assert.DoesNotContain("epoch 4, batch", output.ToString());
+        Assert.DoesNotContain("epoch 4, microbatch", output.ToString());
         Assert.True(
             File.Exists(
                 Path.ChangeExtension(
@@ -361,7 +478,8 @@ public sealed class TrainingIntegrationTests
                 }
               },
               "epochs": 1,
-              "batchSize": 1,
+              "microBatchSize": 1,
+              "microBatchCount": 2,
               "optimizer": "nekomuon",
               "model": { "heads": 1, "hiddenSize": 2, "layers": 1 }
             }
@@ -385,7 +503,10 @@ public sealed class TrainingIntegrationTests
             "augmentation = random crop (padding 4), horizontal flip",
             output.ToString());
         Assert.DoesNotContain("vertical flip", output.ToString());
-        Assert.Contains("epoch 1, batch 1/1, loss = ", output.ToString());
+        Assert.Contains(
+            "epoch 1, microbatch 1/1, accumulation 1/1, " +
+            "update 1/1, loss = ",
+            output.ToString());
         Assert.Contains("epoch 1, eval 100%", output.ToString());
     }
 
@@ -443,6 +564,22 @@ public sealed class TrainingIntegrationTests
         File.WriteAllBytes(path, data);
         return path;
     }
+
+    private static CheckpointSnapshot ReadCheckpoint(string configurationPath)
+    {
+        string checkpointPath = Path.ChangeExtension(
+            configurationPath,
+            ".best-model.json");
+        return JsonSerializer.Deserialize<CheckpointSnapshot>(
+            File.ReadAllText(checkpointPath))
+            ?? throw new InvalidDataException("Checkpoint was JSON null.");
+    }
+
+    private sealed record CheckpointSnapshot(
+        int FormatVersion,
+        int Epoch,
+        float EvaluationLoss,
+        ModuleState Model);
 
     private readonly record struct DatasetFiles(
         string ImagePath,
