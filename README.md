@@ -79,6 +79,38 @@ optimizer.load_state_dict(
     torch.load<OptimizerStateDictionary>("optimizer.json"));
 ```
 
+Save and resume the model, optimizer, and scheduler as one training
+checkpoint:
+
+```csharp
+const string checkpointPath = "training.checkpoint.json";
+int firstEpoch = 1;
+
+if (File.Exists(checkpointPath))
+{
+    TrainingCheckpoint checkpoint =
+        torch.load<TrainingCheckpoint>(checkpointPath);
+    model.load_state_dict(checkpoint.Model);
+    optimizer.load_state_dict(checkpoint.Optimizer);
+    scheduler.load_state_dict(checkpoint.Scheduler);
+    firstEpoch = checkpoint.Epoch + 1;
+}
+
+for (int epoch = firstEpoch; epoch <= 20; epoch++)
+{
+    model.train();
+    // forward, backward, optimizer.step(), and evaluation
+    scheduler.step();
+    torch.save(
+        new TrainingCheckpoint(
+            epoch,
+            model.state_dict(),
+            optimizer.state_dict(),
+            scheduler.state_dict()),
+        checkpointPath);
+}
+```
+
 Text training uses the same style:
 
 ```csharp
@@ -122,6 +154,21 @@ GPT task. Place the Parquet shards under `data/wiki` and run:
 dotnet run --configuration Release --project NNtrain.Cli -- `
   --config training.example.json
 ```
+
+Every completed epoch atomically updates a resumable checkpoint containing
+the current model, optimizer, scheduler, epoch, and task-specific training
+state. Continue from it by increasing `epochs` and running:
+
+```powershell
+dotnet run --configuration Release --project NNtrain.Cli -- `
+  --config training.example.json --resume
+```
+
+The same behavior can be enabled with `"resumeFromCheckpoint": true` in the
+JSON. Classification defaults to `<config>.checkpoint.json`; Wikipedia uses
+`checkpointPath`. The separate `*.best-model.json` classification artifact
+and the best-model portion of a Wikipedia checkpoint remain the weights used
+for evaluation or generation.
 
 With no arguments the CLI selects `training.wiki-jp.json` when it is present,
 then falls back to `training.example.json`. The selected absolute path and the

@@ -9,4 +9,6 @@ public interface IClassificationModel
     int ClassCount { get; }
 
     Tensor Forward(Tensor input);
+
+    Tensor forward(Tensor input) => Forward(input);
 }

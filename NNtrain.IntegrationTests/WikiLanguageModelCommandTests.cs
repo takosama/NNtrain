@@ -245,6 +245,119 @@ public sealed class WikiLanguageModelCommandTests
     }
 
     [Fact]
+    public void WikiCheckpointRestoresCurrentModelOptimizerSchedulerAndStep()
+    {
+        string checkpointPath = Path.Combine(
+            Path.GetTempPath(),
+            $"nntrain-wiki-resume-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new WikiTrainingConfiguration
+            {
+                CheckpointPath = checkpointPath,
+                ResumeFromCheckpoint = true,
+                Epochs = 3,
+                ContextLength = 2,
+                ModelWidth = 4,
+                Heads = 1,
+                HiddenSize = 8,
+                Layers = 1,
+                VocabularySize = BpeTokenizer.BaseVocabularySize,
+                ModelArchitecture =
+                    WikiTrainingConfiguration.TransformerArchitecture,
+                Optimizer = WikiTrainingConfiguration.AdamWOptimizer,
+                Dropout = 0f,
+            };
+            IWikiLanguageModel source =
+                WikiLanguageModelCommand.CreateModel(
+                    config,
+                    config.VocabularySize);
+            IOptimizer sourceOptimizer =
+                WikiLanguageModelCommand.CreateOptimizer(source, config);
+            WarmupCosineProgressLRScheduler sourceScheduler =
+                lr_scheduler.WarmupCosineProgressLR(
+                    sourceOptimizer,
+                    config.WarmupPercent);
+            sourceOptimizer.zero_grad();
+            Tensor loss = nn.functional.cross_entropy(
+                source.forward([1, 2], 1, 2),
+                [2, 1]);
+            loss.backward();
+            sourceScheduler.step(1d / 3d);
+            sourceOptimizer.step();
+            ModuleState expectedCurrent = source.state_dict();
+            ModuleState expectedBest = expectedCurrent with
+            {
+                Parameters = expectedCurrent.Parameters
+                    .Select(parameter => parameter with
+                    {
+                        Values = parameter.Values.ToArray(),
+                    })
+                    .ToArray(),
+            };
+            WikiLanguageModelCommand.SaveTrainingCheckpoint(
+                config,
+                config.VocabularySize,
+                completedEpoch: 1,
+                expectedBest,
+                bestLoss: 1.25f,
+                bestEpoch: 1,
+                source,
+                sourceOptimizer,
+                sourceScheduler,
+                globalStep: 7);
+
+            IWikiLanguageModel restored =
+                WikiLanguageModelCommand.CreateModel(
+                    config,
+                    config.VocabularySize);
+            IOptimizer restoredOptimizer =
+                WikiLanguageModelCommand.CreateOptimizer(restored, config);
+            WarmupCosineProgressLRScheduler restoredScheduler =
+                lr_scheduler.WarmupCosineProgressLR(
+                    restoredOptimizer,
+                    config.WarmupPercent);
+            ModuleState? bestState = null;
+            float bestLoss = float.PositiveInfinity;
+            int bestEpoch = 0;
+            long globalStep = 0;
+            using var output = new StringWriter();
+
+            int firstEpoch =
+                WikiLanguageModelCommand.RestoreTrainingCheckpoint(
+                    config,
+                    restored,
+                    restoredOptimizer,
+                    restoredScheduler,
+                    ref bestState,
+                    ref bestLoss,
+                    ref bestEpoch,
+                    ref globalStep,
+                    output);
+
+            Assert.Equal(2, firstEpoch);
+            Assert.Equal(1, bestEpoch);
+            Assert.Equal(1.25f, bestLoss);
+            Assert.Equal(7, globalStep);
+            Assert.NotNull(bestState);
+            Assert.Equal(
+                expectedCurrent.Parameters[0].Values,
+                restored.state_dict().Parameters[0].Values);
+            Assert.Equal(
+                sourceOptimizer.state_dict().StateJson,
+                restoredOptimizer.state_dict().StateJson);
+            Assert.Equal(
+                sourceScheduler.state_dict(),
+                restoredScheduler.state_dict());
+        }
+        finally
+        {
+            if (File.Exists(checkpointPath))
+                File.Delete(checkpointPath);
+        }
+    }
+
+    [Fact]
     public void DatasetContinuationSplitsDocumentAndGeneratesFromFirstHalf()
     {
         const string document = "日本の歴史を説明します。ここからが文章の後半です。";

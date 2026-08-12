@@ -9,12 +9,15 @@ internal static partial class WikiLanguageModelCommand
         string? generatePrompt,
         TextWriter output,
         TextWriter error,
-        bool openLossGraph = false)
+        bool openLossGraph = false,
+        bool resumeFromCheckpoint = false)
     {
         try
         {
             WikiTrainingConfiguration config =
                 WikiTrainingConfiguration.Load(configurationPath);
+            if (resumeFromCheckpoint)
+                config = config with { ResumeFromCheckpoint = true };
             torch.manual_seed(config.Seed);
             output.WriteLine(
                 $"configuration = {Path.GetFullPath(configurationPath)}");
@@ -155,7 +158,7 @@ internal static partial class WikiLanguageModelCommand
                 config.WarmupPercent);
         output.WriteLine(
             $"model = {model.GetType().Name}, parameters " +
-            $"{model.Parameters().Sum(parameter => (long)parameter.T.Numel):N0}, " +
+            $"{model.parameters().Sum(parameter => (long)parameter.T.Numel):N0}, " +
             $"width {config.ModelWidth}, heads {config.Heads}, " +
             $"hidden {config.HiddenSize}, layers {config.Layers}, " +
             $"context {config.ContextLength}, batch {config.BatchSize}");
@@ -174,9 +177,8 @@ internal static partial class WikiLanguageModelCommand
         }
 
         int[] order = Enumerable.Range(0, trainingSequences).ToArray();
-        var random = new Random(config.Seed);
         var sampleRandom = new Random(config.Seed ^ 0x6A09E667);
-        int globalStep = 0;
+        long globalStep = 0;
         int batchesPerEpoch = DivideRoundUp(
             trainingSequences,
             config.BatchSize);
@@ -185,10 +187,22 @@ internal static partial class WikiLanguageModelCommand
         ModuleState? bestState = null;
         float bestLoss = float.PositiveInfinity;
         int bestEpoch = 0;
+        int firstEpoch = RestoreTrainingCheckpoint(
+            config,
+            model,
+            optimizer,
+            scheduler,
+            ref bestState,
+            ref bestLoss,
+            ref bestEpoch,
+            ref globalStep,
+            output);
 
-        for (int epoch = 1; epoch <= config.Epochs; epoch++)
+        for (int epoch = firstEpoch; epoch <= config.Epochs; epoch++)
         {
-            Shuffle(order, random);
+            Shuffle(
+                order,
+                new Random(HashCode.Combine(config.Seed, epoch)));
             model.train();
             float totalLoss = 0f;
             int completedTargets = 0;
@@ -290,34 +304,24 @@ internal static partial class WikiLanguageModelCommand
             {
                 bestLoss = validationLoss;
                 bestEpoch = epoch;
-                bestState = model.CaptureState();
-                SaveCheckpoint(
-                    config.CheckpointPath,
-                    new WikiModelCheckpoint(
-                        CheckpointFormatVersion,
-                        epoch,
-                        validationLoss,
-                        tokenizer.VocabularySize,
-                        config.ContextLength,
-                        config.ModelWidth,
-                        config.Heads,
-                        config.HiddenSize,
-                        config.Layers,
-                        config.Dropout,
-                        config.InitializationScale,
-                        bestState,
-                        config.ModelArchitecture,
-                        config.HyenaFilterWidth,
-                        config.ForgetMemoryKeyWidth,
-                        config.ForgetMemoryValueWidth,
-                        config.ForgetMemoryRetentionMinimum,
-                        config.ForgetMemoryRetentionMaximum));
+                bestState = model.state_dict();
             }
+            SaveTrainingCheckpoint(
+                config,
+                tokenizer.VocabularySize,
+                epoch,
+                bestState,
+                bestLoss,
+                bestEpoch,
+                model,
+                optimizer,
+                scheduler,
+                globalStep);
         }
 
         if (bestState is null)
             throw new InvalidOperationException("Training did not produce a model state.");
-        model.RestoreState(bestState);
+        model.load_state_dict(bestState);
         output.WriteLine(
             $"best model = epoch {bestEpoch}, validation loss " +
             $"{bestLoss:F6}");
@@ -360,7 +364,7 @@ internal static partial class WikiLanguageModelCommand
         }
 
         IWikiLanguageModel model = CreateModel(checkpoint, config.Seed);
-        model.RestoreState(checkpoint.Model);
+        model.load_state_dict(checkpoint.Model);
         output.WriteLine(
             $"checkpoint = epoch {checkpoint.Epoch}, validation loss " +
             $"{checkpoint.ValidationLoss:F6}");
@@ -406,7 +410,7 @@ internal static partial class WikiLanguageModelCommand
                 config.WarmupPercent);
         output.WriteLine(
             $"model = {model.GetType().Name}, parameters " +
-            $"{model.Parameters().Sum(parameter => (long)parameter.T.Numel):N0}, " +
+            $"{model.parameters().Sum(parameter => (long)parameter.T.Numel):N0}, " +
             $"width {config.ModelWidth}, heads {config.Heads}, " +
             $"hidden {config.HiddenSize}, layers {config.Layers}, " +
             $"context {config.ContextLength}, batch {config.BatchSize}");
@@ -433,8 +437,18 @@ internal static partial class WikiLanguageModelCommand
         ModuleState? bestState = null;
         float bestLoss = float.PositiveInfinity;
         int bestEpoch = 0;
+        int firstEpoch = RestoreTrainingCheckpoint(
+            config,
+            model,
+            optimizer,
+            scheduler,
+            ref bestState,
+            ref bestLoss,
+            ref bestEpoch,
+            ref globalStep,
+            output);
 
-        for (int epoch = 1; epoch <= config.Epochs; epoch++)
+        for (int epoch = firstEpoch; epoch <= config.Epochs; epoch++)
         {
             model.train();
             var buffer = new List<int>(
@@ -523,7 +537,8 @@ internal static partial class WikiLanguageModelCommand
                 maximumDocuments))
             {
                 documentsProcessed++;
-                if (epoch == 1 && TryGetDocumentSplit(document, out _))
+                if (epoch == firstEpoch
+                    && TryGetDocumentSplit(document, out _))
                 {
                     AddReservoirSample(
                         document,
@@ -586,34 +601,24 @@ internal static partial class WikiLanguageModelCommand
             {
                 bestLoss = trainingLoss;
                 bestEpoch = epoch;
-                bestState = model.CaptureState();
-                SaveCheckpoint(
-                    config.CheckpointPath,
-                    new WikiModelCheckpoint(
-                        CheckpointFormatVersion,
-                        epoch,
-                        trainingLoss,
-                        tokenizer.VocabularySize,
-                        config.ContextLength,
-                        config.ModelWidth,
-                        config.Heads,
-                        config.HiddenSize,
-                        config.Layers,
-                        config.Dropout,
-                        config.InitializationScale,
-                        bestState,
-                        config.ModelArchitecture,
-                        config.HyenaFilterWidth,
-                        config.ForgetMemoryKeyWidth,
-                        config.ForgetMemoryValueWidth,
-                        config.ForgetMemoryRetentionMinimum,
-                        config.ForgetMemoryRetentionMaximum));
+                bestState = model.state_dict();
             }
+            SaveTrainingCheckpoint(
+                config,
+                tokenizer.VocabularySize,
+                epoch,
+                bestState,
+                bestLoss,
+                bestEpoch,
+                model,
+                optimizer,
+                scheduler,
+                globalStep);
         }
 
         if (bestState is null)
             throw new InvalidOperationException("Training did not produce a model state.");
-        model.RestoreState(bestState);
+        model.load_state_dict(bestState);
         output.WriteLine(
             $"best model = epoch {bestEpoch}, train loss {bestLoss:F6}");
         output.WriteLine($"checkpoint = {config.CheckpointPath}");

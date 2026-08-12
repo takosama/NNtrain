@@ -15,6 +15,7 @@ public sealed class WikiTrainingConfigurationTests
               "textColumn": "body",
               "tokenizerPath": "artifacts/tokenizer.json",
               "checkpointPath": "artifacts/model.json",
+              "resumeFromCheckpoint": true,
               "vocabularySize": 300,
               "tokenizerTrainingDocuments": 3,
               "tokenizerTrainingBytes": 100,
@@ -72,6 +73,7 @@ public sealed class WikiTrainingConfigurationTests
         Assert.Equal(
             Path.Combine(directory.Root, "artifacts", "model.json"),
             configuration.CheckpointPath);
+        Assert.True(configuration.ResumeFromCheckpoint);
         Assert.Equal("body", configuration.TextColumn);
         Assert.Equal(300, configuration.VocabularySize);
         Assert.Equal(1, configuration.BatchSize);

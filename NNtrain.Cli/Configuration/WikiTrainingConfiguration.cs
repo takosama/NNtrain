@@ -36,6 +36,8 @@ sealed record WikiTrainingConfiguration
 
     public string CheckpointPath { get; init; } = string.Empty;
 
+    public bool ResumeFromCheckpoint { get; init; }
+
     public int VocabularySize { get; init; } = 2048;
 
     public int TokenizerTrainingDocuments { get; init; } = 2000;

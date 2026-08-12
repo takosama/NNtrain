@@ -77,6 +77,60 @@ public sealed class TorchApiTests
     }
 
     [Fact]
+    public void SchedulerStateDictResumesAtTheNextEpoch()
+    {
+        var parameter = new Parameter(
+            [1f], [1], "weight", WeightDecayPolicy.Apply);
+        IOptimizer optimizer = optim.AdamW([parameter], lr: 0.01f);
+        ILRScheduler scheduler =
+            lr_scheduler.LinearWarmupCosineAnnealingLR(
+                optimizer,
+                total_epochs: 4,
+                warmup_epochs: 1);
+        scheduler.step();
+        scheduler.step();
+        LRSchedulerStateDictionary state = scheduler.state_dict();
+
+        IOptimizer restoredOptimizer = optim.AdamW(
+            [parameter],
+            lr: 0.01f);
+        ILRScheduler restored =
+            lr_scheduler.LinearWarmupCosineAnnealingLR(
+                restoredOptimizer,
+                total_epochs: 4,
+                warmup_epochs: 1);
+        restored.load_state_dict(state);
+
+        Assert.Equal(2, restored.LastEpoch);
+        Assert.Equal(scheduler.step(), restored.step());
+    }
+
+    [Fact]
+    public void ProgressSchedulerStateDictRoundTripsProgress()
+    {
+        var parameter = new Parameter(
+            [1f], [1], "weight", WeightDecayPolicy.Apply);
+        IOptimizer optimizer = optim.AdamW([parameter], lr: 0.01f);
+        WarmupCosineProgressLRScheduler scheduler =
+            lr_scheduler.WarmupCosineProgressLR(
+                optimizer,
+                warmup_percent: 20f);
+        scheduler.step(0.45d);
+
+        LRSchedulerStateDictionary state = scheduler.state_dict();
+
+        var restoredParameter = new Parameter(
+            [1f], [1], "weight", WeightDecayPolicy.Apply);
+        WarmupCosineProgressLRScheduler restored =
+            lr_scheduler.WarmupCosineProgressLR(
+                optim.AdamW([restoredParameter], lr: 0.01f),
+                warmup_percent: 20f);
+        restored.load_state_dict(state);
+
+        Assert.Equal(0.45d, restored.state_dict().LastProgress);
+    }
+
+    [Fact]
     public void TokenizerAliasesRoundTripText()
     {
         BpeTokenizer tokenizer = tokenizers.train_bpe(
@@ -106,6 +160,54 @@ public sealed class TorchApiTests
 
             Assert.Equal(state, restored);
             Assert.True(float.IsFinite(loss.item()));
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void TrainingCheckpointRoundTripsAllResumeState()
+    {
+        TransformerClassifier model = nn.transformer_classifier(
+            seq_len: 1,
+            d_model: 2,
+            num_heads: 1,
+            dim_feedforward: 2,
+            num_layers: 1,
+            num_classes: 2,
+            generator: new Random(7));
+        IOptimizer optimizer = optim.AdamW(
+            model.parameters(),
+            lr: 0.001f);
+        ILRScheduler scheduler =
+            lr_scheduler.CosineAnnealingLR(optimizer, T_max: 3);
+        scheduler.step();
+        var checkpoint = new TrainingCheckpoint(
+            1,
+            model.state_dict(),
+            optimizer.state_dict(),
+            scheduler.state_dict());
+        string path = Path.Combine(
+            Path.GetTempPath(),
+            $"nntrain-checkpoint-{Guid.NewGuid():N}.json");
+        try
+        {
+            torch.save(checkpoint, path);
+
+            TrainingCheckpoint restored =
+                torch.load<TrainingCheckpoint>(path);
+
+            Assert.Equal(1, restored.Epoch);
+            Assert.Equal(
+                checkpoint.Model.Parameters.Length,
+                restored.Model.Parameters.Length);
+            Assert.Equal(
+                checkpoint.Optimizer.StateJson,
+                restored.Optimizer.StateJson);
+            Assert.Equal(1, restored.Scheduler.LastEpoch);
         }
         finally
         {

@@ -139,6 +139,100 @@ public sealed class TrainingIntegrationTests
     }
 
     [Fact]
+    public void ProgramResumesModelOptimizerAndSchedulerFromCheckpoint()
+    {
+        using var directory = new TemporaryDirectory();
+        DatasetFiles training = WriteDataset(
+            directory.Root,
+            "resume-train",
+            [0, 1]);
+        DatasetFiles evaluation = WriteDataset(
+            directory.Root,
+            "resume-eval",
+            [0, 1]);
+        string checkpointPath = Path.Combine(
+            directory.Root,
+            "training.checkpoint.json");
+        string configurationPath = Path.Combine(
+            directory.Root,
+            "resume.json");
+
+        void WriteConfiguration(int epochs, bool resume)
+        {
+            File.WriteAllText(
+                configurationPath,
+                $$"""
+                {
+                  "trainingData": {
+                    "imagePath": "{{training.ImagePath.Replace("\\", "\\\\")}}",
+                    "labelPath": "{{training.LabelPath.Replace("\\", "\\\\")}}"
+                  },
+                  "evaluationData": {
+                    "imagePath": "{{evaluation.ImagePath.Replace("\\", "\\\\")}}",
+                    "labelPath": "{{evaluation.LabelPath.Replace("\\", "\\\\")}}"
+                  },
+                  "epochs": {{epochs}},
+                  "batchSize": 2,
+                  "optimizer": "adamw",
+                  "learningRate": 0.001,
+                  "showLossGraph": false,
+                  "resumeFromCheckpoint": {{resume.ToString().ToLowerInvariant()}},
+                  "checkpointPath": "{{checkpointPath.Replace("\\", "\\\\")}}",
+                  "model": {
+                    "heads": 1,
+                    "hiddenSize": 2,
+                    "layers": 1,
+                    "dropout": 0
+                  }
+                }
+                """);
+        }
+
+        WriteConfiguration(epochs: 1, resume: false);
+        using var firstOutput = new StringWriter();
+        using var firstError = new StringWriter();
+        int firstExitCode = Program.Run(
+            ["--config", configurationPath],
+            firstOutput,
+            firstError);
+
+        Assert.Equal(0, firstExitCode);
+        Assert.Equal(string.Empty, firstError.ToString());
+        Assert.True(File.Exists(checkpointPath));
+        using (JsonDocument firstCheckpoint = JsonDocument.Parse(
+            File.ReadAllText(checkpointPath)))
+        {
+            Assert.Equal(
+                1,
+                firstCheckpoint.RootElement
+                    .GetProperty("CompletedEpoch")
+                    .GetInt32());
+        }
+
+        WriteConfiguration(epochs: 2, resume: false);
+        using var resumedOutput = new StringWriter();
+        using var resumedError = new StringWriter();
+        int resumedExitCode = Program.Run(
+            ["--config", configurationPath, "--resume"],
+            resumedOutput,
+            resumedError);
+
+        Assert.Equal(0, resumedExitCode);
+        Assert.Equal(string.Empty, resumedError.ToString());
+        Assert.Contains(
+            "resumed checkpoint = " + checkpointPath + ", next epoch 2",
+            resumedOutput.ToString());
+        Assert.Contains("epoch 2, train loss = ", resumedOutput.ToString());
+        using JsonDocument resumedCheckpoint = JsonDocument.Parse(
+            File.ReadAllText(checkpointPath));
+        Assert.Equal(
+            2,
+            resumedCheckpoint.RootElement
+                .GetProperty("CompletedEpoch")
+                .GetInt32());
+    }
+
+    [Fact]
     public void ProgramDisplaysLossForEveryTrainingMicroBatch()
     {
         using var directory = new TemporaryDirectory();

@@ -42,6 +42,8 @@ public sealed class TrainingConfigurationTests
               "earlyStoppingMinimumDelta": 0.002,
               "useSimd": false,
               "showLossGraph": false,
+              "resumeFromCheckpoint": true,
+              "checkpointPath": "artifacts/resume.json",
               "seed": 42,
               "model": {
                 "heads": 2,
@@ -94,6 +96,10 @@ public sealed class TrainingConfigurationTests
         Assert.Equal(0.002f, configuration.EarlyStoppingMinimumDelta);
         Assert.False(configuration.UseSimd);
         Assert.False(configuration.ShowLossGraph);
+        Assert.True(configuration.ResumeFromCheckpoint);
+        Assert.Equal(
+            Path.Combine(directory.Root, "artifacts", "resume.json"),
+            configuration.CheckpointPath);
         Assert.Equal(42, configuration.Seed);
         Assert.Equal(2, configuration.Model.Heads);
         Assert.Equal(64, configuration.Model.HiddenSize);

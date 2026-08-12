@@ -69,6 +69,10 @@ sealed record TrainingConfiguration
 
     public bool ShowLossGraph { get; init; } = true;
 
+    public bool ResumeFromCheckpoint { get; init; }
+
+    public string CheckpointPath { get; init; } = string.Empty;
+
     public int Seed { get; init; } = 1234;
 
     public ModelConfiguration Model { get; init; } = new();
@@ -97,6 +101,14 @@ sealed record TrainingConfiguration
                 configurationDirectory),
             EvaluationData = configuration.EvaluationData.ResolvePaths(
                 configurationDirectory),
+            CheckpointPath = string.IsNullOrWhiteSpace(
+                configuration.CheckpointPath)
+                ? Path.ChangeExtension(
+                    fullConfigurationPath,
+                    ".checkpoint.json")
+                : Path.GetFullPath(
+                    configuration.CheckpointPath,
+                    configurationDirectory),
         };
     }
 

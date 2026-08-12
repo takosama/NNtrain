@@ -55,12 +55,17 @@ public sealed class Trainer
         return results.AsReadOnly();
     }
 
+    public IReadOnlyList<TrainingEpochResult> fit(
+        Action<TrainingEpochResult>? on_epoch_completed = null,
+        Action<TrainingBatchResult>? on_batch_completed = null)
+        => Run(on_epoch_completed, on_batch_completed);
+
     private TrainingMetrics TrainEpoch(
         int epoch,
         Action<TrainingBatchResult>? onBatchCompleted)
     {
         if (_model is Module module)
-            module.Train();
+            module.train();
 
         float lossSum = 0f;
         int correct = 0;
@@ -96,14 +101,14 @@ public sealed class Trainer
             sampleIndex,
             useTrainingAugmentation: true);
 
-        _optimizer.ZeroGrad();
+        _optimizer.zero_grad();
         ForwardResult forward = Forward(
             sample,
             _options.LabelSmoothing);
-        float lossValue = forward.Loss.Data[0];
+        float lossValue = forward.Loss.item();
 
-        forward.Loss.Backward();
-        _optimizer.Step();
+        forward.Loss.backward();
+        _optimizer.step();
 
         return new TrainingStepResult(lossValue, forward.IsCorrect);
     }
@@ -111,13 +116,13 @@ public sealed class Trainer
     private TrainingMetrics Evaluate()
     {
         if (_model is Module module)
-            module.Eval();
+            module.eval();
 
         float lossSum = 0f;
         int correct = 0;
         var stopwatch = Stopwatch.StartNew();
 
-        using (AutogradContext.NoGrad())
+        using (torch.no_grad())
         {
             for (int index = 0; index < _evaluationDataset.Count; index++)
             {
@@ -126,7 +131,7 @@ public sealed class Trainer
                     index,
                     useTrainingAugmentation: false);
                 ForwardResult forward = Forward(sample, labelSmoothing: 0f);
-                lossSum += forward.Loss.Data[0];
+                lossSum += forward.Loss.item();
                 if (forward.IsCorrect)
                     correct++;
             }
@@ -157,10 +162,11 @@ public sealed class Trainer
 
     private ForwardResult Forward(Sample sample, float labelSmoothing)
     {
-        Tensor logits = _model.Forward(sample.Input);
-        Tensor loss = logits.CrossEntropyWithLogits(
+        Tensor logits = _model.forward(sample.Input);
+        Tensor loss = nn.functional.cross_entropy(
+            logits,
             [sample.Answer],
-            labelSmoothing);
+            label_smoothing: labelSmoothing);
         int prediction = ArgMax(logits.Data);
         return new ForwardResult(loss, prediction == sample.Answer);
     }

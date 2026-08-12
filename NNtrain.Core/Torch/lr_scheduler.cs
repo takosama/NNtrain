@@ -13,7 +13,16 @@ public interface ILRScheduler
     IReadOnlyList<float> step() => Step();
 
     IReadOnlyList<float> get_last_lr() => GetLastLearningRates();
+
+    LRSchedulerStateDictionary state_dict();
+
+    void load_state_dict(LRSchedulerStateDictionary state);
 }
+
+public sealed record LRSchedulerStateDictionary(
+    string SchedulerType,
+    int LastEpoch,
+    double? LastProgress = null);
 
 /// <summary>PyTorch-style learning-rate scheduler factories.</summary>
 public static class lr_scheduler
@@ -45,6 +54,7 @@ public sealed class WarmupCosineProgressLRScheduler
 {
     private readonly SchedulerOptimizerGroups _groups;
     private readonly float _warmupPercent;
+    private double _lastProgress;
 
     public WarmupCosineProgressLRScheduler(
         IOptimizer optimizer,
@@ -63,10 +73,38 @@ public sealed class WarmupCosineProgressLRScheduler
     public IReadOnlyList<float> step(double progress)
     {
         float factor = CalculateFactor(progress, _warmupPercent);
-        return _groups.Set(baseRate => baseRate * factor);
+        IReadOnlyList<float> rates =
+            _groups.Set(baseRate => baseRate * factor);
+        _lastProgress = progress;
+        return rates;
     }
 
     public IReadOnlyList<float> get_last_lr() => _groups.CurrentRates;
+
+    public LRSchedulerStateDictionary state_dict()
+        => new(
+            nameof(WarmupCosineProgressLRScheduler),
+            LastEpoch: 0,
+            _lastProgress);
+
+    public void load_state_dict(LRSchedulerStateDictionary state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        if (!string.Equals(
+                state.SchedulerType,
+                nameof(WarmupCosineProgressLRScheduler),
+                StringComparison.Ordinal)
+            || state.LastProgress is not double progress
+            || !double.IsFinite(progress)
+            || progress < 0d
+            || progress > 1d)
+        {
+            throw new ArgumentException(
+                "WarmupCosineProgressLR state is incompatible.",
+                nameof(state));
+        }
+        _lastProgress = progress;
+    }
 
     public static float CalculateFactor(
         double overallProgress,
@@ -145,6 +183,26 @@ public sealed class CosineAnnealingLRScheduler : ILRScheduler
 
     public IReadOnlyList<float> GetLastLearningRates()
         => _groups.CurrentRates;
+
+    public LRSchedulerStateDictionary state_dict()
+        => new(nameof(CosineAnnealingLRScheduler), LastEpoch);
+
+    public void load_state_dict(LRSchedulerStateDictionary state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        if (!string.Equals(
+                state.SchedulerType,
+                nameof(CosineAnnealingLRScheduler),
+                StringComparison.Ordinal)
+            || state.LastEpoch < 0
+            || state.LastEpoch > _maximumEpochs)
+        {
+            throw new ArgumentException(
+                "CosineAnnealingLR state is incompatible.",
+                nameof(state));
+        }
+        LastEpoch = state.LastEpoch;
+    }
 }
 
 public sealed class LinearWarmupCosineLRScheduler : ILRScheduler
@@ -196,6 +254,26 @@ public sealed class LinearWarmupCosineLRScheduler : ILRScheduler
 
     public IReadOnlyList<float> GetLastLearningRates()
         => _groups.CurrentRates;
+
+    public LRSchedulerStateDictionary state_dict()
+        => new(nameof(LinearWarmupCosineLRScheduler), LastEpoch);
+
+    public void load_state_dict(LRSchedulerStateDictionary state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        if (!string.Equals(
+                state.SchedulerType,
+                nameof(LinearWarmupCosineLRScheduler),
+                StringComparison.Ordinal)
+            || state.LastEpoch < 0
+            || state.LastEpoch > _totalEpochs)
+        {
+            throw new ArgumentException(
+                "LinearWarmupCosineAnnealingLR state is incompatible.",
+                nameof(state));
+        }
+        LastEpoch = state.LastEpoch;
+    }
 
     public static float CalculateFactor(
         int epoch,

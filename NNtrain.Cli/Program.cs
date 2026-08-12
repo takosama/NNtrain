@@ -17,6 +17,7 @@ internal static partial class Program
 
         string configurationPath;
         string? generatePrompt = null;
+        bool resumeFromCheckpoint = false;
         if (args.Length == 0)
         {
             configurationPath = FindDefaultConfiguration();
@@ -28,6 +29,28 @@ internal static partial class Program
                 StringComparison.OrdinalIgnoreCase))
         {
             configurationPath = args[1];
+        }
+        else if (args.Length == 1
+            && string.Equals(
+                args[0],
+                "--resume",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            configurationPath = FindDefaultConfiguration();
+            resumeFromCheckpoint = true;
+        }
+        else if (args.Length == 3
+            && string.Equals(
+                args[0],
+                "--config",
+                StringComparison.OrdinalIgnoreCase)
+            && string.Equals(
+                args[2],
+                "--resume",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            configurationPath = args[1];
+            resumeFromCheckpoint = true;
         }
         else if (args.Length == 4
             && string.Equals(
@@ -46,7 +69,7 @@ internal static partial class Program
         {
             error.WriteLine(
                 "Usage: NNtrain.Cli [--config <training-config.json>] " +
-                "[--generate <prompt>]");
+                "[--resume | --generate <prompt>]");
             return 1;
         }
 
@@ -60,7 +83,8 @@ internal static partial class Program
                     generatePrompt,
                     output,
                     error,
-                    openLossGraph);
+                    openLossGraph,
+                    resumeFromCheckpoint);
             }
             if (generatePrompt is not null)
             {
@@ -71,6 +95,8 @@ internal static partial class Program
 
             TrainingConfiguration config =
                 TrainingConfiguration.Load(configurationPath);
+            if (resumeFromCheckpoint)
+                config = config with { ResumeFromCheckpoint = true };
             torch.manual_seed(config.Seed);
             Tensor.SimdEnabled = config.UseSimd;
             IImageClassificationDataset trainData = CreateDataset(
@@ -101,14 +127,6 @@ internal static partial class Program
                     total_epochs: config.Epochs,
                     warmup_epochs: config.WarmupEpochs,
                     min_lr_ratio: config.MinimumLearningRateRatio);
-            DataLoader trainLoader = torch.utils.data.DataLoader(
-                trainData,
-                batch_size: config.ResolvedMicroBatchSize,
-                shuffle: true,
-                training: true,
-                generator: new Random(config.Seed),
-                augmentation_generator:
-                    new Random(config.Seed ^ 0x51F15EED));
             DataLoader evalLoader = torch.utils.data.DataLoader(
                 evalData,
                 batch_size: config.ResolvedMicroBatchSize);
@@ -195,9 +213,54 @@ internal static partial class Program
             float earlyStoppingReferenceLoss = float.PositiveInfinity;
             int bestEpoch = 0;
             int epochsWithoutImprovement = 0;
+            int firstEpoch = 1;
 
-            for (int epoch = 1; epoch <= config.Epochs; epoch++)
+            if (config.ResumeFromCheckpoint)
             {
+                if (!File.Exists(config.CheckpointPath))
+                {
+                    throw new FileNotFoundException(
+                        "Training checkpoint was not found.",
+                        config.CheckpointPath);
+                }
+                ClassificationTrainingCheckpoint checkpoint =
+                    ClassificationCheckpoint.Load(config.CheckpointPath);
+                if (checkpoint.CompletedEpoch >= config.Epochs)
+                {
+                    throw new InvalidDataException(
+                        $"Checkpoint already completed epoch " +
+                        $"{checkpoint.CompletedEpoch}, but configuration " +
+                        $"requests only {config.Epochs} epoch(s).");
+                }
+                model.load_state_dict(checkpoint.Model);
+                optimizer.load_state_dict(checkpoint.Optimizer);
+                scheduler.load_state_dict(checkpoint.Scheduler);
+                bestModelState = checkpoint.BestModel;
+                bestEpoch = checkpoint.BestEpoch;
+                bestEvaluationLoss = checkpoint.BestEvaluationLoss;
+                earlyStoppingReferenceLoss =
+                    checkpoint.EarlyStoppingReferenceLoss;
+                epochsWithoutImprovement =
+                    checkpoint.EpochsWithoutImprovement;
+                firstEpoch = checkpoint.CompletedEpoch + 1;
+                output.WriteLine(
+                    $"resumed checkpoint = {config.CheckpointPath}, " +
+                    $"next epoch {firstEpoch}");
+            }
+
+            for (int epoch = firstEpoch; epoch <= config.Epochs; epoch++)
+            {
+                DataLoader trainLoader = torch.utils.data.DataLoader(
+                    trainData,
+                    batch_size: config.ResolvedMicroBatchSize,
+                    shuffle: true,
+                    training: true,
+                    generator: new Random(
+                        HashCode.Combine(config.Seed, epoch)),
+                    augmentation_generator: new Random(
+                        HashCode.Combine(
+                            config.Seed ^ 0x51F15EED,
+                            epoch)));
                 IReadOnlyList<float> scheduledRates = scheduler.step();
                 var learningRates = new LearningRates(
                     scheduledRates[0],
@@ -314,7 +377,7 @@ internal static partial class Program
                 {
                     bestEvaluationLoss = averageEvaluationLoss;
                     bestEpoch = epoch;
-                    bestModelState = model.CaptureState();
+                    bestModelState = model.state_dict();
                 }
 
                 bool meaningfulImprovement =
@@ -347,6 +410,23 @@ internal static partial class Program
                     $"train time = {trainTimer.Elapsed.TotalSeconds:F2} sec, " +
                     $"eval time = {evalTimer.Elapsed.TotalSeconds:F2} sec");
 
+                ClassificationCheckpoint.Save(
+                    config.CheckpointPath,
+                    new ClassificationTrainingCheckpoint(
+                        ClassificationTrainingCheckpoint
+                            .CurrentFormatVersion,
+                        epoch,
+                        model.state_dict(),
+                        optimizer.state_dict(),
+                        scheduler.state_dict(),
+                        bestModelState,
+                        bestEpoch,
+                        bestEvaluationLoss,
+                        earlyStoppingReferenceLoss,
+                        epochsWithoutImprovement));
+                output.WriteLine(
+                    $"training checkpoint = {config.CheckpointPath}");
+
                 if (config.EarlyStoppingPatience > 0
                     && epochsWithoutImprovement
                         >= config.EarlyStoppingPatience)
@@ -361,7 +441,7 @@ internal static partial class Program
 
             if (bestModelState is not null)
             {
-                model.RestoreState(bestModelState);
+                model.load_state_dict(bestModelState);
                 string checkpointPath = Path.ChangeExtension(
                     Path.GetFullPath(configurationPath),
                     ".best-model.json");
@@ -462,13 +542,13 @@ internal static partial class Program
         if (configuration.IsOptimizer(TrainingConfiguration.LionOptimizer))
         {
             return optim.Lion(
-                model.Parameters(),
+                model.parameters(),
                 lr: configuration.LearningRate,
                 weight_decay: configuration.WeightDecay);
         }
 
         return optim.AdamW(
-            model.Parameters(),
+            model.parameters(),
             lr: configuration.LearningRate,
             weight_decay: configuration.WeightDecay);
     }

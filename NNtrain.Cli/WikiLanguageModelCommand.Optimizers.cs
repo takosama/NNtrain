@@ -30,7 +30,7 @@ internal static partial class WikiLanguageModelCommand
         }
 
         return optim.AdamW(
-            model.Parameters(),
+            model.parameters(),
             lr: config.LearningRate,
             weight_decay: config.WeightDecay,
             bf16_first_moment: config.AdamWUseBFloat16FirstMoment,
@@ -109,7 +109,7 @@ internal static partial class WikiLanguageModelCommand
         else
         {
             output.WriteLine(
-                $"optimizer = AdamW ({model.Parameters().Count()} " +
+                $"optimizer = AdamW ({model.parameters().Count()} " +
                 $"parameters, lr {config.LearningRate:G}, moments " +
                 $"{GetAdamWMomentStorage(config)})");
         }
