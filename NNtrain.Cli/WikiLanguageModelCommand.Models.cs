@@ -8,60 +8,60 @@ internal static partial class WikiLanguageModelCommand
     {
         if (config.IsForgetMemoryV2Architecture())
         {
-            return new FrogetMemoryV2Gpt(
-                vocabularySize,
-                config.ContextLength,
-                config.ModelWidth,
-                config.HiddenSize,
-                config.Layers,
-                config.ForgetMemoryKeyWidth,
-                config.ForgetMemoryValueWidth,
-                config.ForgetMemoryRetentionMinimum,
-                config.ForgetMemoryRetentionMaximum,
-                new Random(config.Seed),
-                config.InitializationScale,
-                config.Dropout);
+            return nn.forget_memory_v2_lm(
+                vocab_size: vocabularySize,
+                context_length: config.ContextLength,
+                d_model: config.ModelWidth,
+                dim_feedforward: config.HiddenSize,
+                num_layers: config.Layers,
+                key_width: config.ForgetMemoryKeyWidth,
+                value_width: config.ForgetMemoryValueWidth,
+                retention_min: config.ForgetMemoryRetentionMinimum,
+                retention_max: config.ForgetMemoryRetentionMaximum,
+                generator: new Random(config.Seed),
+                init_scale: config.InitializationScale,
+                dropout: config.Dropout);
         }
 
         if (config.IsArchitecture(
             WikiTrainingConfiguration.ForgetScanArchitecture))
         {
-            return new ForgetScanGpt(
-                vocabularySize,
-                config.ContextLength,
-                config.ModelWidth,
-                config.HiddenSize,
-                config.Layers,
-                new Random(config.Seed),
-                config.InitializationScale,
-                config.Dropout);
+            return nn.forget_scan_lm(
+                vocab_size: vocabularySize,
+                context_length: config.ContextLength,
+                d_model: config.ModelWidth,
+                dim_feedforward: config.HiddenSize,
+                num_layers: config.Layers,
+                generator: new Random(config.Seed),
+                init_scale: config.InitializationScale,
+                dropout: config.Dropout);
         }
 
         if (config.IsArchitecture(WikiTrainingConfiguration.HyenaArchitecture))
         {
-            return new HyenaGpt(
-                vocabularySize,
-                config.ContextLength,
-                config.ModelWidth,
-                config.HiddenSize,
-                config.Layers,
-                new Random(config.Seed),
-                config.InitializationScale,
-                config.Dropout,
-                config.HyenaFilterWidth,
-                config.GetHyenaConvolutionAlgorithm());
+            return nn.hyena_lm(
+                vocab_size: vocabularySize,
+                context_length: config.ContextLength,
+                d_model: config.ModelWidth,
+                dim_feedforward: config.HiddenSize,
+                num_layers: config.Layers,
+                generator: new Random(config.Seed),
+                init_scale: config.InitializationScale,
+                dropout: config.Dropout,
+                filter_width: config.HyenaFilterWidth,
+                convolution: config.GetHyenaConvolutionAlgorithm());
         }
 
-        return new GptRinWikiJp(
-            vocabularySize,
-            config.ContextLength,
-            config.ModelWidth,
-            config.Heads,
-            config.HiddenSize,
-            config.Layers,
-            new Random(config.Seed),
-            config.InitializationScale,
-            config.Dropout);
+        return nn.transformer_lm(
+            vocab_size: vocabularySize,
+            context_length: config.ContextLength,
+            d_model: config.ModelWidth,
+            num_heads: config.Heads,
+            dim_feedforward: config.HiddenSize,
+            num_layers: config.Layers,
+            generator: new Random(config.Seed),
+            init_scale: config.InitializationScale,
+            dropout: config.Dropout);
     }
 
     private static string GetCheckpointArchitecture(

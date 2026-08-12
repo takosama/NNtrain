@@ -94,8 +94,11 @@ internal static partial class WikiLanguageModelCommand
         string textColumn,
         int? maxDocuments)
     {
-        IAsyncEnumerator<string> enumerator = WikiParquetCorpus
-            .ReadTextsAsync(path, textColumn, maxDocuments)
+        IAsyncEnumerator<string> enumerator = datasets
+            .wikipedia(
+                root: path,
+                text_column: textColumn,
+                max_documents: maxDocuments)
             .GetAsyncEnumerator();
         try
         {

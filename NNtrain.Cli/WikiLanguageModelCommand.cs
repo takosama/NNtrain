@@ -15,6 +15,7 @@ internal static partial class WikiLanguageModelCommand
         {
             WikiTrainingConfiguration config =
                 WikiTrainingConfiguration.Load(configurationPath);
+            torch.manual_seed(config.Seed);
             output.WriteLine(
                 $"configuration = {Path.GetFullPath(configurationPath)}");
             Tensor.SimdEnabled = config.UseSimd;
@@ -68,7 +69,7 @@ internal static partial class WikiLanguageModelCommand
         BpeTokenizer? tokenizer = null;
         if (File.Exists(config.TokenizerPath))
         {
-            BpeTokenizer existing = BpeTokenizer.Load(config.TokenizerPath);
+            BpeTokenizer existing = tokenizers.load_bpe(config.TokenizerPath);
             if (existing.VocabularySize == config.VocabularySize)
             {
                 tokenizer = existing;
@@ -90,14 +91,14 @@ internal static partial class WikiLanguageModelCommand
                 $"{config.TokenizerTrainingDocuments} documents / " +
                 $"{config.TokenizerTrainingBytes} bytes");
             var timer = Stopwatch.StartNew();
-            tokenizer = BpeTokenizer.Train(
+            tokenizer = tokenizers.train_bpe(
                 ReadDocuments(
                     config.DataPath,
                     config.TextColumn,
                     config.TokenizerTrainingDocuments),
                 config.VocabularySize,
                 config.TokenizerTrainingBytes);
-            tokenizer.Save(config.TokenizerPath);
+            tokenizer.save(config.TokenizerPath);
             timer.Stop();
             output.WriteLine(
                 $"tokenizer = saved {config.TokenizerPath}, " +
@@ -148,6 +149,10 @@ internal static partial class WikiLanguageModelCommand
 
         var model = CreateModel(config, tokenizer.VocabularySize);
         IOptimizer optimizer = CreateOptimizer(model, config);
+        WarmupCosineProgressLRScheduler scheduler =
+            lr_scheduler.WarmupCosineProgressLR(
+                optimizer,
+                config.WarmupPercent);
         output.WriteLine(
             $"model = {model.GetType().Name}, parameters " +
             $"{model.Parameters().Sum(parameter => (long)parameter.T.Numel):N0}, " +
@@ -184,7 +189,7 @@ internal static partial class WikiLanguageModelCommand
         for (int epoch = 1; epoch <= config.Epochs; epoch++)
         {
             Shuffle(order, random);
-            model.Train();
+            model.train();
             float totalLoss = 0f;
             int completedTargets = 0;
             float graphWindowLoss = 0f;
@@ -203,18 +208,15 @@ internal static partial class WikiLanguageModelCommand
                     batch * config.BatchSize,
                     count,
                     config.ContextLength);
-                optimizer.ZeroGrad();
+                optimizer.zero_grad();
                 Tensor logits = model.Forward(
                     values.Input,
                     count,
                     config.ContextLength);
                 Tensor loss = logits.CrossEntropyWithLogits(values.Target);
-                loss.Backward();
-                SetScheduledLearningRates(
-                    optimizer,
-                    config,
-                    (globalStep + 1d) / totalTrainingSteps);
-                optimizer.Step();
+                loss.backward();
+                scheduler.step((globalStep + 1d) / totalTrainingSteps);
+                optimizer.step();
                 globalStep++;
 
                 int validTargets = values.ValidTargetCount;
@@ -347,7 +349,7 @@ internal static partial class WikiLanguageModelCommand
                 config.CheckpointPath);
         }
 
-        BpeTokenizer tokenizer = BpeTokenizer.Load(config.TokenizerPath);
+        BpeTokenizer tokenizer = tokenizers.load_bpe(config.TokenizerPath);
         WikiModelCheckpoint checkpoint = LoadCheckpoint(config.CheckpointPath);
         if (checkpoint.VocabularySize != tokenizer.VocabularySize)
         {
@@ -396,6 +398,10 @@ internal static partial class WikiLanguageModelCommand
 
         var model = CreateModel(config, tokenizer.VocabularySize);
         IOptimizer optimizer = CreateOptimizer(model, config);
+        WarmupCosineProgressLRScheduler scheduler =
+            lr_scheduler.WarmupCosineProgressLR(
+                optimizer,
+                config.WarmupPercent);
         output.WriteLine(
             $"model = {model.GetType().Name}, parameters " +
             $"{model.Parameters().Sum(parameter => (long)parameter.T.Numel):N0}, " +
@@ -428,7 +434,7 @@ internal static partial class WikiLanguageModelCommand
 
         for (int epoch = 1; epoch <= config.Epochs; epoch++)
         {
-            model.Train();
+            model.train();
             var buffer = new List<int>(
                 config.BatchSize * config.ContextLength
                 + config.MaxDocumentTokens
@@ -446,13 +452,13 @@ internal static partial class WikiLanguageModelCommand
                     buffer,
                     batchSize,
                     sequenceLength);
-                optimizer.ZeroGrad();
+                optimizer.zero_grad();
                 Tensor logits = model.Forward(
                     values.Input,
                     batchSize,
                     sequenceLength);
                 Tensor loss = logits.CrossEntropyWithLogits(values.Target);
-                loss.Backward();
+                loss.backward();
                 double documentProgress = documentsPerEpoch == 0
                     ? 0d
                     : Math.Min(
@@ -460,11 +466,8 @@ internal static partial class WikiLanguageModelCommand
                         (double)documentsProcessed / documentsPerEpoch);
                 double overallProgress =
                     (epoch - 1d + documentProgress) / config.Epochs;
-                SetScheduledLearningRates(
-                    optimizer,
-                    config,
-                    overallProgress);
-                optimizer.Step();
+                scheduler.step(overallProgress);
+                optimizer.step();
                 globalStep++;
 
                 long targets = values.ValidTargetCount;
@@ -689,10 +692,10 @@ internal static partial class WikiLanguageModelCommand
         int validationSequences,
         WikiTrainingConfiguration config)
     {
-        model.Eval();
+        model.eval();
         float totalLoss = 0f;
         int completedTargets = 0;
-        using (AutogradContext.NoGrad())
+        using (torch.no_grad())
         {
             for (int start = 0; start < validationSequences; start += config.BatchSize)
             {

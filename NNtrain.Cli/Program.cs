@@ -3,11 +3,8 @@ using System.Text.Json;
 
 namespace NNtrain;
 
-class Program
+internal static class TorchTrainingApplication
 {
-    static int Main(string[] args)
-        => Run(args, Console.Out, Console.Error, openLossGraph: true);
-
     internal static int Run(
         string[] args,
         TextWriter output,
@@ -74,6 +71,7 @@ class Program
 
             TrainingConfiguration config =
                 TrainingConfiguration.Load(configurationPath);
+            torch.manual_seed(config.Seed);
             Tensor.SimdEnabled = config.UseSimd;
             IImageClassificationDataset trainData = CreateDataset(
                 config.TrainingData,
@@ -84,19 +82,34 @@ class Program
 
             ValidateDatasetCompatibility(trainData, evalData);
             config.Model.ValidateForModelWidth(trainData.Columns);
-            var model = new TransformerClassifier(
-                seqLen: trainData.Rows,
-                dModel: trainData.Columns,
-                numHeads: config.Model.Heads,
-                dHidden: config.Model.HiddenSize,
-                numLayers: config.Model.Layers,
-                numClasses: trainData.ClassCount,
-                rng: new Random(config.Model.Seed),
-                initScale: config.Model.InitializationScale,
+            TransformerClassifier model = nn.transformer_classifier(
+                seq_len: trainData.Rows,
+                d_model: trainData.Columns,
+                num_heads: config.Model.Heads,
+                dim_feedforward: config.Model.HiddenSize,
+                num_layers: config.Model.Layers,
+                num_classes: trainData.ClassCount,
+                generator: new Random(config.Model.Seed),
+                init_scale: config.Model.InitializationScale,
                 dropout: config.Model.Dropout);
             IOptimizer optimizer = CreateOptimizer(
                 model,
                 config);
+            ILRScheduler scheduler =
+                lr_scheduler.LinearWarmupCosineAnnealingLR(
+                    optimizer,
+                    total_epochs: config.Epochs,
+                    warmup_epochs: config.WarmupEpochs,
+                    min_lr_ratio: config.MinimumLearningRateRatio);
+            var trainLoader = new DataLoader(
+                trainData,
+                batch_size: config.ResolvedMicroBatchSize,
+                shuffle: true,
+                training: true,
+                generator: new Random(config.Seed ^ 0x51F15EED));
+            var evalLoader = new DataLoader(
+                evalData,
+                batch_size: config.ResolvedMicroBatchSize);
             LossGraph? lossGraph = null;
             if (config.ShowLossGraph)
             {
@@ -109,10 +122,6 @@ class Program
                 if (openLossGraph)
                     lossGraph.TryOpen(error);
             }
-            var shuffleRandom = new Random(config.Seed);
-            var augmentationRandom = new Random(
-                config.Seed ^ 0x51F15EED);
-            int[] trainingOrder = Enumerable.Range(0, trainData.Count).ToArray();
             output.WriteLine(
                 $"workers = {Environment.ProcessorCount}");
             output.WriteLine(
@@ -187,26 +196,25 @@ class Program
 
             for (int epoch = 1; epoch <= config.Epochs; epoch++)
             {
-                LearningRates learningRates = SetScheduledLearningRates(
-                    optimizer,
-                    config,
-                    epoch);
-                model.Train();
+                IReadOnlyList<float> scheduledRates = scheduler.step();
+                var learningRates = new LearningRates(
+                    scheduledRates[0],
+                    scheduledRates.Count > 1 ? scheduledRates[1] : null);
+                model.train();
                 float trainLoss = 0f;
                 int trainCorrect = 0;
                 var trainTimer = Stopwatch.StartNew();
-                Shuffle(trainingOrder, shuffleRandom);
-                int microBatchSize = config.ResolvedMicroBatchSize;
-                int microBatchTotal = DivideRoundUp(
-                    trainData.Count,
-                    microBatchSize);
+                int microBatchSize = trainLoader.batch_size;
+                int microBatchTotal = trainLoader.Count;
                 int updateTotal = DivideRoundUp(
                     microBatchTotal,
                     config.MicroBatchCount);
+                using IEnumerator<DataBatch> trainingBatches =
+                    trainLoader.GetEnumerator();
 
                 for (int update = 0; update < updateTotal; update++)
                 {
-                    optimizer.ZeroGrad();
+                    optimizer.zero_grad();
                     int firstMicroBatch = update * config.MicroBatchCount;
                     int microBatchesInUpdate = Math.Min(
                         config.MicroBatchCount,
@@ -221,30 +229,28 @@ class Program
                         accumulation++)
                     {
                         int microBatch = firstMicroBatch + accumulation;
-                        int microBatchStart = microBatch * microBatchSize;
-                        int samplesInMicroBatch = Math.Min(
-                            microBatchSize,
-                            trainData.Count - microBatchStart);
-                        BatchSamples samples = ReadBatch(
-                            trainData,
-                            trainingOrder,
-                            microBatchStart,
-                            samplesInMicroBatch,
-                            augmentationRandom);
-                        Tensor logits = model.ForwardBatch(samples.Input);
+                        if (!trainingBatches.MoveNext())
+                        {
+                            throw new InvalidOperationException(
+                                "DataLoader ended before the expected " +
+                                "training microbatch count.");
+                        }
+                        DataBatch samples = trainingBatches.Current;
+                        int samplesInMicroBatch = samples.target.Length;
+                        Tensor logits = model.ForwardBatch(samples.input);
                         Tensor loss = logits.CrossEntropyWithLogits(
-                            samples.Answers,
+                            samples.target,
                             config.LabelSmoothing);
                         float microBatchLoss = loss.Data[0];
                         float gradientWeight =
                             (float)samplesInMicroBatch / samplesInUpdate;
 
-                        loss.Backward([gradientWeight]);
+                        loss.backward([gradientWeight]);
                         trainLoss +=
                             microBatchLoss * samplesInMicroBatch;
                         trainCorrect += CountCorrect(
                             logits.Data,
-                            samples.Answers,
+                            samples.target,
                             trainData.ClassCount);
 
                         output.WriteLine(
@@ -256,7 +262,7 @@ class Program
                             $"loss = {microBatchLoss:F6}");
                     }
 
-                    optimizer.Step();
+                    optimizer.step();
                 }
 
                 trainTimer.Stop();
@@ -266,34 +272,20 @@ class Program
                 int completedEvaluationSamples = 0;
                 int lastEvalPercent = -1;
                 var evalTimer = Stopwatch.StartNew();
-                int evaluationBatchCount = DivideRoundUp(
-                    evalData.Count,
-                    microBatchSize);
-
-                model.Eval();
-                using (AutogradContext.NoGrad())
+                model.eval();
+                using (torch.no_grad())
                 {
-                    for (int batch = 0;
-                        batch < evaluationBatchCount;
-                        batch++)
+                    foreach (DataBatch samples in evalLoader)
                     {
-                        int batchStart = batch * microBatchSize;
-                        int samplesInBatch = Math.Min(
-                            microBatchSize,
-                            evalData.Count - batchStart);
-                        BatchSamples samples = ReadBatch(
-                            evalData,
-                            order: null,
-                            batchStart,
-                            samplesInBatch);
-                        Tensor logits = model.ForwardBatch(samples.Input);
+                        int samplesInBatch = samples.target.Length;
+                        Tensor logits = model.ForwardBatch(samples.input);
                         Tensor loss = logits.CrossEntropyWithLogits(
-                            samples.Answers,
+                            samples.target,
                             labelSmoothing: 0f);
                         evalLoss += loss.Data[0] * samplesInBatch;
                         evalCorrectCount += CountCorrect(
                             logits.Data,
-                            samples.Answers,
+                            samples.target,
                             evalData.ClassCount);
 
                         completedEvaluationSamples += samplesInBatch;
@@ -433,64 +425,49 @@ class Program
         if (configuration.IsOptimizer(
             TrainingConfiguration.GainShareAdamWOptimizer))
         {
-            return new GainShareAdamW(
+            return optim.GainShareAdamW(
                 model.MakeGainShareParameterGroups(
                     configuration.GainShareBlockDepth),
-                new GainShareAdamWOptions
-                {
-                    LearningRate = configuration.LearningRate,
-                    Beta1 = configuration.GainShareBeta1,
-                    Beta2 = configuration.GainShareBeta2,
-                    Epsilon = configuration.GainShareEpsilon,
-                    Rho = configuration.GainShareRho,
-                    Gamma = configuration.GainShareGamma,
-                    MinScale = configuration.GainShareMinScale,
-                    MaxScale = configuration.GainShareMaxScale,
-                    WeightDecay = configuration.WeightDecay,
-                });
+                lr: configuration.LearningRate,
+                beta1: configuration.GainShareBeta1,
+                beta2: configuration.GainShareBeta2,
+                eps: configuration.GainShareEpsilon,
+                rho: configuration.GainShareRho,
+                gamma: configuration.GainShareGamma,
+                min_scale: configuration.GainShareMinScale,
+                max_scale: configuration.GainShareMaxScale,
+                weight_decay: configuration.WeightDecay);
         }
 
         if (configuration.IsOptimizer(
             TrainingConfiguration.NekoMuonOptimizer))
         {
-            var nekoMuon = new NekoMuon(
+            IOptimizer nekoMuon = optim.NekoMuon(
                 model.HiddenWeightParameters,
-                new NekoMuonOptions
-                {
-                    LearningRate = configuration.LearningRate,
-                    WeightDecay = configuration.WeightDecay,
-                });
-            var auxiliaryAdamW = new AdamW(
+                lr: configuration.LearningRate,
+                weight_decay: configuration.WeightDecay);
+            IOptimizer auxiliaryAdamW = optim.AdamW(
                 model.AuxiliaryParameters,
-                new AdamWOptions
-                {
-                    LearningRate = configuration.AuxiliaryLearningRate,
-                    Beta1 = 0.9f,
-                    Beta2 = 0.95f,
-                    Epsilon = 1e-8f,
-                    WeightDecay = configuration.WeightDecay,
-                });
-            return new CompositeOptimizer(nekoMuon, auxiliaryAdamW);
+                lr: configuration.AuxiliaryLearningRate,
+                beta1: 0.9f,
+                beta2: 0.95f,
+                eps: 1e-8f,
+                weight_decay: configuration.WeightDecay);
+            return optim.Composite(nekoMuon, auxiliaryAdamW);
         }
 
         if (configuration.IsOptimizer(TrainingConfiguration.LionOptimizer))
         {
-            return new Lion(
+            return optim.Lion(
                 model.Parameters(),
-                new LionOptions
-                {
-                    LearningRate = configuration.LearningRate,
-                    WeightDecay = configuration.WeightDecay,
-                });
+                lr: configuration.LearningRate,
+                weight_decay: configuration.WeightDecay);
         }
 
-        return new AdamW(
+        return optim.AdamW(
             model.Parameters(),
-            new AdamWOptions
-            {
-                LearningRate = configuration.LearningRate,
-                WeightDecay = configuration.WeightDecay,
-            });
+            lr: configuration.LearningRate,
+            weight_decay: configuration.WeightDecay);
     }
 
     internal static float CalculateLearningRateFactor(
@@ -626,27 +603,24 @@ class Program
         {
             EnsureDataFile(configuration.ImagePath, $"{role} image");
             EnsureDataFile(configuration.LabelPath, $"{role} label");
-            return new Mnist(
-                configuration.ImagePath,
-                configuration.LabelPath);
+            return datasets.mnist(
+                images: configuration.ImagePath,
+                labels: configuration.LabelPath);
         }
 
         if (configuration.IsType(DatasetConfiguration.Cifar100Type))
         {
             EnsureDataFile(configuration.DataPath, $"{role} CIFAR-100");
-            return new Cifar100(
-                configuration.DataPath,
-                new Cifar100Options
-                {
-                    PatchSize = configuration.PatchSize,
-                    Normalize = configuration.Normalize,
-                    RandomCropPadding =
-                        configuration.Augmentation.RandomCropPadding,
-                    HorizontalFlip =
-                        configuration.Augmentation.HorizontalFlip,
-                    VerticalFlip =
-                        configuration.Augmentation.VerticalFlip,
-                });
+            return datasets.cifar100(
+                data: configuration.DataPath,
+                patch_size: configuration.PatchSize,
+                normalize: configuration.Normalize,
+                random_crop_padding:
+                    configuration.Augmentation.RandomCropPadding,
+                horizontal_flip:
+                    configuration.Augmentation.HorizontalFlip,
+                vertical_flip:
+                    configuration.Augmentation.VerticalFlip);
         }
 
         throw new ArgumentException(

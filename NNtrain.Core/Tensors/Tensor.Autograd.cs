@@ -17,4 +17,6 @@ partial class Tensor
     /// </param>
     public void Backward(float[]? seed = null)
         => AutogradEngine.Backward(this, seed);
+
+    public void backward(float[]? gradient = null) => Backward(gradient);
 }

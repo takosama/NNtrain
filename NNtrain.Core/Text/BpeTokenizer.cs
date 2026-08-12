@@ -55,6 +55,8 @@ public sealed class BpeTokenizer
 
     public int VocabularySize => BaseVocabularySize + _merges.Length;
 
+    public int vocab_size => VocabularySize;
+
     public static BpeTokenizer Train(
         IEnumerable<string> documents,
         int vocabularySize,
@@ -297,6 +299,12 @@ public sealed class BpeTokenizer
         return result.ToArray();
     }
 
+    public int[] encode(
+        string text,
+        bool add_bos = false,
+        bool add_eos = false)
+        => Encode(text, add_bos, add_eos);
+
     public string Decode(IEnumerable<int> tokenIds)
     {
         ArgumentNullException.ThrowIfNull(tokenIds);
@@ -324,6 +332,8 @@ public sealed class BpeTokenizer
         return Encoding.UTF8.GetString(bytes.ToArray());
     }
 
+    public string decode(IEnumerable<int> token_ids) => Decode(token_ids);
+
     public void Save(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -339,6 +349,8 @@ public sealed class BpeTokenizer
             JsonSerializer.Serialize(file, JsonOptions));
         File.Move(temporaryPath, fullPath, overwrite: true);
     }
+
+    public void save(string path) => Save(path);
 
     public static BpeTokenizer Load(string path)
     {

@@ -28,6 +28,12 @@ public partial class Tensor
     public int Rank => _shape.Length;
     public int Numel => _data.Length;
 
+    public IReadOnlyList<float> data => Data;
+    public IReadOnlyList<float> grad => Grad;
+    public IReadOnlyList<int> shape => Shape;
+    public int ndim => Rank;
+    public int numel() => Numel;
+
     internal Span<float> MutableGrad => EnsureGradientBuffer();
     internal float[] GradientBuffer => _grad;
     internal long DataVersion => _dataVersion;
@@ -113,6 +119,9 @@ public partial class Tensor
     public static Tensor Scalar(float value, string name = "")
         => new([value], [1], name);
 
+    public static Tensor tensor(float[] data, int[] shape, string name = "")
+        => new(data, shape, name);
+
     public static Tensor Zeros(params int[] shape)
     {
         int length = NumelOf(shape);
@@ -161,6 +170,8 @@ public partial class Tensor
     /// Clears this tensor's gradient buffer without changing any other tensor.
     /// </summary>
     public void ZeroGrad() => ClearGradient();
+
+    public void zero_grad() => ZeroGrad();
 
     internal void ClearGradient() => _grad.AsSpan().Clear();
 

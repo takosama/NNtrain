@@ -11,79 +11,39 @@ internal static partial class WikiLanguageModelCommand
 
         if (config.IsOptimizer(WikiTrainingConfiguration.NekoMuonOptimizer))
         {
-            var nekoMuon = new NekoMuon(
+            IOptimizer nekoMuon = optim.NekoMuon(
                 model.HiddenWeightParameters,
-                new NekoMuonOptions
-                {
-                    LearningRate = config.LearningRate,
-                    NewtonSchulzInterval =
-                        config.NekoMuonNewtonSchulzInterval,
-                    WeightDecay = config.WeightDecay,
-                });
-            var auxiliaryAdamW = new AdamW(
+                lr: config.LearningRate,
+                newton_schulz_interval:
+                    config.NekoMuonNewtonSchulzInterval,
+                weight_decay: config.WeightDecay);
+            IOptimizer auxiliaryAdamW = optim.AdamW(
                 model.AuxiliaryParameters,
-                new AdamWOptions
-                {
-                    LearningRate = config.AuxiliaryLearningRate,
-                    Beta1 = 0.9f,
-                    Beta2 = 0.95f,
-                    Epsilon = 1e-8f,
-                    WeightDecay = config.WeightDecay,
-                    UseBFloat16FirstMoment =
-                        config.AdamWUseBFloat16FirstMoment,
-                    UseBFloat16SecondMoment =
-                        config.AdamWUseBFloat16SecondMoment,
-                });
-            return new CompositeOptimizer(nekoMuon, auxiliaryAdamW);
+                lr: config.AuxiliaryLearningRate,
+                beta1: 0.9f,
+                beta2: 0.95f,
+                eps: 1e-8f,
+                weight_decay: config.WeightDecay,
+                bf16_first_moment: config.AdamWUseBFloat16FirstMoment,
+                bf16_second_moment: config.AdamWUseBFloat16SecondMoment);
+            return optim.Composite(nekoMuon, auxiliaryAdamW);
         }
 
-        return new AdamW(
+        return optim.AdamW(
             model.Parameters(),
-            new AdamWOptions
-            {
-                LearningRate = config.LearningRate,
-                WeightDecay = config.WeightDecay,
-                UseBFloat16FirstMoment =
-                    config.AdamWUseBFloat16FirstMoment,
-                UseBFloat16SecondMoment =
-                    config.AdamWUseBFloat16SecondMoment,
-            });
+            lr: config.LearningRate,
+            weight_decay: config.WeightDecay,
+            bf16_first_moment: config.AdamWUseBFloat16FirstMoment,
+            bf16_second_moment: config.AdamWUseBFloat16SecondMoment);
     }
 
     internal static float CalculateLearningRateFactor(
         double overallProgress,
         float warmupPercent)
     {
-        const float MinimumFactor = 1e-6f;
-        if (!double.IsFinite(overallProgress)
-            || overallProgress < 0d
-            || overallProgress > 1d)
-        {
-            throw new ArgumentOutOfRangeException(nameof(overallProgress));
-        }
-        if (!float.IsFinite(warmupPercent)
-            || warmupPercent < 0f
-            || warmupPercent >= 100f)
-        {
-            throw new ArgumentOutOfRangeException(nameof(warmupPercent));
-        }
-
-        double warmupFraction = warmupPercent / 100d;
-        if (warmupFraction > 0d && overallProgress <= warmupFraction)
-        {
-            return MathF.Max(
-                MinimumFactor,
-                (float)(overallProgress / warmupFraction));
-        }
-
-        double decayProgress = warmupFraction == 1d
-            ? 1d
-            : (overallProgress - warmupFraction)
-                / (1d - warmupFraction);
-        decayProgress = Math.Clamp(decayProgress, 0d, 1d);
-        float cosine = 0.5f
-            * (1f + MathF.Cos(MathF.PI * (float)decayProgress));
-        return MathF.Max(MinimumFactor, cosine);
+        return WarmupCosineProgressLRScheduler.CalculateFactor(
+            overallProgress,
+            warmupPercent);
     }
 
     internal static float SetScheduledLearningRates(

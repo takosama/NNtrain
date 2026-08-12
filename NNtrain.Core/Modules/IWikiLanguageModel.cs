@@ -44,4 +44,22 @@ public interface IWikiLanguageModel
     void Train();
 
     void Eval();
+
+    IWikiLanguageModel train()
+    {
+        Train();
+        return this;
+    }
+
+    IWikiLanguageModel eval()
+    {
+        Eval();
+        return this;
+    }
+
+    IEnumerable<Parameter> parameters() => Parameters();
+
+    ModuleState state_dict() => CaptureState();
+
+    void load_state_dict(ModuleState state) => RestoreState(state);
 }

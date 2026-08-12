@@ -54,6 +54,20 @@ public abstract class Module
 
     public void Eval() => SetTraining(false);
 
+    // PyTorch-style aliases. The PascalCase API remains available for
+    // existing callers while new training code can use the familiar surface.
+    public Module train()
+    {
+        Train();
+        return this;
+    }
+
+    public Module eval()
+    {
+        Eval();
+        return this;
+    }
+
     public ModuleState CaptureState()
     {
         Parameter[] parameters = Parameters().ToArray();
@@ -127,6 +141,12 @@ public abstract class Module
         }
     }
 
+    public IEnumerable<Parameter> parameters() => Parameters();
+
+    public ModuleState state_dict() => CaptureState();
+
+    public void load_state_dict(ModuleState state) => RestoreState(state);
+
     private static IEnumerable<Parameter> EnumerateParameters(
         Module module,
         HashSet<Parameter> seenParameters,
@@ -174,6 +194,8 @@ public abstract class Module
         foreach (Parameter parameter in parameters)
             parameter.ZeroGrad();
     }
+
+    public void zero_grad() => ZeroGrad();
 
     private void SetTraining(bool isTraining)
     {
