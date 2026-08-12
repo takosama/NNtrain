@@ -1,5 +1,7 @@
 #pragma warning disable CS8981
 
+using System.Text.Json;
+
 namespace NNtrain;
 
 /// <summary>
@@ -7,6 +9,33 @@ namespace NNtrain;
 /// </summary>
 public static class torch
 {
+    public static class utils
+    {
+        public static class data
+        {
+            public static DataLoader DataLoader(
+                IImageClassificationDataset dataset,
+                int batch_size = 1,
+                bool shuffle = false,
+                bool drop_last = false,
+                bool training = false,
+                Random? generator = null,
+                Random? augmentation_generator = null)
+                => new(
+                    dataset,
+                    batch_size,
+                    shuffle,
+                    drop_last,
+                    training,
+                    generator,
+                    augmentation_generator);
+        }
+    }
+
+    private static readonly JsonSerializerOptions SerializationOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
     private static readonly object SeedLock = new();
     private static int _seed = 1;
     private static int _generatorIndex;
@@ -50,4 +79,29 @@ public static class torch
         => Tensor.Scalar(value, name);
 
     public static IDisposable no_grad() => AutogradContext.NoGrad();
+
+    public static void save<T>(T value, string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        string fullPath = Path.GetFullPath(path);
+        string? directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
+
+        string temporaryPath = fullPath + ".tmp";
+        File.WriteAllText(
+            temporaryPath,
+            JsonSerializer.Serialize(value, SerializationOptions));
+        File.Move(temporaryPath, fullPath, overwrite: true);
+    }
+
+    public static T load<T>(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        return JsonSerializer.Deserialize<T>(
+            File.ReadAllText(path),
+            SerializationOptions)
+            ?? throw new InvalidDataException(
+                $"Serialized torch object '{path}' was JSON null.");
+    }
 }

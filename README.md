@@ -4,6 +4,100 @@ NNtrain is a small neural-network training implementation for studying Tensor
 operations, reverse-mode automatic differentiation, Transformer modules,
 optimizers, dataset boundaries, and training orchestration in C#/.NET 10.
 
+## PyTorch-style API
+
+User-facing training code follows PyTorch's vocabulary while remaining native
+C#. The existing PascalCase API is kept for source compatibility, and both
+surfaces call the same Tensor, autograd, SIMD, module and optimizer kernels.
+
+```csharp
+using NNtrain;
+
+torch.manual_seed(1234);
+
+IImageClassificationDataset trainSet = datasets.mnist(
+    images: "data/train-images.idx3-ubyte",
+    labels: "data/train-labels.idx1-ubyte");
+IImageClassificationDataset testSet = datasets.mnist(
+    images: "data/t10k-images.idx3-ubyte",
+    labels: "data/t10k-labels.idx1-ubyte");
+
+var trainLoader = torch.utils.data.DataLoader(
+    trainSet,
+    batch_size: 64,
+    shuffle: true,
+    training: true,
+    generator: torch.generator());
+var testLoader = torch.utils.data.DataLoader(testSet, batch_size: 64);
+
+TransformerClassifier model = nn.transformer_classifier(
+    seq_len: trainSet.Rows,
+    d_model: trainSet.Columns,
+    num_heads: 4,
+    dim_feedforward: 256,
+    num_layers: 2,
+    num_classes: trainSet.ClassCount,
+    dropout: 0.1f,
+    generator: torch.generator());
+
+IOptimizer optimizer = optim.AdamW(
+    model.parameters(),
+    lr: 3e-4f,
+    weight_decay: 5e-4f);
+ILRScheduler scheduler = lr_scheduler.LinearWarmupCosineAnnealingLR(
+    optimizer,
+    total_epochs: 20,
+    warmup_epochs: 2,
+    min_lr_ratio: 0.01f);
+
+for (int epoch = 0; epoch < 20; epoch++)
+{
+    model.train();
+    scheduler.step();
+    foreach (DataBatch batch in trainLoader)
+    {
+        optimizer.zero_grad();
+        Tensor logits = model.forward(batch.input);
+        Tensor loss = nn.functional.cross_entropy(logits, batch.target);
+        loss.backward();
+        optimizer.step();
+        Console.WriteLine(loss.item());
+    }
+
+    model.eval();
+    using (torch.no_grad())
+    {
+        foreach (DataBatch batch in testLoader)
+            _ = model.forward(batch.input);
+    }
+}
+
+torch.save(model.state_dict(), "model.json");
+model.load_state_dict(torch.load<ModuleState>("model.json"));
+torch.save(optimizer.state_dict(), "optimizer.json");
+optimizer.load_state_dict(
+    torch.load<OptimizerStateDictionary>("optimizer.json"));
+```
+
+Text training uses the same style:
+
+```csharp
+BpeTokenizer tokenizer = tokenizers.train_bpe(
+    documents,
+    vocab_size: 4096);
+int[] tokenIds = tokenizer.encode(text, add_bos: true, add_eos: true);
+string restored = tokenizer.decode(tokenIds);
+
+IAsyncEnumerable<string> wikipedia = datasets.wikipedia(
+    root: "data/wiki",
+    text_column: "text");
+```
+
+The CLI entry point is `Program.main()`. Its classification path constructs
+`datasets`, `DataLoader`, `nn`, `optim`, and `lr_scheduler` objects in that
+order before entering the training loop. Wikipedia training uses the same
+`torch`, `nn`, `optim`, scheduler, dataset, and tokenizer facades.
+
 ## Projects
 
 - `NNtrain.Core`: Tensor, autograd, modules, optimizers, and Trainer

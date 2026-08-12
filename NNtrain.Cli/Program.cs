@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace NNtrain;
 
-internal static class TorchTrainingApplication
+internal static partial class Program
 {
     internal static int Run(
         string[] args,
@@ -101,13 +101,15 @@ internal static class TorchTrainingApplication
                     total_epochs: config.Epochs,
                     warmup_epochs: config.WarmupEpochs,
                     min_lr_ratio: config.MinimumLearningRateRatio);
-            var trainLoader = new DataLoader(
+            DataLoader trainLoader = torch.utils.data.DataLoader(
                 trainData,
                 batch_size: config.ResolvedMicroBatchSize,
                 shuffle: true,
                 training: true,
-                generator: new Random(config.Seed ^ 0x51F15EED));
-            var evalLoader = new DataLoader(
+                generator: new Random(config.Seed),
+                augmentation_generator:
+                    new Random(config.Seed ^ 0x51F15EED));
+            DataLoader evalLoader = torch.utils.data.DataLoader(
                 evalData,
                 batch_size: config.ResolvedMicroBatchSize);
             LossGraph? lossGraph = null;
@@ -237,11 +239,12 @@ internal static class TorchTrainingApplication
                         }
                         DataBatch samples = trainingBatches.Current;
                         int samplesInMicroBatch = samples.target.Length;
-                        Tensor logits = model.ForwardBatch(samples.input);
-                        Tensor loss = logits.CrossEntropyWithLogits(
+                        Tensor logits = model.forward(samples.input);
+                        Tensor loss = nn.functional.cross_entropy(
+                            logits,
                             samples.target,
-                            config.LabelSmoothing);
-                        float microBatchLoss = loss.Data[0];
+                            label_smoothing: config.LabelSmoothing);
+                        float microBatchLoss = loss.item();
                         float gradientWeight =
                             (float)samplesInMicroBatch / samplesInUpdate;
 
@@ -278,11 +281,11 @@ internal static class TorchTrainingApplication
                     foreach (DataBatch samples in evalLoader)
                     {
                         int samplesInBatch = samples.target.Length;
-                        Tensor logits = model.ForwardBatch(samples.input);
-                        Tensor loss = logits.CrossEntropyWithLogits(
-                            samples.target,
-                            labelSmoothing: 0f);
-                        evalLoss += loss.Data[0] * samplesInBatch;
+                        Tensor logits = model.forward(samples.input);
+                        Tensor loss = nn.functional.cross_entropy(
+                            logits,
+                            samples.target);
+                        evalLoss += loss.item() * samplesInBatch;
                         evalCorrectCount += CountCorrect(
                             logits.Data,
                             samples.target,
@@ -554,10 +557,7 @@ internal static class TorchTrainingApplication
             epoch,
             evaluationLoss,
             modelState);
-        string temporaryPath = path + ".tmp";
-        string json = JsonSerializer.Serialize(checkpoint);
-        File.WriteAllText(temporaryPath, json);
-        File.Move(temporaryPath, path, overwrite: true);
+        torch.save(checkpoint, path);
     }
 
     internal static string FindDefaultConfiguration()

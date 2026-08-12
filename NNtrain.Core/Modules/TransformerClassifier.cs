@@ -110,6 +110,9 @@ public class TransformerClassifier : Module, IClassificationModel
         return Forward(x);
     }
 
+    public Tensor forward(Tensor input)
+        => input.Rank == 3 ? ForwardBatch(input) : Forward(input);
+
     public Tensor Embed(Tensor x)
     {
         ArgumentNullException.ThrowIfNull(x);

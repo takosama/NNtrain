@@ -34,6 +34,16 @@ public partial class Tensor
     public int ndim => Rank;
     public int numel() => Numel;
 
+    public float item()
+    {
+        if (Numel != 1)
+        {
+            throw new InvalidOperationException(
+                "item() requires a tensor containing exactly one value.");
+        }
+        return _data[0];
+    }
+
     internal Span<float> MutableGrad => EnsureGradientBuffer();
     internal float[] GradientBuffer => _grad;
     internal long DataVersion => _dataVersion;

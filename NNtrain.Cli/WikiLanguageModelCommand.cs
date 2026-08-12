@@ -209,20 +209,22 @@ internal static partial class WikiLanguageModelCommand
                     count,
                     config.ContextLength);
                 optimizer.zero_grad();
-                Tensor logits = model.Forward(
+                Tensor logits = model.forward(
                     values.Input,
                     count,
                     config.ContextLength);
-                Tensor loss = logits.CrossEntropyWithLogits(values.Target);
+                Tensor loss = nn.functional.cross_entropy(
+                    logits,
+                    values.Target);
                 loss.backward();
                 scheduler.step((globalStep + 1d) / totalTrainingSteps);
                 optimizer.step();
                 globalStep++;
 
                 int validTargets = values.ValidTargetCount;
-                totalLoss += loss.Data[0] * validTargets;
+                totalLoss += loss.item() * validTargets;
                 completedTargets += validTargets;
-                graphWindowLoss += loss.Data[0] * validTargets;
+                graphWindowLoss += loss.item() * validTargets;
                 graphWindowTargets += validTargets;
                 bool epochEnd = batch + 1 == batchTotal;
                 if (lossGraph is not null
@@ -254,7 +256,7 @@ internal static partial class WikiLanguageModelCommand
                 {
                     output.WriteLine(
                         $"epoch {epoch}, batch {batch + 1}/{batchTotal}, " +
-                        $"loss = {loss.Data[0]:F6}");
+                        $"loss = {loss.item():F6}");
                 }
             }
 
@@ -453,11 +455,13 @@ internal static partial class WikiLanguageModelCommand
                     batchSize,
                     sequenceLength);
                 optimizer.zero_grad();
-                Tensor logits = model.Forward(
+                Tensor logits = model.forward(
                     values.Input,
                     batchSize,
                     sequenceLength);
-                Tensor loss = logits.CrossEntropyWithLogits(values.Target);
+                Tensor loss = nn.functional.cross_entropy(
+                    logits,
+                    values.Target);
                 loss.backward();
                 double documentProgress = documentsPerEpoch == 0
                     ? 0d
@@ -471,9 +475,9 @@ internal static partial class WikiLanguageModelCommand
                 globalStep++;
 
                 long targets = values.ValidTargetCount;
-                totalLoss += loss.Data[0] * targets;
+                totalLoss += loss.item() * targets;
                 completedTargets += targets;
-                graphWindowLoss += loss.Data[0] * targets;
+                graphWindowLoss += loss.item() * targets;
                 graphWindowTargets += targets;
                 if (lossGraph is not null
                     && globalStep % config.GraphUpdateSteps == 0)
@@ -506,7 +510,7 @@ internal static partial class WikiLanguageModelCommand
                     output.WriteLine(
                         $"epoch {epoch}, step {globalStep:N0}, " +
                         $"documents {documentsProcessed:N0}/" +
-                        $"{documentsPerEpoch:N0}, loss = {loss.Data[0]:F6}");
+                        $"{documentsPerEpoch:N0}, loss = {loss.item():F6}");
                 }
             }
 
@@ -709,12 +713,14 @@ internal static partial class WikiLanguageModelCommand
                     0,
                     count,
                     config.ContextLength);
-                Tensor logits = model.Forward(
+                Tensor logits = model.forward(
                     values.Input,
                     count,
                     config.ContextLength);
-                Tensor loss = logits.CrossEntropyWithLogits(values.Target);
-                totalLoss += loss.Data[0] * values.ValidTargetCount;
+                Tensor loss = nn.functional.cross_entropy(
+                    logits,
+                    values.Target);
+                totalLoss += loss.item() * values.ValidTargetCount;
                 completedTargets += values.ValidTargetCount;
             }
         }

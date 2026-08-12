@@ -7,7 +7,7 @@ public sealed class TorchApiTests
     public void DataLoaderBatchesAndShufflesDataset()
     {
         torch.manual_seed(7);
-        var loader = new DataLoader(
+        DataLoader loader = torch.utils.data.DataLoader(
             new FakeDataset(),
             batch_size: 2,
             shuffle: true,
@@ -42,8 +42,7 @@ public sealed class TorchApiTests
 
         model.train();
         optimizer.zero_grad();
-        Tensor loss = model.ForwardBatch(input)
-            .CrossEntropyWithLogits([1]);
+        Tensor loss = nn.functional.cross_entropy(model.forward(input), [1]);
         loss.backward();
         optimizer.step();
         model.eval();
@@ -90,6 +89,58 @@ public sealed class TorchApiTests
         Assert.Equal(BpeTokenizer.BaseVocabularySize, tokenizer.vocab_size);
     }
 
+    [Fact]
+    public void FunctionalLossItemAndTorchSerializationMatchCoreBehavior()
+    {
+        Tensor logits = torch.tensor([2f, -1f], [1, 2]);
+        Tensor loss = nn.functional.cross_entropy(logits, [0]);
+        string path = Path.Combine(
+            Path.GetTempPath(),
+            $"nntrain-torch-{Guid.NewGuid():N}.json");
+        try
+        {
+            var state = new SerializableState(3, loss.item());
+            torch.save(state, path);
+
+            SerializableState restored = torch.load<SerializableState>(path);
+
+            Assert.Equal(state, restored);
+            Assert.True(float.IsFinite(loss.item()));
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void OptimizerStateDictRoundTripsCompositeState()
+    {
+        var first = new Parameter(
+            [1f], [1], "first", WeightDecayPolicy.Apply);
+        var second = new Parameter(
+            [2f], [1], "second", WeightDecayPolicy.Apply);
+        IOptimizer optimizer = optim.Composite(
+            optim.NekoMuon([first], lr: 0.01f),
+            optim.AdamW([second], lr: 0.001f));
+        first.T.backward();
+        second.T.backward();
+        optimizer.step();
+        OptimizerStateDictionary state = optimizer.state_dict();
+
+        IOptimizer restored = optim.Composite(
+            optim.NekoMuon([first], lr: 0.01f),
+            optim.AdamW([second], lr: 0.001f));
+        restored.load_state_dict(state);
+
+        OptimizerStateDictionary roundTrip = restored.state_dict();
+        Assert.Equal(state.OptimizerType, roundTrip.OptimizerType);
+        Assert.Equal(2, roundTrip.Children.Length);
+        Assert.Equal(state.Children[0].StateJson, roundTrip.Children[0].StateJson);
+        Assert.Equal(state.Children[1].StateJson, roundTrip.Children[1].StateJson);
+    }
+
     private sealed class FakeDataset : IImageClassificationDataset
     {
         public int Count => 3;
@@ -115,4 +166,6 @@ public sealed class TorchApiTests
             return target;
         }
     }
+
+    public sealed record SerializableState(int Epoch, float Loss);
 }

@@ -1,38 +1,19 @@
-using System.Text.Json;
-
 namespace NNtrain;
 
 internal static partial class WikiLanguageModelCommand
 {
     private const int CheckpointFormatVersion = 2;
 
-    private static readonly JsonSerializerOptions CheckpointJsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
-
     private static void SaveCheckpoint(
         string path,
         WikiModelCheckpoint checkpoint)
     {
-        string? directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(directory))
-            Directory.CreateDirectory(directory);
-        string temporaryPath = path + ".tmp";
-        File.WriteAllText(
-            temporaryPath,
-            JsonSerializer.Serialize(checkpoint, CheckpointJsonOptions));
-        File.Move(temporaryPath, path, overwrite: true);
+        torch.save(checkpoint, path);
     }
 
     private static WikiModelCheckpoint LoadCheckpoint(string path)
     {
-        WikiModelCheckpoint checkpoint =
-            JsonSerializer.Deserialize<WikiModelCheckpoint>(
-                File.ReadAllText(path),
-                CheckpointJsonOptions)
-            ?? throw new InvalidDataException(
-                "Wiki model checkpoint cannot be JSON null.");
+        WikiModelCheckpoint checkpoint = torch.load<WikiModelCheckpoint>(path);
         if (checkpoint.FormatVersion is < 1 or > CheckpointFormatVersion
             || checkpoint.Model is null)
         {

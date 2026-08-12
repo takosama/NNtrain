@@ -5,6 +5,23 @@ namespace NNtrain;
 /// <summary>PyTorch-style neural-network factories.</summary>
 public static class nn
 {
+    public static class functional
+    {
+        public static Tensor cross_entropy(
+            Tensor input,
+            int[] target,
+            float label_smoothing = 0f,
+            int ignore_index = Tensor.DefaultCrossEntropyIgnoreIndex)
+        {
+            ArgumentNullException.ThrowIfNull(input);
+            ArgumentNullException.ThrowIfNull(target);
+            return input.CrossEntropyWithLogits(
+                target,
+                label_smoothing,
+                ignore_index);
+        }
+    }
+
     public static TransformerClassifier transformer_classifier(
         int seq_len,
         int d_model,

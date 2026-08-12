@@ -19,6 +19,9 @@ public interface IWikiLanguageModel
 
     Tensor Forward(int[] tokenIds, int batchSize, int sequenceLength);
 
+    Tensor forward(int[] input_ids, int batch_size, int sequence_length)
+        => Forward(input_ids, batch_size, sequence_length);
+
     int[] GenerateTokenIds(
         IEnumerable<int> promptTokenIds,
         int maxNewTokens,
