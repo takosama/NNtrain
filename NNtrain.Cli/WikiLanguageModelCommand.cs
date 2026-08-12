@@ -157,7 +157,8 @@ internal static partial class WikiLanguageModelCommand
                 optimizer,
                 config.WarmupPercent);
         output.WriteLine(
-            $"model = {model.GetType().Name}, parameters " +
+            $"model = {model.GetType().Name} " +
+            $"(custom {config.ModelArchitecture}), parameters " +
             $"{model.parameters().Sum(parameter => (long)parameter.T.Numel):N0}, " +
             $"width {config.ModelWidth}, heads {config.Heads}, " +
             $"hidden {config.HiddenSize}, layers {config.Layers}, " +
@@ -187,7 +188,7 @@ internal static partial class WikiLanguageModelCommand
         ModuleState? bestState = null;
         float bestLoss = float.PositiveInfinity;
         int bestEpoch = 0;
-        int firstEpoch = RestoreTrainingCheckpoint(
+        WikiResumePosition resume = RestoreTrainingCheckpoint(
             config,
             model,
             optimizer,
@@ -198,20 +199,27 @@ internal static partial class WikiLanguageModelCommand
             ref globalStep,
             output);
 
-        for (int epoch = firstEpoch; epoch <= config.Epochs; epoch++)
+        for (int epoch = resume.Epoch; epoch <= config.Epochs; epoch++)
         {
             Shuffle(
                 order,
                 new Random(HashCode.Combine(config.Seed, epoch)));
             model.train();
-            float totalLoss = 0f;
-            int completedTargets = 0;
+            double totalLoss = epoch == resume.Epoch
+                ? resume.LossSum
+                : 0d;
+            long completedTargets = epoch == resume.Epoch
+                ? resume.TargetCount
+                : 0;
             float graphWindowLoss = 0f;
             int graphWindowTargets = 0;
             int batchTotal = batchesPerEpoch;
             var timer = Stopwatch.StartNew();
 
-            for (int batch = 0; batch < batchTotal; batch++)
+            int firstBatch = epoch == resume.Epoch
+                ? resume.CompletedBatches
+                : 0;
+            for (int batch = firstBatch; batch < batchTotal; batch++)
             {
                 int count = Math.Min(
                     config.BatchSize,
@@ -240,6 +248,31 @@ internal static partial class WikiLanguageModelCommand
                 completedTargets += validTargets;
                 graphWindowLoss += loss.item() * validTargets;
                 graphWindowTargets += validTargets;
+                int completedBatches = batch + 1;
+                if (Program.CrossedCheckpointBoundary(
+                    completedBatches,
+                    batchTotal))
+                {
+                    SaveTrainingCheckpoint(
+                        config,
+                        tokenizer.VocabularySize,
+                        epoch - 1,
+                        bestState ?? model.state_dict(),
+                        bestLoss,
+                        bestEpoch,
+                        model,
+                        optimizer,
+                        scheduler,
+                        globalStep,
+                        currentEpoch: epoch,
+                        completedBatchesInEpoch: completedBatches,
+                        currentLossSum: totalLoss,
+                        currentTargetCount: completedTargets);
+                    output.WriteLine(
+                        $"training checkpoint = {config.CheckpointPath} " +
+                        $"at epoch " +
+                        $"{epoch - 1d + (double)completedBatches / batchTotal:F1}");
+                }
                 bool epochEnd = batch + 1 == batchTotal;
                 if (lossGraph is not null
                     && (batch + 1) % config.GraphUpdateSteps == 0
@@ -274,7 +307,7 @@ internal static partial class WikiLanguageModelCommand
                 }
             }
 
-            float trainingLoss = totalLoss / completedTargets;
+            float trainingLoss = (float)(totalLoss / completedTargets);
             float validationLoss = validationSequences == 0
                 ? trainingLoss
                 : Evaluate(
@@ -305,6 +338,9 @@ internal static partial class WikiLanguageModelCommand
                 bestLoss = validationLoss;
                 bestEpoch = epoch;
                 bestState = model.state_dict();
+                SaveBestModelSafeTensors(
+                    config.CheckpointPath,
+                    bestState);
             }
             SaveTrainingCheckpoint(
                 config,
@@ -364,7 +400,12 @@ internal static partial class WikiLanguageModelCommand
         }
 
         IWikiLanguageModel model = CreateModel(checkpoint, config.Seed);
-        model.load_state_dict(checkpoint.Model);
+        string bestSafeTensorsPath = GetBestSafeTensorsPath(
+            config.CheckpointPath);
+        ModuleState generationState = File.Exists(bestSafeTensorsPath)
+            ? safetensors.torch.load_file(bestSafeTensorsPath)
+            : checkpoint.Model;
+        model.load_state_dict(generationState);
         output.WriteLine(
             $"checkpoint = epoch {checkpoint.Epoch}, validation loss " +
             $"{checkpoint.ValidationLoss:F6}");
@@ -409,7 +450,8 @@ internal static partial class WikiLanguageModelCommand
                 optimizer,
                 config.WarmupPercent);
         output.WriteLine(
-            $"model = {model.GetType().Name}, parameters " +
+            $"model = {model.GetType().Name} " +
+            $"(custom {config.ModelArchitecture}), parameters " +
             $"{model.parameters().Sum(parameter => (long)parameter.T.Numel):N0}, " +
             $"width {config.ModelWidth}, heads {config.Heads}, " +
             $"hidden {config.HiddenSize}, layers {config.Layers}, " +
@@ -437,7 +479,7 @@ internal static partial class WikiLanguageModelCommand
         ModuleState? bestState = null;
         float bestLoss = float.PositiveInfinity;
         int bestEpoch = 0;
-        int firstEpoch = RestoreTrainingCheckpoint(
+        WikiResumePosition resume = RestoreTrainingCheckpoint(
             config,
             model,
             optimizer,
@@ -448,18 +490,29 @@ internal static partial class WikiLanguageModelCommand
             ref globalStep,
             output);
 
-        for (int epoch = firstEpoch; epoch <= config.Epochs; epoch++)
+        for (int epoch = resume.Epoch; epoch <= config.Epochs; epoch++)
         {
             model.train();
             var buffer = new List<int>(
                 config.BatchSize * config.ContextLength
                 + config.MaxDocumentTokens
                 + 2);
-            double totalLoss = 0d;
-            long completedTargets = 0;
+            if (epoch == resume.Epoch)
+                buffer.AddRange(resume.TokenBuffer);
+            double totalLoss = epoch == resume.Epoch
+                ? resume.LossSum
+                : 0d;
+            long completedTargets = epoch == resume.Epoch
+                ? resume.TargetCount
+                : 0;
             double graphWindowLoss = 0d;
             long graphWindowTargets = 0;
-            long documentsProcessed = 0;
+            long documentsProcessed = epoch == resume.Epoch
+                ? resume.CompletedDocuments
+                : 0;
+            int completedBatchesInEpoch = epoch == resume.Epoch
+                ? resume.CompletedBatches
+                : 0;
             var timer = Stopwatch.StartNew();
 
             void TrainBatch(int batchSize, int sequenceLength)
@@ -487,6 +540,7 @@ internal static partial class WikiLanguageModelCommand
                 scheduler.step(overallProgress);
                 optimizer.step();
                 globalStep++;
+                completedBatchesInEpoch++;
 
                 long targets = values.ValidTargetCount;
                 totalLoss += loss.item() * targets;
@@ -531,13 +585,19 @@ internal static partial class WikiLanguageModelCommand
             int? maximumDocuments = config.MaxTrainingDocuments == 0
                 ? null
                 : config.MaxTrainingDocuments;
+            long documentsToSkip = documentsProcessed;
             foreach (string document in ReadDocuments(
                 config.DataPath,
                 config.TextColumn,
                 maximumDocuments))
             {
+                if (documentsToSkip > 0)
+                {
+                    documentsToSkip--;
+                    continue;
+                }
                 documentsProcessed++;
-                if (epoch == firstEpoch
+                if (epoch == resume.Epoch
                     && TryGetDocumentSplit(document, out _))
                 {
                     AddReservoirSample(
@@ -561,6 +621,35 @@ internal static partial class WikiLanguageModelCommand
                     >= config.BatchSize)
                 {
                     TrainBatch(config.BatchSize, config.ContextLength);
+                }
+                int previousTenth = (int)((documentsProcessed - 1) * 10
+                    / documentsPerEpoch);
+                int currentTenth = (int)(documentsProcessed * 10
+                    / documentsPerEpoch);
+                if (currentTenth > previousTenth
+                    && currentTenth < 10)
+                {
+                    SaveTrainingCheckpoint(
+                        config,
+                        tokenizer.VocabularySize,
+                        epoch - 1,
+                        bestState ?? model.state_dict(),
+                        bestLoss,
+                        bestEpoch,
+                        model,
+                        optimizer,
+                        scheduler,
+                        globalStep,
+                        currentEpoch: epoch,
+                        completedBatchesInEpoch,
+                        currentLossSum: totalLoss,
+                        currentTargetCount: completedTargets,
+                        completedDocumentsInEpoch: documentsProcessed,
+                        currentTokenBuffer: buffer.ToArray());
+                    output.WriteLine(
+                        $"training checkpoint = {config.CheckpointPath} " +
+                        $"at epoch " +
+                        $"{epoch - 1d + (double)documentsProcessed / documentsPerEpoch:F1}");
                 }
             }
 
@@ -602,6 +691,9 @@ internal static partial class WikiLanguageModelCommand
                 bestLoss = trainingLoss;
                 bestEpoch = epoch;
                 bestState = model.state_dict();
+                SaveBestModelSafeTensors(
+                    config.CheckpointPath,
+                    bestState);
             }
             SaveTrainingCheckpoint(
                 config,

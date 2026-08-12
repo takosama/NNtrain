@@ -104,6 +104,7 @@ public sealed class WarmupCosineProgressLRScheduler
                 nameof(state));
         }
         _lastProgress = progress;
+        _groups.RefreshCurrentRates();
     }
 
     public static float CalculateFactor(
@@ -202,6 +203,7 @@ public sealed class CosineAnnealingLRScheduler : ILRScheduler
                 nameof(state));
         }
         LastEpoch = state.LastEpoch;
+        _groups.RefreshCurrentRates();
     }
 }
 
@@ -273,6 +275,7 @@ public sealed class LinearWarmupCosineLRScheduler : ILRScheduler
                 nameof(state));
         }
         LastEpoch = state.LastEpoch;
+        _groups.RefreshCurrentRates();
     }
 
     public static float CalculateFactor(
@@ -345,6 +348,11 @@ internal sealed class SchedulerOptimizerGroups
         _currentRates = rates;
         return Array.AsReadOnly(rates);
     }
+
+    internal void RefreshCurrentRates()
+        => _currentRates = _groups
+            .Select(group => group.LearningRate)
+            .ToArray();
 
     private static IEnumerable<ILearningRateAdjustable> Flatten(
         IOptimizer optimizer)

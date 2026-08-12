@@ -77,6 +77,12 @@ model.load_state_dict(torch.load<ModuleState>("model.json"));
 torch.save(optimizer.state_dict(), "optimizer.json");
 optimizer.load_state_dict(
     torch.load<OptimizerStateDictionary>("optimizer.json"));
+
+safetensors.torch.save_file(
+    model.state_dict(),
+    "model.safetensors");
+model.load_state_dict(
+    safetensors.torch.load_file("model.safetensors"));
 ```
 
 Save and resume the model, optimizer, and scheduler as one training
@@ -155,9 +161,14 @@ dotnet run --configuration Release --project NNtrain.Cli -- `
   --config training.example.json
 ```
 
-Every completed epoch atomically updates a resumable checkpoint containing
+Every 0.1 epoch and every completed epoch updates a resumable checkpoint
+containing
 the current model, optimizer, scheduler, epoch, and task-specific training
-state. Continue from it by increasing `epochs` and running:
+state. The model weights are also written as standard F32 SafeTensors beside
+the JSON training state. Classification uses optimizer-update progress;
+finite Wikipedia training uses batch progress; streaming Wikipedia training
+uses processed-document progress. Continue from it by increasing `epochs` and
+running:
 
 ```powershell
 dotnet run --configuration Release --project NNtrain.Cli -- `
@@ -167,8 +178,8 @@ dotnet run --configuration Release --project NNtrain.Cli -- `
 The same behavior can be enabled with `"resumeFromCheckpoint": true` in the
 JSON. Classification defaults to `<config>.checkpoint.json`; Wikipedia uses
 `checkpointPath`. The separate `*.best-model.json` classification artifact
-and the best-model portion of a Wikipedia checkpoint remain the weights used
-for evaluation or generation.
+and `*.best.safetensors` artifacts remain the weights used for evaluation or
+generation.
 
 With no arguments the CLI selects `training.wiki-jp.json` when it is present,
 then falls back to `training.example.json`. The selected absolute path and the
@@ -177,6 +188,10 @@ trains or loads the BPE tokenizer, reads bounded Wikipedia data, trains the
 causal language model, writes the loss graph and checkpoint, and generates a
 sample continuation. Image-classification examples remain available in the
 separate CIFAR-100 configuration.
+`TransformerClassifier` is used only by the image-classification command. The
+default Wikipedia configurations select `modelArchitecture:
+"forgetmemoryv2"`, which constructs the custom `FrogetMemoryV2Gpt`; startup
+prints the concrete model type so this selection is visible before training.
 The CIFAR-100 configuration normalizes RGB channels using the training-set
 statistics. Each 32x32 RGB image is emitted directly as 64 row-major 4x4 patch
 tokens with 48 channel-first features per token. Its training augmentation uses

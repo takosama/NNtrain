@@ -199,6 +199,8 @@ public sealed class TrainingIntegrationTests
         Assert.Equal(0, firstExitCode);
         Assert.Equal(string.Empty, firstError.ToString());
         Assert.True(File.Exists(checkpointPath));
+        Assert.True(File.Exists(
+            ClassificationCheckpoint.GetSafeTensorsPath(checkpointPath)));
         using (JsonDocument firstCheckpoint = JsonDocument.Parse(
             File.ReadAllText(checkpointPath)))
         {
@@ -230,6 +232,84 @@ public sealed class TrainingIntegrationTests
             resumedCheckpoint.RootElement
                 .GetProperty("CompletedEpoch")
                 .GetInt32());
+    }
+
+    [Theory]
+    [InlineData(1, 10, true)]
+    [InlineData(2, 10, true)]
+    [InlineData(9, 10, true)]
+    [InlineData(1, 20, false)]
+    [InlineData(2, 20, true)]
+    [InlineData(20, 20, true)]
+    public void CheckpointBoundaryTracksTenthsOfAnEpoch(
+        int completedUpdates,
+        int totalUpdates,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            Program.CrossedCheckpointBoundary(
+                completedUpdates,
+                totalUpdates));
+    }
+
+    [Fact]
+    public void ProgramSavesCheckpointAtEveryTenthEpochBoundary()
+    {
+        using var directory = new TemporaryDirectory();
+        DatasetFiles training = WriteDataset(
+            directory.Root,
+            "tenths-train",
+            Enumerable.Range(0, 10)
+                .Select(index => (byte)(index % 10))
+                .ToArray());
+        DatasetFiles evaluation = WriteDataset(
+            directory.Root,
+            "tenths-eval",
+            [0]);
+        string configurationPath = Path.Combine(
+            directory.Root,
+            "tenths.json");
+        File.WriteAllText(
+            configurationPath,
+            $$"""
+            {
+              "trainingData": {
+                "imagePath": "{{training.ImagePath.Replace("\\", "\\\\")}}",
+                "labelPath": "{{training.LabelPath.Replace("\\", "\\\\")}}"
+              },
+              "evaluationData": {
+                "imagePath": "{{evaluation.ImagePath.Replace("\\", "\\\\")}}",
+                "labelPath": "{{evaluation.LabelPath.Replace("\\", "\\\\")}}"
+              },
+              "epochs": 1,
+              "batchSize": 1,
+              "optimizer": "adamw",
+              "showLossGraph": false,
+              "model": {
+                "heads": 1,
+                "hiddenSize": 2,
+                "layers": 1,
+                "dropout": 0
+              }
+            }
+            """);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        int exitCode = Program.Run(
+            ["--config", configurationPath],
+            output,
+            error);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        for (int tenth = 1; tenth <= 10; tenth++)
+        {
+            Assert.Contains(
+                $"at epoch {tenth / 10d:F1}",
+                output.ToString());
+        }
     }
 
     [Fact]

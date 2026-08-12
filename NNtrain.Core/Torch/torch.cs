@@ -1,6 +1,7 @@
 #pragma warning disable CS8981
 
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace NNtrain;
 
@@ -35,6 +36,7 @@ public static class torch
     private static readonly JsonSerializerOptions SerializationOptions = new()
     {
         PropertyNameCaseInsensitive = true,
+        NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
     };
     private static readonly object SeedLock = new();
     private static int _seed = 1;
@@ -104,4 +106,10 @@ public static class torch
             ?? throw new InvalidDataException(
                 $"Serialized torch object '{path}' was JSON null.");
     }
+
+    public static void save_safetensors(ModuleState state, string path)
+        => SafeTensorFile.Save(state, path);
+
+    public static ModuleState load_safetensors(string path)
+        => SafeTensorFile.Load(path);
 }

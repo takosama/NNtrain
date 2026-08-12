@@ -76,6 +76,19 @@ public sealed class WikiLanguageModelCommandTests
     }
 
     [Fact]
+    public void DefaultWikiJsonSelectsCustomForgetMemoryV2Model()
+    {
+        var config = new WikiTrainingConfiguration();
+
+        IWikiLanguageModel model = WikiLanguageModelCommand.CreateModel(
+            config,
+            config.VocabularySize);
+
+        Assert.True(config.IsForgetMemoryV2Architecture());
+        Assert.IsType<FrogetMemoryV2Gpt>(model);
+    }
+
+    [Fact]
     public void RunPrintsTheSelectedConfigurationAndEffectiveModelSettings()
     {
         string configurationPath = Path.Combine(
@@ -323,7 +336,7 @@ public sealed class WikiLanguageModelCommandTests
             long globalStep = 0;
             using var output = new StringWriter();
 
-            int firstEpoch =
+            WikiLanguageModelCommand.WikiResumePosition position =
                 WikiLanguageModelCommand.RestoreTrainingCheckpoint(
                     config,
                     restored,
@@ -335,7 +348,7 @@ public sealed class WikiLanguageModelCommandTests
                     ref globalStep,
                     output);
 
-            Assert.Equal(2, firstEpoch);
+            Assert.Equal(2, position.Epoch);
             Assert.Equal(1, bestEpoch);
             Assert.Equal(1.25f, bestLoss);
             Assert.Equal(7, globalStep);
@@ -349,11 +362,19 @@ public sealed class WikiLanguageModelCommandTests
             Assert.Equal(
                 sourceScheduler.state_dict(),
                 restoredScheduler.state_dict());
+            Assert.True(File.Exists(
+                WikiLanguageModelCommand.GetSafeTensorsPath(
+                    checkpointPath)));
         }
         finally
         {
             if (File.Exists(checkpointPath))
                 File.Delete(checkpointPath);
+            string safeTensorsPath =
+                WikiLanguageModelCommand.GetSafeTensorsPath(
+                    checkpointPath);
+            if (File.Exists(safeTensorsPath))
+                File.Delete(safeTensorsPath);
         }
     }
 

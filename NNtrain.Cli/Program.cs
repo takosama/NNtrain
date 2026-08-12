@@ -118,6 +118,8 @@ internal static partial class Program
                 generator: new Random(config.Model.Seed),
                 init_scale: config.Model.InitializationScale,
                 dropout: config.Model.Dropout);
+            output.WriteLine(
+                $"model = {model.GetType().Name} (image classifier)");
             IOptimizer optimizer = CreateOptimizer(
                 model,
                 config);
@@ -214,6 +216,10 @@ internal static partial class Program
             int bestEpoch = 0;
             int epochsWithoutImprovement = 0;
             int firstEpoch = 1;
+            int firstUpdate = 0;
+            double resumedTrainingLossSum = 0d;
+            int resumedTrainingCorrect = 0;
+            int resumedTrainingSamples = 0;
 
             if (config.ResumeFromCheckpoint)
             {
@@ -225,7 +231,10 @@ internal static partial class Program
                 }
                 ClassificationTrainingCheckpoint checkpoint =
                     ClassificationCheckpoint.Load(config.CheckpointPath);
-                if (checkpoint.CompletedEpoch >= config.Epochs)
+                bool hasPartialEpoch = checkpoint.CurrentEpoch
+                    > checkpoint.CompletedEpoch;
+                if (!hasPartialEpoch
+                    && checkpoint.CompletedEpoch >= config.Epochs)
                 {
                     throw new InvalidDataException(
                         $"Checkpoint already completed epoch " +
@@ -242,10 +251,27 @@ internal static partial class Program
                     checkpoint.EarlyStoppingReferenceLoss;
                 epochsWithoutImprovement =
                     checkpoint.EpochsWithoutImprovement;
-                firstEpoch = checkpoint.CompletedEpoch + 1;
+                firstEpoch = hasPartialEpoch
+                    ? checkpoint.CurrentEpoch
+                    : checkpoint.CompletedEpoch + 1;
+                firstUpdate = hasPartialEpoch
+                    ? checkpoint.CompletedUpdatesInEpoch
+                    : 0;
+                if (hasPartialEpoch)
+                {
+                    resumedTrainingLossSum =
+                        checkpoint.CurrentTrainingLossSum;
+                    resumedTrainingCorrect =
+                        checkpoint.CurrentTrainingCorrect;
+                    resumedTrainingSamples =
+                        checkpoint.CurrentTrainingSamples;
+                }
                 output.WriteLine(
                     $"resumed checkpoint = {config.CheckpointPath}, " +
-                    $"next epoch {firstEpoch}");
+                    $"next epoch {firstEpoch}" +
+                    (firstUpdate == 0
+                        ? string.Empty
+                        : $", update {firstUpdate + 1}"));
             }
 
             for (int epoch = firstEpoch; epoch <= config.Epochs; epoch++)
@@ -261,13 +287,23 @@ internal static partial class Program
                         HashCode.Combine(
                             config.Seed ^ 0x51F15EED,
                             epoch)));
-                IReadOnlyList<float> scheduledRates = scheduler.step();
+                int resumeUpdate = epoch == firstEpoch ? firstUpdate : 0;
+                IReadOnlyList<float> scheduledRates = resumeUpdate > 0
+                    ? scheduler.get_last_lr()
+                    : scheduler.step();
                 var learningRates = new LearningRates(
                     scheduledRates[0],
                     scheduledRates.Count > 1 ? scheduledRates[1] : null);
                 model.train();
-                float trainLoss = 0f;
-                int trainCorrect = 0;
+                double trainLoss = epoch == firstEpoch
+                    ? resumedTrainingLossSum
+                    : 0d;
+                int trainCorrect = epoch == firstEpoch
+                    ? resumedTrainingCorrect
+                    : 0;
+                int completedTrainingSamples = epoch == firstEpoch
+                    ? resumedTrainingSamples
+                    : 0;
                 var trainTimer = Stopwatch.StartNew();
                 int microBatchSize = trainLoader.batch_size;
                 int microBatchTotal = trainLoader.Count;
@@ -276,8 +312,24 @@ internal static partial class Program
                     config.MicroBatchCount);
                 using IEnumerator<DataBatch> trainingBatches =
                     trainLoader.GetEnumerator();
+                int microBatchesToSkip = Math.Min(
+                    microBatchTotal,
+                    resumeUpdate * config.MicroBatchCount);
+                for (int skipped = 0;
+                    skipped < microBatchesToSkip;
+                    skipped++)
+                {
+                    if (!trainingBatches.MoveNext())
+                    {
+                        throw new InvalidDataException(
+                            "DataLoader ended while restoring checkpoint " +
+                            "position.");
+                    }
+                }
 
-                for (int update = 0; update < updateTotal; update++)
+                for (int update = resumeUpdate;
+                    update < updateTotal;
+                    update++)
                 {
                     optimizer.zero_grad();
                     int firstMicroBatch = update * config.MicroBatchCount;
@@ -314,6 +366,7 @@ internal static partial class Program
                         loss.backward([gradientWeight]);
                         trainLoss +=
                             microBatchLoss * samplesInMicroBatch;
+                        completedTrainingSamples += samplesInMicroBatch;
                         trainCorrect += CountCorrect(
                             logits.Data,
                             samples.target,
@@ -329,6 +382,33 @@ internal static partial class Program
                     }
 
                     optimizer.step();
+                    int completedUpdates = update + 1;
+                    if (CrossedCheckpointBoundary(
+                        completedUpdates,
+                        updateTotal))
+                    {
+                        ClassificationCheckpoint.Save(
+                            config.CheckpointPath,
+                            CreateClassificationCheckpoint(
+                                completedEpoch: epoch - 1,
+                                currentEpoch: epoch,
+                                completedUpdates,
+                                model,
+                                optimizer,
+                                scheduler,
+                                bestModelState,
+                                bestEpoch,
+                                bestEvaluationLoss,
+                                earlyStoppingReferenceLoss,
+                                epochsWithoutImprovement,
+                                trainLoss,
+                                trainCorrect,
+                                completedTrainingSamples));
+                        output.WriteLine(
+                            $"training checkpoint = " +
+                            $"{config.CheckpointPath} at epoch " +
+                            $"{epoch - 1d + (double)completedUpdates / updateTotal:F1}");
+                    }
                 }
 
                 trainTimer.Stop();
@@ -370,7 +450,8 @@ internal static partial class Program
                 }
 
                 evalTimer.Stop();
-                float averageTrainingLoss = trainLoss / trainData.Count;
+                float averageTrainingLoss =
+                    (float)(trainLoss / completedTrainingSamples);
                 float averageEvaluationLoss = evalLoss / evalData.Count;
                 if (bestModelState is null
                     || averageEvaluationLoss < bestEvaluationLoss)
@@ -412,18 +493,21 @@ internal static partial class Program
 
                 ClassificationCheckpoint.Save(
                     config.CheckpointPath,
-                    new ClassificationTrainingCheckpoint(
-                        ClassificationTrainingCheckpoint
-                            .CurrentFormatVersion,
-                        epoch,
-                        model.state_dict(),
-                        optimizer.state_dict(),
-                        scheduler.state_dict(),
+                    CreateClassificationCheckpoint(
+                        completedEpoch: epoch,
+                        currentEpoch: 0,
+                        completedUpdatesInEpoch: 0,
+                        model,
+                        optimizer,
+                        scheduler,
                         bestModelState,
                         bestEpoch,
                         bestEvaluationLoss,
                         earlyStoppingReferenceLoss,
-                        epochsWithoutImprovement));
+                        epochsWithoutImprovement,
+                        currentTrainingLossSum: 0d,
+                        currentTrainingCorrect: 0,
+                        currentTrainingSamples: 0));
                 output.WriteLine(
                     $"training checkpoint = {config.CheckpointPath}");
 
@@ -450,6 +534,11 @@ internal static partial class Program
                     bestEpoch,
                     bestEvaluationLoss,
                     bestModelState);
+                safetensors.torch.save_file(
+                    bestModelState,
+                    Path.ChangeExtension(
+                        checkpointPath,
+                        ".safetensors"));
                 output.WriteLine(
                     $"best model = epoch {bestEpoch}, " +
                     $"eval loss {bestEvaluationLoss:F6}");
@@ -477,6 +566,52 @@ internal static partial class Program
 
         return value / divisor + (value % divisor == 0 ? 0 : 1);
     }
+
+    internal static bool CrossedCheckpointBoundary(
+        int completedUnits,
+        int totalUnits)
+    {
+        if (completedUnits <= 0 || completedUnits > totalUnits)
+            throw new ArgumentOutOfRangeException(nameof(completedUnits));
+        if (totalUnits <= 0)
+            throw new ArgumentOutOfRangeException(nameof(totalUnits));
+        int previousTenth = (completedUnits - 1) * 10 / totalUnits;
+        int currentTenth = completedUnits * 10 / totalUnits;
+        return currentTenth > previousTenth;
+    }
+
+    private static ClassificationTrainingCheckpoint
+        CreateClassificationCheckpoint(
+            int completedEpoch,
+            int currentEpoch,
+            int completedUpdatesInEpoch,
+            TransformerClassifier model,
+            IOptimizer optimizer,
+            ILRScheduler scheduler,
+            ModuleState? bestModelState,
+            int bestEpoch,
+            float bestEvaluationLoss,
+            float earlyStoppingReferenceLoss,
+            int epochsWithoutImprovement,
+            double currentTrainingLossSum,
+            int currentTrainingCorrect,
+            int currentTrainingSamples)
+        => new(
+            ClassificationTrainingCheckpoint.CurrentFormatVersion,
+            completedEpoch,
+            model.state_dict(),
+            optimizer.state_dict(),
+            scheduler.state_dict(),
+            bestModelState,
+            bestEpoch,
+            bestEvaluationLoss,
+            earlyStoppingReferenceLoss,
+            epochsWithoutImprovement,
+            currentEpoch,
+            completedUpdatesInEpoch,
+            currentTrainingLossSum,
+            currentTrainingCorrect,
+            currentTrainingSamples);
 
     private static void Shuffle(int[] values, Random random)
     {

@@ -217,6 +217,90 @@ public sealed class TorchApiTests
     }
 
     [Fact]
+    public void SafeTensorsRoundTripsModuleStateAndLoadsIntoModel()
+    {
+        TransformerClassifier source = nn.transformer_classifier(
+            seq_len: 1,
+            d_model: 2,
+            num_heads: 1,
+            dim_feedforward: 2,
+            num_layers: 1,
+            num_classes: 2,
+            generator: new Random(17));
+        ModuleState expected = source.state_dict();
+        string path = Path.Combine(
+            Path.GetTempPath(),
+            $"nntrain-{Guid.NewGuid():N}.safetensors");
+        try
+        {
+            safetensors.torch.save_file(expected, path);
+
+            ModuleState actual = safetensors.torch.load_file(path);
+            TransformerClassifier restored = nn.transformer_classifier(
+                seq_len: 1,
+                d_model: 2,
+                num_heads: 1,
+                dim_feedforward: 2,
+                num_layers: 1,
+                num_classes: 2,
+                generator: new Random(91));
+            restored.load_state_dict(actual);
+
+            Assert.Equal(expected.Parameters.Length, actual.Parameters.Length);
+            for (int index = 0; index < expected.Parameters.Length; index++)
+            {
+                AssertParameterEqual(
+                    expected.Parameters[index],
+                    actual.Parameters[index]);
+            }
+            Assert.Equal(
+                expected.Parameters[0].Values,
+                restored.state_dict().Parameters[0].Values);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void SafeTensorsUsesStandardAlignedHeaderAndF32Descriptor()
+    {
+        ModuleState state = new(
+            ModuleState.CurrentFormatVersion,
+            [new ModuleParameterState(0, "weight", [2], [1.5f, -2f])]);
+        string path = Path.Combine(
+            Path.GetTempPath(),
+            $"nntrain-format-{Guid.NewGuid():N}.safetensors");
+        try
+        {
+            torch.save_safetensors(state, path);
+            byte[] bytes = File.ReadAllBytes(path);
+            ulong headerLength = System.Buffers.Binary
+                .BinaryPrimitives
+                .ReadUInt64LittleEndian(bytes.AsSpan(0, sizeof(long)));
+            string header = System.Text.Encoding.UTF8.GetString(
+                bytes,
+                sizeof(long),
+                checked((int)headerLength));
+
+            Assert.Equal(0UL, headerLength % 8UL);
+            Assert.Contains("\"dtype\":\"F32\"", header);
+            Assert.Contains("\"shape\":[2]", header);
+            Assert.Contains("\"data_offsets\":[0,8]", header);
+            Assert.Equal(
+                sizeof(long) + (long)headerLength + 8L,
+                bytes.LongLength);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void OptimizerStateDictRoundTripsCompositeState()
     {
         var first = new Parameter(
@@ -270,4 +354,14 @@ public sealed class TorchApiTests
     }
 
     public sealed record SerializableState(int Epoch, float Loss);
+
+    private static void AssertParameterEqual(
+        ModuleParameterState expected,
+        ModuleParameterState actual)
+    {
+        Assert.Equal(expected.Index, actual.Index);
+        Assert.Equal(expected.Name, actual.Name);
+        Assert.Equal(expected.Shape, actual.Shape);
+        Assert.Equal(expected.Values, actual.Values);
+    }
 }
