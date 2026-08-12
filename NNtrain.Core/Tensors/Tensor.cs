@@ -164,6 +164,12 @@ public partial class Tensor
 
     internal void ClearGradient() => _grad.AsSpan().Clear();
 
+    internal void ClearGradientRange(int start, int length)
+    {
+        if (_grad.Length != 0)
+            _grad.AsSpan(start, length).Clear();
+    }
+
     private float[] EnsureGradientBuffer()
     {
         if (_grad.Length == 0)
@@ -172,6 +178,16 @@ public partial class Tensor
     }
 
     internal DataMutation BeginDataMutation() => new(this);
+
+    internal float[] DataBuffer => _data;
+
+    internal void MarkDataMutated()
+    {
+        unchecked
+        {
+            _dataVersion++;
+        }
+    }
 
     internal float[] GetTransposedData2D()
     {

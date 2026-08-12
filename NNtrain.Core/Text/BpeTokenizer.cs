@@ -9,6 +9,11 @@ namespace NNtrain;
 /// </summary>
 public sealed class BpeTokenizer
 {
+    public const string PadToken = "<pad>";
+    public const string BosToken = "<bos>";
+    public const string EosToken = "<eos>";
+    public const string UnknownToken = "<unk>";
+
     public const int PadTokenId = 0;
     public const int BosTokenId = 1;
     public const int EosTokenId = 2;

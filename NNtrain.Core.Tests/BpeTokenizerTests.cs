@@ -4,6 +4,19 @@ using Xunit;
 public sealed class BpeTokenizerTests
 {
     [Fact]
+    public void SpecialTokensHaveStableReservedIds()
+    {
+        Assert.Equal("<pad>", BpeTokenizer.PadToken);
+        Assert.Equal("<bos>", BpeTokenizer.BosToken);
+        Assert.Equal("<eos>", BpeTokenizer.EosToken);
+        Assert.Equal("<unk>", BpeTokenizer.UnknownToken);
+        Assert.Equal(0, BpeTokenizer.PadTokenId);
+        Assert.Equal(1, BpeTokenizer.BosTokenId);
+        Assert.Equal(2, BpeTokenizer.EosTokenId);
+        Assert.Equal(3, BpeTokenizer.UnknownTokenId);
+    }
+
+    [Fact]
     public void JapaneseTextRoundTripsThroughTrainedTokenizer()
     {
         const string text = "東京は日本の首都です。東京には多くの人が住んでいます。";

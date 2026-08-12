@@ -6,7 +6,7 @@ namespace NNtrain;
 
 internal static class WikiLanguageModelCommand
 {
-    private const int CheckpointFormatVersion = 1;
+    private const int CheckpointFormatVersion = 2;
 
     private static readonly JsonSerializerOptions CheckpointJsonOptions = new()
     {
@@ -128,7 +128,9 @@ internal static class WikiLanguageModelCommand
         output.WriteLine("loading and tokenizing Wikipedia documents...");
         TrainingCorpus corpus = LoadTrainingCorpus(config, tokenizer, output);
         int[] tokens = corpus.Tokens;
-        int sequenceCount = (tokens.Length - 1) / config.ContextLength;
+        int sequenceCount = DivideRoundUp(
+            tokens.Length - 1,
+            config.ContextLength);
         if (sequenceCount < 2)
         {
             throw new InvalidDataException(
@@ -156,7 +158,7 @@ internal static class WikiLanguageModelCommand
         var model = CreateModel(config, tokenizer.VocabularySize);
         IOptimizer optimizer = CreateOptimizer(model, config);
         output.WriteLine(
-            $"model = GptRinWikiJp, parameters " +
+            $"model = {model.GetType().Name}, parameters " +
             $"{model.Parameters().Sum(parameter => (long)parameter.T.Numel):N0}, " +
             $"width {config.ModelWidth}, heads {config.Heads}, " +
             $"hidden {config.HiddenSize}, layers {config.Layers}, " +
@@ -179,6 +181,11 @@ internal static class WikiLanguageModelCommand
         var random = new Random(config.Seed);
         var sampleRandom = new Random(config.Seed ^ 0x6A09E667);
         int globalStep = 0;
+        int batchesPerEpoch = DivideRoundUp(
+            trainingSequences,
+            config.BatchSize);
+        long totalTrainingSteps = checked(
+            (long)config.Epochs * batchesPerEpoch);
         ModuleState? bestState = null;
         float bestLoss = float.PositiveInfinity;
         int bestEpoch = 0;
@@ -188,10 +195,10 @@ internal static class WikiLanguageModelCommand
             Shuffle(order, random);
             model.Train();
             float totalLoss = 0f;
-            int completedSequences = 0;
+            int completedTargets = 0;
             float graphWindowLoss = 0f;
-            int graphWindowSequences = 0;
-            int batchTotal = DivideRoundUp(trainingSequences, config.BatchSize);
+            int graphWindowTargets = 0;
+            int batchTotal = batchesPerEpoch;
             var timer = Stopwatch.StartNew();
 
             for (int batch = 0; batch < batchTotal; batch++)
@@ -212,13 +219,18 @@ internal static class WikiLanguageModelCommand
                     config.ContextLength);
                 Tensor loss = logits.CrossEntropyWithLogits(values.Target);
                 loss.Backward();
+                SetScheduledLearningRates(
+                    optimizer,
+                    config,
+                    (globalStep + 1d) / totalTrainingSteps);
                 optimizer.Step();
                 globalStep++;
 
-                totalLoss += loss.Data[0] * count;
-                completedSequences += count;
-                graphWindowLoss += loss.Data[0] * count;
-                graphWindowSequences += count;
+                int validTargets = values.ValidTargetCount;
+                totalLoss += loss.Data[0] * validTargets;
+                completedTargets += validTargets;
+                graphWindowLoss += loss.Data[0] * validTargets;
+                graphWindowTargets += validTargets;
                 bool epochEnd = batch + 1 == batchTotal;
                 if (lossGraph is not null
                     && (batch + 1) % config.GraphUpdateSteps == 0
@@ -228,10 +240,10 @@ internal static class WikiLanguageModelCommand
                         + (float)(batch + 1) / batchTotal;
                     lossGraph.AddPoint(
                         epochPosition,
-                        graphWindowLoss / graphWindowSequences);
+                        graphWindowLoss / graphWindowTargets);
                     lossGraph.Write();
                     graphWindowLoss = 0f;
-                    graphWindowSequences = 0;
+                    graphWindowTargets = 0;
                 }
                 if (corpus.SampleDocuments.Length > 0
                     && globalStep % config.DatasetSampleEverySteps == 0)
@@ -253,7 +265,7 @@ internal static class WikiLanguageModelCommand
                 }
             }
 
-            float trainingLoss = totalLoss / completedSequences;
+            float trainingLoss = totalLoss / completedTargets;
             float validationLoss = validationSequences == 0
                 ? trainingLoss
                 : Evaluate(
@@ -269,9 +281,9 @@ internal static class WikiLanguageModelCommand
                 $"time = {timer.Elapsed.TotalSeconds:F2} sec");
             if (lossGraph is not null)
             {
-                float graphTrainingLoss = graphWindowSequences == 0
+                float graphTrainingLoss = graphWindowTargets == 0
                     ? trainingLoss
-                    : graphWindowLoss / graphWindowSequences;
+                    : graphWindowLoss / graphWindowTargets;
                 lossGraph.AddPoint(
                     epoch,
                     graphTrainingLoss,
@@ -298,7 +310,13 @@ internal static class WikiLanguageModelCommand
                         config.Layers,
                         config.Dropout,
                         config.InitializationScale,
-                        bestState));
+                        bestState,
+                        config.ModelArchitecture,
+                        config.HyenaFilterWidth,
+                        config.ForgetMemoryKeyWidth,
+                        config.ForgetMemoryValueWidth,
+                        config.ForgetMemoryRetentionMinimum,
+                        config.ForgetMemoryRetentionMaximum));
             }
         }
 
@@ -346,13 +364,14 @@ internal static class WikiLanguageModelCommand
                 "Checkpoint and tokenizer vocabulary sizes do not match.");
         }
 
-        GptRinWikiJp model = CreateModel(checkpoint, config.Seed);
+        IWikiLanguageModel model = CreateModel(checkpoint, config.Seed);
         model.RestoreState(checkpoint.Model);
         output.WriteLine(
             $"checkpoint = epoch {checkpoint.Epoch}, validation loss " +
             $"{checkpoint.ValidationLoss:F6}");
         output.WriteLine(
-            $"checkpoint model = vocabulary {checkpoint.VocabularySize}, " +
+            $"checkpoint model = {GetCheckpointArchitecture(checkpoint)}, " +
+            $"vocabulary {checkpoint.VocabularySize}, " +
             $"width {checkpoint.ModelWidth}, heads {checkpoint.Heads}, " +
             $"hidden {checkpoint.HiddenSize}, layers {checkpoint.Layers}, " +
             $"context {checkpoint.ContextLength}");
@@ -387,7 +406,7 @@ internal static class WikiLanguageModelCommand
         var model = CreateModel(config, tokenizer.VocabularySize);
         IOptimizer optimizer = CreateOptimizer(model, config);
         output.WriteLine(
-            $"model = GptRinWikiJp, parameters " +
+            $"model = {model.GetType().Name}, parameters " +
             $"{model.Parameters().Sum(parameter => (long)parameter.T.Numel):N0}, " +
             $"width {config.ModelWidth}, heads {config.Heads}, " +
             $"hidden {config.HiddenSize}, layers {config.Layers}, " +
@@ -443,10 +462,21 @@ internal static class WikiLanguageModelCommand
                     sequenceLength);
                 Tensor loss = logits.CrossEntropyWithLogits(values.Target);
                 loss.Backward();
+                double documentProgress = documentsPerEpoch == 0
+                    ? 0d
+                    : Math.Min(
+                        1d,
+                        (double)documentsProcessed / documentsPerEpoch);
+                double overallProgress =
+                    (epoch - 1d + documentProgress) / config.Epochs;
+                SetScheduledLearningRates(
+                    optimizer,
+                    config,
+                    overallProgress);
                 optimizer.Step();
                 globalStep++;
 
-                long targets = checked((long)batchSize * sequenceLength);
+                long targets = values.ValidTargetCount;
                 totalLoss += loss.Data[0] * targets;
                 completedTargets += targets;
                 graphWindowLoss += loss.Data[0] * targets;
@@ -523,16 +553,14 @@ internal static class WikiLanguageModelCommand
 
             while (buffer.Count > 1)
             {
-                int fullSequences = (buffer.Count - 1) / config.ContextLength;
-                if (fullSequences > 0)
-                {
-                    int batchSize = Math.Min(config.BatchSize, fullSequences);
-                    TrainBatch(batchSize, config.ContextLength);
-                }
-                else
-                {
-                    TrainBatch(batchSize: 1, sequenceLength: buffer.Count - 1);
-                }
+                int remainingTargets = buffer.Count - 1;
+                int remainingSequences = DivideRoundUp(
+                    remainingTargets,
+                    config.ContextLength);
+                int batchSize = Math.Min(
+                    config.BatchSize,
+                    remainingSequences);
+                TrainBatch(batchSize, config.ContextLength);
             }
 
             if (completedTargets == 0)
@@ -575,7 +603,13 @@ internal static class WikiLanguageModelCommand
                         config.Layers,
                         config.Dropout,
                         config.InitializationScale,
-                        bestState));
+                        bestState,
+                        config.ModelArchitecture,
+                        config.HyenaFilterWidth,
+                        config.ForgetMemoryKeyWidth,
+                        config.ForgetMemoryValueWidth,
+                        config.ForgetMemoryRetentionMinimum,
+                        config.ForgetMemoryRetentionMaximum));
             }
         }
 
@@ -658,7 +692,7 @@ internal static class WikiLanguageModelCommand
     }
 
     private static float Evaluate(
-        GptRinWikiJp model,
+        IWikiLanguageModel model,
         int[] tokens,
         int validationStartSequence,
         int validationSequences,
@@ -666,7 +700,7 @@ internal static class WikiLanguageModelCommand
     {
         model.Eval();
         float totalLoss = 0f;
-        int completed = 0;
+        int completedTargets = 0;
         using (AutogradContext.NoGrad())
         {
             for (int start = 0; start < validationSequences; start += config.BatchSize)
@@ -686,14 +720,14 @@ internal static class WikiLanguageModelCommand
                     count,
                     config.ContextLength);
                 Tensor loss = logits.CrossEntropyWithLogits(values.Target);
-                totalLoss += loss.Data[0] * count;
-                completed += count;
+                totalLoss += loss.Data[0] * values.ValidTargetCount;
+                completedTargets += values.ValidTargetCount;
             }
         }
-        return totalLoss / completed;
+        return totalLoss / completedTargets;
     }
 
-    private static LanguageBatch CreateBatch(
+    internal static LanguageBatch CreateBatch(
         IReadOnlyList<int> tokens,
         IReadOnlyList<int> sequenceOrder,
         int orderStart,
@@ -702,66 +736,80 @@ internal static class WikiLanguageModelCommand
     {
         var input = new int[checked(count * contextLength)];
         var target = new int[input.Length];
+        Array.Fill(target, Tensor.DefaultCrossEntropyIgnoreIndex);
+        int validTargetCount = 0;
         if (tokens is int[] tokenArray)
         {
             void CopySequence(int item)
             {
                 int sequence = sequenceOrder[orderStart + item];
                 int tokenStart = checked(sequence * contextLength);
+                int validLength = Math.Min(
+                    contextLength,
+                    tokenArray.Length - tokenStart - 1);
+                if (validLength <= 0)
+                    return;
                 Array.Copy(
                     tokenArray,
                     tokenStart,
                     input,
                     item * contextLength,
-                    contextLength);
+                    validLength);
                 Array.Copy(
                     tokenArray,
                     tokenStart + 1,
                     target,
                     item * contextLength,
-                    contextLength);
+                    validLength);
+                Interlocked.Add(ref validTargetCount, validLength);
             }
 
             for (int item = 0; item < count; item++)
                 CopySequence(item);
-            return new LanguageBatch(input, target);
+            return new LanguageBatch(input, target, validTargetCount);
         }
 
         for (int item = 0; item < count; item++)
         {
             int sequence = sequenceOrder[orderStart + item];
             int tokenStart = checked(sequence * contextLength);
-            for (int position = 0; position < contextLength; position++)
+            int validLength = Math.Min(
+                contextLength,
+                tokens.Count - tokenStart - 1);
+            for (int position = 0; position < validLength; position++)
             {
                 input[item * contextLength + position] =
                     tokens[tokenStart + position];
                 target[item * contextLength + position] =
                     tokens[tokenStart + position + 1];
             }
+            validTargetCount += validLength;
         }
-        return new LanguageBatch(input, target);
+        return new LanguageBatch(input, target, validTargetCount);
     }
 
-    private static LanguageBatch CreateStreamingBatch(
+    internal static LanguageBatch CreateStreamingBatch(
         List<int> buffer,
         int batchSize,
         int sequenceLength)
     {
         int targetCount = checked(batchSize * sequenceLength);
-        if (buffer.Count < targetCount + 1)
+        if (buffer.Count < 2)
         {
             throw new ArgumentException(
-                "Streaming token buffer does not contain a complete batch.",
+                "Streaming token buffer does not contain a token pair.",
                 nameof(buffer));
         }
 
         var input = new int[targetCount];
         var target = new int[targetCount];
+        Array.Fill(target, Tensor.DefaultCrossEntropyIgnoreIndex);
+        int validTargetCount = Math.Min(targetCount, buffer.Count - 1);
         Span<int> values = CollectionsMarshal.AsSpan(buffer);
-        values[..targetCount].CopyTo(input);
-        values.Slice(1, targetCount).CopyTo(target);
-        buffer.RemoveRange(0, targetCount);
-        return new LanguageBatch(input, target);
+        values[..validTargetCount].CopyTo(input);
+        values.Slice(1, validTargetCount).CopyTo(target);
+        buffer.RemoveRange(0, validTargetCount);
+        return new LanguageBatch(input, target, validTargetCount);
     }
 
     private static IEnumerable<string> ReadDocuments(
@@ -802,10 +850,57 @@ internal static class WikiLanguageModelCommand
             samples[replacement] = document;
     }
 
-    private static GptRinWikiJp CreateModel(
+    internal static IWikiLanguageModel CreateModel(
         WikiTrainingConfiguration config,
         int vocabularySize)
-        => new(
+    {
+        if (config.IsForgetMemoryV2Architecture())
+        {
+            return new FrogetMemoryV2Gpt(
+                vocabularySize,
+                config.ContextLength,
+                config.ModelWidth,
+                config.HiddenSize,
+                config.Layers,
+                config.ForgetMemoryKeyWidth,
+                config.ForgetMemoryValueWidth,
+                config.ForgetMemoryRetentionMinimum,
+                config.ForgetMemoryRetentionMaximum,
+                new Random(config.Seed),
+                config.InitializationScale,
+                config.Dropout);
+        }
+
+        if (config.IsArchitecture(
+            WikiTrainingConfiguration.ForgetScanArchitecture))
+        {
+            return new ForgetScanGpt(
+                vocabularySize,
+                config.ContextLength,
+                config.ModelWidth,
+                config.HiddenSize,
+                config.Layers,
+                new Random(config.Seed),
+                config.InitializationScale,
+                config.Dropout);
+        }
+
+        if (config.IsArchitecture(WikiTrainingConfiguration.HyenaArchitecture))
+        {
+            return new HyenaGpt(
+                vocabularySize,
+                config.ContextLength,
+                config.ModelWidth,
+                config.HiddenSize,
+                config.Layers,
+                new Random(config.Seed),
+                config.InitializationScale,
+                config.Dropout,
+                config.HyenaFilterWidth,
+                config.GetHyenaConvolutionAlgorithm());
+        }
+
+        return new GptRinWikiJp(
             vocabularySize,
             config.ContextLength,
             config.ModelWidth,
@@ -815,21 +910,47 @@ internal static class WikiLanguageModelCommand
             new Random(config.Seed),
             config.InitializationScale,
             config.Dropout);
+    }
 
     private static void WriteEffectiveTrainingConfiguration(
         WikiTrainingConfiguration config,
         TextWriter output)
     {
+        string architectureDetails = config.IsForgetMemoryV2Architecture()
+            ? $", matrix delta memory key {config.ForgetMemoryKeyWidth}, " +
+                $"value {config.ForgetMemoryValueWidth}, retention " +
+                $"{config.ForgetMemoryRetentionMinimum:G}-" +
+                $"{config.ForgetMemoryRetentionMaximum:G}"
+            : config.IsArchitecture(WikiTrainingConfiguration.HyenaArchitecture)
+                ? $", Hyena filter width {config.HyenaFilterWidth}, " +
+                    $"convolution {config.HyenaConvolutionAlgorithm}"
+                : config.IsArchitecture(
+                    WikiTrainingConfiguration.ForgetScanArchitecture)
+                    ? ", associative forget scan"
+                    : string.Empty;
         output.WriteLine(
             $"effective training = epochs {config.Epochs}, " +
             $"batch {config.BatchSize}, context {config.ContextLength}, " +
             $"max document tokens {config.MaxDocumentTokens}");
         output.WriteLine(
-            $"effective model = vocabulary {config.VocabularySize}, " +
+            $"effective model = {config.ModelArchitecture}, " +
+            $"vocabulary {config.VocabularySize}, " +
             $"width {config.ModelWidth}, heads {config.Heads}, " +
             $"hidden {config.HiddenSize}, layers {config.Layers}, " +
-            $"dropout {config.Dropout:G}");
+            $"dropout {config.Dropout:G}" + architectureDetails);
+        output.WriteLine(
+            $"special tokens = {BpeTokenizer.PadToken}:" +
+            $"{BpeTokenizer.PadTokenId}, {BpeTokenizer.BosToken}:" +
+            $"{BpeTokenizer.BosTokenId}, {BpeTokenizer.EosToken}:" +
+            $"{BpeTokenizer.EosTokenId}; padded targets use ignoreIndex " +
+            $"{Tensor.DefaultCrossEntropyIgnoreIndex}");
     }
+
+    private static string GetCheckpointArchitecture(
+        WikiModelCheckpoint checkpoint)
+        => string.IsNullOrWhiteSpace(checkpoint.ModelArchitecture)
+            ? WikiTrainingConfiguration.TransformerArchitecture
+            : checkpoint.ModelArchitecture;
 
     private static bool CheckpointArchitectureMatchesConfiguration(
         WikiModelCheckpoint checkpoint,
@@ -839,10 +960,41 @@ internal static class WikiLanguageModelCommand
             && checkpoint.ModelWidth == config.ModelWidth
             && checkpoint.Heads == config.Heads
             && checkpoint.HiddenSize == config.HiddenSize
-            && checkpoint.Layers == config.Layers;
+            && checkpoint.Layers == config.Layers
+            && (config.IsForgetMemoryV2Architecture()
+                ? IsCheckpointForgetMemoryV2(checkpoint)
+                : string.Equals(
+                    GetCheckpointArchitecture(checkpoint),
+                    config.ModelArchitecture,
+                    StringComparison.OrdinalIgnoreCase))
+            && (!string.Equals(
+                    GetCheckpointArchitecture(checkpoint),
+                    WikiTrainingConfiguration.HyenaArchitecture,
+                    StringComparison.OrdinalIgnoreCase)
+                || checkpoint.HyenaFilterWidth == config.HyenaFilterWidth)
+            && (!IsCheckpointForgetMemoryV2(checkpoint)
+                || (checkpoint.ForgetMemoryKeyWidth
+                        == config.ForgetMemoryKeyWidth
+                    && checkpoint.ForgetMemoryValueWidth
+                        == config.ForgetMemoryValueWidth
+                    && checkpoint.ForgetMemoryRetentionMinimum
+                        == config.ForgetMemoryRetentionMinimum
+                    && checkpoint.ForgetMemoryRetentionMaximum
+                        == config.ForgetMemoryRetentionMaximum));
+
+    private static bool IsCheckpointForgetMemoryV2(
+        WikiModelCheckpoint checkpoint)
+        => string.Equals(
+                GetCheckpointArchitecture(checkpoint),
+                WikiTrainingConfiguration.ForgetMemoryV2Architecture,
+                StringComparison.OrdinalIgnoreCase)
+            || string.Equals(
+                GetCheckpointArchitecture(checkpoint),
+                WikiTrainingConfiguration.FrogetMemoryV2ArchitectureAlias,
+                StringComparison.OrdinalIgnoreCase);
 
     internal static IOptimizer CreateOptimizer(
-        GptRinWikiJp model,
+        IWikiLanguageModel model,
         WikiTrainingConfiguration config)
     {
         ArgumentNullException.ThrowIfNull(model);
@@ -855,6 +1007,8 @@ internal static class WikiLanguageModelCommand
                 new NekoMuonOptions
                 {
                     LearningRate = config.LearningRate,
+                    NewtonSchulzInterval =
+                        config.NekoMuonNewtonSchulzInterval,
                     WeightDecay = config.WeightDecay,
                 });
             var auxiliaryAdamW = new AdamW(
@@ -866,6 +1020,10 @@ internal static class WikiLanguageModelCommand
                     Beta2 = 0.95f,
                     Epsilon = 1e-8f,
                     WeightDecay = config.WeightDecay,
+                    UseBFloat16FirstMoment =
+                        config.AdamWUseBFloat16FirstMoment,
+                    UseBFloat16SecondMoment =
+                        config.AdamWUseBFloat16SecondMoment,
                 });
             return new CompositeOptimizer(nekoMuon, auxiliaryAdamW);
         }
@@ -876,11 +1034,95 @@ internal static class WikiLanguageModelCommand
             {
                 LearningRate = config.LearningRate,
                 WeightDecay = config.WeightDecay,
+                UseBFloat16FirstMoment =
+                    config.AdamWUseBFloat16FirstMoment,
+                UseBFloat16SecondMoment =
+                    config.AdamWUseBFloat16SecondMoment,
             });
     }
 
+    internal static float CalculateLearningRateFactor(
+        double overallProgress,
+        float warmupPercent)
+    {
+        const float MinimumFactor = 1e-6f;
+        if (!double.IsFinite(overallProgress)
+            || overallProgress < 0d
+            || overallProgress > 1d)
+        {
+            throw new ArgumentOutOfRangeException(nameof(overallProgress));
+        }
+        if (!float.IsFinite(warmupPercent)
+            || warmupPercent < 0f
+            || warmupPercent >= 100f)
+        {
+            throw new ArgumentOutOfRangeException(nameof(warmupPercent));
+        }
+
+        double warmupFraction = warmupPercent / 100d;
+        if (warmupFraction > 0d && overallProgress <= warmupFraction)
+        {
+            return MathF.Max(
+                MinimumFactor,
+                (float)(overallProgress / warmupFraction));
+        }
+
+        double decayProgress = warmupFraction == 1d
+            ? 1d
+            : (overallProgress - warmupFraction)
+                / (1d - warmupFraction);
+        decayProgress = Math.Clamp(decayProgress, 0d, 1d);
+        float cosine = 0.5f
+            * (1f + MathF.Cos(MathF.PI * (float)decayProgress));
+        return MathF.Max(MinimumFactor, cosine);
+    }
+
+    internal static float SetScheduledLearningRates(
+        IOptimizer optimizer,
+        WikiTrainingConfiguration config,
+        double overallProgress)
+    {
+        ArgumentNullException.ThrowIfNull(optimizer);
+        ArgumentNullException.ThrowIfNull(config);
+        float factor = CalculateLearningRateFactor(
+            overallProgress,
+            config.WarmupPercent);
+
+        if (config.IsOptimizer(WikiTrainingConfiguration.NekoMuonOptimizer))
+        {
+            if (optimizer is not CompositeOptimizer composite
+                || composite.Optimizers.Count != 2
+                || composite.Optimizers[0]
+                    is not ILearningRateAdjustable primary
+                || composite.Optimizers[1]
+                    is not ILearningRateAdjustable auxiliary)
+            {
+                throw new InvalidOperationException(
+                    "NekoMuon scheduling requires adjustable primary and " +
+                    "auxiliary optimizers.");
+            }
+
+            primary.SetLearningRate(
+                MathF.Max(float.Epsilon, config.LearningRate * factor));
+            auxiliary.SetLearningRate(
+                MathF.Max(
+                    float.Epsilon,
+                    config.AuxiliaryLearningRate * factor));
+            return factor;
+        }
+
+        if (optimizer is not ILearningRateAdjustable adjustable)
+        {
+            throw new InvalidOperationException(
+                "Learning-rate scheduling requires an adjustable optimizer.");
+        }
+        adjustable.SetLearningRate(
+            MathF.Max(float.Epsilon, config.LearningRate * factor));
+        return factor;
+    }
+
     private static void WriteOptimizerSummary(
-        GptRinWikiJp model,
+        IWikiLanguageModel model,
         WikiTrainingConfiguration config,
         TextWriter output)
     {
@@ -889,21 +1131,85 @@ internal static class WikiLanguageModelCommand
             output.WriteLine(
                 $"optimizer = NekoMuon " +
                 $"({model.HiddenWeightParameters.Count} matrix parameters, " +
-                $"lr {config.LearningRate:G}) + AdamW " +
+                $"lr {config.LearningRate:G}, Newton-Schulz every " +
+                $"{config.NekoMuonNewtonSchulzInterval} steps) + AdamW " +
                 $"({model.AuxiliaryParameters.Count} auxiliary parameters, " +
-                $"lr {config.AuxiliaryLearningRate:G})");
-            return;
+                $"lr {config.AuxiliaryLearningRate:G}, moments " +
+                $"{GetAdamWMomentStorage(config)})");
         }
-
+        else
+        {
+            output.WriteLine(
+                $"optimizer = AdamW ({model.Parameters().Count()} " +
+                $"parameters, lr {config.LearningRate:G}, moments " +
+                $"{GetAdamWMomentStorage(config)})");
+        }
         output.WriteLine(
-            $"optimizer = AdamW ({model.Parameters().Count()} parameters, " +
-            $"lr {config.LearningRate:G})");
+            $"learning-rate schedule = linear warmup " +
+            $"{config.WarmupPercent:G}% of total training, then cosine " +
+            "decay");
     }
 
-    private static GptRinWikiJp CreateModel(
+    private static string GetAdamWMomentStorage(
+        WikiTrainingConfiguration config)
+        => $"{(config.AdamWUseBFloat16FirstMoment ? "bf16" : "f32")}/" +
+            $"{(config.AdamWUseBFloat16SecondMoment ? "bf16" : "f32")}";
+
+    private static IWikiLanguageModel CreateModel(
         WikiModelCheckpoint checkpoint,
         int seed)
-        => new(
+    {
+        if (IsCheckpointForgetMemoryV2(checkpoint))
+        {
+            return new FrogetMemoryV2Gpt(
+                checkpoint.VocabularySize,
+                checkpoint.ContextLength,
+                checkpoint.ModelWidth,
+                checkpoint.HiddenSize,
+                checkpoint.Layers,
+                checkpoint.ForgetMemoryKeyWidth,
+                checkpoint.ForgetMemoryValueWidth,
+                checkpoint.ForgetMemoryRetentionMinimum,
+                checkpoint.ForgetMemoryRetentionMaximum,
+                new Random(seed),
+                checkpoint.InitializationScale,
+                checkpoint.Dropout);
+        }
+
+        if (string.Equals(
+            GetCheckpointArchitecture(checkpoint),
+            WikiTrainingConfiguration.ForgetScanArchitecture,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            return new ForgetScanGpt(
+                checkpoint.VocabularySize,
+                checkpoint.ContextLength,
+                checkpoint.ModelWidth,
+                checkpoint.HiddenSize,
+                checkpoint.Layers,
+                new Random(seed),
+                checkpoint.InitializationScale,
+                checkpoint.Dropout);
+        }
+
+        if (string.Equals(
+            GetCheckpointArchitecture(checkpoint),
+            WikiTrainingConfiguration.HyenaArchitecture,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            return new HyenaGpt(
+                checkpoint.VocabularySize,
+                checkpoint.ContextLength,
+                checkpoint.ModelWidth,
+                checkpoint.HiddenSize,
+                checkpoint.Layers,
+                new Random(seed),
+                checkpoint.InitializationScale,
+                checkpoint.Dropout,
+                checkpoint.HyenaFilterWidth);
+        }
+
+        return new GptRinWikiJp(
             checkpoint.VocabularySize,
             checkpoint.ContextLength,
             checkpoint.ModelWidth,
@@ -913,9 +1219,10 @@ internal static class WikiLanguageModelCommand
             new Random(seed),
             checkpoint.InitializationScale,
             checkpoint.Dropout);
+    }
 
     internal static DatasetContinuation CreateDatasetContinuation(
-        GptRinWikiJp model,
+        IWikiLanguageModel model,
         BpeTokenizer tokenizer,
         IReadOnlyList<string> documents,
         WikiTrainingConfiguration config,
@@ -983,7 +1290,7 @@ internal static class WikiLanguageModelCommand
     }
 
     private static void WriteFinalDatasetContinuation(
-        GptRinWikiJp model,
+        IWikiLanguageModel model,
         BpeTokenizer tokenizer,
         IReadOnlyList<string> documents,
         WikiTrainingConfiguration config,
@@ -1043,7 +1350,7 @@ internal static class WikiLanguageModelCommand
     }
 
     private static void WriteGeneration(
-        GptRinWikiJp model,
+        IWikiLanguageModel model,
         BpeTokenizer tokenizer,
         string prompt,
         WikiTrainingConfiguration config,
@@ -1082,7 +1389,7 @@ internal static class WikiLanguageModelCommand
                 CheckpointJsonOptions)
             ?? throw new InvalidDataException(
                 "Wiki model checkpoint cannot be JSON null.");
-        if (checkpoint.FormatVersion != CheckpointFormatVersion
+        if (checkpoint.FormatVersion is < 1 or > CheckpointFormatVersion
             || checkpoint.Model is null)
         {
             throw new InvalidDataException(
@@ -1103,7 +1410,10 @@ internal static class WikiLanguageModelCommand
         }
     }
 
-    private readonly record struct LanguageBatch(int[] Input, int[] Target);
+    internal readonly record struct LanguageBatch(
+        int[] Input,
+        int[] Target,
+        int ValidTargetCount);
 
     private readonly record struct TrainingCorpus(
         int[] Tokens,
@@ -1128,5 +1438,11 @@ internal static class WikiLanguageModelCommand
         int Layers,
         float Dropout,
         float InitializationScale,
-        ModuleState Model);
+        ModuleState Model,
+        string? ModelArchitecture = null,
+        int HyenaFilterWidth = 64,
+        int ForgetMemoryKeyWidth = 16,
+        int ForgetMemoryValueWidth = 16,
+        float ForgetMemoryRetentionMinimum = 0.5f,
+        float ForgetMemoryRetentionMaximum = 0.99f);
 }

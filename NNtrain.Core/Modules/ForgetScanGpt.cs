@@ -1,27 +1,25 @@
 namespace NNtrain;
 
 /// <summary>
-/// A compact decoder-only Transformer for Japanese Wikipedia text.
+/// Decoder-only language model using content-dependent forgetful state scans.
 /// </summary>
-public sealed class GptRinWikiJp : Module, IWikiLanguageModel
+public sealed class ForgetScanGpt : Module, IWikiLanguageModel
 {
     private readonly Parameter _tokenEmbedding;
-    private readonly Parameter _positionEmbedding;
     private readonly Dropout _embeddingDropout;
-    private readonly TransformerBlock[] _blocks;
+    private readonly ForgetScanBlock[] _blocks;
     private readonly LayerNorm _finalNorm;
     private readonly Linear _languageModelHead;
     private readonly Parameter[] _hiddenWeightParameters;
     private readonly Parameter[] _auxiliaryParameters;
 
-    public GptRinWikiJp(
+    public ForgetScanGpt(
         int vocabularySize,
         int contextLength,
-        int dModel,
-        int numHeads,
-        int dHidden,
+        int modelWidth,
+        int hiddenWidth,
         int numLayers,
-        Random? rng = null,
+        Random? random = null,
         float initializationScale = 0.02f,
         float dropout = 0f)
     {
@@ -29,19 +27,14 @@ public sealed class GptRinWikiJp : Module, IWikiLanguageModel
             throw new ArgumentOutOfRangeException(nameof(vocabularySize));
         if (contextLength <= 0)
             throw new ArgumentOutOfRangeException(nameof(contextLength));
-        if (dModel <= 0)
-            throw new ArgumentOutOfRangeException(nameof(dModel));
-        if (numHeads <= 0 || dModel % numHeads != 0)
-        {
-            throw new ArgumentException(
-                "Head count must be positive and evenly divide dModel.",
-                nameof(numHeads));
-        }
-        if (dHidden <= 0)
-            throw new ArgumentOutOfRangeException(nameof(dHidden));
+        if (modelWidth <= 0)
+            throw new ArgumentOutOfRangeException(nameof(modelWidth));
+        if (hiddenWidth <= 0)
+            throw new ArgumentOutOfRangeException(nameof(hiddenWidth));
         if (numLayers <= 0)
             throw new ArgumentOutOfRangeException(nameof(numLayers));
-        if (!float.IsFinite(initializationScale) || initializationScale <= 0f)
+        if (!float.IsFinite(initializationScale)
+            || initializationScale <= 0f)
         {
             throw new ArgumentOutOfRangeException(nameof(initializationScale));
         }
@@ -50,40 +43,34 @@ public sealed class GptRinWikiJp : Module, IWikiLanguageModel
 
         VocabularySize = vocabularySize;
         ContextLength = contextLength;
-        ModelWidth = dModel;
-        rng ??= new Random(1);
+        ModelWidth = modelWidth;
+        random ??= new Random(1);
 
         _tokenEmbedding = RegisterParameter(
             CreateEmbedding(
                 vocabularySize,
-                dModel,
-                "TokenEmbedding",
-                rng,
+                modelWidth,
+                random,
                 initializationScale));
-        _positionEmbedding = RegisterParameter(
-            CreateEmbedding(
-                contextLength,
-                dModel,
-                "PositionEmbedding",
-                rng,
-                initializationScale));
-        _embeddingDropout = RegisterModule(new Dropout(dropout, rng));
-        _blocks = new TransformerBlock[numLayers];
+        _embeddingDropout = RegisterModule(new Dropout(dropout, random));
+        _blocks = new ForgetScanBlock[numLayers];
         for (int layer = 0; layer < numLayers; layer++)
         {
             _blocks[layer] = RegisterModule(
-                new TransformerBlock(
-                    dModel,
-                    numHeads,
-                    dHidden,
-                    causal: true,
-                    rng,
+                new ForgetScanBlock(
+                    modelWidth,
+                    hiddenWidth,
+                    random,
                     initializationScale,
                     dropout));
         }
-        _finalNorm = RegisterModule(new LayerNorm(dModel));
+        _finalNorm = RegisterModule(new LayerNorm(modelWidth));
         _languageModelHead = RegisterModule(
-            new Linear(dModel, vocabularySize, rng, initializationScale));
+            new Linear(
+                modelWidth,
+                vocabularySize,
+                random,
+                initializationScale));
 
         _hiddenWeightParameters = _blocks
             .SelectMany(block => block.Parameters())
@@ -103,23 +90,12 @@ public sealed class GptRinWikiJp : Module, IWikiLanguageModel
 
     public int ModelWidth { get; }
 
-    /// <summary>
-    /// Transformer matrix weights updated by NekoMuon.
-    /// </summary>
     public IReadOnlyList<Parameter> HiddenWeightParameters
         => Array.AsReadOnly(_hiddenWeightParameters);
 
-    /// <summary>
-    /// Embeddings, normalization parameters, biases, and language-model head
-    /// updated by the auxiliary AdamW optimizer.
-    /// </summary>
     public IReadOnlyList<Parameter> AuxiliaryParameters
         => Array.AsReadOnly(_auxiliaryParameters);
 
-    /// <summary>
-    /// Returns flattened next-token logits with shape
-    /// [batchSize * sequenceLength, vocabularySize].
-    /// </summary>
     public Tensor Forward(
         int[] tokenIds,
         int batchSize,
@@ -141,24 +117,19 @@ public sealed class GptRinWikiJp : Module, IWikiLanguageModel
                 "Token count must equal batchSize * sequenceLength.",
                 nameof(tokenIds));
         }
+
         Tensor hidden = _embeddingDropout.Forward(
-            _tokenEmbedding.T.EmbeddingLookupWithPositions(
-                _positionEmbedding.T,
+            _tokenEmbedding.T.EmbeddingLookup(
                 tokenIds,
                 batchSize,
                 sequenceLength));
-        foreach (TransformerBlock block in _blocks)
+        foreach (ForgetScanBlock block in _blocks)
             hidden = block.Forward(hidden);
         hidden = _finalNorm.Forward(hidden);
-
         return _languageModelHead.ForwardBatch(
             hidden.Reshape(batchSize * sequenceLength, ModelWidth));
     }
 
-    /// <summary>
-    /// Autoregressively samples token ids and returns the prompt plus generated
-    /// continuation.
-    /// </summary>
     public int[] GenerateTokenIds(
         IEnumerable<int> promptTokenIds,
         int maxNewTokens,
@@ -182,9 +153,11 @@ public sealed class GptRinWikiJp : Module, IWikiLanguageModel
 
         var result = promptTokenIds.ToList();
         if (result.Count == 0)
+        {
             throw new ArgumentException(
                 "At least one prompt token is required.",
                 nameof(promptTokenIds));
+        }
         if (result.Any(token => (uint)token >= (uint)VocabularySize))
             throw new ArgumentOutOfRangeException(nameof(promptTokenIds));
 
@@ -225,9 +198,6 @@ public sealed class GptRinWikiJp : Module, IWikiLanguageModel
         return result.ToArray();
     }
 
-    /// <summary>
-    /// Encodes a prompt, generates a continuation, and decodes it to text.
-    /// </summary>
     public string Generate(
         string prompt,
         BpeTokenizer tokenizer,
@@ -259,7 +229,6 @@ public sealed class GptRinWikiJp : Module, IWikiLanguageModel
     private static Parameter CreateEmbedding(
         int rows,
         int width,
-        string name,
         Random random,
         float scale)
     {
@@ -269,7 +238,7 @@ public sealed class GptRinWikiJp : Module, IWikiLanguageModel
         return new Parameter(
             values,
             [rows, width],
-            name,
+            "TokenEmbedding",
             WeightDecayPolicy.Apply);
     }
 

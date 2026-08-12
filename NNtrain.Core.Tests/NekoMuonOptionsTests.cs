@@ -16,6 +16,7 @@ public sealed class NekoMuonOptionsTests
         new NekoMuonOptions { Epsilon = 0f },
         new NekoMuonOptions { Epsilon = float.PositiveInfinity },
         new NekoMuonOptions { MaxNewtonSchulzSteps = 0 },
+        new NekoMuonOptions { NewtonSchulzInterval = 0 },
         new NekoMuonOptions { WeightDecay = -0.1f },
     };
 
@@ -30,6 +31,7 @@ public sealed class NekoMuonOptionsTests
         Assert.Equal(0.9f, options.Rho);
         Assert.Equal(1e-7f, options.Epsilon);
         Assert.Equal(5, options.MaxNewtonSchulzSteps);
+        Assert.Equal(5, options.NewtonSchulzInterval);
         Assert.Equal(1e-2f, options.WeightDecay);
         Assert.False(options.Decay1D);
     }

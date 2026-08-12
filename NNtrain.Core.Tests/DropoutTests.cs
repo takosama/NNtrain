@@ -36,6 +36,77 @@ public sealed class DropoutTests
         Assert.Contains(0f, trainingOutput.Data);
     }
 
+    [Fact]
+    public void FusedResidualDropoutUsesTheSameMaskForForwardAndBackward()
+    {
+        var residual = new Tensor(
+            Enumerable.Repeat(3f, 64).ToArray(),
+            [64]);
+        var branch = new Tensor(
+            Enumerable.Repeat(1f, 64).ToArray(),
+            [64]);
+
+        Tensor output = residual.AddDropout(
+            branch,
+            0.5f,
+            new Random(31));
+        output.Backward(Enumerable.Repeat(1f, 64).ToArray());
+
+        Assert.Contains(3f, output.Data);
+        Assert.Contains(5f, output.Data);
+        Assert.All(residual.Grad, gradient => Assert.Equal(1f, gradient));
+        for (int index = 0; index < output.Numel; index++)
+        {
+            Assert.Equal(output.Data[index] - 3f, branch.Grad[index]);
+        }
+    }
+
+    [Fact]
+    public void ZeroProbabilityFusedResidualMatchesAddition()
+    {
+        var residual = new Tensor([1f, 2f, 3f, 4f], [4]);
+        var branch = new Tensor([5f, 6f, 7f, 8f], [4]);
+
+        Tensor output = residual.AddDropout(
+            branch,
+            0f,
+            new Random(37));
+        output.Backward([1f, 1f, 1f, 1f]);
+
+        Assert.Equal(new[] { 6f, 8f, 10f, 12f }, output.Data);
+        Assert.Equal(new[] { 1f, 1f, 1f, 1f }, residual.Grad);
+        Assert.Equal(new[] { 1f, 1f, 1f, 1f }, branch.Grad);
+    }
+
+    [Fact]
+    public void CounterMaskMatchesBetweenScalarAndSimdKernels()
+    {
+        bool previousSimd = Tensor.SimdEnabled;
+        int previousParallelism = Tensor.MaxDegreeOfParallelism;
+        try
+        {
+            float[] values = Enumerable.Range(1, 67)
+                .Select(value => (float)value)
+                .ToArray();
+
+            Tensor.SimdEnabled = false;
+            Tensor.MaxDegreeOfParallelism = 1;
+            Tensor scalar = new Tensor(values, [67])
+                .Dropout(0.3f, new Random(41));
+
+            Tensor.SimdEnabled = true;
+            Tensor simd = new Tensor(values, [67])
+                .Dropout(0.3f, new Random(41));
+
+            Assert.Equal(scalar.Data, simd.Data);
+        }
+        finally
+        {
+            Tensor.SimdEnabled = previousSimd;
+            Tensor.MaxDegreeOfParallelism = previousParallelism;
+        }
+    }
+
     [Theory]
     [InlineData(-0.1f)]
     [InlineData(1f)]

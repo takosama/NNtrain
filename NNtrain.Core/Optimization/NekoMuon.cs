@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace NNtrain;
 
 public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
@@ -10,6 +12,10 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
     private readonly long _totalElements;
     private readonly NekoMuonWorkspace[] _workspaces;
     private NekoMuonState _state;
+
+    public bool ProfilingEnabled { get; set; }
+
+    public NekoMuonStepProfile LastStepProfile { get; private set; }
 
     public NekoMuon(
         IEnumerable<Parameter> parameters,
@@ -107,6 +113,7 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
             1f - MathF.Pow(options.BetaFast, _state.Step);
         float slowCorrection =
             1f - MathF.Pow(options.BetaSlow, _state.Step);
+        long[]? profileTicks = ProfilingEnabled ? new long[9] : null;
 
         void UpdateParameter(int parameterIndex)
         {
@@ -120,6 +127,9 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
             float[] fastHat = workspace.FastHat;
             float[] slowHat = workspace.SlowHat;
 
+            long phaseStart = profileTicks is null
+                ? 0L
+                : Stopwatch.GetTimestamp();
             UpdateMoments(
                 gradientBuffer,
                 fast,
@@ -129,7 +139,9 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
                 options,
                 fastCorrection,
                 slowCorrection);
+            AddProfileTicks(profileTicks, 0, phaseStart);
 
+            phaseStart = profileTicks is null ? 0L : Stopwatch.GetTimestamp();
             float confidenceRaw = CalculateConfidenceRaw(
                 fastHat,
                 slowHat,
@@ -139,10 +151,18 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
                     + (1f - options.Rho) * confidenceRaw,
                 0f,
                 1f);
+            AddProfileTicks(profileTicks, 1, phaseStart);
             _state.ParameterStates[parameterIndex] =
                 parameterState with { Confidence = confidence };
 
-            float depth = options.MaxNewtonSchulzSteps * confidence;
+            bool runNewtonSchulz =
+                _state.Step % options.NewtonSchulzInterval == 0;
+            // Moments and weights still advance on the intervening steps.
+            // They use the normalized current momentum matrix; only the
+            // expensive orthogonalization is cadence-limited.
+            float depth = runNewtonSchulz
+                ? options.MaxNewtonSchulzSteps * confidence
+                : 0f;
             int wholeSteps = Math.Min(
                 options.MaxNewtonSchulzSteps,
                 (int)MathF.Floor(depth));
@@ -156,6 +176,7 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
             int rows = Math.Min(originalRows, originalColumns);
             int columns = Math.Max(originalRows, originalColumns);
             float[] x = workspace.X;
+            phaseStart = profileTicks is null ? 0L : Stopwatch.GetTimestamp();
             InitializeMuonMatrix(
                 fastHat,
                 x,
@@ -163,10 +184,12 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
                 originalColumns,
                 transpose,
                 options.Epsilon);
+            AddProfileTicks(profileTicks, 2, phaseStart);
 
             float[] next = workspace.Next;
             float[] gram = workspace.Gram;
             float[] gramSquared = workspace.GramSquared;
+            phaseStart = profileTicks is null ? 0L : Stopwatch.GetTimestamp();
             for (int step = 0; step < wholeSteps; step++)
             {
                 NewtonSchulz(
@@ -175,7 +198,8 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
                     gram,
                     gramSquared,
                     rows,
-                    columns);
+                    columns,
+                    profileTicks);
                 (x, next) = (next, x);
             }
 
@@ -187,9 +211,11 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
                     gram,
                     gramSquared,
                     rows,
-                    columns);
+                    columns,
+                    profileTicks);
                 InterpolateInPlace(x, next, fraction);
             }
+            AddProfileTicks(profileTicks, 3, phaseStart);
 
             float finalScale = MathF.Sqrt(MathF.Max(
                 1f,
@@ -197,14 +223,20 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
             float[] update = transpose ? slowHat : x;
             if (transpose)
             {
+                phaseStart = profileTicks is null
+                    ? 0L
+                    : Stopwatch.GetTimestamp();
                 TransposeBack(
                     x,
                     update,
                     originalRows,
                     originalColumns);
+                AddProfileTicks(profileTicks, 4, phaseStart);
             }
 
+            phaseStart = profileTicks is null ? 0L : Stopwatch.GetTimestamp();
             ApplyUpdate(parameter, update, finalScale, options);
+            AddProfileTicks(profileTicks, 5, phaseStart);
         }
 
         if (_parameters.Count > 1 && _totalElements >= 32_768)
@@ -212,7 +244,36 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
         else
             for (int index = 0; index < _parameters.Count; index++)
                 UpdateParameter(index);
+
+        if (profileTicks is not null)
+        {
+            LastStepProfile = new NekoMuonStepProfile(
+                TicksToMilliseconds(profileTicks[0]),
+                TicksToMilliseconds(profileTicks[1]),
+                TicksToMilliseconds(profileTicks[2]),
+                TicksToMilliseconds(profileTicks[3]),
+                TicksToMilliseconds(profileTicks[4]),
+                TicksToMilliseconds(profileTicks[5]),
+                TicksToMilliseconds(profileTicks[6]),
+                TicksToMilliseconds(profileTicks[7]),
+                TicksToMilliseconds(profileTicks[8]));
+        }
     }
+
+    private static void AddProfileTicks(
+        long[]? profileTicks,
+        int index,
+        long start)
+    {
+        if (profileTicks is null)
+            return;
+        Interlocked.Add(
+            ref profileTicks[index],
+            Stopwatch.GetTimestamp() - start);
+    }
+
+    private static double TicksToMilliseconds(long ticks)
+        => ticks * 1000d / Stopwatch.Frequency;
 
     private static void UpdateMoments(
         float[] gradientBuffer,
@@ -410,48 +471,121 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
         float[] gram,
         float[] gramSquared,
         int rows,
-        int columns)
+        int columns,
+        long[]? profileTicks)
     {
-        for (int row = 0; row < rows; row++)
-        {
-            int rowOffset = row * columns;
-            for (int other = 0; other <= row; other++)
-            {
-                float dot = Dot(
-                    source,
-                    rowOffset,
-                    other * columns,
-                    columns);
-                gram[row * rows + other] = dot;
-                gram[other * rows + row] = dot;
-            }
-        }
+        long phaseStart = profileTicks is null
+            ? 0L
+            : Stopwatch.GetTimestamp();
+        ComputeSymmetricGram(source, gram, rows, columns);
+        AddProfileTicks(profileTicks, 6, phaseStart);
 
-        for (int row = 0; row < rows; row++)
-        {
-            for (int column = 0; column < rows; column++)
-            {
-                // Gram is symmetric, so its column is also available as a
-                // contiguous row. This turns the O(rows^3) product into
-                // SIMD dot products without transposing or gathering.
-                gramSquared[row * rows + column] = (float)DotAsDouble(
-                    gram,
-                    row * rows,
-                    column * rows,
-                    rows);
-            }
-        }
+        phaseStart = profileTicks is null ? 0L : Stopwatch.GetTimestamp();
+        ComputeSymmetricGram(gram, gramSquared, rows, rows);
+        AddProfileTicks(profileTicks, 7, phaseStart);
 
+        phaseStart = profileTicks is null ? 0L : Stopwatch.GetTimestamp();
         Scale(source, destination, NewtonSchulzA);
-        for (int row = 0; row < rows; row++)
+        int outputRow = 0;
+        for (; outputRow + 7 < rows; outputRow += 8)
         {
-            int destinationOffset = row * columns;
+            int destination0 = outputRow * columns;
+            int destination1 = destination0 + columns;
+            int destination2 = destination1 + columns;
+            int destination3 = destination2 + columns;
+            int destination4 = destination3 + columns;
+            int destination5 = destination4 + columns;
+            int destination6 = destination5 + columns;
+            int destination7 = destination6 + columns;
+            int coefficient0 = outputRow * rows;
+            int coefficient1 = coefficient0 + rows;
+            int coefficient2 = coefficient1 + rows;
+            int coefficient3 = coefficient2 + rows;
+            int coefficient4 = coefficient3 + rows;
+            int coefficient5 = coefficient4 + rows;
+            int coefficient6 = coefficient5 + rows;
+            int coefficient7 = coefficient6 + rows;
+
+            for (int inner = 0; inner < rows; inner++)
+            {
+                AddScaledEightRows(
+                    source,
+                    inner * columns,
+                    destination,
+                    destination0,
+                    destination1,
+                    destination2,
+                    destination3,
+                    destination4,
+                    destination5,
+                    destination6,
+                    destination7,
+                    columns,
+                    NewtonSchulzB * gram[coefficient0 + inner]
+                        + NewtonSchulzC * gramSquared[coefficient0 + inner],
+                    NewtonSchulzB * gram[coefficient1 + inner]
+                        + NewtonSchulzC * gramSquared[coefficient1 + inner],
+                    NewtonSchulzB * gram[coefficient2 + inner]
+                        + NewtonSchulzC * gramSquared[coefficient2 + inner],
+                    NewtonSchulzB * gram[coefficient3 + inner]
+                        + NewtonSchulzC * gramSquared[coefficient3 + inner],
+                    NewtonSchulzB * gram[coefficient4 + inner]
+                        + NewtonSchulzC * gramSquared[coefficient4 + inner],
+                    NewtonSchulzB * gram[coefficient5 + inner]
+                        + NewtonSchulzC * gramSquared[coefficient5 + inner],
+                    NewtonSchulzB * gram[coefficient6 + inner]
+                        + NewtonSchulzC * gramSquared[coefficient6 + inner],
+                    NewtonSchulzB * gram[coefficient7 + inner]
+                        + NewtonSchulzC * gramSquared[coefficient7 + inner]);
+            }
+        }
+
+        for (; outputRow + 3 < rows; outputRow += 4)
+        {
+            int destination0 = outputRow * columns;
+            int destination1 = destination0 + columns;
+            int destination2 = destination1 + columns;
+            int destination3 = destination2 + columns;
+            int coefficient0 = outputRow * rows;
+            int coefficient1 = coefficient0 + rows;
+            int coefficient2 = coefficient1 + rows;
+            int coefficient3 = coefficient2 + rows;
+
+            for (int inner = 0; inner < rows; inner++)
+            {
+                AddScaledFourRows(
+                    source,
+                    inner * columns,
+                    destination,
+                    destination0,
+                    destination1,
+                    destination2,
+                    destination3,
+                    columns,
+                    NewtonSchulzB * gram[coefficient0 + inner]
+                        + NewtonSchulzC
+                            * gramSquared[coefficient0 + inner],
+                    NewtonSchulzB * gram[coefficient1 + inner]
+                        + NewtonSchulzC
+                            * gramSquared[coefficient1 + inner],
+                    NewtonSchulzB * gram[coefficient2 + inner]
+                        + NewtonSchulzC
+                            * gramSquared[coefficient2 + inner],
+                    NewtonSchulzB * gram[coefficient3 + inner]
+                        + NewtonSchulzC
+                            * gramSquared[coefficient3 + inner]);
+            }
+        }
+
+        for (; outputRow < rows; outputRow++)
+        {
+            int destinationOffset = outputRow * columns;
             for (int inner = 0; inner < rows; inner++)
             {
                 float coefficient =
-                    NewtonSchulzB * gram[row * rows + inner]
+                    NewtonSchulzB * gram[outputRow * rows + inner]
                     + NewtonSchulzC
-                        * gramSquared[row * rows + inner];
+                        * gramSquared[outputRow * rows + inner];
                 AddScaled(
                     source,
                     inner * columns,
@@ -461,6 +595,163 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
                     coefficient);
             }
         }
+        AddProfileTicks(profileTicks, 8, phaseStart);
+    }
+
+    private static void ComputeSymmetricGram(
+        float[] source,
+        float[] destination,
+        int rows,
+        int columns)
+    {
+        if (!Tensor.SimdEnabled
+            || !Vector256.IsHardwareAccelerated
+            || rows % 4 != 0
+            || columns < Vector256<float>.Count)
+        {
+            for (int row = 0; row < rows; row++)
+            {
+                int rowOffset = row * columns;
+                for (int other = 0; other <= row; other++)
+                {
+                    float dot = Dot(
+                        source,
+                        rowOffset,
+                        other * columns,
+                        columns);
+                    destination[row * rows + other] = dot;
+                    destination[other * rows + row] = dot;
+                }
+            }
+            return;
+        }
+
+        // Four rows and two comparison rows share six vector loads across
+        // eight dot products. This removes most repeated reads in the two
+        // Gram products that dominate Newton-Schulz on wide FFN matrices.
+        for (int rowBase = 0; rowBase < rows; rowBase += 4)
+        {
+            for (int otherBase = 0;
+                otherBase <= rowBase + 2;
+                otherBase += 2)
+            {
+                ComputeGramFourByTwo(
+                    source,
+                    destination,
+                    rows,
+                    columns,
+                    rowBase,
+                    otherBase);
+            }
+        }
+    }
+
+    private static void ComputeGramFourByTwo(
+        float[] source,
+        float[] destination,
+        int rows,
+        int columns,
+        int rowBase,
+        int otherBase)
+    {
+        int row0 = rowBase * columns;
+        int row1 = row0 + columns;
+        int row2 = row1 + columns;
+        int row3 = row2 + columns;
+        int other0 = otherBase * columns;
+        int other1 = other0 + columns;
+        int index = 0;
+        int width = Vector256<float>.Count;
+        int vectorizedLength = columns - columns % width;
+        Vector256<float> sum00 = Vector256<float>.Zero;
+        Vector256<float> sum01 = Vector256<float>.Zero;
+        Vector256<float> sum10 = Vector256<float>.Zero;
+        Vector256<float> sum11 = Vector256<float>.Zero;
+        Vector256<float> sum20 = Vector256<float>.Zero;
+        Vector256<float> sum21 = Vector256<float>.Zero;
+        Vector256<float> sum30 = Vector256<float>.Zero;
+        Vector256<float> sum31 = Vector256<float>.Zero;
+
+        for (; index < vectorizedLength; index += width)
+        {
+            Vector256<float> a0 = Vector256.LoadUnsafe(ref source[row0 + index]);
+            Vector256<float> a1 = Vector256.LoadUnsafe(ref source[row1 + index]);
+            Vector256<float> a2 = Vector256.LoadUnsafe(ref source[row2 + index]);
+            Vector256<float> a3 = Vector256.LoadUnsafe(ref source[row3 + index]);
+            Vector256<float> b0 = Vector256.LoadUnsafe(
+                ref source[other0 + index]);
+            Vector256<float> b1 = Vector256.LoadUnsafe(
+                ref source[other1 + index]);
+            sum00 = Vector256.FusedMultiplyAdd(a0, b0, sum00);
+            sum01 = Vector256.FusedMultiplyAdd(a0, b1, sum01);
+            sum10 = Vector256.FusedMultiplyAdd(a1, b0, sum10);
+            sum11 = Vector256.FusedMultiplyAdd(a1, b1, sum11);
+            sum20 = Vector256.FusedMultiplyAdd(a2, b0, sum20);
+            sum21 = Vector256.FusedMultiplyAdd(a2, b1, sum21);
+            sum30 = Vector256.FusedMultiplyAdd(a3, b0, sum30);
+            sum31 = Vector256.FusedMultiplyAdd(a3, b1, sum31);
+        }
+
+        float scalar00 = Vector256.Sum(sum00);
+        float scalar01 = Vector256.Sum(sum01);
+        float scalar10 = Vector256.Sum(sum10);
+        float scalar11 = Vector256.Sum(sum11);
+        float scalar20 = Vector256.Sum(sum20);
+        float scalar21 = Vector256.Sum(sum21);
+        float scalar30 = Vector256.Sum(sum30);
+        float scalar31 = Vector256.Sum(sum31);
+        for (; index < columns; index++)
+        {
+            float a0 = source[row0 + index];
+            float a1 = source[row1 + index];
+            float a2 = source[row2 + index];
+            float a3 = source[row3 + index];
+            float b0 = source[other0 + index];
+            float b1 = source[other1 + index];
+            scalar00 += a0 * b0;
+            scalar01 += a0 * b1;
+            scalar10 += a1 * b0;
+            scalar11 += a1 * b1;
+            scalar20 += a2 * b0;
+            scalar21 += a2 * b1;
+            scalar30 += a3 * b0;
+            scalar31 += a3 * b1;
+        }
+
+        StoreSymmetricGram(destination, rows, rowBase, otherBase, scalar00);
+        StoreSymmetricGram(destination, rows, rowBase, otherBase + 1, scalar01);
+        StoreSymmetricGram(destination, rows, rowBase + 1, otherBase, scalar10);
+        StoreSymmetricGram(
+            destination,
+            rows,
+            rowBase + 1,
+            otherBase + 1,
+            scalar11);
+        StoreSymmetricGram(destination, rows, rowBase + 2, otherBase, scalar20);
+        StoreSymmetricGram(
+            destination,
+            rows,
+            rowBase + 2,
+            otherBase + 1,
+            scalar21);
+        StoreSymmetricGram(destination, rows, rowBase + 3, otherBase, scalar30);
+        StoreSymmetricGram(
+            destination,
+            rows,
+            rowBase + 3,
+            otherBase + 1,
+            scalar31);
+    }
+
+    private static void StoreSymmetricGram(
+        float[] destination,
+        int rows,
+        int row,
+        int column,
+        float value)
+    {
+        destination[row * rows + column] = value;
+        destination[column * rows + row] = value;
     }
 
     private static float Dot(
@@ -477,45 +768,40 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
         {
             int width = Vector256<float>.Count;
             int vectorizedLength = length - length % width;
-            Vector256<float> vectorSum = Vector256<float>.Zero;
-            for (; index < vectorizedLength; index += width)
+            int unrolledLength = vectorizedLength - 3 * width;
+            Vector256<float> sum0 = Vector256<float>.Zero;
+            Vector256<float> sum1 = Vector256<float>.Zero;
+            Vector256<float> sum2 = Vector256<float>.Zero;
+            Vector256<float> sum3 = Vector256<float>.Zero;
+            for (; index < unrolledLength; index += 4 * width)
             {
-                vectorSum +=
+                sum0 +=
                     Vector256.LoadUnsafe(ref values[firstOffset + index])
                     * Vector256.LoadUnsafe(ref values[secondOffset + index]);
+                sum1 +=
+                    Vector256.LoadUnsafe(
+                        ref values[firstOffset + index + width])
+                    * Vector256.LoadUnsafe(
+                        ref values[secondOffset + index + width]);
+                sum2 +=
+                    Vector256.LoadUnsafe(
+                        ref values[firstOffset + index + 2 * width])
+                    * Vector256.LoadUnsafe(
+                        ref values[secondOffset + index + 2 * width]);
+                sum3 +=
+                    Vector256.LoadUnsafe(
+                        ref values[firstOffset + index + 3 * width])
+                    * Vector256.LoadUnsafe(
+                        ref values[secondOffset + index + 3 * width]);
             }
 
-            sum = Vector256.Sum(vectorSum);
-        }
-
-        for (; index < length; index++)
-        {
-            sum += values[firstOffset + index]
-                * values[secondOffset + index];
-        }
-
-        return sum;
-    }
-
-    private static double DotAsDouble(
-        float[] values,
-        int firstOffset,
-        int secondOffset,
-        int length)
-    {
-        int index = 0;
-        double sum = 0d;
-        if (Tensor.SimdEnabled
-            && Vector256.IsHardwareAccelerated
-            && length >= Vector256<float>.Count)
-        {
-            int width = Vector256<float>.Count;
-            int vectorizedLength = length - length % width;
+            sum = Vector256.Sum((sum0 + sum1) + (sum2 + sum3));
             for (; index < vectorizedLength; index += width)
             {
                 sum += Vector256.Sum(
                     Vector256.LoadUnsafe(ref values[firstOffset + index])
-                    * Vector256.LoadUnsafe(ref values[secondOffset + index]));
+                    * Vector256.LoadUnsafe(
+                        ref values[secondOffset + index]));
             }
         }
 
@@ -524,6 +810,7 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
             sum += values[firstOffset + index]
                 * values[secondOffset + index];
         }
+
         return sum;
     }
 
@@ -584,6 +871,158 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
         {
             destination[destinationOffset + index] +=
                 scale * source[sourceOffset + index];
+        }
+    }
+
+    private static void AddScaledFourRows(
+        float[] source,
+        int sourceOffset,
+        float[] destination,
+        int destination0,
+        int destination1,
+        int destination2,
+        int destination3,
+        int length,
+        float scale0,
+        float scale1,
+        float scale2,
+        float scale3)
+    {
+        int index = 0;
+        if (Tensor.SimdEnabled
+            && Vector256.IsHardwareAccelerated
+            && length >= Vector256<float>.Count)
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            Vector256<float> vectorScale0 = Vector256.Create(scale0);
+            Vector256<float> vectorScale1 = Vector256.Create(scale1);
+            Vector256<float> vectorScale2 = Vector256.Create(scale2);
+            Vector256<float> vectorScale3 = Vector256.Create(scale3);
+            for (; index < vectorizedLength; index += width)
+            {
+                Vector256<float> sourceVector = Vector256.LoadUnsafe(
+                    ref source[sourceOffset + index]);
+                (Vector256.LoadUnsafe(ref destination[destination0 + index])
+                    + vectorScale0 * sourceVector)
+                    .StoreUnsafe(ref destination[destination0 + index]);
+                (Vector256.LoadUnsafe(ref destination[destination1 + index])
+                    + vectorScale1 * sourceVector)
+                    .StoreUnsafe(ref destination[destination1 + index]);
+                (Vector256.LoadUnsafe(ref destination[destination2 + index])
+                    + vectorScale2 * sourceVector)
+                    .StoreUnsafe(ref destination[destination2 + index]);
+                (Vector256.LoadUnsafe(ref destination[destination3 + index])
+                    + vectorScale3 * sourceVector)
+                    .StoreUnsafe(ref destination[destination3 + index]);
+            }
+        }
+
+        for (; index < length; index++)
+        {
+            float sourceValue = source[sourceOffset + index];
+            destination[destination0 + index] += scale0 * sourceValue;
+            destination[destination1 + index] += scale1 * sourceValue;
+            destination[destination2 + index] += scale2 * sourceValue;
+            destination[destination3 + index] += scale3 * sourceValue;
+        }
+    }
+
+    private static void AddScaledEightRows(
+        float[] source,
+        int sourceOffset,
+        float[] destination,
+        int destination0,
+        int destination1,
+        int destination2,
+        int destination3,
+        int destination4,
+        int destination5,
+        int destination6,
+        int destination7,
+        int length,
+        float scale0,
+        float scale1,
+        float scale2,
+        float scale3,
+        float scale4,
+        float scale5,
+        float scale6,
+        float scale7)
+    {
+        int index = 0;
+        if (Tensor.SimdEnabled
+            && Vector256.IsHardwareAccelerated
+            && length >= Vector256<float>.Count)
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            Vector256<float> vectorScale0 = Vector256.Create(scale0);
+            Vector256<float> vectorScale1 = Vector256.Create(scale1);
+            Vector256<float> vectorScale2 = Vector256.Create(scale2);
+            Vector256<float> vectorScale3 = Vector256.Create(scale3);
+            Vector256<float> vectorScale4 = Vector256.Create(scale4);
+            Vector256<float> vectorScale5 = Vector256.Create(scale5);
+            Vector256<float> vectorScale6 = Vector256.Create(scale6);
+            Vector256<float> vectorScale7 = Vector256.Create(scale7);
+            for (; index < vectorizedLength; index += width)
+            {
+                Vector256<float> sourceVector = Vector256.LoadUnsafe(
+                    ref source[sourceOffset + index]);
+                Vector256.FusedMultiplyAdd(
+                    sourceVector,
+                    vectorScale0,
+                    Vector256.LoadUnsafe(ref destination[destination0 + index]))
+                    .StoreUnsafe(ref destination[destination0 + index]);
+                Vector256.FusedMultiplyAdd(
+                    sourceVector,
+                    vectorScale1,
+                    Vector256.LoadUnsafe(ref destination[destination1 + index]))
+                    .StoreUnsafe(ref destination[destination1 + index]);
+                Vector256.FusedMultiplyAdd(
+                    sourceVector,
+                    vectorScale2,
+                    Vector256.LoadUnsafe(ref destination[destination2 + index]))
+                    .StoreUnsafe(ref destination[destination2 + index]);
+                Vector256.FusedMultiplyAdd(
+                    sourceVector,
+                    vectorScale3,
+                    Vector256.LoadUnsafe(ref destination[destination3 + index]))
+                    .StoreUnsafe(ref destination[destination3 + index]);
+                Vector256.FusedMultiplyAdd(
+                    sourceVector,
+                    vectorScale4,
+                    Vector256.LoadUnsafe(ref destination[destination4 + index]))
+                    .StoreUnsafe(ref destination[destination4 + index]);
+                Vector256.FusedMultiplyAdd(
+                    sourceVector,
+                    vectorScale5,
+                    Vector256.LoadUnsafe(ref destination[destination5 + index]))
+                    .StoreUnsafe(ref destination[destination5 + index]);
+                Vector256.FusedMultiplyAdd(
+                    sourceVector,
+                    vectorScale6,
+                    Vector256.LoadUnsafe(ref destination[destination6 + index]))
+                    .StoreUnsafe(ref destination[destination6 + index]);
+                Vector256.FusedMultiplyAdd(
+                    sourceVector,
+                    vectorScale7,
+                    Vector256.LoadUnsafe(ref destination[destination7 + index]))
+                    .StoreUnsafe(ref destination[destination7 + index]);
+            }
+        }
+
+        for (; index < length; index++)
+        {
+            float sourceValue = source[sourceOffset + index];
+            destination[destination0 + index] += scale0 * sourceValue;
+            destination[destination1 + index] += scale1 * sourceValue;
+            destination[destination2 + index] += scale2 * sourceValue;
+            destination[destination3 + index] += scale3 * sourceValue;
+            destination[destination4 + index] += scale4 * sourceValue;
+            destination[destination5 + index] += scale5 * sourceValue;
+            destination[destination6 + index] += scale6 * sourceValue;
+            destination[destination7 + index] += scale7 * sourceValue;
         }
     }
 
@@ -825,6 +1264,14 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
                 "NekoMuon maximum Newton-Schulz steps must be positive.");
         }
 
+        if (options.NewtonSchulzInterval <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                options.NewtonSchulzInterval,
+                "NekoMuon Newton-Schulz interval must be positive.");
+        }
+
         if (!float.IsFinite(options.WeightDecay)
             || options.WeightDecay < 0f)
         {
@@ -874,4 +1321,24 @@ public sealed class NekoMuon : IOptimizer, ILearningRateAdjustable
                         parameterState.Confidence))
                 .ToArray());
     }
+}
+
+public readonly record struct NekoMuonStepProfile(
+    double UpdateMomentsMilliseconds,
+    double ConfidenceMilliseconds,
+    double InitializeMilliseconds,
+    double NewtonSchulzMilliseconds,
+    double TransposeMilliseconds,
+    double ApplyUpdateMilliseconds,
+    double FirstGramMilliseconds,
+    double GramSquaredMilliseconds,
+    double PolynomialMilliseconds)
+{
+    public double TotalCpuMilliseconds
+        => UpdateMomentsMilliseconds
+            + ConfidenceMilliseconds
+            + InitializeMilliseconds
+            + NewtonSchulzMilliseconds
+            + TransposeMilliseconds
+            + ApplyUpdateMilliseconds;
 }

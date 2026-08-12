@@ -8,6 +8,14 @@ sealed record WikiTrainingConfiguration
     internal const string TaskName = "gpt_rin_wiki_jp";
     internal const string NekoMuonOptimizer = "nekomuon";
     internal const string AdamWOptimizer = "adamw";
+    internal const string TransformerArchitecture = "transformer";
+    internal const string HyenaArchitecture = "hyena";
+    internal const string ForgetScanArchitecture = "forgetscan";
+    internal const string ForgetMemoryV2Architecture = "forgetmemoryv2";
+    internal const string FrogetMemoryV2ArchitectureAlias = "frogetmemoryv2";
+    internal const string AutoHyenaConvolution = "auto";
+    internal const string DirectHyenaConvolution = "direct";
+    internal const string FftHyenaConvolution = "fft";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -56,6 +64,22 @@ sealed record WikiTrainingConfiguration
 
     public int Layers { get; init; } = 4;
 
+    public string ModelArchitecture { get; init; } =
+        ForgetMemoryV2Architecture;
+
+    public int ForgetMemoryKeyWidth { get; init; } = 16;
+
+    public int ForgetMemoryValueWidth { get; init; } = 16;
+
+    public float ForgetMemoryRetentionMinimum { get; init; } = 0.5f;
+
+    public float ForgetMemoryRetentionMaximum { get; init; } = 0.99f;
+
+    public int HyenaFilterWidth { get; init; } = 64;
+
+    public string HyenaConvolutionAlgorithm { get; init; } =
+        AutoHyenaConvolution;
+
     public float Dropout { get; init; } = 0.1f;
 
     public float InitializationScale { get; init; } = 0.02f;
@@ -66,7 +90,15 @@ sealed record WikiTrainingConfiguration
 
     public float AuxiliaryLearningRate { get; init; } = 3e-4f;
 
+    public int NekoMuonNewtonSchulzInterval { get; init; } = 5;
+
+    public float WarmupPercent { get; init; } = 20f;
+
     public float WeightDecay { get; init; } = 0.01f;
+
+    public bool AdamWUseBFloat16FirstMoment { get; init; }
+
+    public bool AdamWUseBFloat16SecondMoment { get; init; }
 
     public int Seed { get; init; } = 1234;
 
@@ -178,6 +210,13 @@ sealed record WikiTrainingConfiguration
         ValidatePositive(Heads, nameof(Heads));
         ValidatePositive(HiddenSize, nameof(HiddenSize));
         ValidatePositive(Layers, nameof(Layers));
+        ValidatePositive(
+            ForgetMemoryKeyWidth,
+            nameof(ForgetMemoryKeyWidth));
+        ValidatePositive(
+            ForgetMemoryValueWidth,
+            nameof(ForgetMemoryValueWidth));
+        ValidatePositive(HyenaFilterWidth, nameof(HyenaFilterWidth));
         ValidatePositive(LogEveryBatches, nameof(LogEveryBatches));
         ValidatePositive(GraphUpdateSteps, nameof(GraphUpdateSteps));
         ValidatePositive(
@@ -199,6 +238,41 @@ sealed record WikiTrainingConfiguration
             throw new ArgumentException(
                 "Head count must evenly divide model width.",
                 nameof(Heads));
+        }
+        if (!IsArchitecture(TransformerArchitecture)
+            && !IsArchitecture(HyenaArchitecture)
+            && !IsArchitecture(ForgetScanArchitecture)
+            && !IsForgetMemoryV2Architecture())
+        {
+            throw new ArgumentException(
+                $"Unsupported model architecture '{ModelArchitecture}'. " +
+                $"Supported architectures are '{TransformerArchitecture}' " +
+                $"'{HyenaArchitecture}', '{ForgetScanArchitecture}', and " +
+                $"'{ForgetMemoryV2Architecture}'.",
+                nameof(ModelArchitecture));
+        }
+        if (!float.IsFinite(ForgetMemoryRetentionMinimum)
+            || !float.IsFinite(ForgetMemoryRetentionMaximum)
+            || ForgetMemoryRetentionMinimum < 0f
+            || ForgetMemoryRetentionMinimum
+                > ForgetMemoryRetentionMaximum
+            || ForgetMemoryRetentionMaximum >= 1f)
+        {
+            throw new ArgumentException(
+                "ForgetMemory retention bounds must satisfy " +
+                "0 <= minimum <= maximum < 1.",
+                nameof(ForgetMemoryRetentionMinimum));
+        }
+        if (!IsHyenaConvolution(AutoHyenaConvolution)
+            && !IsHyenaConvolution(DirectHyenaConvolution)
+            && !IsHyenaConvolution(FftHyenaConvolution))
+        {
+            throw new ArgumentException(
+                $"Unsupported Hyena convolution algorithm " +
+                $"'{HyenaConvolutionAlgorithm}'. Supported algorithms are " +
+                $"'{AutoHyenaConvolution}', '{DirectHyenaConvolution}', and " +
+                $"'{FftHyenaConvolution}'.",
+                nameof(HyenaConvolutionAlgorithm));
         }
         if (!float.IsFinite(ValidationFraction)
             || ValidationFraction < 0f
@@ -230,6 +304,18 @@ sealed record WikiTrainingConfiguration
         {
             throw new ArgumentOutOfRangeException(
                 nameof(AuxiliaryLearningRate));
+        }
+        ValidatePositive(
+            NekoMuonNewtonSchulzInterval,
+            nameof(NekoMuonNewtonSchulzInterval));
+        if (!float.IsFinite(WarmupPercent)
+            || WarmupPercent < 0f
+            || WarmupPercent >= 100f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(WarmupPercent),
+                WarmupPercent,
+                "Warmup percent must be finite and in [0, 100).");
         }
         if (!float.IsFinite(WeightDecay) || WeightDecay < 0f)
             throw new ArgumentOutOfRangeException(nameof(WeightDecay));
@@ -264,4 +350,28 @@ sealed record WikiTrainingConfiguration
             Optimizer,
             expectedOptimizer,
             StringComparison.OrdinalIgnoreCase);
+
+    internal bool IsArchitecture(string expectedArchitecture)
+        => string.Equals(
+            ModelArchitecture,
+            expectedArchitecture,
+            StringComparison.OrdinalIgnoreCase);
+
+    internal bool IsForgetMemoryV2Architecture()
+        => IsArchitecture(ForgetMemoryV2Architecture)
+            || IsArchitecture(FrogetMemoryV2ArchitectureAlias);
+
+    internal bool IsHyenaConvolution(string expectedAlgorithm)
+        => string.Equals(
+            HyenaConvolutionAlgorithm,
+            expectedAlgorithm,
+            StringComparison.OrdinalIgnoreCase);
+
+    internal HyenaConvolutionAlgorithm GetHyenaConvolutionAlgorithm()
+        => HyenaConvolutionAlgorithm.ToLowerInvariant() switch
+        {
+            DirectHyenaConvolution => NNtrain.HyenaConvolutionAlgorithm.Direct,
+            FftHyenaConvolution => NNtrain.HyenaConvolutionAlgorithm.Fft,
+            _ => NNtrain.HyenaConvolutionAlgorithm.Auto,
+        };
 }

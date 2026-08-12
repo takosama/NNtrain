@@ -163,6 +163,33 @@ public sealed class TensorFusedOperationTests
     }
 
     [Fact]
+    public void CrossEntropyIgnoresMinusOneLabelsByDefault()
+    {
+        const int classes = 4;
+        float[] values = Pattern(3 * classes, 23, 0.13f);
+        var paddedInput = new Tensor(values, [3, classes]);
+        var compactInput = new Tensor(
+            values[..classes].Concat(values[(2 * classes)..]).ToArray(),
+            [2, classes]);
+
+        Tensor paddedLoss = paddedInput.CrossEntropyWithLogits([1, -1, 3]);
+        Tensor compactLoss = compactInput.CrossEntropyWithLogits([1, 3]);
+        paddedLoss.Backward();
+        compactLoss.Backward();
+        float[] paddedGradient = paddedInput.Grad.ToArray();
+        float[] compactGradient = compactInput.Grad.ToArray();
+
+        AssertClose(compactLoss.Data, paddedLoss.Data, 2e-5f);
+        AssertClose(compactGradient[..classes], paddedGradient[..classes]);
+        AssertClose(
+            new float[classes],
+            paddedGradient[classes..(2 * classes)]);
+        AssertClose(
+            compactGradient[classes..],
+            paddedGradient[(2 * classes)..]);
+    }
+
+    [Fact]
     public void LabelSmoothedCrossEntropyMatchesUniformTargetMixture()
     {
         const int batch = 3;

@@ -2,6 +2,24 @@
 
 partial class Tensor
 {
+    public Tensor Sin()
+    {
+        var output = new float[Numel];
+        for (int index = 0; index < Numel; index++)
+            output[index] = MathF.Sin(_data[index]);
+
+        var result = new Tensor(output, _shape, [this]);
+        result.Node.BackwardAction = () =>
+        {
+            for (int index = 0; index < Numel; index++)
+            {
+                _grad[index] +=
+                    MathF.Cos(_data[index]) * result._grad[index];
+            }
+        };
+        return result;
+    }
+
     public Tensor Relu()
     {
         float[] y = new float[Numel];

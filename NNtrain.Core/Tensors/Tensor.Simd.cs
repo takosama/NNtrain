@@ -10,7 +10,7 @@ partial class Tensor
 
     /// <summary>
     /// Gets or sets whether tensor operations may use hardware-accelerated
-    /// 256-bit SIMD.
+    /// 256-bit and 128-bit SIMD.
     /// </summary>
     /// <remarks>
     /// SIMD is enabled by default. When disabled, or when the current runtime
@@ -301,6 +301,137 @@ partial class Tensor
         {
             destination[destinationOffset + index] =
                 left[leftOffset + index] * right[rightOffset + index];
+        }
+    }
+
+    /// <summary>
+    /// Adds a sum of strided element-wise products to one contiguous vector.
+    /// Keeping four destination vectors in registers avoids a load/store pair
+    /// for every convolution tap while retaining contiguous source reads.
+    /// </summary>
+    private static void AddStridedElementwiseProductSum(
+        float[] destination,
+        int destinationOffset,
+        float[] left,
+        int leftOffset,
+        int leftStride,
+        float[] right,
+        int rightOffset,
+        int rightStride,
+        int termCount,
+        int length)
+    {
+        int index = 0;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int blockWidth = 4 * width;
+            int blockEnd = length - length % blockWidth;
+            for (; index < blockEnd; index += blockWidth)
+            {
+                Vector256<float> sum0 = LoadVector256(
+                    destination,
+                    destinationOffset + index);
+                Vector256<float> sum1 = LoadVector256(
+                    destination,
+                    destinationOffset + index + width);
+                Vector256<float> sum2 = LoadVector256(
+                    destination,
+                    destinationOffset + index + 2 * width);
+                Vector256<float> sum3 = LoadVector256(
+                    destination,
+                    destinationOffset + index + 3 * width);
+                int leftTermOffset = leftOffset + index;
+                int rightTermOffset = rightOffset + index;
+                for (int term = 0; term < termCount; term++)
+                {
+                    sum0 = Vector256.FusedMultiplyAdd(
+                        LoadVector256(left, leftTermOffset),
+                        LoadVector256(right, rightTermOffset),
+                        sum0);
+                    sum1 = Vector256.FusedMultiplyAdd(
+                        LoadVector256(left, leftTermOffset + width),
+                        LoadVector256(right, rightTermOffset + width),
+                        sum1);
+                    sum2 = Vector256.FusedMultiplyAdd(
+                        LoadVector256(left, leftTermOffset + 2 * width),
+                        LoadVector256(right, rightTermOffset + 2 * width),
+                        sum2);
+                    sum3 = Vector256.FusedMultiplyAdd(
+                        LoadVector256(left, leftTermOffset + 3 * width),
+                        LoadVector256(right, rightTermOffset + 3 * width),
+                        sum3);
+                    leftTermOffset += leftStride;
+                    rightTermOffset += rightStride;
+                }
+                StoreVector256(sum0, destination, destinationOffset + index);
+                StoreVector256(
+                    sum1,
+                    destination,
+                    destinationOffset + index + width);
+                StoreVector256(
+                    sum2,
+                    destination,
+                    destinationOffset + index + 2 * width);
+                StoreVector256(
+                    sum3,
+                    destination,
+                    destinationOffset + index + 3 * width);
+            }
+
+            int vectorEnd = length - length % width;
+            for (; index < vectorEnd; index += width)
+            {
+                Vector256<float> sum = LoadVector256(
+                    destination,
+                    destinationOffset + index);
+                int leftTermOffset = leftOffset + index;
+                int rightTermOffset = rightOffset + index;
+                for (int term = 0; term < termCount; term++)
+                {
+                    sum = Vector256.FusedMultiplyAdd(
+                        LoadVector256(left, leftTermOffset),
+                        LoadVector256(right, rightTermOffset),
+                        sum);
+                    leftTermOffset += leftStride;
+                    rightTermOffset += rightStride;
+                }
+                StoreVector256(sum, destination, destinationOffset + index);
+            }
+        }
+
+        if (CanUseVector128(length - index))
+        {
+            Vector128<float> sum = LoadVector128(
+                destination,
+                destinationOffset + index);
+            int leftTermOffset = leftOffset + index;
+            int rightTermOffset = rightOffset + index;
+            for (int term = 0; term < termCount; term++)
+            {
+                sum = Vector128.FusedMultiplyAdd(
+                    LoadVector128(left, leftTermOffset),
+                    LoadVector128(right, rightTermOffset),
+                    sum);
+                leftTermOffset += leftStride;
+                rightTermOffset += rightStride;
+            }
+            StoreVector128(sum, destination, destinationOffset + index);
+            index += Vector128<float>.Count;
+        }
+
+        for (; index < length; index++)
+        {
+            float sum = destination[destinationOffset + index];
+            int leftTermOffset = leftOffset + index;
+            int rightTermOffset = rightOffset + index;
+            for (int term = 0; term < termCount; term++)
+            {
+                sum += left[leftTermOffset] * right[rightTermOffset];
+                leftTermOffset += leftStride;
+                rightTermOffset += rightStride;
+            }
+            destination[destinationOffset + index] = sum;
         }
     }
 

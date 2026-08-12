@@ -4,4 +4,5 @@
   <Project Path="NNtrain.Cli/NNtrain.Cli.csproj" />
   <Project Path="NNtrain.Core.Tests/NNtrain.Core.Tests.csproj" />
   <Project Path="NNtrain.IntegrationTests/NNtrain.IntegrationTests.csproj" />
+  <Project Path="NNtrain.Benchmarks/NNtrain.Benchmarks.csproj" />
 </Solution>

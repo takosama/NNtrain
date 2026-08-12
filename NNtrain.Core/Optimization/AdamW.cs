@@ -4,7 +4,16 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
 {
     private readonly List<Parameter> _parameters;
     private readonly long _totalElements;
-    private AdamWState _state;
+    private readonly AdamWParameterRuntime[] _parameterRuntime;
+    private readonly AdamWWorkItem[] _workItems;
+    private AdamWOptions _options;
+    private AdamWParameterState[] _parameterStates;
+    private readonly Action<int> _updateWorkItemAction;
+    private readonly Action<int> _clearWorkItemAction;
+    private AdamWOptions _stepOptions = null!;
+    private float _stepUpdateScale;
+    private float _stepScaledEpsilon;
+    private int _step;
 
     public AdamW(
         IEnumerable<Parameter> parameters,
@@ -38,18 +47,63 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
 
         _totalElements = _parameters.Sum(
             parameter => (long)parameter.T.Numel);
+        _workItems = CreateWorkItems(_parameters);
 
         AdamWOptions effectiveOptions = options ?? new AdamWOptions();
         ValidateOptions(effectiveOptions, nameof(options));
-        _state = CreateInitialState(_parameters, effectiveOptions);
+        AdamWState initialState = CreateInitialState(
+            _parameters,
+            effectiveOptions);
+        _options = initialState.Options;
+        _parameterStates = initialState.ParameterStates;
+        _parameterRuntime = CreateParameterRuntime(
+            _parameters,
+            _parameterStates,
+            _options);
+        _updateWorkItemAction = UpdateWorkItem;
+        _clearWorkItemAction = ClearWorkItem;
     }
 
     public AdamWState CaptureState()
     {
-        return CloneState(_state);
+        if (_options.UseBFloat16FirstMoment
+            || _options.UseBFloat16SecondMoment)
+        {
+            var states = new AdamWParameterState[_parameters.Count];
+            for (int index = 0; index < states.Length; index++)
+            {
+                Parameter parameter = _parameters[index];
+                states[index] = new AdamWParameterState(
+                    index,
+                    parameter.Name,
+                    parameter.T.Shape.ToArray(),
+                    _options.UseBFloat16FirstMoment
+                        ? DecodeBFloat16(
+                            _parameterRuntime[index]
+                                .FirstMomentBFloat16!)
+                        : _parameterRuntime[index].FirstMoment.ToArray(),
+                    _options.UseBFloat16SecondMoment
+                        ? DecodeBFloat16(
+                            _parameterRuntime[index]
+                                .SecondMomentBFloat16!)
+                        : _parameterRuntime[index].SecondMoment.ToArray());
+            }
+            return new AdamWState(
+                AdamWState.CurrentFormatVersion,
+                _step,
+                _options with { },
+                states);
+        }
+
+        return CloneState(
+            new AdamWState(
+                AdamWState.CurrentFormatVersion,
+                _step,
+                _options,
+                _parameterStates));
     }
 
-    public float LearningRate => _state.Options.LearningRate;
+    public float LearningRate => _options.LearningRate;
 
     public void SetLearningRate(float learningRate)
     {
@@ -61,144 +115,423 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
                 "AdamW learning rate must be finite and positive.");
         }
 
-        _state = _state with
-        {
-            Options = _state.Options with { LearningRate = learningRate },
-        };
+        _options = _options with { LearningRate = learningRate };
+        RefreshWeightDecayFlags();
     }
 
     public void RestoreState(AdamWState state)
     {
         ArgumentNullException.ThrowIfNull(state);
         ValidateState(state);
-        _state = CloneState(state);
+        AdamWState clone = CloneState(state);
+        _step = clone.Step;
+        _options = clone.Options;
+        _parameterStates = clone.ParameterStates;
+        for (int index = 0; index < _parameterRuntime.Length; index++)
+        {
+            if (_options.UseBFloat16FirstMoment)
+            {
+                _parameterRuntime[index].FirstMoment = [];
+                _parameterRuntime[index].FirstMomentBFloat16 =
+                    EncodeBFloat16(_parameterStates[index].FirstMoment);
+                _parameterStates[index] = _parameterStates[index] with
+                {
+                    FirstMoment = [],
+                };
+            }
+            else
+            {
+                _parameterRuntime[index].FirstMoment =
+                    _parameterStates[index].FirstMoment;
+                _parameterRuntime[index].FirstMomentBFloat16 = null;
+            }
+            if (_options.UseBFloat16SecondMoment)
+            {
+                _parameterRuntime[index].SecondMoment = [];
+                _parameterRuntime[index].SecondMomentBFloat16 =
+                    EncodeBFloat16(_parameterStates[index].SecondMoment);
+                _parameterStates[index] = _parameterStates[index] with
+                {
+                    SecondMoment = [],
+                };
+            }
+            else
+            {
+                _parameterRuntime[index].SecondMoment =
+                    _parameterStates[index].SecondMoment;
+                _parameterRuntime[index].SecondMomentBFloat16 = null;
+            }
+        }
+        RefreshWeightDecayFlags();
     }
 
     public void ZeroGrad()
     {
-        if (_parameters.Count > 1 && _totalElements >= 32_768)
+        if (_workItems.Length > 1 && _totalElements >= 32_768)
         {
             Tensor.RunParallel(
                 0,
-                _parameters.Count,
-                index => _parameters[index].ZeroGrad());
+                _workItems.Length,
+                _clearWorkItemAction);
             return;
         }
 
-        foreach (Parameter parameter in _parameters)
-            parameter.ZeroGrad();
+        for (int index = 0; index < _workItems.Length; index++)
+            ClearWorkItem(index);
+    }
+
+    private void ClearWorkItem(int workItemIndex)
+    {
+        AdamWWorkItem workItem = _workItems[workItemIndex];
+        _parameterRuntime[workItem.ParameterIndex]
+            .Parameter
+            .T
+            .ClearGradientRange(workItem.Start, workItem.Length);
     }
 
     public void Step()
     {
-        if (_state.Step == int.MaxValue)
+        if (_step == int.MaxValue)
         {
             throw new InvalidOperationException(
                 "AdamW cannot advance beyond Int32.MaxValue steps.");
         }
 
-        _state = _state with { Step = _state.Step + 1 };
-        AdamWOptions options = _state.Options;
+        _step++;
+        AdamWOptions options = _options;
 
-        float bc1 = 1f - MathF.Pow(options.Beta1, _state.Step);
-        float bc2 = 1f - MathF.Pow(options.Beta2, _state.Step);
+        float bc1 = 1f - MathF.Pow(options.Beta1, _step);
+        float bc2 = 1f - MathF.Pow(options.Beta2, _step);
+        float sqrtBc2 = MathF.Sqrt(bc2);
+        _stepOptions = options;
+        _stepUpdateScale = options.LearningRate * sqrtBc2 / bc1;
+        _stepScaledEpsilon = options.Epsilon * sqrtBc2;
 
-        void UpdateParameter(int parameterIndex)
+        for (int parameterIndex = 0;
+            parameterIndex < _parameters.Count;
+            parameterIndex++)
         {
-            Parameter p = _parameters[parameterIndex];
-            AdamWParameterState parameterState =
-                _state.ParameterStates[parameterIndex];
-            using Tensor.DataMutation mutation = p.BeginUpdate();
-            Span<float> data = mutation.Values;
-            float[] grad = p.T.GradientBuffer;
-            float[] m = parameterState.FirstMoment;
-            float[] v = parameterState.SecondMoment;
+            AdamWParameterRuntime runtime =
+                _parameterRuntime[parameterIndex];
+            runtime.Parameter.MarkUpdated();
+            runtime.Gradient = runtime.Parameter.T.GradientBuffer;
+        }
 
-            bool applyWeightDecay =
-                p.WeightDecay == WeightDecayPolicy.Apply
-                || (options.Decay1D && p.T.Rank == 1);
-            int length = p.T.Numel;
-            int index = 0;
+        if (_workItems.Length > 1 && _totalElements >= 32_768)
+            Tensor.RunParallel(0, _workItems.Length, _updateWorkItemAction);
+        else
+            for (int index = 0; index < _workItems.Length; index++)
+                UpdateWorkItem(index);
+    }
 
-            if (Tensor.SimdEnabled
-                && Vector256.IsHardwareAccelerated
-                && length >= Vector256<float>.Count)
+    private void UpdateWorkItem(int workItemIndex)
+    {
+        AdamWOptions options = _stepOptions;
+        float updateScale = _stepUpdateScale;
+        float scaledEpsilon = _stepScaledEpsilon;
+        AdamWWorkItem workItem = _workItems[workItemIndex];
+        AdamWParameterRuntime runtime =
+            _parameterRuntime[workItem.ParameterIndex];
+        float[] data = runtime.Data;
+        float[] grad = runtime.Gradient;
+        float[] m = runtime.FirstMoment;
+        short[]? mBFloat16 = runtime.FirstMomentBFloat16;
+        float[] v = runtime.SecondMoment;
+        short[]? vBFloat16 = runtime.SecondMomentBFloat16;
+        bool applyWeightDecay = runtime.ApplyWeightDecay;
+        int end = workItem.Start + workItem.Length;
+        int index = workItem.Start;
+
+        if (Tensor.SimdEnabled
+            && Vector256.IsHardwareAccelerated
+            && (mBFloat16 is null
+                && vBFloat16 is null
+                || System.Runtime.Intrinsics.X86.Avx2.IsSupported)
+            && workItem.Length >= Vector256<float>.Count)
+        {
+            int vectorWidth = Vector256<float>.Count;
+            int vectorizedLength = end - workItem.Length % vectorWidth;
+            Vector256<float> beta1 = Vector256.Create(options.Beta1);
+            Vector256<float> beta2 = Vector256.Create(options.Beta2);
+            Vector256<float> oneMinusBeta1 =
+                Vector256.Create(1f - options.Beta1);
+            Vector256<float> oneMinusBeta2 =
+                Vector256.Create(1f - options.Beta2);
+            Vector256<float> updateScaleVector =
+                Vector256.Create(updateScale);
+            Vector256<float> epsilon =
+                Vector256.Create(scaledEpsilon);
+            Vector256<float> parameterScale = Vector256.Create(
+                applyWeightDecay
+                    ? 1f - options.LearningRate * options.WeightDecay
+                    : 1f);
+            Vector256<float> one = Vector256.Create(1f);
+            Vector256<float> two = Vector256.Create(2f);
+            Vector256<float> half = Vector256.Create(0.5f);
+            Vector256<float> three = Vector256.Create(3f);
+            Vector256<float> inverseZeroDenominator =
+                Vector256.Create(1f / scaledEpsilon);
+            ref float dataStart = ref System.Runtime.InteropServices
+                .MemoryMarshal.GetArrayDataReference(data);
+            ref float gradientStart = ref System.Runtime.InteropServices
+                .MemoryMarshal.GetArrayDataReference(grad);
+            ref float firstMomentStart = ref System.Runtime.InteropServices
+                .MemoryMarshal.GetArrayDataReference(m);
+            ref float secondMomentStart = ref System.Runtime.InteropServices
+                .MemoryMarshal.GetArrayDataReference(v);
+
+            for (; index < vectorizedLength; index += vectorWidth)
             {
-                int vectorWidth = Vector256<float>.Count;
-                int vectorizedLength = length - length % vectorWidth;
-                Vector256<float> beta1 = Vector256.Create(options.Beta1);
-                Vector256<float> beta2 = Vector256.Create(options.Beta2);
-                Vector256<float> oneMinusBeta1 =
-                    Vector256.Create(1f - options.Beta1);
-                Vector256<float> oneMinusBeta2 =
-                    Vector256.Create(1f - options.Beta2);
-                Vector256<float> inverseBc1 = Vector256.Create(1f / bc1);
-                Vector256<float> inverseBc2 = Vector256.Create(1f / bc2);
-                Vector256<float> learningRate =
-                    Vector256.Create(options.LearningRate);
-                Vector256<float> epsilon =
-                    Vector256.Create(options.Epsilon);
-                Vector256<float> decay = Vector256.Create(
-                    options.LearningRate * options.WeightDecay);
-
-                for (; index < vectorizedLength; index += vectorWidth)
+                Vector256<float> gradient = grad.Length == 0
+                    ? Vector256<float>.Zero
+                    : Vector256.LoadUnsafe(
+                        ref System.Runtime.CompilerServices.Unsafe.Add(
+                            ref gradientStart,
+                            index));
+                Vector256<float> firstMoment =
+                    Vector256.FusedMultiplyAdd(
+                        oneMinusBeta1,
+                        gradient,
+                        beta1 * (mBFloat16 is null
+                            ? Vector256.LoadUnsafe(
+                                ref System.Runtime.CompilerServices.Unsafe.Add(
+                                    ref firstMomentStart,
+                                    index))
+                            : LoadBFloat16(mBFloat16, index)));
+                Vector256<float> secondMoment =
+                    Vector256.FusedMultiplyAdd(
+                        oneMinusBeta2 * gradient,
+                        gradient,
+                        beta2 * (vBFloat16 is null
+                            ? Vector256.LoadUnsafe(
+                                ref System.Runtime.CompilerServices.Unsafe.Add(
+                                    ref secondMomentStart,
+                                    index))
+                            : LoadBFloat16(vBFloat16, index)));
+                if (mBFloat16 is null)
                 {
-                    Vector256<float> gradient = grad.Length == 0
-                        ? Vector256<float>.Zero
-                        : Vector256.LoadUnsafe(ref grad[index]);
-                    Vector256<float> firstMoment =
-                        beta1 * Vector256.LoadUnsafe(ref m[index])
-                        + oneMinusBeta1 * gradient;
-                    Vector256<float> secondMoment =
-                        beta2 * Vector256.LoadUnsafe(ref v[index])
-                        + oneMinusBeta2 * gradient * gradient;
-                    firstMoment.StoreUnsafe(ref m[index]);
-                    secondMoment.StoreUnsafe(ref v[index]);
-
-                    Vector256<float> parameter =
-                        Vector256.LoadUnsafe(ref data[index]);
-                    if (applyWeightDecay)
-                        parameter -= decay * parameter;
-                    parameter -= learningRate
-                        * (firstMoment * inverseBc1)
-                        / (Vector256.Sqrt(secondMoment * inverseBc2)
-                            + epsilon);
-                    parameter.StoreUnsafe(ref data[index]);
+                    firstMoment.StoreUnsafe(
+                        ref System.Runtime.CompilerServices.Unsafe.Add(
+                            ref firstMomentStart,
+                            index));
                 }
-            }
+                else
+                {
+                    StoreBFloat16(firstMoment, mBFloat16, index);
+                }
+                if (vBFloat16 is null)
+                {
+                    secondMoment.StoreUnsafe(
+                        ref System.Runtime.CompilerServices.Unsafe.Add(
+                            ref secondMomentStart,
+                            index));
+                }
+                else
+                {
+                    StoreBFloat16(secondMoment, vBFloat16, index);
+                }
 
-            for (; index < length; index++)
-            {
-                float g = grad.Length == 0 ? 0f : grad[index];
-
-                // Adam
-                m[index] = options.Beta1 * m[index]
-                    + (1f - options.Beta1) * g;
-                v[index] = options.Beta2 * v[index]
-                    + (1f - options.Beta2) * g * g;
-
-                float mHat = m[index] / bc1;
-                float vHat = v[index] / bc2;
-
-                // AdamW: decoupled weight decay
-                if (applyWeightDecay)
-                    data[index] -= options.LearningRate
-                        * options.WeightDecay
-                        * data[index];
-
-                data[index] -=
-                    options.LearningRate
-                    * mHat
-                    / (MathF.Sqrt(vHat) + options.Epsilon);
+                Vector256<float> parameter =
+                    Vector256.LoadUnsafe(
+                        ref System.Runtime.CompilerServices.Unsafe.Add(
+                            ref dataStart,
+                            index))
+                    * parameterScale;
+                Vector256<float> inverseRoot =
+                    System.Runtime.Intrinsics.X86.Avx
+                        .ReciprocalSqrt(secondMoment);
+                inverseRoot *= half
+                    * (three - secondMoment * inverseRoot * inverseRoot);
+                Vector256<float> epsilonCorrection =
+                    one + epsilon * inverseRoot;
+                Vector256<float> inverseCorrection =
+                    System.Runtime.Intrinsics.X86.Avx.Reciprocal(
+                        epsilonCorrection);
+                inverseCorrection *= two
+                    - epsilonCorrection * inverseCorrection;
+                Vector256<float> inverseDenominator =
+                    inverseRoot * inverseCorrection;
+                inverseDenominator = Vector256.ConditionalSelect(
+                    Vector256.Equals(
+                        secondMoment,
+                        Vector256<float>.Zero),
+                    inverseZeroDenominator,
+                    inverseDenominator);
+                parameter -= updateScaleVector
+                    * firstMoment
+                    * inverseDenominator;
+                parameter.StoreUnsafe(
+                    ref System.Runtime.CompilerServices.Unsafe.Add(
+                        ref dataStart,
+                        index));
             }
         }
 
-        if (_parameters.Count > 1 && _totalElements >= 32_768)
-            Tensor.RunParallel(0, _parameters.Count, UpdateParameter);
-        else
-            for (int index = 0; index < _parameters.Count; index++)
-                UpdateParameter(index);
+        for (; index < end; index++)
+        {
+            float g = grad.Length == 0 ? 0f : grad[index];
+            float previousFirstMoment = mBFloat16 is null
+                ? m[index]
+                : BFloat16ToSingle(mBFloat16[index]);
+            float firstMoment = options.Beta1 * previousFirstMoment
+                + (1f - options.Beta1) * g;
+            if (mBFloat16 is null)
+                m[index] = firstMoment;
+            else
+                mBFloat16[index] = SingleToBFloat16(firstMoment);
+            float previousSecondMoment = vBFloat16 is null
+                ? v[index]
+                : BFloat16ToSingle(vBFloat16[index]);
+            float secondMoment = options.Beta2 * previousSecondMoment
+                + (1f - options.Beta2) * g * g;
+            if (vBFloat16 is null)
+                v[index] = secondMoment;
+            else
+                vBFloat16[index] = SingleToBFloat16(secondMoment);
+
+            if (applyWeightDecay)
+                data[index] *= 1f - options.LearningRate
+                    * options.WeightDecay;
+
+            data[index] -= updateScale * firstMoment
+                / (MathF.Sqrt(secondMoment) + scaledEpsilon);
+        }
     }
+
+    private static AdamWWorkItem[] CreateWorkItems(
+        IReadOnlyList<Parameter> parameters)
+    {
+        // Split large matrices so one embedding or projection cannot leave
+        // the remaining workers idle near the end of an optimizer step.
+        const int ChunkElements = 65_536;
+        var workItems = new List<AdamWWorkItem>();
+        for (int parameterIndex = 0;
+            parameterIndex < parameters.Count;
+            parameterIndex++)
+        {
+            int length = parameters[parameterIndex].T.Numel;
+            for (int start = 0; start < length; start += ChunkElements)
+            {
+                workItems.Add(
+                    new AdamWWorkItem(
+                        parameterIndex,
+                        start,
+                        Math.Min(ChunkElements, length - start)));
+            }
+        }
+        return workItems.ToArray();
+    }
+
+    private static Vector256<float> LoadBFloat16(
+        short[] source,
+        int offset)
+    {
+        Vector128<short> packed = Vector128.LoadUnsafe(ref source[offset]);
+        Vector256<int> widened = System.Runtime.Intrinsics.X86.Avx2
+            .ConvertToVector256Int32(packed);
+        return System.Runtime.Intrinsics.X86.Avx2
+            .ShiftLeftLogical(widened.AsUInt32(), 16)
+            .AsSingle();
+    }
+
+    private static void StoreBFloat16(
+        Vector256<float> values,
+        short[] destination,
+        int offset)
+    {
+        Vector256<int> bits = values.AsInt32();
+        Vector256<int> leastSignificantBit = System.Runtime.Intrinsics.X86.Avx2
+            .ShiftRightLogical(bits.AsUInt32(), 16)
+            .AsInt32()
+            & Vector256.Create(1);
+        Vector256<int> rounded = bits
+            + Vector256.Create(0x7FFF)
+            + leastSignificantBit;
+        Vector256<int> upper = System.Runtime.Intrinsics.X86.Avx2
+            .ShiftRightArithmetic(rounded, 16);
+        Vector256<short> duplicated = System.Runtime.Intrinsics.X86.Avx2
+            .PackSignedSaturate(upper, upper);
+        Vector256<short> ordered = System.Runtime.Intrinsics.X86.Avx2
+            .Permute4x64(duplicated.AsInt64(), 0xD8)
+            .AsInt16();
+        ordered.GetLower().StoreUnsafe(ref destination[offset]);
+    }
+
+    private static short SingleToBFloat16(float value)
+    {
+        uint bits = unchecked((uint)BitConverter.SingleToInt32Bits(value));
+        bits += 0x7FFFu + ((bits >> 16) & 1u);
+        return unchecked((short)(bits >> 16));
+    }
+
+    private static float BFloat16ToSingle(short value)
+        => BitConverter.Int32BitsToSingle(value << 16);
+
+    private static short[] EncodeBFloat16(float[] source)
+    {
+        var result = new short[source.Length];
+        for (int index = 0; index < source.Length; index++)
+            result[index] = SingleToBFloat16(source[index]);
+        return result;
+    }
+
+    private static float[] DecodeBFloat16(short[] source)
+    {
+        var result = new float[source.Length];
+        int index = 0;
+        if (Vector256.IsHardwareAccelerated
+            && System.Runtime.Intrinsics.X86.Avx2.IsSupported)
+        {
+            int end = source.Length
+                - source.Length % Vector256<float>.Count;
+            for (; index < end; index += Vector256<float>.Count)
+                LoadBFloat16(source, index).StoreUnsafe(ref result[index]);
+        }
+        for (; index < source.Length; index++)
+            result[index] = BFloat16ToSingle(source[index]);
+        return result;
+    }
+
+    private static AdamWParameterRuntime[] CreateParameterRuntime(
+        IReadOnlyList<Parameter> parameters,
+        IReadOnlyList<AdamWParameterState> states,
+        AdamWOptions options)
+    {
+        var result = new AdamWParameterRuntime[parameters.Count];
+        for (int index = 0; index < result.Length; index++)
+        {
+            Parameter parameter = parameters[index];
+            result[index] = new AdamWParameterRuntime(
+                parameter,
+                parameter.DataBuffer,
+                parameter.T.GradientBuffer,
+                states[index].FirstMoment,
+                states[index].SecondMoment,
+                options.UseBFloat16FirstMoment
+                    ? new short[parameter.T.Numel]
+                    : null,
+                options.UseBFloat16SecondMoment
+                    ? new short[parameter.T.Numel]
+                    : null,
+                ShouldApplyWeightDecay(parameter, options));
+        }
+        return result;
+    }
+
+    private void RefreshWeightDecayFlags()
+    {
+        for (int index = 0; index < _parameterRuntime.Length; index++)
+        {
+            _parameterRuntime[index].ApplyWeightDecay =
+                ShouldApplyWeightDecay(_parameters[index], _options);
+        }
+    }
+
+    private static bool ShouldApplyWeightDecay(
+        Parameter parameter,
+        AdamWOptions options)
+        => parameter.WeightDecay == WeightDecayPolicy.Apply
+            || (options.Decay1D && parameter.T.Rank == 1);
 
     private static AdamWState CreateInitialState(
         IReadOnlyList<Parameter> parameters,
@@ -210,8 +543,12 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
                     index,
                     parameter.Name,
                     parameter.T.Shape.ToArray(),
-                    new float[parameter.T.Numel],
-                    new float[parameter.T.Numel]))
+                    options.UseBFloat16FirstMoment
+                        ? []
+                        : new float[parameter.T.Numel],
+                    options.UseBFloat16SecondMoment
+                        ? []
+                        : new float[parameter.T.Numel]))
             .ToArray();
 
         return new AdamWState(
@@ -393,5 +730,32 @@ public class AdamW : IOptimizer, ILearningRateAdjustable
                         parameterState.FirstMoment.ToArray(),
                         parameterState.SecondMoment.ToArray()))
                 .ToArray());
+    }
+
+    private readonly record struct AdamWWorkItem(
+        int ParameterIndex,
+        int Start,
+        int Length);
+
+    private sealed class AdamWParameterRuntime(
+        Parameter parameter,
+        float[] data,
+        float[] gradient,
+        float[] firstMoment,
+        float[] secondMoment,
+        short[]? firstMomentBFloat16,
+        short[]? secondMomentBFloat16,
+        bool applyWeightDecay)
+    {
+        internal Parameter Parameter { get; } = parameter;
+        internal float[] Data { get; } = data;
+        internal float[] Gradient { get; set; } = gradient;
+        internal float[] FirstMoment { get; set; } = firstMoment;
+        internal short[]? FirstMomentBFloat16 { get; set; } =
+            firstMomentBFloat16;
+        internal float[] SecondMoment { get; set; } = secondMoment;
+        internal short[]? SecondMomentBFloat16 { get; set; } =
+            secondMomentBFloat16;
+        internal bool ApplyWeightDecay { get; set; } = applyWeightDecay;
     }
 }

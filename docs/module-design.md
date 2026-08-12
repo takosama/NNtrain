@@ -159,6 +159,14 @@ an optional options object; omitting the object uses the defaults below.
 | `Epsilon` | `1e-8` |
 | `WeightDecay` | `5e-2` |
 | `Decay1D` | `false` |
+| `UseBFloat16FirstMoment` | `false` |
+| `UseBFloat16SecondMoment` | `false` |
+
+The bfloat16 options reduce moment-buffer storage and memory traffic. AdamW
+loads each compact moment into float32 SIMD lanes for the update and rounds it
+back to bfloat16 between steps. `CaptureState` always exposes float32 moment
+arrays, and `RestoreState` converts them back to the configured runtime storage,
+so checkpoint format version 1 remains compatible.
 
 Configuration remains specific to each implementation and is deliberately
 absent from `IOptimizer`. Supporting GainShareAdamW, Lion, and NekoMuon

@@ -19,6 +19,8 @@ BenchmarkDotNet.Artifacts/
 *.best-model.json
 *.wiki-model.json
 training.wiki-jp.model.json
+training.hyena-wiki-jp.model.json
+training.forgetscan-wiki-jp.model.json
 *-bpe.json
 
 # OS files

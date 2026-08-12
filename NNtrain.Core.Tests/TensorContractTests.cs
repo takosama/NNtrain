@@ -152,6 +152,17 @@ public sealed class TensorContractTests
     }
 
     [Fact]
+    public void CrossEntropyRejectsBatchContainingOnlyIgnoredLabels()
+    {
+        var logits = new Tensor([1f, 0f, 0f, 1f], [2, 2]);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => logits.CrossEntropyWithLogits([-1, -1]));
+
+        Assert.Equal("labels", exception.ParamName);
+    }
+
+    [Fact]
     public void ToStringUsesDataFormatting()
     {
         var tensor = Tensor.From1D([1f, 2.5f]);

@@ -65,15 +65,141 @@ dotnet run --configuration Release --project NNtrain.Cli -- `
   --config training.wiki-jp.json
 ```
 
+To train the attention-free Hyena variant with the same Wikipedia pipeline:
+
+```powershell
+dotnet run --configuration Release --project NNtrain.Cli -- `
+  --config training.hyena-wiki-jp.json
+```
+
+To train ForgetScanGPT with its content-dependent associative memory scan:
+
+```powershell
+dotnet run --configuration Release --project NNtrain.Cli -- `
+  --config training.forgetscan-wiki-jp.json
+```
+
+To run the conceptual ForgetMemoryV2 matrix-memory model:
+
+```powershell
+dotnet run --configuration Release --project NNtrain.Cli -- `
+  --config training.forgetmemoryv2-wiki-jp.json
+```
+
+ForgetMemoryV2 is the default model. Set `modelArchitecture` to
+`"forgetmemoryv2"`, `"forgetscan"`, `"hyena"`, or `"transformer"` when an
+explicit architecture is required. `forgetMemoryKeyWidth` and
+`forgetMemoryValueWidth` control the associative matrix shape. The retention
+floor increases from `forgetMemoryRetentionMinimum` in the shallow layer to
+`forgetMemoryRetentionMaximum` in the deepest layer.
+`hyenaFilterWidth` controls the hidden width of the implicit long-filter MLP.
+`hyenaConvolutionAlgorithm` accepts `"auto"`, `"direct"`, or `"fft"`.
+The automatic mode keeps short sequences on the direct SIMD kernel and uses
+the zero-padded SIMD FFT kernel from 1024 tokens during training and 2048
+tokens during inference.
+`HyenaGpt` follows the order-2 operator from the
+[Hyena Hierarchy paper](https://arxiv.org/abs/2302.10866) and its
+[official standalone implementation](https://github.com/HazyResearch/safari/blob/main/standalone_hyena.py):
+a 3-way input projection, causal depthwise short filter, two data-controlled
+gates, an implicit sinusoidal and exponentially modulated long filter, and an
+output projection. The CPU implementation automatically selects between the
+direct SIMD convolution and the zero-padded SIMD FFT convolution.
+
+`ForgetScanGpt` projects each normalized token into forget, input, and value
+gates, then evaluates `m[t] = f[t] * m[t-1] + i[t] * v[t]` with an associative
+affine scan. On CPU, independent state channels are scheduled as cache-aligned
+tiles across worker threads and evaluated in one `O(Ld)` pass; AVX2/FMA kernels
+apply the gates and recurrence in each tile. Training saves gate values for a
+SIMD reverse scan, while inference omits those buffers. Both paths remain
+causal without storing attention keys or values.
+
+`FrogetMemoryV2Layer` packs q, k, v, retention-gate, and beta projections into
+one Tensor and evaluates a differentiable matrix memory recurrence:
+`g = lambda + (1-lambda)sigmoid(gate)`,
+`write = (1-g)sigmoid(beta)`,
+`M[t] = g*M[t-1] + write*(v-M[t-1]k)k^T`, and `r[t] = M[t]q`.
+The positive delta term moves the current recall toward v; using a negative
+term would increase the prediction error. Time remains a direct causal
+recurrence, while AVX2/FMA handles state dot products, state updates, recall,
+and all major backward vectors. Independent batches use `Parallel.For`.
+
+On a Ryzen 7 5700X, the reproducible two-layer training benchmark
+(`batch=2`, `width=64`, `hidden=128`, key/value width 32) measured:
+
+| Sequence | Attention | FrogetMemoryV2 SIMD |
+|---:|---:|---:|
+| 64 | 2.184 ms | 2.453 ms |
+| 128 | 4.908 ms | 4.805 ms |
+| 256 | 11.198 ms | 9.218 ms |
+
+Run it with `--filter *FrogetMemoryV2AttentionBenchmarks*`. These compare the
+same GPT macro dimensions; parameter counts are close but not exactly equal.
+
+The reproducible ForgetScan microbenchmarks can be run with:
+
+```powershell
+dotnet run -c Release --project NNtrain.Benchmarks -- --filter *ForgetScan*
+```
+
+To profile one complete training step with the dimensions and optimizer read
+directly from a training JSON file, run:
+
+```powershell
+dotnet run -c Release --project NNtrain.Benchmarks -- --profile-wiki training.wiki-jp.json
+```
+
+To isolate AdamW with the exact model shape and optimizer settings from the
+same JSON, run:
+
+```powershell
+dotnet run -c Release --project NNtrain.Benchmarks -- --profile-adamw training.wiki-jp.json
+dotnet run -c Release --project NNtrain.Benchmarks -- --filter *AdamWJsonBenchmarks*
+```
+
+`adamWUseBFloat16FirstMoment` and
+`adamWUseBFloat16SecondMoment` independently store AdamW moment buffers as
+bfloat16 between steps. The update is expanded to float32 in the AVX2/FMA
+kernel and checkpoints are still serialized as float32, so saved-state format
+and restore behavior remain portable. These options are off by default because
+they trade moment precision for lower memory traffic. The Wikipedia JSON turns
+both on: for its 10,551,680 parameter elements this reduces moment storage from
+84,413,440 to 42,206,720 bytes.
+
+The profiler reports forward, loss, backward, NekoMuon, and AdamW wall time,
+plus allocation/GC counts and a separate summed worker-CPU breakdown inside
+NekoMuon. With the current 17.2M-parameter `training.wiki-jp.json` profile on a
+Ryzen 7 5700X and `nekoMuonNewtonSchulzInterval: 5`, a ten-step run averaged
+589.89 ms per training step and 147.78 ms in NekoMuon. Non-refresh optimizer
+steps took about 36--40 ms, while the fifth-step orthogonalization took about
+585--598 ms. The profiler measures complete cadence cycles and reports means,
+because a median would hide the periodic fifth-step cost.
+
 The default GPT profile uses a 4096-token BPE vocabulary, reads every Parquet
-document (`maxTrainingDocuments: 0`), and uses up to 4096 tokens from each
+document (`maxTrainingDocuments: 0`), and uses the JSON-configured token limit
+from each
 document. `maxTrainingTokens: 0` selects the streaming path, so the complete
 tokenized corpus is not retained in memory. The tokenizer and best checkpoint
 paths are controlled by `tokenizerPath` and `checkpointPath`.
-The GPT profile uses `optimizer: "nekomuon"`: NekoMuon updates Transformer
-matrix weights, while an auxiliary AdamW updates embeddings, normalization
-parameters, biases, and the language-model output head. Their learning rates
-are controlled independently by `learningRate` and `auxiliaryLearningRate`.
+The byte-level BPE vocabulary reserves `<pad>=0`, `<bos>=1`, `<eos>=2`, and
+`<unk>=3`. Training pads incomplete final sequences with token id 0 and writes
+`-1` to the corresponding targets. `CrossEntropyWithLogits` enables
+`ignoreIndex=-1` by default, excludes those rows from both gradients and the
+mean-loss denominator, and continues to train BOS/EOS normally.
+The optimizer is selected by the JSON. With `optimizer: "adamw"`, AdamW updates
+every model parameter; with `optimizer: "nekomuon"`, NekoMuon updates matrix
+weights while an auxiliary AdamW updates embeddings, normalization parameters,
+biases, and the language-model output head. Their learning rates are controlled
+independently by `learningRate` and `auxiliaryLearningRate`.
+`nekoMuonNewtonSchulzInterval` defaults to 5: moments and weights advance on
+every step using the normalized current momentum, while the expensive
+Newton--Schulz orthogonalization runs only every fifth step. Set it to 1 for
+orthogonalization on every optimizer step. This cadence reduction is an
+intentional throughput variant; the original Muon implementation instead runs
+five Newton--Schulz iterations on every optimizer step.
+`warmupPercent` defaults to 20: both optimizer groups linearly warm up over the
+first 20% of total training progress, then follow cosine decay for the
+remaining 80%. Finite-token training uses exact optimizer-step progress;
+streaming all-data training uses epoch plus processed-document progress.
 With `useSimd: true`, GPT training uses hardware-accelerated Vector256 kernels
 for fused token/position embeddings, linear algebra, normalization, softmax
 reductions, cross-entropy, and NekoMuon/AdamW updates. Startup output reports
@@ -84,9 +210,12 @@ square and large-input matrices keep the cache-friendly dot-product kernel. Soft
 attention, and cross-entropy use a vectorized polynomial exponential, with a
 Vector128 fallback for narrow attention heads. Large cross-entropy batches
 recompute probabilities during backward
-instead of retaining a vocabulary-sized probability buffer. Dropout fills its
-mask in bulk, and NekoMuon reuses per-parameter workspaces to reduce allocation
-and garbage-collection overhead.
+instead of retaining a vocabulary-sized probability buffer. ForgetScan fuses
+residual addition with Dropout; its counter-based SIMD mask is regenerated in
+backward instead of retaining an activation-sized mask. NekoMuon computes both
+symmetric Gram products with a four-by-two blocked AVX2/FMA kernel, updates
+eight polynomial output rows from each source-vector load, and reuses
+per-parameter workspaces to reduce allocation and garbage-collection overhead.
 The same kernels use `Parallel.For` for independent rows, attention heads,
 embedding-gradient groups, loss rows, and optimizer parameter groups. Set
 `maxDegreeOfParallelism` to `0` to use the runtime-selected worker count, or to

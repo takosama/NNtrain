@@ -4,6 +4,78 @@ using Xunit;
 public sealed class WikiLanguageModelCommandTests
 {
     [Fact]
+    public void FiniteBatchPadsInputAndIgnoresPaddedTargets()
+    {
+        int[] tokens =
+        [
+            BpeTokenizer.BosTokenId,
+            17,
+            BpeTokenizer.EosTokenId,
+        ];
+
+        WikiLanguageModelCommand.LanguageBatch batch =
+            WikiLanguageModelCommand.CreateBatch(
+                tokens,
+                [0],
+                orderStart: 0,
+                count: 1,
+                contextLength: 4);
+
+        Assert.Equal<int>([1, 17, 0, 0], batch.Input);
+        Assert.Equal<int>([17, 2, -1, -1], batch.Target);
+        Assert.Equal(2, batch.ValidTargetCount);
+    }
+
+    [Fact]
+    public void StreamingBatchPadsInputAndKeepsOverlapToken()
+    {
+        var buffer = new List<int>
+        {
+            BpeTokenizer.BosTokenId,
+            17,
+            BpeTokenizer.EosTokenId,
+        };
+
+        WikiLanguageModelCommand.LanguageBatch batch =
+            WikiLanguageModelCommand.CreateStreamingBatch(
+                buffer,
+                batchSize: 1,
+                sequenceLength: 4);
+
+        Assert.Equal<int>([1, 17, 0, 0], batch.Input);
+        Assert.Equal<int>([17, 2, -1, -1], batch.Target);
+        Assert.Equal(2, batch.ValidTargetCount);
+        Assert.Equal<int>([BpeTokenizer.EosTokenId], buffer);
+    }
+
+    [Fact]
+    public void DefaultConfigurationCreatesFrogetMemoryV2Gpt()
+    {
+        var config = new WikiTrainingConfiguration
+        {
+            ContextLength = 8,
+            ModelWidth = 12,
+            Heads = 3,
+            HiddenSize = 20,
+            Layers = 2,
+            ForgetMemoryKeyWidth = 5,
+            ForgetMemoryValueWidth = 7,
+            ForgetMemoryRetentionMinimum = 0.3f,
+            ForgetMemoryRetentionMaximum = 0.9f,
+        };
+
+        IWikiLanguageModel created = WikiLanguageModelCommand.CreateModel(
+            config,
+            BpeTokenizer.BaseVocabularySize);
+
+        FrogetMemoryV2Gpt model = Assert.IsType<FrogetMemoryV2Gpt>(created);
+        Assert.Equal(5, model.KeyWidth);
+        Assert.Equal(7, model.ValueWidth);
+        Assert.Equal(0.3f, model.Layers[0].RetentionFloor, precision: 6);
+        Assert.Equal(0.9f, model.Layers[1].RetentionFloor, precision: 6);
+    }
+
+    [Fact]
     public void RunPrintsTheSelectedConfigurationAndEffectiveModelSettings()
     {
         string configurationPath = Path.Combine(
@@ -46,8 +118,12 @@ public sealed class WikiLanguageModelCommandTests
                 "effective training = epochs 5, batch 7, context 12",
                 output.ToString());
             Assert.Contains(
-                "effective model = vocabulary 2048, width 12, heads 3, " +
+                "effective model = forgetmemoryv2, vocabulary 2048, " +
+                "width 12, heads 3, " +
                 "hidden 20, layers 3",
+                output.ToString());
+            Assert.Contains(
+                "matrix delta memory key 16, value 16, retention 0.5-0.99",
                 output.ToString());
             Assert.Contains(
                 "Wikipedia data directory was not found",
@@ -75,6 +151,7 @@ public sealed class WikiLanguageModelCommandTests
             Optimizer = "nekomuon",
             LearningRate = 4e-4f,
             AuxiliaryLearningRate = 2e-4f,
+            NekoMuonNewtonSchulzInterval = 7,
         };
 
         IOptimizer optimizer = WikiLanguageModelCommand.CreateOptimizer(
@@ -90,6 +167,81 @@ public sealed class WikiLanguageModelCommandTests
         Assert.Equal(
             config.LearningRate,
             ((NekoMuon)composite.Optimizers[0]).LearningRate);
+        Assert.Equal(
+            7,
+            ((NekoMuon)composite.Optimizers[0])
+                .CaptureState()
+                .Options
+                .NewtonSchulzInterval);
+
+        float factor = WikiLanguageModelCommand.SetScheduledLearningRates(
+            optimizer,
+            config,
+            overallProgress: 0.1d);
+
+        Assert.Equal(0.5f, factor, precision: 6);
+        Assert.Equal(
+            config.LearningRate * 0.5f,
+            ((NekoMuon)composite.Optimizers[0]).LearningRate,
+            precision: 8);
+        Assert.Equal(
+            config.AuxiliaryLearningRate * 0.5f,
+            ((AdamW)composite.Optimizers[1]).LearningRate,
+            precision: 8);
+    }
+
+    [Theory]
+    [InlineData(0.1d, 0.5f)]
+    [InlineData(0.2d, 1f)]
+    [InlineData(0.6d, 0.5f)]
+    [InlineData(1d, 1e-6f)]
+    public void WikiScheduleUsesTwentyPercentWarmupThenCosine(
+        double progress,
+        float expected)
+    {
+        float actual = WikiLanguageModelCommand.CalculateLearningRateFactor(
+            progress,
+            warmupPercent: 20f);
+
+        Assert.Equal(expected, actual, precision: 5);
+    }
+
+    [Fact]
+    public void WikiScheduleUpdatesSingleAdamW()
+    {
+        var model = new GptRinWikiJp(
+            BpeTokenizer.BaseVocabularySize,
+            contextLength: 2,
+            dModel: 4,
+            numHeads: 1,
+            dHidden: 8,
+            numLayers: 1,
+            rng: new Random(29));
+        var config = new WikiTrainingConfiguration
+        {
+            Optimizer = "adamw",
+            LearningRate = 0.01f,
+            WarmupPercent = 20f,
+            AdamWUseBFloat16FirstMoment = true,
+            AdamWUseBFloat16SecondMoment = true,
+        };
+        IOptimizer optimizer = WikiLanguageModelCommand.CreateOptimizer(
+            model,
+            config);
+
+        AdamWState state = Assert.IsType<AdamW>(optimizer).CaptureState();
+        Assert.True(state.Options.UseBFloat16FirstMoment);
+        Assert.True(state.Options.UseBFloat16SecondMoment);
+
+        WikiLanguageModelCommand.SetScheduledLearningRates(
+            optimizer,
+            config,
+            overallProgress: 0.6d);
+
+        Assert.Equal(
+            0.005f,
+            Assert.IsType<AdamW>(optimizer).LearningRate,
+            precision: 7);
     }
 
     [Fact]

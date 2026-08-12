@@ -24,6 +24,7 @@ public sealed class NekoMuonTests
                 Rho = 0.5f,
                 Epsilon = 1e-12f,
                 MaxNewtonSchulzSteps = 1,
+                NewtonSchulzInterval = 1,
                 WeightDecay = 0f,
             });
 
@@ -57,6 +58,7 @@ public sealed class NekoMuonTests
                 Rho = 0f,
                 Epsilon = 1e-12f,
                 MaxNewtonSchulzSteps = 1,
+                NewtonSchulzInterval = 1,
                 WeightDecay = 0f,
             });
 
@@ -149,6 +151,98 @@ public sealed class NekoMuonTests
 
         AssertClose([1.96f], decayed.T.Data);
         AssertClose([2f], excluded.T.Data);
+    }
+
+    [Fact]
+    public void BlockedSimdNewtonSchulzMatchesScalarPath()
+    {
+        const int Rows = 8;
+        const int Columns = 12;
+        float[] initial = Enumerable.Range(0, Rows * Columns)
+            .Select(index => 0.01f * MathF.Cos(index * 0.17f))
+            .ToArray();
+        float[] gradient = Enumerable.Range(0, Rows * Columns)
+            .Select(index => MathF.Sin((index + 1) * 0.11f))
+            .ToArray();
+        Parameter scalar = CreateParameter(
+            (float[])initial.Clone(),
+            [Rows, Columns],
+            WeightDecayPolicy.Exclude);
+        Parameter simd = CreateParameter(
+            (float[])initial.Clone(),
+            [Rows, Columns],
+            WeightDecayPolicy.Exclude);
+        gradient.AsSpan().CopyTo(scalar.T.MutableGrad);
+        gradient.AsSpan().CopyTo(simd.T.MutableGrad);
+        var options = new NekoMuonOptions
+        {
+            LearningRate = 0.01f,
+            BetaFast = 0f,
+            BetaSlow = 0f,
+            Rho = 0f,
+            Epsilon = 1e-12f,
+            MaxNewtonSchulzSteps = 2,
+            NewtonSchulzInterval = 1,
+            WeightDecay = 0f,
+        };
+        bool previousSimd = Tensor.SimdEnabled;
+        int previousParallelism = Tensor.MaxDegreeOfParallelism;
+
+        try
+        {
+            Tensor.MaxDegreeOfParallelism = 1;
+            Tensor.SimdEnabled = false;
+            new NekoMuon([scalar], options).Step();
+            Tensor.SimdEnabled = true;
+            new NekoMuon([simd], options).Step();
+
+            AssertClose(scalar.T.Data, simd.T.Data, 2e-5f);
+        }
+        finally
+        {
+            Tensor.SimdEnabled = previousSimd;
+            Tensor.MaxDegreeOfParallelism = previousParallelism;
+        }
+    }
+
+    [Fact]
+    public void NewtonSchulzRunsOnlyAtConfiguredInterval()
+    {
+        Parameter parameter = CreateParameter(
+            [0f, 0f, 0f, 0f],
+            [2, 2],
+            WeightDecayPolicy.Exclude);
+        var optimizer = new NekoMuon(
+            [parameter],
+            new NekoMuonOptions
+            {
+                LearningRate = 0.01f,
+                BetaFast = 0f,
+                BetaSlow = 0f,
+                Rho = 0f,
+                MaxNewtonSchulzSteps = 1,
+                NewtonSchulzInterval = 5,
+                WeightDecay = 0f,
+            })
+        {
+            ProfilingEnabled = true,
+        };
+
+        for (int step = 1; step <= 5; step++)
+        {
+            new float[] { 1f, 0f, 0f, 1f }
+                .AsSpan()
+                .CopyTo(parameter.T.MutableGrad);
+            float before = parameter.T.Data[0];
+
+            optimizer.Step();
+
+            Assert.NotEqual(before, parameter.T.Data[0]);
+            if (step < 5)
+                Assert.Equal(0d, optimizer.LastStepProfile.FirstGramMilliseconds);
+            else
+                Assert.True(optimizer.LastStepProfile.FirstGramMilliseconds > 0d);
+        }
     }
 
     private static Parameter CreateParameter(

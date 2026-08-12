@@ -14,6 +14,8 @@ public sealed record NekoMuonOptions
 
     public int MaxNewtonSchulzSteps { get; init; } = 5;
 
+    public int NewtonSchulzInterval { get; init; } = 5;
+
     public float WeightDecay { get; init; } = 1e-2f;
 
     public bool Decay1D { get; init; }

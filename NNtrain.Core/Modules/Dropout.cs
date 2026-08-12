@@ -27,4 +27,13 @@ public sealed class Dropout : Module
         ArgumentNullException.ThrowIfNull(input);
         return IsTraining ? input.Dropout(Probability, _random) : input;
     }
+
+    public Tensor AddResidual(Tensor residual, Tensor branch)
+    {
+        ArgumentNullException.ThrowIfNull(residual);
+        ArgumentNullException.ThrowIfNull(branch);
+        return IsTraining
+            ? residual.AddDropout(branch, Probability, _random)
+            : residual + branch;
+    }
 }

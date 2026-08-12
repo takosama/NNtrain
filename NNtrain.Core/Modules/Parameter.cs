@@ -59,4 +59,8 @@ public class Parameter
 
     internal Tensor.DataMutation BeginUpdate()
         => T.BeginDataMutation();
+
+    internal float[] DataBuffer => T.DataBuffer;
+
+    internal void MarkUpdated() => T.MarkDataMutated();
 }

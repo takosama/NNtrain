@@ -13,4 +13,18 @@ public sealed record AdamWOptions
     public float WeightDecay { get; init; } = 5e-2f;
 
     public bool Decay1D { get; init; }
+
+    /// <summary>
+    /// Stores the signed first moment in bfloat16 between steps. This reduces
+    /// optimizer memory traffic at the cost of bfloat16 moment precision;
+    /// checkpoints remain serialized as float32 arrays.
+    /// </summary>
+    public bool UseBFloat16FirstMoment { get; init; }
+
+    /// <summary>
+    /// Stores the non-negative second moment in bfloat16 between steps.
+    /// This is an opt-in memory-bandwidth optimization; checkpoints remain
+    /// serialized as float32 arrays.
+    /// </summary>
+    public bool UseBFloat16SecondMoment { get; init; }
 }

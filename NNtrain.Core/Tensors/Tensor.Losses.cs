@@ -2,6 +2,8 @@ namespace NNtrain;
 
 partial class Tensor
 {
+    public const int DefaultCrossEntropyIgnoreIndex = -1;
+
     private const int MaximumCachedCrossEntropyProbabilities = 1 << 20;
 
     /// <summary>
@@ -10,7 +12,8 @@ partial class Tensor
     /// </summary>
     public Tensor CrossEntropyWithLogits(
         int[] labels,
-        float labelSmoothing = 0f)
+        float labelSmoothing = 0f,
+        int ignoreIndex = DefaultCrossEntropyIgnoreIndex)
     {
         ArgumentNullException.ThrowIfNull(labels);
         if (!float.IsFinite(labelSmoothing)
@@ -39,8 +42,11 @@ partial class Tensor
         }
 
         int[] retainedLabels = (int[])labels.Clone();
+        int validRows = 0;
         for (int row = 0; row < rows; row++)
         {
+            if (retainedLabels[row] == ignoreIndex)
+                continue;
             if ((uint)retainedLabels[row] >= (uint)columns)
             {
                 throw new ArgumentOutOfRangeException(
@@ -49,6 +55,13 @@ partial class Tensor
                     $"Label at row {row} must be between 0 and " +
                     $"{columns - 1}.");
             }
+            validRows++;
+        }
+        if (validRows == 0)
+        {
+            throw new ArgumentException(
+                "At least one label must not equal ignoreIndex.",
+                nameof(labels));
         }
 
         float[] rowLosses = new float[rows];
@@ -60,6 +73,9 @@ partial class Tensor
                 : null;
         void ForwardRow(int row)
         {
+            if (retainedLabels[row] == ignoreIndex)
+                return;
+
             int offset = row * columns;
             float maximum = MaxValues(_data, offset, columns);
             rowMaximums[row] = maximum;
@@ -103,15 +119,18 @@ partial class Tensor
         }
 
         RunBatches(rows, columns, ForwardRow);
-        float meanLoss = SumValues(rowLosses, 0, rows) / rows;
+        float meanLoss = SumValues(rowLosses, 0, rows) / validRows;
         var result = new Tensor([meanLoss], [1], [this]);
         result.Node.BackwardAction = () =>
         {
-            float scale = result._grad[0] / rows;
+            float scale = result._grad[0] / validRows;
             float uniformTarget = scale * labelSmoothing / columns;
             float trueTarget = scale * (1f - labelSmoothing);
             void BackwardRow(int row)
             {
+                if (retainedLabels[row] == ignoreIndex)
+                    return;
+
                 int offset = row * columns;
                 if (cachedProbabilities is null)
                 {

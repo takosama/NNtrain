@@ -28,12 +28,23 @@ public sealed class WikiTrainingConfigurationTests
               "heads": 2,
               "hiddenSize": 16,
               "layers": 1,
+              "modelArchitecture": "hyena",
+              "forgetMemoryKeyWidth": 6,
+              "forgetMemoryValueWidth": 7,
+              "forgetMemoryRetentionMinimum": 0.25,
+              "forgetMemoryRetentionMaximum": 0.9,
+              "hyenaFilterWidth": 12,
+              "hyenaConvolutionAlgorithm": "fft",
               "dropout": 0.2,
               "initializationScale": 0.03,
               "optimizer": "nekomuon",
               "learningRate": 0.001,
               "auxiliaryLearningRate": 0.002,
+              "nekoMuonNewtonSchulzInterval": 7,
+              "warmupPercent": 20,
               "weightDecay": 0.02,
+              "adamWUseBFloat16FirstMoment": true,
+              "adamWUseBFloat16SecondMoment": true,
               "seed": 9,
               "logEveryBatches": 2,
               "showLossGraph": true,
@@ -69,9 +80,23 @@ public sealed class WikiTrainingConfigurationTests
         Assert.Equal(2, configuration.Heads);
         Assert.Equal(16, configuration.HiddenSize);
         Assert.Equal(1, configuration.Layers);
+        Assert.Equal("hyena", configuration.ModelArchitecture);
+        Assert.Equal(6, configuration.ForgetMemoryKeyWidth);
+        Assert.Equal(7, configuration.ForgetMemoryValueWidth);
+        Assert.Equal(0.25f, configuration.ForgetMemoryRetentionMinimum);
+        Assert.Equal(0.9f, configuration.ForgetMemoryRetentionMaximum);
+        Assert.Equal(12, configuration.HyenaFilterWidth);
+        Assert.Equal("fft", configuration.HyenaConvolutionAlgorithm);
+        Assert.Equal(
+            HyenaConvolutionAlgorithm.Fft,
+            configuration.GetHyenaConvolutionAlgorithm());
         Assert.Equal("nekomuon", configuration.Optimizer);
         Assert.Equal(0.001f, configuration.LearningRate);
         Assert.Equal(0.002f, configuration.AuxiliaryLearningRate);
+        Assert.Equal(7, configuration.NekoMuonNewtonSchulzInterval);
+        Assert.Equal(20f, configuration.WarmupPercent);
+        Assert.True(configuration.AdamWUseBFloat16FirstMoment);
+        Assert.True(configuration.AdamWUseBFloat16SecondMoment);
         Assert.True(configuration.ShowLossGraph);
         Assert.Equal(100, configuration.GraphUpdateSteps);
         Assert.Equal(1000, configuration.DatasetSampleEverySteps);
@@ -104,6 +129,11 @@ public sealed class WikiTrainingConfigurationTests
         };
 
         configuration.Validate();
+        Assert.Equal("forgetmemoryv2", configuration.ModelArchitecture);
+        Assert.True(configuration.IsForgetMemoryV2Architecture());
+        Assert.Equal(
+            HyenaConvolutionAlgorithm.Auto,
+            configuration.GetHyenaConvolutionAlgorithm());
     }
 
     [Fact]
@@ -133,6 +163,117 @@ public sealed class WikiTrainingConfigurationTests
             configuration.Validate);
 
         Assert.Equal("Optimizer", exception.ParamName);
+    }
+
+    [Fact]
+    public void RejectsUnsupportedModelArchitecture()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            ModelArchitecture = "attention-plus",
+        };
+
+        ArgumentException exception = Assert.Throws<ArgumentException>(
+            configuration.Validate);
+
+        Assert.Equal("ModelArchitecture", exception.ParamName);
+    }
+
+    [Fact]
+    public void AcceptsForgetScanArchitecture()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            ModelArchitecture = "forgetscan",
+        };
+
+        configuration.Validate();
+
+        Assert.True(configuration.IsArchitecture(
+            WikiTrainingConfiguration.ForgetScanArchitecture));
+    }
+
+    [Theory]
+    [InlineData("forgetmemoryv2")]
+    [InlineData("frogetmemoryv2")]
+    public void AcceptsForgetMemoryV2ArchitectureAndAlias(string architecture)
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            ModelArchitecture = architecture,
+            ForgetMemoryKeyWidth = 5,
+            ForgetMemoryValueWidth = 7,
+            ForgetMemoryRetentionMinimum = 0.2f,
+            ForgetMemoryRetentionMaximum = 0.95f,
+        };
+
+        configuration.Validate();
+
+        Assert.True(configuration.IsForgetMemoryV2Architecture());
+    }
+
+    [Fact]
+    public void RejectsInvalidForgetMemoryRetentionRange()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            ForgetMemoryRetentionMinimum = 0.9f,
+            ForgetMemoryRetentionMaximum = 0.5f,
+        };
+
+        ArgumentException exception = Assert.Throws<ArgumentException>(
+            configuration.Validate);
+
+        Assert.Equal("ForgetMemoryRetentionMinimum", exception.ParamName);
+    }
+
+    [Theory]
+    [InlineData(-1f)]
+    [InlineData(100f)]
+    [InlineData(float.NaN)]
+    public void RejectsInvalidWarmupPercent(float warmupPercent)
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            WarmupPercent = warmupPercent,
+        };
+
+        ArgumentOutOfRangeException exception =
+            Assert.Throws<ArgumentOutOfRangeException>(
+                configuration.Validate);
+
+        Assert.Equal("WarmupPercent", exception.ParamName);
+    }
+
+    [Fact]
+    public void RejectsInvalidNekoMuonNewtonSchulzInterval()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            NekoMuonNewtonSchulzInterval = 0,
+        };
+
+        ArgumentOutOfRangeException exception =
+            Assert.Throws<ArgumentOutOfRangeException>(
+                configuration.Validate);
+
+        Assert.Equal(
+            "NekoMuonNewtonSchulzInterval",
+            exception.ParamName);
+    }
+
+    [Fact]
+    public void RejectsUnsupportedHyenaConvolutionAlgorithm()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            HyenaConvolutionAlgorithm = "ntt",
+        };
+
+        ArgumentException exception = Assert.Throws<ArgumentException>(
+            configuration.Validate);
+
+        Assert.Equal("HyenaConvolutionAlgorithm", exception.ParamName);
     }
 
     private sealed class TemporaryDirectory : IDisposable
