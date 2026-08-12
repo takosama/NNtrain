@@ -175,6 +175,20 @@ dotnet run --configuration Release --project NNtrain.Cli -- `
   --config training.example.json --resume
 ```
 
+To resume only when the previous training process ended abnormally, use:
+
+```powershell
+dotnet run --configuration Release --project NNtrain.Cli -- `
+  --config training.example.json --auto-resume
+```
+
+`--auto-resume` creates an exclusive `*.running.json` run marker next to the
+checkpoint. A normal training completion removes it; a crash, forced process
+termination, or error leaves it behind. On the next launch, the CLI restores
+the latest checkpoint only when both the interrupted-run marker and checkpoint
+exist. The same marker lease also prevents two processes from updating one
+checkpoint concurrently.
+
 The same behavior can be enabled with `"resumeFromCheckpoint": true` in the
 JSON. Classification defaults to `<config>.checkpoint.json`; Wikipedia uses
 `checkpointPath`. The separate `*.best-model.json` classification artifact

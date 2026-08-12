@@ -212,15 +212,21 @@ public sealed class TrainingIntegrationTests
         }
 
         WriteConfiguration(epochs: 2, resume: false);
+        File.WriteAllText(
+            TrainingRunGuard.GetMarkerPath(checkpointPath),
+            "{\"interrupted\":true}");
         using var resumedOutput = new StringWriter();
         using var resumedError = new StringWriter();
         int resumedExitCode = Program.Run(
-            ["--config", configurationPath, "--resume"],
+            ["--config", configurationPath, "--auto-resume"],
             resumedOutput,
             resumedError);
 
         Assert.Equal(0, resumedExitCode);
         Assert.Equal(string.Empty, resumedError.ToString());
+        Assert.Contains(
+            "auto-resume = interrupted training detected",
+            resumedOutput.ToString());
         Assert.Contains(
             "resumed checkpoint = " + checkpointPath + ", next epoch 2",
             resumedOutput.ToString());
@@ -232,6 +238,78 @@ public sealed class TrainingIntegrationTests
             resumedCheckpoint.RootElement
                 .GetProperty("CompletedEpoch")
                 .GetInt32());
+        Assert.False(File.Exists(
+            TrainingRunGuard.GetMarkerPath(checkpointPath)));
+    }
+
+    [Fact]
+    public void AutoResumeStartsFreshWithoutInterruptedRunMarker()
+    {
+        using var directory = new TemporaryDirectory();
+        string checkpointPath = Path.Combine(
+            directory.Root,
+            "fresh.checkpoint.json");
+        using TrainingRunGuard run = TrainingRunGuard.Begin(
+            Path.Combine(directory.Root, "training.json"),
+            checkpointPath);
+        using var output = new StringWriter();
+
+        bool resume = Program.ResolveAutomaticResume(
+            explicitResume: false,
+            autoResume: true,
+            run,
+            checkpointPath,
+            output);
+
+        Assert.False(resume);
+        Assert.Contains(
+            "no interrupted training run detected",
+            output.ToString());
+        run.Complete();
+    }
+
+    [Fact]
+    public void TrainingRunGuardRejectsConcurrentTrainingForSameCheckpoint()
+    {
+        using var directory = new TemporaryDirectory();
+        string checkpointPath = Path.Combine(
+            directory.Root,
+            "shared.checkpoint.json");
+        using TrainingRunGuard first = TrainingRunGuard.Begin(
+            Path.Combine(directory.Root, "first.json"),
+            checkpointPath);
+
+        IOException exception = Assert.Throws<IOException>(() =>
+            TrainingRunGuard.Begin(
+                Path.Combine(directory.Root, "second.json"),
+                checkpointPath));
+
+        Assert.Contains("Another training process", exception.Message);
+        first.Complete();
+    }
+
+    [Fact]
+    public void IncompleteTrainingRunLeavesInterruptionMarker()
+    {
+        using var directory = new TemporaryDirectory();
+        string checkpointPath = Path.Combine(
+            directory.Root,
+            "interrupted.checkpoint.json");
+        string markerPath = TrainingRunGuard.GetMarkerPath(checkpointPath);
+
+        using (TrainingRunGuard run = TrainingRunGuard.Begin(
+            Path.Combine(directory.Root, "training.json"),
+            checkpointPath))
+        {
+            Assert.False(run.WasInterrupted);
+        }
+
+        Assert.True(File.Exists(markerPath));
+        using TrainingRunGuard resumed = TrainingRunGuard.Begin(
+            Path.Combine(directory.Root, "training.json"),
+            checkpointPath);
+        Assert.True(resumed.WasInterrupted);
+        resumed.Complete();
     }
 
     [Theory]

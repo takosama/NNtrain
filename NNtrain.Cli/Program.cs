@@ -18,6 +18,7 @@ internal static partial class Program
         string configurationPath;
         string? generatePrompt = null;
         bool resumeFromCheckpoint = false;
+        bool autoResume = false;
         if (args.Length == 0)
         {
             configurationPath = FindDefaultConfiguration();
@@ -39,6 +40,15 @@ internal static partial class Program
             configurationPath = FindDefaultConfiguration();
             resumeFromCheckpoint = true;
         }
+        else if (args.Length == 1
+            && string.Equals(
+                args[0],
+                "--auto-resume",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            configurationPath = FindDefaultConfiguration();
+            autoResume = true;
+        }
         else if (args.Length == 3
             && string.Equals(
                 args[0],
@@ -51,6 +61,19 @@ internal static partial class Program
         {
             configurationPath = args[1];
             resumeFromCheckpoint = true;
+        }
+        else if (args.Length == 3
+            && string.Equals(
+                args[0],
+                "--config",
+                StringComparison.OrdinalIgnoreCase)
+            && string.Equals(
+                args[2],
+                "--auto-resume",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            configurationPath = args[1];
+            autoResume = true;
         }
         else if (args.Length == 4
             && string.Equals(
@@ -69,7 +92,7 @@ internal static partial class Program
         {
             error.WriteLine(
                 "Usage: NNtrain.Cli [--config <training-config.json>] " +
-                "[--resume | --generate <prompt>]");
+                "[--resume | --auto-resume | --generate <prompt>]");
             return 1;
         }
 
@@ -78,13 +101,36 @@ internal static partial class Program
             if (WikiTrainingConfiguration.IsWikiConfiguration(
                 configurationPath))
             {
-                return WikiLanguageModelCommand.Run(
+                if (generatePrompt is not null)
+                {
+                    return WikiLanguageModelCommand.Run(
+                        configurationPath,
+                        generatePrompt,
+                        output,
+                        error,
+                        openLossGraph);
+                }
+                WikiTrainingConfiguration wikiConfig =
+                    WikiTrainingConfiguration.Load(configurationPath);
+                using TrainingRunGuard wikiRun = TrainingRunGuard.Begin(
                     configurationPath,
-                    generatePrompt,
+                    wikiConfig.CheckpointPath);
+                bool resumeWiki = ResolveAutomaticResume(
+                    resumeFromCheckpoint,
+                    autoResume,
+                    wikiRun,
+                    wikiConfig.CheckpointPath,
+                    output);
+                int wikiExitCode = WikiLanguageModelCommand.Run(
+                    configurationPath,
+                    generatePrompt: null,
                     output,
                     error,
                     openLossGraph,
-                    resumeFromCheckpoint);
+                    resumeWiki);
+                if (wikiExitCode == 0)
+                    wikiRun.Complete();
+                return wikiExitCode;
             }
             if (generatePrompt is not null)
             {
@@ -95,7 +141,17 @@ internal static partial class Program
 
             TrainingConfiguration config =
                 TrainingConfiguration.Load(configurationPath);
-            if (resumeFromCheckpoint)
+            using TrainingRunGuard classificationRun =
+                TrainingRunGuard.Begin(
+                    configurationPath,
+                    config.CheckpointPath);
+            bool resumeClassification = ResolveAutomaticResume(
+                resumeFromCheckpoint,
+                autoResume,
+                classificationRun,
+                config.CheckpointPath,
+                output);
+            if (resumeClassification)
                 config = config with { ResumeFromCheckpoint = true };
             torch.manual_seed(config.Seed);
             Tensor.SimdEnabled = config.UseSimd;
@@ -545,6 +601,7 @@ internal static partial class Program
                 output.WriteLine($"checkpoint = {checkpointPath}");
             }
 
+            classificationRun.Complete();
             return 0;
         }
         catch (Exception exception) when (
@@ -578,6 +635,41 @@ internal static partial class Program
         int previousTenth = (completedUnits - 1) * 10 / totalUnits;
         int currentTenth = completedUnits * 10 / totalUnits;
         return currentTenth > previousTenth;
+    }
+
+    internal static bool ResolveAutomaticResume(
+        bool explicitResume,
+        bool autoResume,
+        TrainingRunGuard run,
+        string checkpointPath,
+        TextWriter output)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        ArgumentNullException.ThrowIfNull(output);
+        if (explicitResume)
+            return true;
+        if (!autoResume)
+            return false;
+        if (!run.WasInterrupted)
+        {
+            output.WriteLine(
+                "auto-resume = no interrupted training run detected; " +
+                "starting from the configured initial state");
+            return false;
+        }
+        if (!File.Exists(checkpointPath))
+        {
+            output.WriteLine(
+                $"auto-resume = interrupted run marker found at " +
+                $"{run.MarkerPath}, but checkpoint is missing; starting " +
+                "from the configured initial state");
+            return false;
+        }
+
+        output.WriteLine(
+            $"auto-resume = interrupted training detected; restoring " +
+            $"latest checkpoint {Path.GetFullPath(checkpointPath)}");
+        return true;
     }
 
     private static ClassificationTrainingCheckpoint
