@@ -120,7 +120,13 @@ partial class Tensor
 
         RunBatches(rows, columns, ForwardRow);
         float meanLoss = SumValues(rowLosses, 0, rows) / validRows;
-        var result = new Tensor([meanLoss], [1], [this]);
+        // Loss values and their reduction are always retained in Float32,
+        // even when the logits use a lower-precision physical storage.
+        var result = new Tensor(
+            [meanLoss],
+            [1],
+            [this],
+            dtype: TensorDType.Float32);
         result.Node.BackwardAction = () =>
         {
             float scale = result._grad[0] / validRows;

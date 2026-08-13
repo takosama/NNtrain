@@ -291,7 +291,7 @@ partial class Tensor
             int outputRow = r * n;
             if (transposedOther is not null)
             {
-                Array.Copy(rowBias._data, 0, y, outputRow, n);
+                rowBias._data.CopyRangeTo(0, y.AsSpan(outputRow, n));
                 for (int inner = 0; inner < k; inner++)
                 {
                     AddScaledValues(
@@ -420,6 +420,293 @@ partial class Tensor
         for (; index < length; index++)
             sum += left[leftOffset + index] * right[rightOffset + index];
 
+        return sum;
+    }
+
+    private static float DotProduct(
+        TensorStorage left,
+        int leftOffset,
+        TensorStorage right,
+        int rightOffset,
+        int length)
+    {
+        if (left.TryGetFloat32Buffer(out float[] leftValues)
+            && right.TryGetFloat32Buffer(out float[] rightValues))
+        {
+            return DotProduct(
+                leftValues,
+                leftOffset,
+                rightValues,
+                rightOffset,
+                length);
+        }
+        if (left.TryGetFloat16Buffer(out Half[] leftHalf)
+            && right.TryGetFloat16Buffer(out Half[] rightHalf))
+        {
+            return DotProductHalf(
+                leftHalf,
+                leftOffset,
+                rightHalf,
+                rightOffset,
+                length);
+        }
+        return DotProductStorage(left, leftOffset, right, rightOffset, length);
+    }
+
+    private static float DotProduct(
+        float[] left,
+        int leftOffset,
+        Half[] right,
+        int rightOffset,
+        int length)
+        => DotProductFloatHalf(left, leftOffset, right, rightOffset, length);
+
+    private static float DotProduct(
+        Half[] left,
+        int leftOffset,
+        float[] right,
+        int rightOffset,
+        int length)
+        => DotProductHalfFloat(left, leftOffset, right, rightOffset, length);
+
+    private static float DotProduct(
+        float[] left,
+        int leftOffset,
+        TensorStorage right,
+        int rightOffset,
+        int length)
+    {
+        if (right.TryGetFloat32Buffer(out float[] rightValues))
+        {
+            return DotProduct(
+                left,
+                leftOffset,
+                rightValues,
+                rightOffset,
+                length);
+        }
+        if (right.TryGetFloat16Buffer(out Half[] rightHalf))
+        {
+            return DotProductFloatHalf(
+                left,
+                leftOffset,
+                rightHalf,
+                rightOffset,
+                length);
+        }
+        return DotProductStorage(left, leftOffset, right, rightOffset, length);
+    }
+
+    private static float DotProduct(
+        TensorStorage left,
+        int leftOffset,
+        float[] right,
+        int rightOffset,
+        int length)
+    {
+        if (left.TryGetFloat32Buffer(out float[] leftValues))
+        {
+            return DotProduct(
+                leftValues,
+                leftOffset,
+                right,
+                rightOffset,
+                length);
+        }
+        if (left.TryGetFloat16Buffer(out Half[] leftHalf))
+        {
+            return DotProductHalfFloat(
+                leftHalf,
+                leftOffset,
+                right,
+                rightOffset,
+                length);
+        }
+        return DotProductStorage(left, leftOffset, right, rightOffset, length);
+    }
+
+    private static float DotProductHalf(
+        Half[] left,
+        int leftOffset,
+        Half[] right,
+        int rightOffset,
+        int length)
+    {
+        int index = 0;
+        float sum = 0f;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int end = length - length % width;
+            Vector256<float> sumVector = Vector256<float>.Zero;
+            for (; index < end; index += width)
+            {
+                sumVector += LoadVector256(left, leftOffset + index)
+                    * LoadVector256(right, rightOffset + index);
+            }
+            sum = Vector256.Sum(sumVector);
+        }
+        if (CanUseVector128(length - index))
+        {
+            sum += Vector128.Sum(
+                LoadVector128(left, leftOffset + index)
+                    * LoadVector128(right, rightOffset + index));
+            index += Vector128<float>.Count;
+        }
+        for (; index < length; index++)
+            sum += (float)left[leftOffset + index]
+                * (float)right[rightOffset + index];
+        return sum;
+    }
+
+    private static float DotProductFloatHalf(
+        float[] left,
+        int leftOffset,
+        Half[] right,
+        int rightOffset,
+        int length)
+    {
+        int index = 0;
+        float sum = 0f;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int end = length - length % width;
+            Vector256<float> sumVector = Vector256<float>.Zero;
+            for (; index < end; index += width)
+            {
+                sumVector += LoadVector256(left, leftOffset + index)
+                    * LoadVector256(right, rightOffset + index);
+            }
+            sum = Vector256.Sum(sumVector);
+        }
+        if (CanUseVector128(length - index))
+        {
+            sum += Vector128.Sum(
+                LoadVector128(left, leftOffset + index)
+                    * LoadVector128(right, rightOffset + index));
+            index += Vector128<float>.Count;
+        }
+        for (; index < length; index++)
+            sum += left[leftOffset + index] * (float)right[rightOffset + index];
+        return sum;
+    }
+
+    private static float DotProductHalfFloat(
+        Half[] left,
+        int leftOffset,
+        float[] right,
+        int rightOffset,
+        int length)
+        => DotProductFloatHalf(
+            right,
+            rightOffset,
+            left,
+            leftOffset,
+            length);
+
+    private static float DotProductStorage(
+        TensorStorage left,
+        int leftOffset,
+        TensorStorage right,
+        int rightOffset,
+        int length)
+    {
+        int index = 0;
+        float sum = 0f;
+        if (CanUseSimd(length))
+        {
+            int vectorWidth = Vector256<float>.Count;
+            int vectorizedLength = length - length % vectorWidth;
+            Vector256<float> sumVector = Vector256<float>.Zero;
+            for (; index < vectorizedLength; index += vectorWidth)
+            {
+                sumVector += LoadVector256(left, leftOffset + index)
+                    * LoadVector256(right, rightOffset + index);
+            }
+            sum = Vector256.Sum(sumVector);
+        }
+
+        if (CanUseVector128(length - index))
+        {
+            sum += Vector128.Sum(
+                LoadVector128(left, leftOffset + index)
+                    * LoadVector128(right, rightOffset + index));
+            index += Vector128<float>.Count;
+        }
+
+        for (; index < length; index++)
+            sum += left[leftOffset + index] * right[rightOffset + index];
+        return sum;
+    }
+
+    private static float DotProductStorage(
+        float[] left,
+        int leftOffset,
+        TensorStorage right,
+        int rightOffset,
+        int length)
+    {
+        int index = 0;
+        float sum = 0f;
+        if (CanUseSimd(length))
+        {
+            int vectorWidth = Vector256<float>.Count;
+            int vectorizedLength = length - length % vectorWidth;
+            Vector256<float> sumVector = Vector256<float>.Zero;
+            for (; index < vectorizedLength; index += vectorWidth)
+            {
+                sumVector += LoadVector256(left, leftOffset + index)
+                    * LoadVector256(right, rightOffset + index);
+            }
+            sum = Vector256.Sum(sumVector);
+        }
+
+        if (CanUseVector128(length - index))
+        {
+            sum += Vector128.Sum(
+                LoadVector128(left, leftOffset + index)
+                    * LoadVector128(right, rightOffset + index));
+            index += Vector128<float>.Count;
+        }
+
+        for (; index < length; index++)
+            sum += left[leftOffset + index] * right[rightOffset + index];
+        return sum;
+    }
+
+    private static float DotProductStorage(
+        TensorStorage left,
+        int leftOffset,
+        float[] right,
+        int rightOffset,
+        int length)
+    {
+        int index = 0;
+        float sum = 0f;
+        if (CanUseSimd(length))
+        {
+            int vectorWidth = Vector256<float>.Count;
+            int vectorizedLength = length - length % vectorWidth;
+            Vector256<float> sumVector = Vector256<float>.Zero;
+            for (; index < vectorizedLength; index += vectorWidth)
+            {
+                sumVector += LoadVector256(left, leftOffset + index)
+                    * LoadVector256(right, rightOffset + index);
+            }
+            sum = Vector256.Sum(sumVector);
+        }
+
+        if (CanUseVector128(length - index))
+        {
+            sum += Vector128.Sum(
+                LoadVector128(left, leftOffset + index)
+                    * LoadVector128(right, rightOffset + index));
+            index += Vector128<float>.Count;
+        }
+
+        for (; index < length; index++)
+            sum += left[leftOffset + index] * right[rightOffset + index];
         return sum;
     }
 }

@@ -19,7 +19,8 @@ partial class Tensor
             throw ShapeMismatch(this, matrix, "Batch-wise addition");
 
         int matrixLength = rows * columns;
-        float[] output = (float[])_data.Clone();
+        float[] output = new float[Numel];
+        _data.CopyTo(output);
         for (int batchIndex = 0; batchIndex < batch; batchIndex++)
         {
             AddScaledValues(

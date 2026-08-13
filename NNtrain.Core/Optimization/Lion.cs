@@ -5,6 +5,8 @@ public sealed class Lion : IOptimizer, ILearningRateAdjustable
     private readonly List<Parameter> _parameters;
     private LionState _state;
 
+    internal IReadOnlyList<Parameter> Parameters => _parameters;
+
     public Lion(
         IEnumerable<Parameter> parameters,
         LionOptions? options = null)

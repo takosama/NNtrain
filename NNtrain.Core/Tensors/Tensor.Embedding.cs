@@ -60,12 +60,9 @@ partial class Tensor
                     $"Embedding index at position {position} must be " +
                     $"between 0 and {rows - 1}.");
             }
-            Array.Copy(
-                _data,
+            _data.CopyRangeTo(
                 row * width,
-                resultData,
-                position * width,
-                width);
+                resultData.AsSpan(position * width, width));
         }
 
         EmbeddingGradientGroups gradientGroups =

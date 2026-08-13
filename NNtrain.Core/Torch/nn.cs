@@ -124,7 +124,8 @@ public static class nn
         float retention_max = 0.99f,
         float dropout = 0f,
         float init_scale = 0.02f,
-        Random? generator = null)
+        Random? generator = null,
+        TensorDType dtype = TensorDType.Float16)
         => new(
             vocab_size,
             context_length,
@@ -137,5 +138,6 @@ public static class nn
             retention_max,
             generator ?? torch.generator(),
             init_scale,
-            dropout);
+            dropout,
+            dtype);
 }

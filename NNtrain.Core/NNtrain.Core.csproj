@@ -4,6 +4,16 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <!-- The native F16C accelerator is optional.  A portable managed AVX2/
+       scalar codec remains the default when this Windows x64 payload is not
+       present or the processor does not advertise F16C. -->
+  <ItemGroup Condition="Exists('runtimes\\win-x64\\native\\NNtrain.F16C.dll')">
+    <None Include="runtimes\\win-x64\\native\\NNtrain.F16C.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="NNtrain.F16C.dll" />
+  </ItemGroup>
 
 </Project>

@@ -27,10 +27,14 @@ internal static class ClassificationCheckpoint
         ClassificationTrainingCheckpoint checkpoint)
     {
         ArgumentNullException.ThrowIfNull(checkpoint);
+        string fullPath = Path.GetFullPath(path);
+        string? directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
         safetensors.torch.save_file(
             checkpoint.Model,
-            GetSafeTensorsPath(path));
-        torch.save(checkpoint, path);
+            GetSafeTensorsPath(fullPath));
+        torch.save(checkpoint, fullPath);
     }
 
     internal static ClassificationTrainingCheckpoint Load(string path)

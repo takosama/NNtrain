@@ -14,7 +14,15 @@ data/
 # BenchmarkDotNet generated reports and executables
 BenchmarkDotNet.Artifacts/
 
+# Native F16C build by-products. The Windows x64 runtime DLL is intentional:
+# it is the optional accelerator payload copied by NNtrain.Core.csproj.
+NNtrain.F16C.obj
+NNtrain.Core/runtimes/win-x64/native/*.obj
+NNtrain.Core/runtimes/win-x64/native/*.lib
+NNtrain.Core/runtimes/win-x64/native/*.exp
+
 # Generated training reports and checkpoints
+checkpoints/
 *.loss*.html
 *.best-model.json
 *.wiki-model.json

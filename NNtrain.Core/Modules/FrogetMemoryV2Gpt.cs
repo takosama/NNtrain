@@ -25,7 +25,9 @@ public sealed class FrogetMemoryV2Gpt : Module, IWikiLanguageModel
         float retentionMaximum = 0.99f,
         Random? random = null,
         float initializationScale = 0.02f,
-        float dropout = 0f)
+        float dropout = 0f,
+        TensorDType dtype = TensorDType.Float16)
+        : base(dtype)
     {
         if (vocabularySize <= 0)
             throw new ArgumentOutOfRangeException(nameof(vocabularySize));
@@ -64,8 +66,9 @@ public sealed class FrogetMemoryV2Gpt : Module, IWikiLanguageModel
                 vocabularySize,
                 modelWidth,
                 random,
-                initializationScale));
-        _embeddingDropout = RegisterModule(new Dropout(dropout, random));
+                initializationScale,
+                dtype));
+        _embeddingDropout = RegisterModule(new Dropout(dropout, random, dtype));
         _layers = new FrogetMemoryV2Layer[numLayers];
         for (int layerIndex = 0; layerIndex < numLayers; layerIndex++)
         {
@@ -84,15 +87,18 @@ public sealed class FrogetMemoryV2Gpt : Module, IWikiLanguageModel
                     retentionFloor,
                     random,
                     initializationScale,
-                    dropout));
+                    dropout,
+                    dtype));
         }
-        _finalNorm = RegisterModule(new LayerNorm(modelWidth));
+        _finalNorm = RegisterModule(
+            new LayerNorm(modelWidth, dtype: dtype));
         _languageModelHead = RegisterModule(
             new Linear(
                 modelWidth,
                 vocabularySize,
                 random,
-                initializationScale));
+                initializationScale,
+                dtype));
 
         _hiddenWeightParameters = _layers
             .SelectMany(layer => layer.Parameters())
@@ -279,7 +285,8 @@ public sealed class FrogetMemoryV2Gpt : Module, IWikiLanguageModel
         int rows,
         int width,
         Random random,
-        float scale)
+        float scale,
+        TensorDType dtype)
     {
         var values = new float[checked(rows * width)];
         for (int index = 0; index < values.Length; index++)
@@ -288,7 +295,8 @@ public sealed class FrogetMemoryV2Gpt : Module, IWikiLanguageModel
             values,
             [rows, width],
             "TokenEmbedding",
-            WeightDecayPolicy.Apply);
+            WeightDecayPolicy.Apply,
+            dtype);
     }
 
     private static int Sample(

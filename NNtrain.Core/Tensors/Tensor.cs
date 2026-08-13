@@ -10,7 +10,10 @@ namespace NNtrain;
 /// </remarks>
 public partial class Tensor
 {
-    private readonly float[] _data;
+    private readonly TensorStorage _data;
+    private float[]? _masterData;
+    private float[]? _physicalFloat32Cache;
+    private long _physicalFloat32CacheDataVersion = -1;
     private float[] _grad;
     private readonly int[] _shape;
     private long _dataVersion;
@@ -25,8 +28,19 @@ public partial class Tensor
     public IReadOnlyList<int> Shape { get; }
     public string Name { get; }
 
+    /// <summary>Gets the physical storage dtype.</summary>
+    public TensorDType DType => _data.DType;
+
+    /// <summary>
+    /// Gets the dtype used by arithmetic after values are loaded from storage.
+    /// </summary>
+    public TensorDType ComputeDType => TensorDType.Float32;
+
+    /// <summary>Gets the dtype used by reductions and gradient accumulation.</summary>
+    public TensorDType AccumulationDType => TensorDType.Float32;
+
     public int Rank => _shape.Length;
-    public int Numel => _data.Length;
+    public int Numel => _data.Count;
 
     public IReadOnlyList<float> data => Data;
     public IReadOnlyList<float> grad => Grad;
@@ -49,17 +63,22 @@ public partial class Tensor
     internal long DataVersion => _dataVersion;
     internal bool HasGradientBuffer => _grad.Length != 0;
 
-    public Tensor(float[] data, int[] shape, string name = "")
+    public Tensor(
+        float[] data,
+        int[] shape,
+        string name = "",
+        TensorDType dtype = TensorDType.Float32)
     {
         ArgumentNullException.ThrowIfNull(data);
         ValidateShape(shape, data.Length);
+        TensorDTypeContract.ValidateImplemented(dtype, nameof(dtype));
 
-        _data = (float[])data.Clone();
+        _data = TensorStorage.Create(data, dtype);
         _grad = [];
         _shape = (int[])shape.Clone();
         Name = name ?? throw new ArgumentNullException(nameof(name));
 
-        Data = Array.AsReadOnly(_data);
+        Data = _data;
         Grad = new GradientView(this);
         Shape = Array.AsReadOnly(_shape);
 
@@ -73,44 +92,61 @@ public partial class Tensor
     public static Tensor FromOwnedData(
         float[] data,
         int[] shape,
-        string name = "")
+        string name = "",
+        TensorDType dtype = TensorDType.Float32)
     {
         ArgumentNullException.ThrowIfNull(data);
         ValidateShape(shape, data.Length);
 
-        return new Tensor(data, shape, name, takeOwnership: true);
+        TensorDTypeContract.ValidateImplemented(dtype, nameof(dtype));
+        return new Tensor(data, shape, name, takeOwnership: true, dtype);
     }
 
     private Tensor(
         float[] data,
         int[] shape,
         string name,
-        bool takeOwnership)
+        bool takeOwnership,
+        TensorDType dtype)
     {
-        _data = takeOwnership ? data : (float[])data.Clone();
+        _data = dtype == TensorDType.Float32 && takeOwnership
+            ? TensorStorage.FromOwnedFloat32(data)
+            : TensorStorage.Create(data, dtype);
         _grad = [];
         _shape = (int[])shape.Clone();
         Name = name ?? throw new ArgumentNullException(nameof(name));
 
-        Data = Array.AsReadOnly(_data);
+        Data = _data;
         Grad = new GradientView(this);
         Shape = Array.AsReadOnly(_shape);
         Node = new AutogradNode();
     }
 
-    private Tensor(float[] data, int[] shape, Tensor[] prev, string name = "")
+    private Tensor(
+        float[] data,
+        int[] shape,
+        Tensor[] prev,
+        string name = "",
+        TensorDType? dtype = null)
     {
         ArgumentNullException.ThrowIfNull(data);
         ArgumentNullException.ThrowIfNull(prev);
         ValidateShape(shape, data.Length);
 
-        _data = data;
+        TensorDType resultDType = dtype
+            ?? TensorDTypeContract.Promote(prev);
+        TensorDTypeContract.ValidateImplemented(
+            resultDType,
+            nameof(dtype));
+        _data = resultDType == TensorDType.Float32
+            ? TensorStorage.FromOwnedFloat32(data)
+            : TensorStorage.Create(data, resultDType);
         bool isRecording = AutogradContext.IsRecordingEnabled;
         _grad = isRecording ? new float[data.Length] : [];
         _shape = (int[])shape.Clone();
         Name = name ?? throw new ArgumentNullException(nameof(name));
 
-        Data = Array.AsReadOnly(_data);
+        Data = _data;
         Grad = new GradientView(this);
         Shape = Array.AsReadOnly(_shape);
 
@@ -126,25 +162,93 @@ public partial class Tensor
         }
     }
 
-    public static Tensor Scalar(float value, string name = "")
-        => new([value], [1], name);
+    private Tensor(
+        TensorStorage data,
+        int[] shape,
+        Tensor[] prev,
+        string name = "")
+    {
+        ArgumentNullException.ThrowIfNull(data);
+        ArgumentNullException.ThrowIfNull(prev);
+        ValidateShape(shape, data.Count);
 
-    public static Tensor tensor(float[] data, int[] shape, string name = "")
-        => new(data, shape, name);
+        _data = data;
+        bool isRecording = AutogradContext.IsRecordingEnabled;
+        _grad = isRecording ? new float[data.Count] : [];
+        _shape = (int[])shape.Clone();
+        Name = name ?? throw new ArgumentNullException(nameof(name));
+
+        Data = _data;
+        Grad = new GradientView(this);
+        Shape = Array.AsReadOnly(_shape);
+
+        if (isRecording)
+        {
+            foreach (Tensor parent in prev)
+                parent.EnsureGradientBuffer();
+            Node = new AutogradNode(prev);
+        }
+        else
+        {
+            Node = AutogradNode.Detached();
+        }
+    }
+
+    private static Tensor FromStorageResult(
+        TensorStorage data,
+        int[] shape,
+        Tensor[] prev,
+        string name = "")
+        => new(data, shape, prev, name);
+
+    private static Tensor FromFloat16Result(
+        Half[] data,
+        int[] shape,
+        Tensor[] prev,
+        string name = "")
+        => FromStorageResult(
+            TensorStorage.FromOwnedFloat16(data),
+            shape,
+            prev,
+            name);
+
+    public static Tensor Scalar(
+        float value,
+        string name = "",
+        TensorDType dtype = TensorDType.Float32)
+        => new([value], [1], name, dtype);
+
+    public static Tensor tensor(
+        float[] data,
+        int[] shape,
+        string name = "",
+        TensorDType dtype = TensorDType.Float32)
+        => new(data, shape, name, dtype);
 
     public static Tensor Zeros(params int[] shape)
+        => Zeros(TensorDType.Float32, shape);
+
+    public static Tensor Zeros(
+        TensorDType dtype,
+        params int[] shape)
     {
         int length = NumelOf(shape);
-        return new Tensor(new float[length], shape);
+        return new Tensor(new float[length], shape, dtype: dtype);
     }
 
-    public static Tensor From1D(float[] values, string name = "")
+    public static Tensor From1D(
+        float[] values,
+        string name = "",
+        TensorDType dtype = TensorDType.Float32)
     {
         ArgumentNullException.ThrowIfNull(values);
-        return new Tensor(values, [values.Length], name);
+        return new Tensor(values, [values.Length], name, dtype);
     }
 
-    public static Tensor From2D(float[,] values, string name = "")
+    public static Tensor From2D(
+        float[,] values,
+        string name = "",
+        TensorDType dtype = TensorDType.Float32)
     {
         ArgumentNullException.ThrowIfNull(values);
 
@@ -155,8 +259,41 @@ public partial class Tensor
             for (int column = 0; column < columns; column++)
                 data[row * columns + column] = values[row, column];
 
-        return new Tensor(data, [rows, columns], name);
+        return new Tensor(data, [rows, columns], name, dtype);
     }
+
+    /// <summary>
+    /// Converts physical storage while keeping arithmetic, reductions,
+    /// gradients, and optimizer master values in Float32.
+    /// </summary>
+    public Tensor To(TensorDType dtype)
+    {
+        TensorDTypeContract.ValidateImplemented(dtype, nameof(dtype));
+        if (dtype == DType)
+            return this;
+
+        var result = new Tensor(
+            _data.ToFloat32Array(),
+            _shape,
+            [this],
+            dtype: dtype);
+        result.Node.BackwardAction = () => AddScaledValues(
+            EnsureGradientBuffer(),
+            0,
+            result._grad,
+            0,
+            1f,
+            Numel);
+        return result;
+    }
+
+    public Tensor to(TensorDType dtype) => To(dtype);
+
+    public Tensor Half() => To(TensorDType.Float16);
+
+    public Tensor half() => Half();
+
+    public Tensor ToFloat32() => To(TensorDType.Float32);
 
     public float this[int index]
     {
@@ -200,7 +337,64 @@ public partial class Tensor
 
     internal DataMutation BeginDataMutation() => new(this);
 
-    internal float[] DataBuffer => _data;
+    internal float[] DataBuffer
+        => DType == TensorDType.Float32
+            ? _data.GetMutableFloat32Buffer()
+            : _masterData ??= _data.ToFloat32Array();
+
+    internal int StorageByteLength => _data.ByteLength;
+
+    internal void EnableMasterData()
+    {
+        if (DType != TensorDType.Float32)
+            _masterData ??= _data.ToFloat32Array();
+    }
+
+    internal float[] CaptureData(bool preferMaster)
+        => preferMaster && _masterData is not null
+            ? (float[])_masterData.Clone()
+            : _data.ToFloat32Array();
+
+    /// <summary>
+    /// Gets a versioned Float32 decoding of a physical Float16 payload.
+    /// This is intentionally not the optimizer's Float32 master buffer.
+    /// Dense parameter tensors can reuse it across many activation rows.
+    /// </summary>
+    internal float[] GetPhysicalFloat32ComputeCache()
+    {
+        if (DType == TensorDType.Float32)
+            return _data.GetMutableFloat32Buffer();
+
+        long version = _dataVersion;
+        if (_physicalFloat32Cache is not null
+            && _physicalFloat32CacheDataVersion == version)
+        {
+            return _physicalFloat32Cache;
+        }
+
+        lock (_transposeCacheLock)
+        {
+            if (_physicalFloat32Cache is null
+                || _physicalFloat32Cache.Length != Numel)
+            {
+                _physicalFloat32Cache = new float[Numel];
+                _physicalFloat32CacheDataVersion = -1;
+            }
+            if (_physicalFloat32CacheDataVersion != version)
+            {
+                _data.CopyTo(_physicalFloat32Cache);
+                _physicalFloat32CacheDataVersion = version;
+            }
+            return _physicalFloat32Cache;
+        }
+    }
+
+    internal void SynchronizeStorageFromMaster()
+    {
+        if (_masterData is not null)
+            _data.CopyFrom(_masterData);
+        MarkDataMutated();
+    }
 
     internal void MarkDataMutated()
     {
@@ -208,6 +402,7 @@ public partial class Tensor
         {
             _dataVersion++;
         }
+        _physicalFloat32CacheDataVersion = -1;
     }
 
     internal float[] GetTransposedData2D()
@@ -228,7 +423,7 @@ public partial class Tensor
 
             int rows = _shape[0];
             int columns = _shape[1];
-            var transposed = new float[_data.Length];
+            var transposed = new float[_data.Count];
             const int BlockSize = 32;
             for (int columnBlock = 0;
                 columnBlock < columns;
@@ -270,7 +465,7 @@ public partial class Tensor
         }
 
         internal Span<float> Values
-            => _owner?._data
+            => _owner?.DataBuffer
                 ?? throw new ObjectDisposedException(nameof(DataMutation));
 
         public void Dispose()
@@ -278,10 +473,7 @@ public partial class Tensor
             if (_owner is null)
                 return;
 
-            unchecked
-            {
-                _owner._dataVersion++;
-            }
+            _owner.SynchronizeStorageFromMaster();
 
             _owner = null;
         }

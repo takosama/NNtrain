@@ -24,26 +24,36 @@
   "epochs": 200,
   "microBatchSize": 256,
   "microBatchCount":1,
-  "optimizer": "gainshareadamw",
-  "learningRate": 0.0003,
-  "weightDecay": 0.0005,
-  "gainShareBlockDepth": 1,
-  "gainShareBeta1": 0.9,
-  "gainShareBeta2": 0.999,
-  "gainShareEpsilon": 1e-8,
-  "gainShareRho": 0.95,
-  "gainShareGamma": 1.0,
-  "gainShareMinScale": 0.5,
-  "gainShareMaxScale": 2.0,
+  "optimization": {
+    "optimizer": {
+      "type": "gainshareadamw",
+      "learningRate": 0.0003,
+      "weightDecay": 0.0005,
+      "gainShareBlockDepth": 1,
+      "gainShareBeta1": 0.9,
+      "gainShareBeta2": 0.999,
+      "gainShareEpsilon": 1e-8,
+      "gainShareRho": 0.95,
+      "gainShareGamma": 1.0,
+      "gainShareMinScale": 0.5,
+      "gainShareMaxScale": 2.0
+    },
+    "scheduler": {
+      "type": "linearWarmupCosineAnnealing",
+      "warmupEpochs": 5,
+      "minimumLearningRateRatio": 0.01
+    }
+  },
   "labelSmoothing": 0.1,
-  "warmupEpochs": 5,
-  "minimumLearningRateRatio": 0.01,
   "earlyStoppingPatience": 15,
   "earlyStoppingMinimumDelta": 0.0001,
   "useSimd": true,
   "showLossGraph": true,
-  "resumeFromCheckpoint": false,
-  "autoResume": true,
+  "checkpoint": {
+    "directory": "checkpoints/cifar100",
+    "resume": false,
+    "autoResume": true
+  },
   "seed": 1234,
   "model": {
     "heads":16,

@@ -2,42 +2,110 @@ namespace NNtrain;
 
 internal static partial class WikiLanguageModelCommand
 {
-    private const int CheckpointFormatVersion = 4;
+    private const int CheckpointFormatVersion = 5;
+    private const int DTypeCheckpointFormatVersion = 5;
 
     private static void SaveCheckpoint(
         string path,
         WikiModelCheckpoint checkpoint)
     {
+        ValidateCheckpoint(checkpoint);
+        string fullPath = Path.GetFullPath(path);
+        string? directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
         safetensors.torch.save_file(
             checkpoint.CurrentModel ?? checkpoint.Model,
-            GetSafeTensorsPath(path));
-        torch.save(checkpoint, path);
+            GetSafeTensorsPath(fullPath));
+        torch.save(checkpoint, fullPath);
     }
 
     private static void SaveBestModelSafeTensors(
         string checkpointPath,
         ModuleState state)
-        => safetensors.torch.save_file(
-            state,
-            GetBestSafeTensorsPath(checkpointPath));
+    {
+        string path = GetBestSafeTensorsPath(checkpointPath);
+        string? directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
+        safetensors.torch.save_file(state, path);
+    }
 
     private static WikiModelCheckpoint LoadCheckpoint(string path)
     {
         WikiModelCheckpoint checkpoint = torch.load<WikiModelCheckpoint>(path);
-        if (checkpoint.FormatVersion is < 1 or > CheckpointFormatVersion
-            || checkpoint.Model is null)
-        {
-            throw new InvalidDataException(
-                "Wiki model checkpoint has an unsupported format.");
-        }
+        ValidateCheckpoint(checkpoint);
         string safeTensorsPath = GetSafeTensorsPath(path);
         if (!File.Exists(safeTensorsPath))
             return checkpoint;
         ModuleState safeModel = safetensors.torch.load_file(safeTensorsPath);
         ModuleState expected = checkpoint.CurrentModel ?? checkpoint.Model;
-        return ModuleStatesEqual(safeModel, expected)
-            ? checkpoint with { CurrentModel = safeModel }
-            : checkpoint;
+        // The JSON state is authoritative because it retains the exact FP32
+        // master weights. SafeTensors intentionally stores the quantized
+        // physical representation and is used only as a validated artifact.
+        if (!ModuleStatesEqual(safeModel, expected))
+        {
+            throw new InvalidDataException(
+                "Wiki checkpoint SafeTensors sidecar does not match the " +
+                "JSON model metadata or quantized weights.");
+        }
+        return checkpoint;
+    }
+
+    internal static ModuleState LoadGenerationModelState(
+        WikiModelCheckpoint checkpoint,
+        string checkpointPath)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        ValidateCheckpoint(checkpoint);
+        string bestSafeTensorsPath = GetBestSafeTensorsPath(checkpointPath);
+        if (!File.Exists(bestSafeTensorsPath))
+            return checkpoint.Model;
+
+        ModuleState safeModel = safetensors.torch.load_file(
+            bestSafeTensorsPath);
+        if (!ModuleStatesEqual(safeModel, checkpoint.Model))
+        {
+            throw new InvalidDataException(
+                "Wiki best-model SafeTensors sidecar does not match the " +
+                "checkpoint model metadata or quantized weights.");
+        }
+        return safeModel;
+    }
+
+    internal static TensorDType ResolveModelDTypeForTraining(
+        WikiTrainingConfiguration config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        if (!config.ResumeFromCheckpoint)
+            return config.GetModelDType();
+        if (!File.Exists(config.CheckpointPath))
+        {
+            throw new FileNotFoundException(
+                "Wiki training checkpoint was not found.",
+                config.CheckpointPath);
+        }
+
+        WikiModelCheckpoint checkpoint = LoadCheckpoint(config.CheckpointPath);
+        if (!CheckpointArchitectureMatchesConfiguration(checkpoint, config))
+        {
+            throw new InvalidDataException(
+                "Checkpoint model architecture does not match the current " +
+                "Wiki training configuration.");
+        }
+
+        TensorDType checkpointDType = GetCheckpointModelDType(checkpoint);
+        TensorDType? configuredDType = config.GetExplicitModelDType();
+        if (configuredDType is not null
+            && configuredDType.Value != checkpointDType)
+        {
+            throw new InvalidDataException(
+                $"Configured modelDType '{FormatModelDType(configuredDType.Value)}' " +
+                $"does not match checkpoint model dtype " +
+                $"'{FormatModelDType(checkpointDType)}'. Remove modelDType " +
+                "to inherit the checkpoint dtype, or use a matching value.");
+        }
+        return checkpointDType;
     }
 
     internal static WikiResumePosition RestoreTrainingCheckpoint(
@@ -66,6 +134,14 @@ internal static partial class WikiLanguageModelCommand
             throw new InvalidDataException(
                 "Checkpoint model architecture does not match the current " +
                 "Wiki training configuration.");
+        }
+        TensorDType checkpointDType = GetCheckpointModelDType(checkpoint);
+        if (model is Module module && module.DType != checkpointDType)
+        {
+            throw new InvalidDataException(
+                $"Checkpoint model dtype '{FormatModelDType(checkpointDType)}' " +
+                $"does not match the constructed model dtype " +
+                $"'{FormatModelDType(module.DType)}'.");
         }
 
         int completedEpoch = checkpoint.CompletedEpoch == 0
@@ -159,7 +235,10 @@ internal static partial class WikiLanguageModelCommand
                 currentLossSum,
                 currentTargetCount,
                 completedDocumentsInEpoch,
-                currentTokenBuffer));
+                currentTokenBuffer,
+                model is Module module
+                    ? module.DType
+                    : config.GetModelDType()));
     }
 
     internal static string GetSafeTensorsPath(string checkpointPath)
@@ -179,7 +258,8 @@ internal static partial class WikiLanguageModelCommand
 
     private static bool ModuleStatesEqual(ModuleState left, ModuleState right)
     {
-        if (left.Parameters.Length != right.Parameters.Length)
+        if (left.FormatVersion != right.FormatVersion
+            || left.Parameters.Length != right.Parameters.Length)
             return false;
         for (int index = 0; index < left.Parameters.Length; index++)
         {
@@ -188,13 +268,86 @@ internal static partial class WikiLanguageModelCommand
             if (first.Index != second.Index
                 || first.Name != second.Name
                 || !first.Shape.AsSpan().SequenceEqual(second.Shape)
-                || !first.Values.AsSpan().SequenceEqual(second.Values))
+                || first.DType != second.DType
+                || first.Values.Length != second.Values.Length)
             {
                 return false;
+            }
+            for (int valueIndex = 0;
+                valueIndex < first.Values.Length;
+                valueIndex++)
+            {
+                float expected = second.DType == TensorDType.Float16
+                    ? (float)(Half)second.Values[valueIndex]
+                    : second.Values[valueIndex];
+                if (BitConverter.SingleToInt32Bits(first.Values[valueIndex])
+                    != BitConverter.SingleToInt32Bits(expected))
+                {
+                    return false;
+                }
             }
         }
         return true;
     }
+
+    private static void ValidateCheckpoint(WikiModelCheckpoint checkpoint)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (checkpoint.FormatVersion is < 1 or > CheckpointFormatVersion
+            || checkpoint.Model is null)
+        {
+            throw new InvalidDataException(
+                "Wiki model checkpoint has an unsupported format.");
+        }
+
+        TensorDType modelDType = GetCheckpointModelDType(checkpoint);
+        ValidateCheckpointModelState(
+            checkpoint.Model,
+            modelDType,
+            "best model");
+        if (checkpoint.CurrentModel is not null)
+        {
+            ValidateCheckpointModelState(
+                checkpoint.CurrentModel,
+                modelDType,
+                "current model");
+        }
+    }
+
+    private static void ValidateCheckpointModelState(
+        ModuleState state,
+        TensorDType modelDType,
+        string stateName)
+    {
+        if (state.FormatVersion != ModuleState.CurrentFormatVersion
+            || state.Parameters is null)
+        {
+            throw new InvalidDataException(
+                $"Wiki checkpoint {stateName} state has an unsupported " +
+                "format.");
+        }
+
+        for (int index = 0; index < state.Parameters.Length; index++)
+        {
+            ModuleParameterState? parameter = state.Parameters[index];
+            if (parameter is null
+                || parameter.Index != index
+                || parameter.Shape is null
+                || parameter.Values is null
+                || parameter.DType != modelDType)
+            {
+                throw new InvalidDataException(
+                    $"Wiki checkpoint {stateName} parameter {index} does " +
+                    $"not match model dtype " +
+                    $"'{FormatModelDType(modelDType)}'.");
+            }
+        }
+    }
+
+    private static string FormatModelDType(TensorDType dtype)
+        => dtype == TensorDType.Float16
+            ? WikiTrainingConfiguration.Float16ModelDType
+            : WikiTrainingConfiguration.Float32ModelDType;
 
     internal sealed record WikiResumePosition(
         int Epoch,
@@ -233,5 +386,6 @@ internal static partial class WikiLanguageModelCommand
         double CurrentLossSum = 0d,
         long CurrentTargetCount = 0,
         long CompletedDocumentsInEpoch = 0,
-        int[]? CurrentTokenBuffer = null);
+        int[]? CurrentTokenBuffer = null,
+        TensorDType? ModelDType = null);
 }

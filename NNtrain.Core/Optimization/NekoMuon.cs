@@ -13,6 +13,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
     private readonly NekoMuonWorkspace[] _workspaces;
     private NekoMuonState _state;
 
+    internal IReadOnlyList<Parameter> Parameters => _parameters;
+
     public bool ProfilingEnabled { get; set; }
 
     public NekoMuonStepProfile LastStepProfile { get; private set; }

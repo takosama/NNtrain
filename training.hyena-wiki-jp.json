@@ -3,9 +3,12 @@
   "dataPath": "data/wiki",
   "textColumn": "text",
   "tokenizerPath": "wiki-jp-bpe.json",
-  "checkpointPath": "training.hyena-wiki-jp.model.json",
-  "resumeFromCheckpoint": false,
-  "autoResume": true,
+  "checkpoint": {
+    "directory": "checkpoints",
+    "fileName": "training.hyena-wiki-jp.model.json",
+    "resume": false,
+    "autoResume": true
+  },
 
   "vocabularySize": 4096,
   "tokenizerTrainingDocuments": 5000,
@@ -29,12 +32,21 @@
   "dropout": 0.1,
   "initializationScale": 0.02,
 
-  "optimizer": "nekomuon",
-  "learningRate": 0.0003,
-  "auxiliaryLearningRate": 0.0003,
-  "nekoMuonNewtonSchulzInterval": 5,
-  "warmupPercent": 20,
-  "weightDecay": 0.01,
+  "optimization": {
+    "optimizer": {
+      "type": "nekomuon",
+      "learningRate": 0.0003,
+      "auxiliaryLearningRate": 0.0003,
+      "nekoMuonNewtonSchulzInterval": 5,
+      "weightDecay": 0.01,
+      "adamWUseBFloat16FirstMoment": false,
+      "adamWUseBFloat16SecondMoment": false
+    },
+    "scheduler": {
+      "type": "warmupCosineProgress",
+      "warmupPercent": 20
+    }
+  },
   "seed": 1234,
   "logEveryBatches": 10,
   "showLossGraph": true,

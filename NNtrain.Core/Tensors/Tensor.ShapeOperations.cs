@@ -30,10 +30,10 @@ partial class Tensor
                 throw new ArgumentOutOfRangeException(nameof(dim), dim, "Rank-1 tensors only have dimension 0.");
             ValidateSliceRange(_shape[0], start, length);
 
-            float[] y = new float[length];
-            Array.Copy(_data, start, y, 0, length);
+            TensorStorage y = TensorStorage.CreateUninitialized(length, DType);
+            _data.CopyRangeTo(start, y, 0, length);
 
-            var t = new Tensor(y, new[] { length }, new[] { this });
+            var t = FromStorageResult(y, [length], [this]);
 
             t.Node.BackwardAction = () =>
             {
@@ -58,11 +58,17 @@ partial class Tensor
             {
                 ValidateSliceRange(rows, start, length);
 
-                float[] y = new float[length * cols];
-                for (int r = 0; r < length; r++)
-                    Array.Copy(_data, (start + r) * cols, y, r * cols, cols);
+                int resultLength = length * cols;
+                TensorStorage y = TensorStorage.CreateUninitialized(
+                    resultLength,
+                    DType);
+                _data.CopyRangeTo(
+                    start * cols,
+                    y,
+                    0,
+                    resultLength);
 
-                var t = new Tensor(y, new[] { length, cols }, new[] { this });
+                var t = FromStorageResult(y, [length, cols], [this]);
 
                 t.Node.BackwardAction = () =>
                 {
@@ -85,12 +91,19 @@ partial class Tensor
             {
                 ValidateSliceRange(cols, start, length);
 
-                float[] y = new float[rows * length];
+                TensorStorage y = TensorStorage.CreateUninitialized(
+                    rows * length,
+                    DType);
                 for (int r = 0; r < rows; r++)
-                    for (int c = 0; c < length; c++)
-                        y[r * length + c] = _data[r * cols + (start + c)];
+                {
+                    _data.CopyRangeTo(
+                        r * cols + start,
+                        y,
+                        r * length,
+                        length);
+                }
 
-                var t = new Tensor(y, new[] { rows, length }, new[] { this });
+                var t = FromStorageResult(y, [rows, length], [this]);
 
                 t.Node.BackwardAction = () =>
                 {
@@ -125,15 +138,17 @@ partial class Tensor
             {
                 ValidateSliceRange(batch, start, length);
                 int batchLength = rows * cols;
-                float[] y = new float[length * batchLength];
-                Array.Copy(
-                    _data,
+                int resultLength = length * batchLength;
+                TensorStorage y = TensorStorage.CreateUninitialized(
+                    resultLength,
+                    DType);
+                _data.CopyRangeTo(
                     start * batchLength,
                     y,
                     0,
-                    y.Length);
+                    resultLength);
 
-                var t = new Tensor(
+                var t = FromStorageResult(
                     y,
                     [length, rows, cols],
                     [this]);
@@ -144,27 +159,29 @@ partial class Tensor
                         t._grad,
                         0,
                         1f,
-                        y.Length);
+                        y.Count);
                 return t;
             }
 
             if (dim == 1)
             {
                 ValidateSliceRange(rows, start, length);
-                float[] y = new float[batch * length * cols];
+                TensorStorage y = TensorStorage.CreateUninitialized(
+                    batch * length * cols,
+                    DType);
                 for (int batchIndex = 0;
                     batchIndex < batch;
                     batchIndex++)
                 {
-                    Array.Copy(
-                        _data,
+                    int copyLength = length * cols;
+                    _data.CopyRangeTo(
                         (batchIndex * rows + start) * cols,
                         y,
-                        batchIndex * length * cols,
-                        length * cols);
+                        batchIndex * copyLength,
+                        copyLength);
                 }
 
-                var t = new Tensor(
+                var t = FromStorageResult(
                     y,
                     [batch, length, cols],
                     [this]);
@@ -189,15 +206,16 @@ partial class Tensor
             if (dim == 2)
             {
                 ValidateSliceRange(cols, start, length);
-                float[] y = new float[batch * rows * length];
+                TensorStorage y = TensorStorage.CreateUninitialized(
+                    batch * rows * length,
+                    DType);
                 for (int batchIndex = 0;
                     batchIndex < batch;
                     batchIndex++)
                 {
                     for (int row = 0; row < rows; row++)
                     {
-                        Array.Copy(
-                            _data,
+                        _data.CopyRangeTo(
                             (batchIndex * rows + row) * cols + start,
                             y,
                             (batchIndex * rows + row) * length,
@@ -205,7 +223,7 @@ partial class Tensor
                     }
                 }
 
-                var t = new Tensor(
+                var t = FromStorageResult(
                     y,
                     [batch, rows, length],
                     [this]);
@@ -252,6 +270,8 @@ partial class Tensor
             if (xs[i].Rank != rank)
                 throw new ArgumentException("All tensors passed to Concat must have the same rank.", nameof(xs));
 
+        TensorDType resultDType = TensorDTypeContract.Promote(xs);
+
         if (rank == 1)
         {
             if (dim != 0)
@@ -260,15 +280,21 @@ partial class Tensor
             int total = 0;
             for (int i = 0; i < xs.Length; i++) total += xs[i]._shape[0];
 
-            float[] y = new float[total];
+            TensorStorage y = TensorStorage.CreateUninitialized(
+                total,
+                resultDType);
             int offset = 0;
             for (int i = 0; i < xs.Length; i++)
             {
-                Array.Copy(xs[i]._data, 0, y, offset, xs[i].Numel);
+                xs[i]._data.CopyRangeTo(
+                    0,
+                    y,
+                    offset,
+                    xs[i].Numel);
                 offset += xs[i].Numel;
             }
 
-            var t = new Tensor(y, new[] { total }, xs);
+            var t = FromStorageResult(y, [total], xs);
 
             t.Node.BackwardAction = () =>
             {
@@ -305,7 +331,9 @@ partial class Tensor
                 int totalRows = 0;
                 for (int i = 0; i < xs.Length; i++) totalRows += xs[i]._shape[0];
 
-                float[] y = new float[totalRows * cols0];
+                TensorStorage y = TensorStorage.CreateUninitialized(
+                    totalRows * cols0,
+                    resultDType);
                 int rowOffset = 0;
 
                 for (int k = 0; k < xs.Length; k++)
@@ -313,11 +341,17 @@ partial class Tensor
                     int rows = xs[k]._shape[0];
                     int cols = xs[k]._shape[1];
                     for (int r = 0; r < rows; r++)
-                        Array.Copy(xs[k]._data, r * cols, y, (rowOffset + r) * cols0, cols);
+                    {
+                        xs[k]._data.CopyRangeTo(
+                            r * cols,
+                            y,
+                            (rowOffset + r) * cols0,
+                            cols);
+                    }
                     rowOffset += rows;
                 }
 
-                var t = new Tensor(y, new[] { totalRows, cols0 }, xs);
+                var t = FromStorageResult(y, [totalRows, cols0], xs);
 
                 t.Node.BackwardAction = () =>
                 {
@@ -354,7 +388,9 @@ partial class Tensor
                 int totalCols = 0;
                 for (int i = 0; i < xs.Length; i++) totalCols += xs[i]._shape[1];
 
-                float[] y = new float[rows0 * totalCols];
+                TensorStorage y = TensorStorage.CreateUninitialized(
+                    rows0 * totalCols,
+                    resultDType);
 
                 for (int r = 0; r < rows0; r++)
                 {
@@ -362,12 +398,16 @@ partial class Tensor
                     for (int k = 0; k < xs.Length; k++)
                     {
                         int cols = xs[k]._shape[1];
-                        Array.Copy(xs[k]._data, r * cols, y, r * totalCols + colOffset, cols);
+                        xs[k]._data.CopyRangeTo(
+                            r * cols,
+                            y,
+                            r * totalCols + colOffset,
+                            cols);
                         colOffset += cols;
                     }
                 }
 
-                var t = new Tensor(y, new[] { rows0, totalCols }, xs);
+                var t = FromStorageResult(y, [rows0, totalCols], xs);
 
                 t.Node.BackwardAction = () =>
                 {
@@ -419,15 +459,21 @@ partial class Tensor
                 }
 
                 int totalBatch = xs.Sum(tensor => tensor._shape[0]);
-                float[] y = new float[totalBatch * rows0 * cols0];
+                TensorStorage y = TensorStorage.CreateUninitialized(
+                    totalBatch * rows0 * cols0,
+                    resultDType);
                 int offset = 0;
                 foreach (Tensor tensor in xs)
                 {
-                    Array.Copy(tensor._data, 0, y, offset, tensor.Numel);
+                    tensor._data.CopyRangeTo(
+                        0,
+                        y,
+                        offset,
+                        tensor.Numel);
                     offset += tensor.Numel;
                 }
 
-                var t = new Tensor(
+                var t = FromStorageResult(
                     y,
                     [totalBatch, rows0, cols0],
                     xs);
@@ -464,7 +510,9 @@ partial class Tensor
                 }
 
                 int totalRows = xs.Sum(tensor => tensor._shape[1]);
-                float[] y = new float[batch0 * totalRows * cols0];
+                TensorStorage y = TensorStorage.CreateUninitialized(
+                    batch0 * totalRows * cols0,
+                    resultDType);
                 for (int batchIndex = 0;
                     batchIndex < batch0;
                     batchIndex++)
@@ -473,17 +521,17 @@ partial class Tensor
                     foreach (Tensor tensor in xs)
                     {
                         int rows = tensor._shape[1];
-                        Array.Copy(
-                            tensor._data,
-                            batchIndex * rows * cols0,
+                        int copyLength = rows * cols0;
+                        tensor._data.CopyRangeTo(
+                            batchIndex * copyLength,
                             y,
                             (batchIndex * totalRows + rowOffset) * cols0,
-                            rows * cols0);
+                            copyLength);
                         rowOffset += rows;
                     }
                 }
 
-                var t = new Tensor(
+                var t = FromStorageResult(
                     y,
                     [batch0, totalRows, cols0],
                     xs);
@@ -526,7 +574,9 @@ partial class Tensor
                 }
 
                 int totalCols = xs.Sum(tensor => tensor._shape[2]);
-                float[] y = new float[batch0 * rows0 * totalCols];
+                TensorStorage y = TensorStorage.CreateUninitialized(
+                    batch0 * rows0 * totalCols,
+                    resultDType);
                 for (int batchIndex = 0;
                     batchIndex < batch0;
                     batchIndex++)
@@ -537,8 +587,7 @@ partial class Tensor
                         foreach (Tensor tensor in xs)
                         {
                             int cols = tensor._shape[2];
-                            Array.Copy(
-                                tensor._data,
+                            tensor._data.CopyRangeTo(
                                 (batchIndex * rows0 + row) * cols,
                                 y,
                                 (batchIndex * rows0 + row) * totalCols
@@ -549,7 +598,7 @@ partial class Tensor
                     }
                 }
 
-                var t = new Tensor(
+                var t = FromStorageResult(
                     y,
                     [batch0, rows0, totalCols],
                     xs);
@@ -597,30 +646,14 @@ partial class Tensor
 
         int rows = _shape[0];
         int cols = _shape[1];
-        float[] y = new float[Numel];
+        TensorStorage y = TensorStorage.CreateUninitialized(Numel, DType);
+        _data.Transpose2DTo(y, rows, cols);
 
-        const int blockSize = 32;
-        for (int rowBlock = 0; rowBlock < rows; rowBlock += blockSize)
-        {
-            int rowEnd = Math.Min(rowBlock + blockSize, rows);
-            for (int columnBlock = 0;
-                columnBlock < cols;
-                columnBlock += blockSize)
-            {
-                int columnEnd = Math.Min(columnBlock + blockSize, cols);
-                for (int r = rowBlock; r < rowEnd; r++)
-                {
-                    int sourceRow = r * cols;
-                    for (int c = columnBlock; c < columnEnd; c++)
-                        y[c * rows + r] = _data[sourceRow + c];
-                }
-            }
-        }
-
-        var t = new Tensor(y, new[] { cols, rows }, new[] { this });
+        var t = FromStorageResult(y, [cols, rows], [this]);
 
         t.Node.BackwardAction = () =>
         {
+            const int blockSize = 32;
             for (int rowBlock = 0; rowBlock < rows; rowBlock += blockSize)
             {
                 int rowEnd = Math.Min(rowBlock + blockSize, rows);

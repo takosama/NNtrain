@@ -1,4 +1,5 @@
 using BenchmarkDotNet.Running;
+using NNtrain;
 using NNtrain.Benchmarks;
 
 if (args.Length > 0
@@ -24,7 +25,30 @@ else if (args.Length > 0
     string configurationPath = args.Length > 1
         ? args[1]
         : "training.wiki-jp.json";
-    WikiTrainingPhaseProfiler.Run(configurationPath);
+    TensorDType? dtypeOverride = args.Length > 2
+        ? args[2].ToLowerInvariant() switch
+        {
+            "float16" or "half" => TensorDType.Float16,
+            "float32" => TensorDType.Float32,
+            _ => throw new ArgumentException(
+                $"Unsupported profile dtype '{args[2]}'."),
+        }
+        : null;
+    bool? nativeFloat16Override = args.Length > 3
+        ? bool.Parse(args[3])
+        : null;
+    int? warmupStepsOverride = args.Length > 4
+        ? int.Parse(args[4])
+        : null;
+    int? measuredStepsOverride = args.Length > 5
+        ? int.Parse(args[5])
+        : null;
+    WikiTrainingPhaseProfiler.Run(
+        configurationPath,
+        dtypeOverride,
+        nativeFloat16Override,
+        warmupStepsOverride,
+        measuredStepsOverride);
 }
 else
 {

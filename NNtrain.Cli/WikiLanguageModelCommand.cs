@@ -61,7 +61,10 @@ internal static partial class WikiLanguageModelCommand
         TextWriter error,
         bool openLossGraph)
     {
-        WriteEffectiveTrainingConfiguration(config, output);
+        // Resolve resume metadata before any corpus scan or tokenizer work so
+        // an incompatible checkpoint fails before expensive data processing.
+        TensorDType modelDType = ResolveModelDTypeForTraining(config);
+        WriteEffectiveTrainingConfiguration(config, modelDType, output);
         if (!Directory.Exists(config.DataPath))
         {
             throw new DirectoryNotFoundException(
@@ -117,7 +120,8 @@ internal static partial class WikiLanguageModelCommand
                 lossGraphPath,
                 output,
                 error,
-                openLossGraph);
+                openLossGraph,
+                modelDType);
         }
 
         output.WriteLine("loading and tokenizing Wikipedia documents...");
@@ -150,7 +154,10 @@ internal static partial class WikiLanguageModelCommand
             $"{config.DatasetSampleEverySteps:N0} steps, sample pool " +
             $"{corpus.SampleDocuments.Length}");
 
-        var model = CreateModel(config, tokenizer.VocabularySize);
+        IWikiLanguageModel model = CreateModel(
+            config,
+            tokenizer.VocabularySize,
+            modelDType);
         IOptimizer optimizer = CreateOptimizer(model, config);
         WarmupCosineProgressLRScheduler scheduler =
             lr_scheduler.WarmupCosineProgressLR(
@@ -162,7 +169,8 @@ internal static partial class WikiLanguageModelCommand
             $"{model.parameters().Sum(parameter => (long)parameter.T.Numel):N0}, " +
             $"width {config.ModelWidth}, heads {config.Heads}, " +
             $"hidden {config.HiddenSize}, layers {config.Layers}, " +
-            $"context {config.ContextLength}, batch {config.BatchSize}");
+            $"context {config.ContextLength}, batch {config.BatchSize}, " +
+            $"dtype {FormatModelDType(modelDType)}");
         WriteOptimizerSummary(model, config, output);
 
         LossGraph? lossGraph = null;
@@ -414,12 +422,14 @@ internal static partial class WikiLanguageModelCommand
                 "Checkpoint and tokenizer vocabulary sizes do not match.");
         }
 
+        TensorDType checkpointDType = GetCheckpointModelDType(checkpoint);
+        bool configuredDTypeDiffers =
+            config.GetModelDType() != checkpointDType;
+
         IWikiLanguageModel model = CreateModel(checkpoint, config.Seed);
-        string bestSafeTensorsPath = GetBestSafeTensorsPath(
+        ModuleState generationState = LoadGenerationModelState(
+            checkpoint,
             config.CheckpointPath);
-        ModuleState generationState = File.Exists(bestSafeTensorsPath)
-            ? safetensors.torch.load_file(bestSafeTensorsPath)
-            : checkpoint.Model;
         model.load_state_dict(generationState);
         output.WriteLine(
             $"checkpoint = epoch {checkpoint.Epoch}, validation loss " +
@@ -429,13 +439,15 @@ internal static partial class WikiLanguageModelCommand
             $"vocabulary {checkpoint.VocabularySize}, " +
             $"width {checkpoint.ModelWidth}, heads {checkpoint.Heads}, " +
             $"hidden {checkpoint.HiddenSize}, layers {checkpoint.Layers}, " +
-            $"context {checkpoint.ContextLength}");
-        if (!CheckpointArchitectureMatchesConfiguration(checkpoint, config))
+            $"context {checkpoint.ContextLength}, " +
+            $"dtype {FormatModelDType(checkpointDType)}");
+        if (!CheckpointArchitectureMatchesConfiguration(checkpoint, config)
+            || configuredDTypeDiffers)
         {
             output.WriteLine(
-                "note: --generate uses the architecture stored in the " +
-                "checkpoint. JSON model settings take effect when a new " +
-                "training run starts and its checkpoint is saved.");
+                "note: --generate uses the architecture and dtype stored " +
+                "in the checkpoint. JSON model settings take effect when " +
+                "a new training run starts and its checkpoint is saved.");
         }
         WriteGeneration(model, tokenizer, prompt, config, output);
         return 0;
@@ -447,7 +459,8 @@ internal static partial class WikiLanguageModelCommand
         string lossGraphPath,
         TextWriter output,
         TextWriter error,
-        bool openLossGraph)
+        bool openLossGraph,
+        TensorDType modelDType)
     {
         long availableDocuments = WikiParquetCorpus.CountRowsAsync(
             config.DataPath).GetAwaiter().GetResult();
@@ -458,7 +471,10 @@ internal static partial class WikiLanguageModelCommand
             $"streaming corpus = {documentsPerEpoch:N0} documents/epoch, " +
             $"up to {config.MaxDocumentTokens:N0} tokens/document");
 
-        var model = CreateModel(config, tokenizer.VocabularySize);
+        IWikiLanguageModel model = CreateModel(
+            config,
+            tokenizer.VocabularySize,
+            modelDType);
         IOptimizer optimizer = CreateOptimizer(model, config);
         WarmupCosineProgressLRScheduler scheduler =
             lr_scheduler.WarmupCosineProgressLR(
@@ -470,7 +486,8 @@ internal static partial class WikiLanguageModelCommand
             $"{model.parameters().Sum(parameter => (long)parameter.T.Numel):N0}, " +
             $"width {config.ModelWidth}, heads {config.Heads}, " +
             $"hidden {config.HiddenSize}, layers {config.Layers}, " +
-            $"context {config.ContextLength}, batch {config.BatchSize}");
+            $"context {config.ContextLength}, batch {config.BatchSize}, " +
+            $"dtype {FormatModelDType(modelDType)}");
         WriteOptimizerSummary(model, config, output);
 
         LossGraph? lossGraph = null;
@@ -856,6 +873,7 @@ internal static partial class WikiLanguageModelCommand
 
     private static void WriteEffectiveTrainingConfiguration(
         WikiTrainingConfiguration config,
+        TensorDType modelDType,
         TextWriter output)
     {
         string architectureDetails = config.IsForgetMemoryV2Architecture()
@@ -875,11 +893,22 @@ internal static partial class WikiLanguageModelCommand
             $"batch {config.BatchSize}, context {config.ContextLength}, " +
             $"max document tokens {config.MaxDocumentTokens}");
         output.WriteLine(
+            $"checkpoint = {config.CheckpointPath}, " +
+            $"resume {(config.ResumeFromCheckpoint ? "enabled" : "disabled")}, " +
+            $"auto-resume {(config.AutoResume ? "enabled" : "disabled")}");
+        output.WriteLine(
             $"effective model = {config.ModelArchitecture}, " +
             $"vocabulary {config.VocabularySize}, " +
             $"width {config.ModelWidth}, heads {config.Heads}, " +
             $"hidden {config.HiddenSize}, layers {config.Layers}, " +
-            $"dropout {config.Dropout:G}" + architectureDetails);
+            $"dropout {config.Dropout:G}, dtype " +
+            $"{FormatModelDType(modelDType)}" +
+            (config.ResumeFromCheckpoint
+                ? " (checkpoint)"
+                : config.ModelDType is null
+                    ? " (default)"
+                    : string.Empty) +
+            architectureDetails);
         output.WriteLine(
             $"special tokens = {BpeTokenizer.PadToken}:" +
             $"{BpeTokenizer.PadTokenId}, {BpeTokenizer.BosToken}:" +

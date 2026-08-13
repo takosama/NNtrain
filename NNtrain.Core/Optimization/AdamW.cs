@@ -15,6 +15,8 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
     private float _stepScaledEpsilon;
     private int _step;
 
+    internal IReadOnlyList<Parameter> Parameters => _parameters;
+
     public AdamW(
         IEnumerable<Parameter> parameters,
         AdamWOptions? options = null)
@@ -213,7 +215,6 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         {
             AdamWParameterRuntime runtime =
                 _parameterRuntime[parameterIndex];
-            runtime.Parameter.MarkUpdated();
             runtime.Gradient = runtime.Parameter.T.GradientBuffer;
         }
 
@@ -222,6 +223,18 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         else
             for (int index = 0; index < _workItems.Length; index++)
                 UpdateWorkItem(index);
+
+        // A parameter can span several parallel work items. Publish its
+        // Float32 master weight to low-precision storage only after every
+        // chunk has completed, and advance the data version exactly once.
+        for (int parameterIndex = 0;
+            parameterIndex < _parameterRuntime.Length;
+            parameterIndex++)
+        {
+            _parameterRuntime[parameterIndex]
+                .Parameter
+                .CompleteUpdate();
+        }
     }
 
 }

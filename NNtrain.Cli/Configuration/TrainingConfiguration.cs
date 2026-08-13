@@ -9,6 +9,33 @@ sealed record TrainingConfiguration
     internal const string LionOptimizer = "lion";
     internal const string NekoMuonOptimizer = "nekomuon";
     internal const string AdamWOptimizer = "adamw";
+    internal const string LinearWarmupCosineAnnealingScheduler =
+        "linearWarmupCosineAnnealing";
+
+    private static readonly string[] LegacyOptimizationPropertyNames =
+    [
+        "optimizer",
+        "learningRate",
+        "auxiliaryLearningRate",
+        "weightDecay",
+        "gainShareBlockDepth",
+        "gainShareBeta1",
+        "gainShareBeta2",
+        "gainShareEpsilon",
+        "gainShareRho",
+        "gainShareGamma",
+        "gainShareMinScale",
+        "gainShareMaxScale",
+        "warmupEpochs",
+        "minimumLearningRateRatio",
+    ];
+
+    private static readonly string[] LegacyCheckpointPropertyNames =
+    [
+        "resumeFromCheckpoint",
+        "autoResume",
+        "checkpointPath",
+    ];
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -75,6 +102,14 @@ sealed record TrainingConfiguration
 
     public string CheckpointPath { get; init; } = string.Empty;
 
+    public ClassificationCheckpointConfiguration? Checkpoint { get; init; }
+
+    public ClassificationOptimizationConfiguration? Optimization
+    {
+        get;
+        init;
+    }
+
     public int Seed { get; init; } = 1234;
 
     public ModelConfiguration Model { get; init; } = new();
@@ -85,6 +120,7 @@ sealed record TrainingConfiguration
 
         string fullConfigurationPath = Path.GetFullPath(configurationPath);
         string json = File.ReadAllText(fullConfigurationPath);
+        ValidateJsonSectionExclusivity(json);
         TrainingConfiguration configuration =
             JsonSerializer.Deserialize<TrainingConfiguration>(
                 json,
@@ -92,10 +128,13 @@ sealed record TrainingConfiguration
             ?? throw new InvalidDataException(
                 "Training configuration cannot be JSON null.");
 
-        configuration.Validate();
         string configurationDirectory =
             Path.GetDirectoryName(fullConfigurationPath)
             ?? Environment.CurrentDirectory;
+        configuration = configuration.NormalizeStructuredSettings(
+            fullConfigurationPath,
+            configurationDirectory);
+        configuration.Validate();
 
         return configuration with
         {
@@ -103,15 +142,200 @@ sealed record TrainingConfiguration
                 configurationDirectory),
             EvaluationData = configuration.EvaluationData.ResolvePaths(
                 configurationDirectory),
-            CheckpointPath = string.IsNullOrWhiteSpace(
-                configuration.CheckpointPath)
+        };
+    }
+
+    private static void ValidateJsonSectionExclusivity(string json)
+    {
+        using JsonDocument document = JsonDocument.Parse(
+            json,
+            new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip,
+            });
+
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        RejectMixedJsonSettings(
+            document.RootElement,
+            "optimization",
+            LegacyOptimizationPropertyNames);
+        RejectMixedJsonSettings(
+            document.RootElement,
+            "checkpoint",
+            LegacyCheckpointPropertyNames);
+    }
+
+    private static void RejectMixedJsonSettings(
+        JsonElement root,
+        string sectionName,
+        IReadOnlyCollection<string> legacyNames)
+    {
+        bool hasSection = root.EnumerateObject().Any(
+            property => string.Equals(
+                property.Name,
+                sectionName,
+                StringComparison.OrdinalIgnoreCase));
+        if (!hasSection)
+        {
+            return;
+        }
+
+        string[] specifiedLegacyNames = root.EnumerateObject()
+            .Where(property => legacyNames.Any(
+                legacyName => string.Equals(
+                    property.Name,
+                    legacyName,
+                    StringComparison.OrdinalIgnoreCase)))
+            .Select(property => property.Name)
+            .ToArray();
+        if (specifiedLegacyNames.Length == 0)
+        {
+            return;
+        }
+
+        throw new InvalidDataException(
+            $"The '{sectionName}' section cannot be combined with legacy " +
+            $"root settings: {string.Join(", ", specifiedLegacyNames)}.");
+    }
+
+    private TrainingConfiguration NormalizeStructuredSettings(
+        string fullConfigurationPath,
+        string configurationDirectory)
+    {
+        ClassificationOptimizerConfiguration? optimizerSettings =
+            Optimization?.Optimizer;
+        ClassificationSchedulerConfiguration? schedulerSettings =
+            Optimization?.Scheduler;
+
+        if (Optimization is not null && optimizerSettings is null)
+        {
+            throw new InvalidDataException(
+                "The 'optimization.optimizer' setting cannot be JSON null.");
+        }
+
+        if (Optimization is not null && schedulerSettings is null)
+        {
+            throw new InvalidDataException(
+                "The 'optimization.scheduler' setting cannot be JSON null.");
+        }
+
+        string schedulerType = schedulerSettings?.Type
+            ?? LinearWarmupCosineAnnealingScheduler;
+        if (!string.Equals(
+            schedulerType,
+            LinearWarmupCosineAnnealingScheduler,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"Unsupported scheduler '{schedulerType}'. Supported " +
+                $"scheduler is '{LinearWarmupCosineAnnealingScheduler}'.",
+                nameof(ClassificationSchedulerConfiguration.Type));
+        }
+
+        string checkpointPath = ResolveCheckpointPath(
+            fullConfigurationPath,
+            configurationDirectory);
+
+        return this with
+        {
+            Optimizer = optimizerSettings?.Type ?? Optimizer,
+            LearningRate = optimizerSettings?.LearningRate ?? LearningRate,
+            AuxiliaryLearningRate =
+                optimizerSettings?.AuxiliaryLearningRate
+                ?? AuxiliaryLearningRate,
+            WeightDecay = optimizerSettings?.WeightDecay ?? WeightDecay,
+            GainShareBlockDepth =
+                optimizerSettings?.GainShareBlockDepth
+                ?? GainShareBlockDepth,
+            GainShareBeta1 =
+                optimizerSettings?.GainShareBeta1 ?? GainShareBeta1,
+            GainShareBeta2 =
+                optimizerSettings?.GainShareBeta2 ?? GainShareBeta2,
+            GainShareEpsilon =
+                optimizerSettings?.GainShareEpsilon ?? GainShareEpsilon,
+            GainShareRho =
+                optimizerSettings?.GainShareRho ?? GainShareRho,
+            GainShareGamma =
+                optimizerSettings?.GainShareGamma ?? GainShareGamma,
+            GainShareMinScale =
+                optimizerSettings?.GainShareMinScale ?? GainShareMinScale,
+            GainShareMaxScale =
+                optimizerSettings?.GainShareMaxScale ?? GainShareMaxScale,
+            WarmupEpochs =
+                schedulerSettings?.WarmupEpochs ?? WarmupEpochs,
+            MinimumLearningRateRatio =
+                schedulerSettings?.MinimumLearningRateRatio
+                ?? MinimumLearningRateRatio,
+            ResumeFromCheckpoint =
+                Checkpoint?.Resume ?? ResumeFromCheckpoint,
+            AutoResume = Checkpoint?.AutoResume ?? AutoResume,
+            CheckpointPath = checkpointPath,
+        };
+    }
+
+    private string ResolveCheckpointPath(
+        string fullConfigurationPath,
+        string configurationDirectory)
+    {
+        if (Checkpoint is null)
+        {
+            return string.IsNullOrWhiteSpace(CheckpointPath)
                 ? Path.ChangeExtension(
                     fullConfigurationPath,
                     ".checkpoint.json")
                 : Path.GetFullPath(
-                    configuration.CheckpointPath,
-                    configurationDirectory),
-        };
+                    CheckpointPath,
+                    configurationDirectory);
+        }
+
+        string directory = Checkpoint.Directory
+            ?? configurationDirectory;
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            throw new InvalidDataException(
+                "The 'checkpoint.directory' setting cannot be empty or " +
+                "whitespace.");
+        }
+
+        string fileName = Checkpoint.FileName
+            ?? Path.GetFileName(
+                Path.ChangeExtension(
+                    fullConfigurationPath,
+                    ".checkpoint.json"));
+        if (string.IsNullOrWhiteSpace(fileName)
+            || Path.IsPathRooted(fileName)
+            || !string.Equals(
+                Path.GetFileName(fileName),
+                fileName,
+                StringComparison.Ordinal)
+            || fileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            throw new InvalidDataException(
+                "The 'checkpoint.fileName' setting must be a valid file " +
+                "name without a directory component.");
+        }
+
+        try
+        {
+            string fullDirectory = Path.GetFullPath(
+                directory,
+                configurationDirectory);
+            return Path.Combine(fullDirectory, fileName);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+            or NotSupportedException
+            or PathTooLongException)
+        {
+            throw new InvalidDataException(
+                "The checkpoint directory could not be resolved.",
+                exception);
+        }
     }
 
     internal void Validate()
@@ -357,6 +581,62 @@ sealed record TrainingConfiguration
 
     internal int EffectiveBatchSize
         => checked(ResolvedMicroBatchSize * MicroBatchCount);
+}
+
+sealed record ClassificationCheckpointConfiguration
+{
+    public string Directory { get; init; } = string.Empty;
+
+    public string? FileName { get; init; }
+
+    public bool? Resume { get; init; }
+
+    public bool? AutoResume { get; init; }
+}
+
+sealed record ClassificationOptimizationConfiguration
+{
+    public ClassificationOptimizerConfiguration Optimizer { get; init; } =
+        new();
+
+    public ClassificationSchedulerConfiguration Scheduler { get; init; } =
+        new();
+}
+
+sealed record ClassificationOptimizerConfiguration
+{
+    public string? Type { get; init; }
+
+    public float? LearningRate { get; init; }
+
+    public float? AuxiliaryLearningRate { get; init; }
+
+    public float? WeightDecay { get; init; }
+
+    public int? GainShareBlockDepth { get; init; }
+
+    public float? GainShareBeta1 { get; init; }
+
+    public float? GainShareBeta2 { get; init; }
+
+    public float? GainShareEpsilon { get; init; }
+
+    public float? GainShareRho { get; init; }
+
+    public float? GainShareGamma { get; init; }
+
+    public float? GainShareMinScale { get; init; }
+
+    public float? GainShareMaxScale { get; init; }
+}
+
+sealed record ClassificationSchedulerConfiguration
+{
+    public string? Type { get; init; }
+
+    public int? WarmupEpochs { get; init; }
+
+    public float? MinimumLearningRateRatio { get; init; }
 }
 
 sealed record DatasetConfiguration

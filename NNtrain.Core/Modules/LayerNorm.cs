@@ -6,7 +6,11 @@ class LayerNorm : Module
     public Parameter Beta { get; }  // (dim)
     private readonly float _eps;
 
-    public LayerNorm(int dim, float eps = 1e-5f)
+    public LayerNorm(
+        int dim,
+        float eps = 1e-5f,
+        TensorDType dtype = TensorDType.Float32)
+        : base(dtype)
     {
         float[] g = Enumerable.Repeat(1f, dim).ToArray();
         float[] b = new float[dim];
@@ -16,13 +20,15 @@ class LayerNorm : Module
                 g,
                 new[] { dim },
                 "Gamma",
-                WeightDecayPolicy.Exclude));
+                WeightDecayPolicy.Exclude,
+                dtype));
         Beta = RegisterParameter(
             new Parameter(
                 b,
                 new[] { dim },
                 "Beta",
-                WeightDecayPolicy.Exclude));
+                WeightDecayPolicy.Exclude,
+                dtype));
         _eps = eps;
     }
 

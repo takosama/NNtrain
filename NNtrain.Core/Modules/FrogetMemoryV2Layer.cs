@@ -17,7 +17,9 @@ public sealed class FrogetMemoryV2Layer : Module
         float retentionFloor,
         Random? random = null,
         float initializationScale = 0.02f,
-        float dropout = 0f)
+        float dropout = 0f,
+        TensorDType dtype = TensorDType.Float16)
+        : base(dtype)
     {
         if (modelWidth <= 0)
             throw new ArgumentOutOfRangeException(nameof(modelWidth));
@@ -47,28 +49,31 @@ public sealed class FrogetMemoryV2Layer : Module
         RetentionFloor = retentionFloor;
         random ??= new Random(1);
 
-        Ln1 = RegisterModule(new LayerNorm(modelWidth));
+        Ln1 = RegisterModule(new LayerNorm(modelWidth, dtype: dtype));
         _memoryProjection = RegisterModule(
             new Linear(
                 modelWidth,
                 checked(2 * keyWidth + 3 * valueWidth),
                 random,
-                initializationScale));
+                initializationScale,
+                dtype));
         _outputProjection = RegisterModule(
             new Linear(
                 valueWidth,
                 modelWidth,
                 random,
-                initializationScale));
-        MemoryDropout = RegisterModule(new Dropout(dropout, random));
-        Ln2 = RegisterModule(new LayerNorm(modelWidth));
+                initializationScale,
+                dtype));
+        MemoryDropout = RegisterModule(new Dropout(dropout, random, dtype));
+        Ln2 = RegisterModule(new LayerNorm(modelWidth, dtype: dtype));
         Ffn = RegisterModule(
             new FeedForward(
                 modelWidth,
                 hiddenWidth,
                 random,
-                initializationScale));
-        FfnDropout = RegisterModule(new Dropout(dropout, random));
+                initializationScale,
+                dtype));
+        FfnDropout = RegisterModule(new Dropout(dropout, random, dtype));
     }
 
     public int ModelWidth { get; }

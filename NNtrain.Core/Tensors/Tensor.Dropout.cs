@@ -144,7 +144,7 @@ partial class Tensor
     }
 
     private static void ApplyDropoutValues(
-        float[] input,
+        TensorStorage input,
         float[] output,
         int offset,
         int length,
@@ -196,8 +196,8 @@ partial class Tensor
     }
 
     private static void AddDropoutValues(
-        float[] residual,
-        float[] branch,
+        TensorStorage residual,
+        TensorStorage branch,
         float[] output,
         int offset,
         int length,

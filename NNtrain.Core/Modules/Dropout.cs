@@ -4,7 +4,11 @@ public sealed class Dropout : Module
 {
     private readonly Random _random;
 
-    public Dropout(float probability = 0.5f, Random? random = null)
+    public Dropout(
+        float probability = 0.5f,
+        Random? random = null,
+        TensorDType dtype = TensorDType.Float32)
+        : base(dtype)
     {
         if (!float.IsFinite(probability)
             || probability < 0f

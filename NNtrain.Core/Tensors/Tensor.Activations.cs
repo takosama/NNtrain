@@ -545,7 +545,8 @@ partial class Tensor
         int rows = _shape[^2];
         int cols = _shape[^1];
         int matrixCount = Numel / (rows * cols);
-        float[] y = (float[])_data.Clone();
+        float[] y = new float[Numel];
+        _data.CopyTo(y);
 
         for (int matrix = 0; matrix < matrixCount; matrix++)
         {

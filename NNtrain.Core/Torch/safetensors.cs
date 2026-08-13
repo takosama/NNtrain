@@ -23,9 +23,13 @@ public static class safetensors
 internal static class SafeTensorFile
 {
     private const int LengthPrefixSize = sizeof(long);
-    private const int FloatSize = sizeof(float);
+    private const int Float32Size = sizeof(float);
+    private const int Float16Size = sizeof(ushort);
     private const int MaximumHeaderBytes = 64 * 1024 * 1024;
-    private const string FormatMetadata = "nntrain.module_state.f32.v1";
+    private const string Float32FormatMetadata =
+        "nntrain.module_state.f32.v1";
+    private const string MixedFormatMetadata =
+        "nntrain.module_state.mixed.v1";
 
     internal static void Save(ModuleState state, string path)
     {
@@ -59,7 +63,7 @@ internal static class SafeTensorFile
                 foreach (ModuleParameterState parameter in
                     state.Parameters.OrderBy(parameter => parameter.Index))
                 {
-                    WriteFloats(stream, parameter.Values);
+                    WriteValues(stream, parameter.Values, parameter.DType);
                 }
                 stream.Flush(flushToDisk: true);
             }
@@ -123,12 +127,16 @@ internal static class SafeTensorFile
 
             JsonElement descriptor = property.Value;
             string? dtype = descriptor.GetProperty("dtype").GetString();
-            if (!string.Equals(dtype, "F32", StringComparison.Ordinal))
+            TensorDType tensorDType = dtype switch
             {
-                throw new InvalidDataException(
+                "F32" => TensorDType.Float32,
+                "F16" => TensorDType.Float16,
+                _ => throw new InvalidDataException(
                     $"SafeTensors parameter '{property.Name}' uses " +
-                    $"unsupported dtype '{dtype}'. Only F32 is supported.");
-            }
+                    $"unsupported dtype '{dtype}'. Only F32 and F16 are " +
+                    "supported."),
+            };
+            int elementSize = GetElementSize(tensorDType);
             int[] shape = descriptor.GetProperty("shape")
                 .EnumerateArray()
                 .Select(ReadDimension)
@@ -151,7 +159,7 @@ internal static class SafeTensorFile
             }
 
             int elementCount = GetElementCount(shape);
-            if (end - start != checked((long)elementCount * FloatSize))
+            if (end - start != checked((long)elementCount * elementSize))
             {
                 throw new InvalidDataException(
                     $"SafeTensors parameter '{property.Name}' shape and " +
@@ -159,13 +167,14 @@ internal static class SafeTensorFile
             }
             var values = new float[elementCount];
             stream.Position = checked(dataStart + start);
-            ReadFloats(stream, values);
+            ReadValues(stream, values, tensorDType);
             parameters.Add(
                 new ModuleParameterState(
                     index,
                     property.Name[(separator + 1)..],
                     shape,
-                    values));
+                    values,
+                    tensorDType));
         }
 
         ModuleParameterState[] ordered = parameters
@@ -190,7 +199,12 @@ internal static class SafeTensorFile
             writer.WriteStartObject();
             writer.WritePropertyName("__metadata__");
             writer.WriteStartObject();
-            writer.WriteString("format", FormatMetadata);
+            writer.WriteString(
+                "format",
+                state.Parameters.Any(
+                    parameter => parameter.DType == TensorDType.Float16)
+                    ? MixedFormatMetadata
+                    : Float32FormatMetadata);
             writer.WriteString(
                 "module_state_format_version",
                 state.FormatVersion.ToString(
@@ -204,14 +218,18 @@ internal static class SafeTensorFile
                 writer.WritePropertyName(
                     $"{parameter.Index:D8}:{parameter.Name}");
                 writer.WriteStartObject();
-                writer.WriteString("dtype", "F32");
+                writer.WriteString(
+                    "dtype",
+                    parameter.DType == TensorDType.Float16 ? "F16" : "F32");
                 writer.WritePropertyName("shape");
                 writer.WriteStartArray();
                 foreach (int dimension in parameter.Shape)
                     writer.WriteNumberValue(dimension);
                 writer.WriteEndArray();
                 long end = checked(
-                    offset + (long)parameter.Values.Length * FloatSize);
+                    offset
+                    + (long)parameter.Values.Length
+                        * GetElementSize(parameter.DType));
                 writer.WritePropertyName("data_offsets");
                 writer.WriteStartArray();
                 writer.WriteNumberValue(offset);
@@ -267,10 +285,21 @@ internal static class SafeTensorFile
                 || parameter.Shape is null
                 || parameter.Values is null
                 || parameter.Values.Length
-                    != GetElementCount(parameter.Shape))
+                    != GetElementCount(parameter.Shape)
+                || parameter.DType is not TensorDType.Float32
+                    and not TensorDType.Float16)
             {
                 throw new ArgumentException(
                     $"Module state parameter {index} is invalid.",
+                    nameof(state));
+            }
+
+            if (parameter.StorageMetadata is { IsRaw: false })
+            {
+                throw new ArgumentException(
+                    $"Module state parameter {index} contains storage " +
+                    "metadata that SafeTensors cannot serialize yet. " +
+                    "Only raw Float32 and Float16 payloads are supported.",
                     nameof(state));
             }
         }
@@ -300,14 +329,53 @@ internal static class SafeTensorFile
     private static InvalidDataException InvalidOffsets(string name)
         => new($"SafeTensors parameter '{name}' has invalid data offsets.");
 
-    private static void WriteFloats(Stream stream, float[] values)
+    private static int GetElementSize(TensorDType dtype)
+        => dtype switch
+        {
+            TensorDType.Float32 => Float32Size,
+            TensorDType.Float16 => Float16Size,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(dtype),
+                dtype,
+                "SafeTensors supports only Float32 and Float16 states."),
+        };
+
+    private static void WriteValues(
+        Stream stream,
+        float[] values,
+        TensorDType dtype)
+    {
+        if (dtype == TensorDType.Float16)
+        {
+            WriteFloat16Values(stream, values);
+            return;
+        }
+
+        WriteFloat32Values(stream, values);
+    }
+
+    private static void ReadValues(
+        Stream stream,
+        float[] values,
+        TensorDType dtype)
+    {
+        if (dtype == TensorDType.Float16)
+        {
+            ReadFloat16Values(stream, values);
+            return;
+        }
+
+        ReadFloat32Values(stream, values);
+    }
+
+    private static void WriteFloat32Values(Stream stream, float[] values)
     {
         if (BitConverter.IsLittleEndian)
         {
             stream.Write(MemoryMarshal.AsBytes(values.AsSpan()));
             return;
         }
-        Span<byte> bytes = stackalloc byte[FloatSize];
+        Span<byte> bytes = stackalloc byte[Float32Size];
         foreach (float value in values)
         {
             BinaryPrimitives.WriteSingleLittleEndian(bytes, value);
@@ -315,18 +383,60 @@ internal static class SafeTensorFile
         }
     }
 
-    private static void ReadFloats(Stream stream, float[] values)
+    private static void ReadFloat32Values(Stream stream, float[] values)
     {
         if (BitConverter.IsLittleEndian)
         {
             ReadExactly(stream, MemoryMarshal.AsBytes(values.AsSpan()));
             return;
         }
-        Span<byte> bytes = stackalloc byte[FloatSize];
+        Span<byte> bytes = stackalloc byte[Float32Size];
         for (int index = 0; index < values.Length; index++)
         {
             ReadExactly(stream, bytes);
             values[index] = BinaryPrimitives.ReadSingleLittleEndian(bytes);
+        }
+    }
+
+    private static void WriteFloat16Values(Stream stream, float[] values)
+    {
+        const int ValuesPerChunk = 4096;
+        Span<byte> bytes = stackalloc byte[ValuesPerChunk * Float16Size];
+        int offset = 0;
+        while (offset < values.Length)
+        {
+            int count = Math.Min(ValuesPerChunk, values.Length - offset);
+            for (int index = 0; index < count; index++)
+            {
+                ushort bits = BitConverter.HalfToUInt16Bits(
+                    (Half)values[offset + index]);
+                BinaryPrimitives.WriteUInt16LittleEndian(
+                    bytes.Slice(index * Float16Size, Float16Size),
+                    bits);
+            }
+            stream.Write(bytes[..(count * Float16Size)]);
+            offset += count;
+        }
+    }
+
+    private static void ReadFloat16Values(Stream stream, float[] values)
+    {
+        const int ValuesPerChunk = 4096;
+        Span<byte> bytes = stackalloc byte[ValuesPerChunk * Float16Size];
+        int offset = 0;
+        while (offset < values.Length)
+        {
+            int count = Math.Min(ValuesPerChunk, values.Length - offset);
+            Span<byte> active = bytes[..(count * Float16Size)];
+            ReadExactly(stream, active);
+            for (int index = 0; index < count; index++)
+            {
+                ushort bits = BinaryPrimitives.ReadUInt16LittleEndian(
+                    active.Slice(index * Float16Size, Float16Size));
+                values[offset + index] =
+                    (float)BitConverter.UInt16BitsToHalf(bits);
+            }
+            offset += count;
         }
     }
 

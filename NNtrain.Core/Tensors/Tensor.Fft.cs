@@ -33,7 +33,7 @@ partial class Tensor
         int batch,
         int sequence,
         int width,
-        float[] filter,
+        TensorStorage filter,
         float[] destination)
     {
         int fftLength = GetFftLength(sequence);
@@ -74,12 +74,11 @@ partial class Tensor
                     }
                     if (!filterSpectrumReady)
                     {
-                        Array.Copy(
-                            filter,
+                        filter.CopyRangeTo(
                             0,
-                            signalImaginary,
-                            0,
-                            checked(sequence * width));
+                            signalImaginary.AsSpan(
+                                0,
+                                checked(sequence * width)));
                     }
 
                     FftChannelsInPlace(
@@ -156,7 +155,7 @@ partial class Tensor
         int batch,
         int sequence,
         int width,
-        float[] filter,
+        TensorStorage filter,
         float[] gatedGradient,
         float[] localFilterGradient)
     {
@@ -169,7 +168,9 @@ partial class Tensor
         {
             filterReal.AsSpan(0, spectrumElements).Clear();
             filterImaginary.AsSpan(0, spectrumElements).Clear();
-            Array.Copy(filter, filterReal, checked(sequence * width));
+            filter.CopyRangeTo(
+                0,
+                filterReal.AsSpan(0, checked(sequence * width)));
             FftChannelsInPlace(
                 filterReal,
                 filterImaginary,

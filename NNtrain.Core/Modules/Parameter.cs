@@ -6,7 +6,8 @@ public class Parameter
         float[] data,
         int[] shape,
         string name,
-        WeightDecayPolicy weightDecay)
+        WeightDecayPolicy weightDecay,
+        TensorDType dtype = TensorDType.Float32)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -25,7 +26,10 @@ public class Parameter
 
         Name = name;
         WeightDecay = weightDecay;
-        T = new Tensor(data, shape, name);
+        T = new Tensor(data, shape, name, dtype);
+        T.EnableMasterData();
+        if (dtype != TensorDType.Float32)
+            data.AsSpan().CopyTo(T.DataBuffer);
     }
 
     public Tensor T { get; }
@@ -62,5 +66,5 @@ public class Parameter
 
     internal float[] DataBuffer => T.DataBuffer;
 
-    internal void MarkUpdated() => T.MarkDataMutated();
+    internal void CompleteUpdate() => T.SynchronizeStorageFromMaster();
 }

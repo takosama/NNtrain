@@ -5,6 +5,12 @@ internal static partial class WikiLanguageModelCommand
     internal static IWikiLanguageModel CreateModel(
         WikiTrainingConfiguration config,
         int vocabularySize)
+        => CreateModel(config, vocabularySize, config.GetModelDType());
+
+    internal static IWikiLanguageModel CreateModel(
+        WikiTrainingConfiguration config,
+        int vocabularySize,
+        TensorDType modelDType)
     {
         if (config.IsForgetMemoryV2Architecture())
         {
@@ -20,7 +26,15 @@ internal static partial class WikiLanguageModelCommand
                 retention_max: config.ForgetMemoryRetentionMaximum,
                 generator: new Random(config.Seed),
                 init_scale: config.InitializationScale,
-                dropout: config.Dropout);
+                dropout: config.Dropout,
+                dtype: modelDType);
+        }
+
+        if (modelDType != TensorDType.Float32)
+        {
+            throw new InvalidOperationException(
+                $"Model dtype '{modelDType}' is not supported for " +
+                $"architecture '{config.ModelArchitecture}'.");
         }
 
         if (config.IsArchitecture(
@@ -111,10 +125,11 @@ internal static partial class WikiLanguageModelCommand
                 WikiTrainingConfiguration.FrogetMemoryV2ArchitectureAlias,
                 StringComparison.OrdinalIgnoreCase);
 
-    private static IWikiLanguageModel CreateModel(
+    internal static IWikiLanguageModel CreateModel(
         WikiModelCheckpoint checkpoint,
         int seed)
     {
+        TensorDType modelDType = GetCheckpointModelDType(checkpoint);
         if (IsCheckpointForgetMemoryV2(checkpoint))
         {
             return new FrogetMemoryV2Gpt(
@@ -129,7 +144,15 @@ internal static partial class WikiLanguageModelCommand
                 checkpoint.ForgetMemoryRetentionMaximum,
                 new Random(seed),
                 checkpoint.InitializationScale,
-                checkpoint.Dropout);
+                checkpoint.Dropout,
+                modelDType);
+        }
+
+        if (modelDType != TensorDType.Float32)
+        {
+            throw new InvalidDataException(
+                $"Checkpoint model dtype '{modelDType}' is not supported " +
+                $"for architecture '{GetCheckpointArchitecture(checkpoint)}'.");
         }
 
         if (string.Equals(
@@ -175,5 +198,24 @@ internal static partial class WikiLanguageModelCommand
             new Random(seed),
             checkpoint.InitializationScale,
             checkpoint.Dropout);
+    }
+
+    internal static TensorDType GetCheckpointModelDType(
+        WikiModelCheckpoint checkpoint)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (checkpoint.FormatVersion < DTypeCheckpointFormatVersion)
+            return TensorDType.Float32;
+
+        TensorDType dtype = checkpoint.ModelDType
+            ?? throw new InvalidDataException(
+                "Wiki model checkpoint does not declare its model dtype.");
+        if (dtype is not TensorDType.Float32 and not TensorDType.Float16)
+        {
+            throw new InvalidDataException(
+                $"Wiki model checkpoint declares unsupported model dtype " +
+                $"'{dtype}'.");
+        }
+        return dtype;
     }
 }

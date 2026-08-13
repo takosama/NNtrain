@@ -94,7 +94,7 @@ partial class Tensor
             int shortOffset = row * channels;
             int inputOffset =
                 (batchIndex * sequence + time) * channels;
-            AddStridedElementwiseProductSum(
+            AddStridedStoredProductSum(
                 shortOutput,
                 shortOffset,
                 _data,
@@ -124,7 +124,7 @@ partial class Tensor
         void InitializeConvolutionRow(int row)
         {
             int mixedOffset = row * width;
-            MultiplyElementwiseValues(
+            MultiplyFloatByStoredValues(
                 gated,
                 mixedOffset,
                 diagonalBias._data,
@@ -167,7 +167,7 @@ partial class Tensor
                 int time = row % sequence;
                 int mixedOffset = row * width;
                 InitializeConvolutionRow(row);
-                AddStridedElementwiseProductSum(
+                AddStridedFloatStoredProductSum(
                     convolved,
                     mixedOffset,
                     gated,
@@ -247,7 +247,7 @@ partial class Tensor
                         convolutionGradient,
                         mixedOffset,
                         width);
-                    MultiplyElementwiseValues(
+                    MultiplyFloatByStoredValues(
                         convolutionGradient,
                         mixedOffset,
                         diagonalBias._data,
@@ -338,7 +338,7 @@ partial class Tensor
                             sourceTime < sequence;
                             sourceTime++)
                         {
-                            AddStridedElementwiseProductSum(
+                            AddStridedFloatStoredProductSum(
                                 gatedGradient,
                                 batchMixedOffset
                                     + sourceTime * width
@@ -465,7 +465,7 @@ partial class Tensor
                         inputTime < sequence;
                         inputTime++)
                     {
-                        AddStridedElementwiseProductSum(
+                        AddStridedFloatStoredProductSum(
                             _grad,
                             batchShortOffset
                                 + inputTime * channels
@@ -484,7 +484,7 @@ partial class Tensor
 
                     for (int tap = 0; tap < 3; tap++)
                     {
-                        AddStridedElementwiseProductSum(
+                        AddStridedFloatStoredProductSum(
                             localShortFilterGradient,
                             localFilterBase + tap * channels + channelStart,
                             shortGradient,
@@ -535,5 +535,298 @@ partial class Tensor
         };
 
         return result;
+    }
+
+    private static void MultiplyFloatByStoredValues(
+        float[] left,
+        int leftOffset,
+        TensorStorage right,
+        int rightOffset,
+        float[] destination,
+        int destinationOffset,
+        int length)
+    {
+        int index = 0;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            for (; index < vectorizedLength; index += width)
+            {
+                StoreVector256(
+                    LoadVector256(left, leftOffset + index)
+                        * LoadVector256(right, rightOffset + index),
+                    destination,
+                    destinationOffset + index);
+            }
+        }
+
+        if (CanUseVector128(length - index))
+        {
+            StoreVector128(
+                LoadVector128(left, leftOffset + index)
+                    * LoadVector128(right, rightOffset + index),
+                destination,
+                destinationOffset + index);
+            index += Vector128<float>.Count;
+        }
+
+        for (; index < length; index++)
+        {
+            destination[destinationOffset + index] =
+                left[leftOffset + index] * right[rightOffset + index];
+        }
+    }
+
+    private static void AddStridedStoredProductSum(
+        float[] destination,
+        int destinationOffset,
+        TensorStorage left,
+        int leftOffset,
+        int leftStride,
+        TensorStorage right,
+        int rightOffset,
+        int rightStride,
+        int termCount,
+        int length)
+    {
+        int index = 0;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int blockWidth = 4 * width;
+            int blockEnd = length - length % blockWidth;
+            for (; index < blockEnd; index += blockWidth)
+            {
+                Vector256<float> sum0 = LoadVector256(
+                    destination,
+                    destinationOffset + index);
+                Vector256<float> sum1 = LoadVector256(
+                    destination,
+                    destinationOffset + index + width);
+                Vector256<float> sum2 = LoadVector256(
+                    destination,
+                    destinationOffset + index + 2 * width);
+                Vector256<float> sum3 = LoadVector256(
+                    destination,
+                    destinationOffset + index + 3 * width);
+                int leftTermOffset = leftOffset + index;
+                int rightTermOffset = rightOffset + index;
+                for (int term = 0; term < termCount; term++)
+                {
+                    sum0 = Vector256.FusedMultiplyAdd(
+                        LoadVector256(left, leftTermOffset),
+                        LoadVector256(right, rightTermOffset),
+                        sum0);
+                    sum1 = Vector256.FusedMultiplyAdd(
+                        LoadVector256(left, leftTermOffset + width),
+                        LoadVector256(right, rightTermOffset + width),
+                        sum1);
+                    sum2 = Vector256.FusedMultiplyAdd(
+                        LoadVector256(left, leftTermOffset + 2 * width),
+                        LoadVector256(right, rightTermOffset + 2 * width),
+                        sum2);
+                    sum3 = Vector256.FusedMultiplyAdd(
+                        LoadVector256(left, leftTermOffset + 3 * width),
+                        LoadVector256(right, rightTermOffset + 3 * width),
+                        sum3);
+                    leftTermOffset += leftStride;
+                    rightTermOffset += rightStride;
+                }
+                StoreVector256(sum0, destination, destinationOffset + index);
+                StoreVector256(
+                    sum1,
+                    destination,
+                    destinationOffset + index + width);
+                StoreVector256(
+                    sum2,
+                    destination,
+                    destinationOffset + index + 2 * width);
+                StoreVector256(
+                    sum3,
+                    destination,
+                    destinationOffset + index + 3 * width);
+            }
+
+            int vectorEnd = length - length % width;
+            for (; index < vectorEnd; index += width)
+            {
+                Vector256<float> sum = LoadVector256(
+                    destination,
+                    destinationOffset + index);
+                int leftTermOffset = leftOffset + index;
+                int rightTermOffset = rightOffset + index;
+                for (int term = 0; term < termCount; term++)
+                {
+                    sum = Vector256.FusedMultiplyAdd(
+                        LoadVector256(left, leftTermOffset),
+                        LoadVector256(right, rightTermOffset),
+                        sum);
+                    leftTermOffset += leftStride;
+                    rightTermOffset += rightStride;
+                }
+                StoreVector256(sum, destination, destinationOffset + index);
+            }
+        }
+
+        if (CanUseVector128(length - index))
+        {
+            Vector128<float> sum = LoadVector128(
+                destination,
+                destinationOffset + index);
+            int leftTermOffset = leftOffset + index;
+            int rightTermOffset = rightOffset + index;
+            for (int term = 0; term < termCount; term++)
+            {
+                sum = Vector128.FusedMultiplyAdd(
+                    LoadVector128(left, leftTermOffset),
+                    LoadVector128(right, rightTermOffset),
+                    sum);
+                leftTermOffset += leftStride;
+                rightTermOffset += rightStride;
+            }
+            StoreVector128(sum, destination, destinationOffset + index);
+            index += Vector128<float>.Count;
+        }
+
+        for (; index < length; index++)
+        {
+            float sum = destination[destinationOffset + index];
+            int leftTermOffset = leftOffset + index;
+            int rightTermOffset = rightOffset + index;
+            for (int term = 0; term < termCount; term++)
+            {
+                sum += left[leftTermOffset] * right[rightTermOffset];
+                leftTermOffset += leftStride;
+                rightTermOffset += rightStride;
+            }
+            destination[destinationOffset + index] = sum;
+        }
+    }
+
+    private static void AddStridedFloatStoredProductSum(
+        float[] destination,
+        int destinationOffset,
+        float[] left,
+        int leftOffset,
+        int leftStride,
+        TensorStorage right,
+        int rightOffset,
+        int rightStride,
+        int termCount,
+        int length)
+    {
+        int index = 0;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int blockWidth = 4 * width;
+            int blockEnd = length - length % blockWidth;
+            for (; index < blockEnd; index += blockWidth)
+            {
+                Vector256<float> sum0 = LoadVector256(
+                    destination,
+                    destinationOffset + index);
+                Vector256<float> sum1 = LoadVector256(
+                    destination,
+                    destinationOffset + index + width);
+                Vector256<float> sum2 = LoadVector256(
+                    destination,
+                    destinationOffset + index + 2 * width);
+                Vector256<float> sum3 = LoadVector256(
+                    destination,
+                    destinationOffset + index + 3 * width);
+                int leftTermOffset = leftOffset + index;
+                int rightTermOffset = rightOffset + index;
+                for (int term = 0; term < termCount; term++)
+                {
+                    sum0 = Vector256.FusedMultiplyAdd(
+                        LoadVector256(left, leftTermOffset),
+                        LoadVector256(right, rightTermOffset),
+                        sum0);
+                    sum1 = Vector256.FusedMultiplyAdd(
+                        LoadVector256(left, leftTermOffset + width),
+                        LoadVector256(right, rightTermOffset + width),
+                        sum1);
+                    sum2 = Vector256.FusedMultiplyAdd(
+                        LoadVector256(left, leftTermOffset + 2 * width),
+                        LoadVector256(right, rightTermOffset + 2 * width),
+                        sum2);
+                    sum3 = Vector256.FusedMultiplyAdd(
+                        LoadVector256(left, leftTermOffset + 3 * width),
+                        LoadVector256(right, rightTermOffset + 3 * width),
+                        sum3);
+                    leftTermOffset += leftStride;
+                    rightTermOffset += rightStride;
+                }
+                StoreVector256(sum0, destination, destinationOffset + index);
+                StoreVector256(
+                    sum1,
+                    destination,
+                    destinationOffset + index + width);
+                StoreVector256(
+                    sum2,
+                    destination,
+                    destinationOffset + index + 2 * width);
+                StoreVector256(
+                    sum3,
+                    destination,
+                    destinationOffset + index + 3 * width);
+            }
+
+            int vectorEnd = length - length % width;
+            for (; index < vectorEnd; index += width)
+            {
+                Vector256<float> sum = LoadVector256(
+                    destination,
+                    destinationOffset + index);
+                int leftTermOffset = leftOffset + index;
+                int rightTermOffset = rightOffset + index;
+                for (int term = 0; term < termCount; term++)
+                {
+                    sum = Vector256.FusedMultiplyAdd(
+                        LoadVector256(left, leftTermOffset),
+                        LoadVector256(right, rightTermOffset),
+                        sum);
+                    leftTermOffset += leftStride;
+                    rightTermOffset += rightStride;
+                }
+                StoreVector256(sum, destination, destinationOffset + index);
+            }
+        }
+
+        if (CanUseVector128(length - index))
+        {
+            Vector128<float> sum = LoadVector128(
+                destination,
+                destinationOffset + index);
+            int leftTermOffset = leftOffset + index;
+            int rightTermOffset = rightOffset + index;
+            for (int term = 0; term < termCount; term++)
+            {
+                sum = Vector128.FusedMultiplyAdd(
+                    LoadVector128(left, leftTermOffset),
+                    LoadVector128(right, rightTermOffset),
+                    sum);
+                leftTermOffset += leftStride;
+                rightTermOffset += rightStride;
+            }
+            StoreVector128(sum, destination, destinationOffset + index);
+            index += Vector128<float>.Count;
+        }
+
+        for (; index < length; index++)
+        {
+            float sum = destination[destinationOffset + index];
+            int leftTermOffset = leftOffset + index;
+            int rightTermOffset = rightOffset + index;
+            for (int term = 0; term < termCount; term++)
+            {
+                sum += left[leftTermOffset] * right[rightTermOffset];
+                leftTermOffset += leftStride;
+                rightTermOffset += rightStride;
+            }
+            destination[destinationOffset + index] = sum;
+        }
     }
 }

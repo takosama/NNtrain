@@ -132,7 +132,7 @@ partial class Tensor
     }
 
     private static void ForwardForgetScanTrainingTile(
-        float[] projected,
+        TensorStorage projected,
         float[] memory,
         float[] forget,
         float[] input,
@@ -223,7 +223,7 @@ partial class Tensor
     }
 
     private static void ForwardForgetScanInferenceTile(
-        float[] projected,
+        TensorStorage projected,
         float[] memory,
         int projectedBatchOffset,
         int stateBatchOffset,

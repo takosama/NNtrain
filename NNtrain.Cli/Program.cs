@@ -246,6 +246,10 @@ internal static partial class Program
                 $"epoch(s), cosine to " +
                 $"{config.MinimumLearningRateRatio:P1}");
             output.WriteLine(
+                $"checkpoint = {config.CheckpointPath}, " +
+                $"resume {(config.ResumeFromCheckpoint ? "enabled" : "disabled")}, " +
+                $"auto-resume {(config.AutoResume ? "enabled" : "disabled")}");
+            output.WriteLine(
                 config.EarlyStoppingPatience > 0
                     ? $"early stopping = patience " +
                         $"{config.EarlyStoppingPatience} epoch(s)"
@@ -590,9 +594,11 @@ internal static partial class Program
             if (bestModelState is not null)
             {
                 model.load_state_dict(bestModelState);
-                string checkpointPath = Path.ChangeExtension(
-                    Path.GetFullPath(configurationPath),
-                    ".best-model.json");
+                string checkpointPath = config.Checkpoint is null
+                    ? Path.ChangeExtension(
+                        Path.GetFullPath(configurationPath),
+                        ".best-model.json")
+                    : GetBestModelCheckpointPath(config.CheckpointPath);
                 SaveModelCheckpoint(
                     checkpointPath,
                     bestEpoch,
@@ -867,12 +873,33 @@ internal static partial class Program
         float evaluationLoss,
         ModuleState modelState)
     {
+        string fullPath = Path.GetFullPath(path);
+        string? directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
         var checkpoint = new ModelCheckpoint(
             ModelCheckpoint.CurrentFormatVersion,
             epoch,
             evaluationLoss,
             modelState);
-        torch.save(checkpoint, path);
+        torch.save(checkpoint, fullPath);
+    }
+
+    internal static string GetBestModelCheckpointPath(
+        string trainingCheckpointPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(trainingCheckpointPath);
+        string fullPath = Path.GetFullPath(trainingCheckpointPath);
+        string directory = Path.GetDirectoryName(fullPath)
+            ?? Environment.CurrentDirectory;
+        string fileName = Path.GetFileName(fullPath);
+        const string defaultSuffix = ".checkpoint.json";
+        string stem = fileName.EndsWith(
+            defaultSuffix,
+            StringComparison.OrdinalIgnoreCase)
+            ? fileName[..^defaultSuffix.Length]
+            : Path.GetFileNameWithoutExtension(fileName);
+        return Path.Combine(directory, $"{stem}.best-model.json");
     }
 
     internal static string FindDefaultConfiguration()

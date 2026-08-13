@@ -117,7 +117,7 @@ partial class Tensor
     }
 
     private static void ForwardFrogetMemoryV2Batch(
-        float[] projected,
+        TensorStorage projected,
         float[]? output,
         float[] state,
         int batchIndex,
@@ -198,7 +198,7 @@ partial class Tensor
     }
 
     private static void BackwardFrogetMemoryV2Batch(
-        float[] projected,
+        TensorStorage projected,
         float[] projectedGradient,
         float[] outputGradient,
         float[] states,
@@ -333,7 +333,7 @@ partial class Tensor
     private static void UpdateFrogetMemoryState(
         float[] state,
         int stateOffset,
-        float[] key,
+        TensorStorage key,
         int keyOffset,
         float retention,
         float delta,
@@ -378,7 +378,7 @@ partial class Tensor
     }
 
     private static void ComputeFrogetMemoryBackwardDots(
-        float[] key,
+        TensorStorage key,
         int keyOffset,
         float[] previousState,
         int previousStateOffset,
@@ -476,7 +476,7 @@ partial class Tensor
         int keyGradientOffset,
         float[] previousStateGradient,
         int previousStateGradientOffset,
-        float[] key,
+        TensorStorage key,
         int keyOffset,
         float[] previousState,
         int previousStateOffset,

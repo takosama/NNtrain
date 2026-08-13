@@ -8,7 +8,19 @@ public abstract class Module
     private readonly HashSet<Module> _directModules =
         new(ReferenceEqualityComparer.Instance);
 
+    protected Module(TensorDType dtype = TensorDType.Float32)
+    {
+        TensorDTypeContract.ValidateImplemented(dtype, nameof(dtype));
+        DType = dtype;
+    }
+
     public bool IsTraining { get; private set; } = true;
+
+    /// <summary>
+    /// Gets the physical storage dtype selected for this module's parameters.
+    /// Stateless modules propagate this contract to their inputs and children.
+    /// </summary>
+    public TensorDType DType { get; }
 
     protected Parameter RegisterParameter(Parameter parameter)
     {
@@ -79,7 +91,8 @@ public abstract class Module
                 index,
                 parameter.Name,
                 parameter.T.Shape.ToArray(),
-                parameter.T.Data.ToArray());
+                parameter.T.CaptureData(preferMaster: true),
+                parameter.T.DType);
         }
 
         return new ModuleState(ModuleState.CurrentFormatVersion, states);
@@ -121,7 +134,8 @@ public abstract class Module
         {
             using Tensor.DataMutation mutation =
                 parameters[index].BeginUpdate();
-            state.Parameters[index].Values.AsSpan().CopyTo(mutation.Values);
+            ModuleParameterState parameterState = state.Parameters[index];
+            parameterState.Values.AsSpan().CopyTo(mutation.Values);
         }
     }
 
@@ -256,7 +270,10 @@ public abstract class Module
                 || parameterState.Shape is null
                 || !parameterState.Shape.SequenceEqual(parameter.T.Shape)
                 || parameterState.Values is null
-                || parameterState.Values.Length != parameter.T.Numel)
+                || parameterState.Values.Length != parameter.T.Numel
+                || parameterState.DType is not TensorDType.Float32
+                    and not TensorDType.Float16
+                || parameterState.StorageMetadata is { IsRaw: false })
             {
                 throw new ArgumentException(
                     $"Module parameter state for slot {index} is " +
@@ -269,6 +286,17 @@ public abstract class Module
                 throw new ArgumentException(
                     $"Module parameter state for slot {index} contains " +
                     "a non-finite value.",
+                    nameof(state));
+            }
+
+            if ((parameterState.DType == TensorDType.Float16
+                    || parameter.T.DType == TensorDType.Float16)
+                && parameterState.Values.Any(
+                    value => !Half.IsFinite((Half)value)))
+            {
+                throw new ArgumentException(
+                    $"Module parameter state for slot {index} contains " +
+                    "a value outside the finite Float16 range.",
                     nameof(state));
             }
         }

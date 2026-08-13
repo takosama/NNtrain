@@ -10,6 +10,10 @@ namespace NNtrain;
 /// </summary>
 public static class torch
 {
+    public const TensorDType float32 = TensorDType.Float32;
+    public const TensorDType float16 = TensorDType.Float16;
+    public const TensorDType half = TensorDType.Float16;
+
     public static class utils
     {
         public static class data
@@ -72,13 +76,22 @@ public static class torch
     public static Tensor tensor(
         float[] data,
         int[] shape,
-        string name = "")
-        => new(data, shape, name);
+        string name = "",
+        TensorDType dtype = TensorDType.Float32)
+        => new(data, shape, name, dtype);
 
     public static Tensor zeros(params int[] shape) => Tensor.Zeros(shape);
 
-    public static Tensor scalar(float value, string name = "")
-        => Tensor.Scalar(value, name);
+    public static Tensor zeros(
+        int[] shape,
+        TensorDType dtype)
+        => Tensor.Zeros(dtype, shape);
+
+    public static Tensor scalar(
+        float value,
+        string name = "",
+        TensorDType dtype = TensorDType.Float32)
+        => Tensor.Scalar(value, name, dtype);
 
     public static IDisposable no_grad() => AutogradContext.NoGrad();
 

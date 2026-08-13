@@ -24,7 +24,11 @@ partial class Tensor
         }
 
         float[] output = new float[checked(rows * outputWidth)];
-        bool useOutputVectorization = CanUseTransposedRightKernel(inputWidth, outputWidth);
+        // A Float16 weight stays packed. Expanding the full matrix into the
+        // Float32 transpose cache would erase its storage/cache advantage, so
+        // use the contiguous dtype-aware dot-product kernel for that case.
+        bool useOutputVectorization = other.DType == TensorDType.Float32
+            && CanUseTransposedRightKernel(inputWidth, outputWidth);
         float[]? transposedOther = useOutputVectorization
             ? other.GetTransposedData2D()
             : null;
@@ -34,7 +38,9 @@ partial class Tensor
             int outputOffset = row * outputWidth;
             if (transposedOther is not null)
             {
-                Array.Copy(rowBias._data, 0, output, outputOffset, outputWidth);
+                rowBias._data.CopyRangeTo(
+                    0,
+                    output.AsSpan(outputOffset, outputWidth));
                 for (int inner = 0; inner < inputWidth; inner++)
                 {
                     AddScaledValues(
@@ -81,7 +87,7 @@ partial class Tensor
                     for (int inner = 0; inner < inputWidth; inner++)
                     {
                         _grad[inputOffset + inner] +=
-                            DotProductMaskedByPositive(
+                            DotProductMaskedByPositiveStoredMask(
                                 result._grad,
                                 outputOffset,
                                 result._data,
@@ -183,12 +189,12 @@ partial class Tensor
         void ForwardRow(int row)
         {
             int offset = row * columns;
-            float mean = SumAddedValues(
+            float mean = SumAddedStoredValues(
                 _data,
                 residual._data,
                 offset,
                 columns) / columns;
-            float variance = SumSquaredAddedDifferences(
+            float variance = SumSquaredAddedStoredDifferences(
                 _data,
                 residual._data,
                 offset,
@@ -196,7 +202,7 @@ partial class Tensor
                 mean) / columns;
             float inverse = 1f / MathF.Sqrt(variance + eps);
             inverses[row] = inverse;
-            NormalizeAddedAffineValues(
+            NormalizeAddedStoredAffineValues(
                 _data,
                 residual._data,
                 offset,
@@ -220,7 +226,7 @@ partial class Tensor
             void BackwardInputRow(int row)
             {
                 int offset = row * columns;
-                ComputeLayerNormGradientSums(
+                ComputeStoredLayerNormGradientSums(
                     result._grad,
                     offset,
                     gamma._data,
@@ -229,7 +235,7 @@ partial class Tensor
                     columns,
                     out float sumDxhat,
                     out float sumDxhatXhat);
-                AccumulateLayerNormInputGradientPair(
+                AccumulateStoredLayerNormInputGradientPair(
                     _grad,
                     residual._grad,
                     offset,
@@ -266,5 +272,289 @@ partial class Tensor
         };
 
         return result;
+    }
+
+    private static float DotProductMaskedByPositiveStoredMask(
+        float[] gradient,
+        int gradientOffset,
+        TensorStorage activation,
+        int activationOffset,
+        float[] weight,
+        int weightOffset,
+        int length)
+    {
+        int index = 0;
+        float sum = 0f;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            Vector256<float> zero = Vector256<float>.Zero;
+            Vector256<float> sumVector = zero;
+            for (; index < vectorizedLength; index += width)
+            {
+                Vector256<float> activationVector = LoadVector256(
+                    activation,
+                    activationOffset + index);
+                Vector256<float> maskedGradient =
+                    Vector256.ConditionalSelect(
+                        Vector256.GreaterThan(activationVector, zero),
+                        LoadVector256(gradient, gradientOffset + index),
+                        zero);
+                sumVector += maskedGradient
+                    * LoadVector256(weight, weightOffset + index);
+            }
+            sum = Vector256.Sum(sumVector);
+        }
+
+        for (; index < length; index++)
+        {
+            if (activation[activationOffset + index] > 0f)
+            {
+                sum += gradient[gradientOffset + index]
+                    * weight[weightOffset + index];
+            }
+        }
+        return sum;
+    }
+
+    private static float SumAddedStoredValues(
+        TensorStorage left,
+        TensorStorage right,
+        int offset,
+        int length)
+    {
+        int index = 0;
+        float sum = 0f;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            Vector256<float> sumVector = Vector256<float>.Zero;
+            for (; index < vectorizedLength; index += width)
+            {
+                sumVector += LoadVector256(left, offset + index)
+                    + LoadVector256(right, offset + index);
+            }
+            sum += Vector256.Sum(sumVector);
+        }
+
+        for (; index < length; index++)
+            sum += left[offset + index] + right[offset + index];
+        return sum;
+    }
+
+    private static float SumSquaredAddedStoredDifferences(
+        TensorStorage left,
+        TensorStorage right,
+        int offset,
+        int length,
+        float mean)
+    {
+        int index = 0;
+        float sum = 0f;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            Vector256<float> meanVector = Vector256.Create(mean);
+            Vector256<float> sumVector = Vector256<float>.Zero;
+            for (; index < vectorizedLength; index += width)
+            {
+                Vector256<float> difference =
+                    LoadVector256(left, offset + index)
+                    + LoadVector256(right, offset + index)
+                    - meanVector;
+                sumVector += difference * difference;
+            }
+            sum += Vector256.Sum(sumVector);
+        }
+
+        for (; index < length; index++)
+        {
+            float difference =
+                left[offset + index] + right[offset + index] - mean;
+            sum += difference * difference;
+        }
+        return sum;
+    }
+
+    private static void NormalizeAddedStoredAffineValues(
+        TensorStorage left,
+        TensorStorage right,
+        int offset,
+        TensorStorage gamma,
+        TensorStorage beta,
+        float mean,
+        float inverseStandardDeviation,
+        float[] normalized,
+        float[] output,
+        int length)
+    {
+        int index = 0;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            Vector256<float> meanVector = Vector256.Create(mean);
+            Vector256<float> inverseVector =
+                Vector256.Create(inverseStandardDeviation);
+            for (; index < vectorizedLength; index += width)
+            {
+                Vector256<float> normalizedVector =
+                    (LoadVector256(left, offset + index)
+                        + LoadVector256(right, offset + index)
+                        - meanVector)
+                    * inverseVector;
+                StoreVector256(
+                    normalizedVector,
+                    normalized,
+                    offset + index);
+                StoreVector256(
+                    normalizedVector * LoadVector256(gamma, index)
+                        + LoadVector256(beta, index),
+                    output,
+                    offset + index);
+            }
+        }
+
+        for (; index < length; index++)
+        {
+            float normalizedValue =
+                (left[offset + index] + right[offset + index] - mean)
+                * inverseStandardDeviation;
+            normalized[offset + index] = normalizedValue;
+            output[offset + index] =
+                normalizedValue * gamma[index] + beta[index];
+        }
+    }
+
+    private static void ComputeStoredLayerNormGradientSums(
+        float[] gradient,
+        int gradientOffset,
+        TensorStorage gamma,
+        float[] normalized,
+        int normalizedOffset,
+        int length,
+        out float sumGradientToNormalized,
+        out float sumGradientToNormalizedTimesNormalized)
+    {
+        int index = 0;
+        float firstSum = 0f;
+        float secondSum = 0f;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            Vector256<float> firstSumVector = Vector256<float>.Zero;
+            Vector256<float> secondSumVector = Vector256<float>.Zero;
+            for (; index < vectorizedLength; index += width)
+            {
+                Vector256<float> gradientToNormalized =
+                    LoadVector256(gradient, gradientOffset + index)
+                    * LoadVector256(gamma, index);
+                Vector256<float> normalizedVector = LoadVector256(
+                    normalized,
+                    normalizedOffset + index);
+                firstSumVector += gradientToNormalized;
+                secondSumVector +=
+                    gradientToNormalized * normalizedVector;
+            }
+            firstSum += Vector256.Sum(firstSumVector);
+            secondSum += Vector256.Sum(secondSumVector);
+        }
+
+        for (; index < length; index++)
+        {
+            float gradientToNormalized =
+                gradient[gradientOffset + index] * gamma[index];
+            firstSum += gradientToNormalized;
+            secondSum += gradientToNormalized
+                * normalized[normalizedOffset + index];
+        }
+
+        sumGradientToNormalized = firstSum;
+        sumGradientToNormalizedTimesNormalized = secondSum;
+    }
+
+    private static void AccumulateStoredLayerNormInputGradientPair(
+        float[] firstDestination,
+        float[] secondDestination,
+        int destinationOffset,
+        float[] gradient,
+        int gradientOffset,
+        TensorStorage gamma,
+        float[] normalized,
+        int normalizedOffset,
+        int length,
+        float inverseStandardDeviation,
+        float sumGradientToNormalized,
+        float sumGradientToNormalizedTimesNormalized)
+    {
+        int index = 0;
+        float factor = inverseStandardDeviation / length;
+        bool sameDestination = ReferenceEquals(
+            firstDestination,
+            secondDestination);
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            Vector256<float> lengthVector = Vector256.Create((float)length);
+            Vector256<float> firstSumVector =
+                Vector256.Create(sumGradientToNormalized);
+            Vector256<float> secondSumVector =
+                Vector256.Create(sumGradientToNormalizedTimesNormalized);
+            Vector256<float> factorVector = Vector256.Create(factor);
+            Vector256<float> destinationScale =
+                Vector256.Create(sameDestination ? 2f : 1f);
+
+            for (; index < vectorizedLength; index += width)
+            {
+                Vector256<float> gradientToNormalized =
+                    LoadVector256(gradient, gradientOffset + index)
+                    * LoadVector256(gamma, index);
+                Vector256<float> contribution = factorVector
+                    * (lengthVector * gradientToNormalized
+                        - firstSumVector
+                        - LoadVector256(normalized, normalizedOffset + index)
+                            * secondSumVector);
+                StoreVector256(
+                    LoadVector256(
+                        firstDestination,
+                        destinationOffset + index)
+                        + contribution * destinationScale,
+                    firstDestination,
+                    destinationOffset + index);
+                if (!sameDestination)
+                {
+                    StoreVector256(
+                        LoadVector256(
+                            secondDestination,
+                            destinationOffset + index)
+                            + contribution,
+                        secondDestination,
+                        destinationOffset + index);
+                }
+            }
+        }
+
+        for (; index < length; index++)
+        {
+            float gradientToNormalized =
+                gradient[gradientOffset + index] * gamma[index];
+            float contribution = factor
+                * (length * gradientToNormalized
+                    - sumGradientToNormalized
+                    - normalized[normalizedOffset + index]
+                        * sumGradientToNormalizedTimesNormalized);
+            firstDestination[destinationOffset + index] +=
+                sameDestination ? 2f * contribution : contribution;
+            if (!sameDestination)
+            {
+                secondDestination[destinationOffset + index] +=
+                    contribution;
+            }
+        }
     }
 }

@@ -8,11 +8,15 @@ sealed record WikiTrainingConfiguration
     internal const string TaskName = "gpt_rin_wiki_jp";
     internal const string NekoMuonOptimizer = "nekomuon";
     internal const string AdamWOptimizer = "adamw";
+    internal const string WarmupCosineProgressScheduler =
+        "warmupCosineProgress";
     internal const string TransformerArchitecture = "transformer";
     internal const string HyenaArchitecture = "hyena";
     internal const string ForgetScanArchitecture = "forgetscan";
     internal const string ForgetMemoryV2Architecture = "forgetmemoryv2";
     internal const string FrogetMemoryV2ArchitectureAlias = "frogetmemoryv2";
+    internal const string Float16ModelDType = "float16";
+    internal const string Float32ModelDType = "float32";
     internal const string AutoHyenaConvolution = "auto";
     internal const string DirectHyenaConvolution = "direct";
     internal const string FftHyenaConvolution = "fft";
@@ -39,6 +43,8 @@ sealed record WikiTrainingConfiguration
     public bool ResumeFromCheckpoint { get; init; }
 
     public bool AutoResume { get; init; }
+
+    public WikiCheckpointConfiguration? Checkpoint { get; init; }
 
     public int VocabularySize { get; init; } = 2048;
 
@@ -70,6 +76,8 @@ sealed record WikiTrainingConfiguration
 
     public string ModelArchitecture { get; init; } =
         ForgetMemoryV2Architecture;
+
+    public string? ModelDType { get; init; }
 
     public int ForgetMemoryKeyWidth { get; init; } = 16;
 
@@ -103,6 +111,8 @@ sealed record WikiTrainingConfiguration
     public bool AdamWUseBFloat16FirstMoment { get; init; }
 
     public bool AdamWUseBFloat16SecondMoment { get; init; }
+
+    public WikiOptimizationConfiguration? Optimization { get; init; }
 
     public int Seed { get; init; } = 1234;
 
@@ -158,12 +168,23 @@ sealed record WikiTrainingConfiguration
     internal static WikiTrainingConfiguration Load(string path)
     {
         string fullPath = Path.GetFullPath(path);
+        string json = File.ReadAllText(fullPath);
+        using JsonDocument document = JsonDocument.Parse(
+            json,
+            new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip,
+            });
         WikiTrainingConfiguration configuration =
             JsonSerializer.Deserialize<WikiTrainingConfiguration>(
-                File.ReadAllText(fullPath),
+                json,
                 JsonOptions)
             ?? throw new InvalidDataException(
                 "Wiki training configuration cannot be JSON null.");
+        configuration = ApplyGroupedSettings(
+            configuration,
+            document.RootElement);
         configuration.Validate();
 
         string directory = Path.GetDirectoryName(fullPath)
@@ -175,11 +196,169 @@ sealed record WikiTrainingConfiguration
                 configuration.TokenizerPath)
                 ? Path.Combine(directory, "wiki-jp-bpe.json")
                 : Path.GetFullPath(configuration.TokenizerPath, directory),
-            CheckpointPath = string.IsNullOrWhiteSpace(
-                configuration.CheckpointPath)
-                ? Path.ChangeExtension(fullPath, ".wiki-model.json")
-                : Path.GetFullPath(configuration.CheckpointPath, directory),
+            CheckpointPath = ResolveCheckpointPath(
+                configuration,
+                fullPath,
+                directory),
         };
+    }
+
+    private static WikiTrainingConfiguration ApplyGroupedSettings(
+        WikiTrainingConfiguration configuration,
+        JsonElement root)
+    {
+        bool hasCheckpoint = HasProperty(root, "checkpoint");
+        if (hasCheckpoint)
+        {
+            RejectLegacyProperties(
+                root,
+                "checkpoint",
+                "checkpointPath",
+                "resumeFromCheckpoint",
+                "autoResume");
+            WikiCheckpointConfiguration checkpoint =
+                configuration.Checkpoint
+                ?? throw new InvalidDataException(
+                    "The 'checkpoint' section cannot be null.");
+            if (string.IsNullOrWhiteSpace(checkpoint.Directory))
+            {
+                throw new InvalidDataException(
+                    "checkpoint.directory is required.");
+            }
+            ValidateCheckpointFileName(checkpoint.FileName);
+            configuration = configuration with
+            {
+                ResumeFromCheckpoint = checkpoint.Resume,
+                AutoResume = checkpoint.AutoResume,
+            };
+        }
+
+        bool hasOptimization = HasProperty(root, "optimization");
+        if (!hasOptimization)
+            return configuration;
+
+        RejectLegacyProperties(
+            root,
+            "optimization",
+            "optimizer",
+            "learningRate",
+            "auxiliaryLearningRate",
+            "weightDecay",
+            "nekoMuonNewtonSchulzInterval",
+            "warmupPercent",
+            "adamWUseBFloat16FirstMoment",
+            "adamWUseBFloat16SecondMoment");
+        WikiOptimizationConfiguration optimization =
+            configuration.Optimization
+            ?? throw new InvalidDataException(
+                "The 'optimization' section cannot be null.");
+        WikiOptimizerConfiguration optimizer = optimization.Optimizer
+            ?? throw new InvalidDataException(
+                "optimization.optimizer cannot be null.");
+        WikiSchedulerConfiguration scheduler = optimization.Scheduler
+            ?? throw new InvalidDataException(
+                "optimization.scheduler cannot be null.");
+        if (!string.Equals(
+                scheduler.Type,
+                WarmupCosineProgressScheduler,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"Unsupported scheduler '{scheduler.Type}'. The supported " +
+                $"scheduler is '{WarmupCosineProgressScheduler}'.",
+                nameof(Optimization));
+        }
+
+        return configuration with
+        {
+            Optimizer = optimizer.Type,
+            LearningRate = optimizer.LearningRate,
+            AuxiliaryLearningRate = optimizer.AuxiliaryLearningRate,
+            WeightDecay = optimizer.WeightDecay,
+            NekoMuonNewtonSchulzInterval =
+                optimizer.NekoMuonNewtonSchulzInterval,
+            AdamWUseBFloat16FirstMoment =
+                optimizer.AdamWUseBFloat16FirstMoment,
+            AdamWUseBFloat16SecondMoment =
+                optimizer.AdamWUseBFloat16SecondMoment,
+            WarmupPercent = scheduler.WarmupPercent,
+        };
+    }
+
+    private static string ResolveCheckpointPath(
+        WikiTrainingConfiguration configuration,
+        string fullConfigurationPath,
+        string configurationDirectory)
+    {
+        string defaultPath = Path.ChangeExtension(
+            fullConfigurationPath,
+            ".wiki-model.json");
+        if (configuration.Checkpoint is not WikiCheckpointConfiguration grouped)
+        {
+            return string.IsNullOrWhiteSpace(configuration.CheckpointPath)
+                ? defaultPath
+                : Path.GetFullPath(
+                    configuration.CheckpointPath,
+                    configurationDirectory);
+        }
+
+        string checkpointDirectory = Path.GetFullPath(
+            grouped.Directory,
+            configurationDirectory);
+        string fileName = string.IsNullOrWhiteSpace(grouped.FileName)
+            ? Path.GetFileName(defaultPath)
+            : grouped.FileName;
+        return Path.Combine(checkpointDirectory, fileName);
+    }
+
+    private static void ValidateCheckpointFileName(string? fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+            return;
+        if (Path.IsPathRooted(fileName)
+            || !string.Equals(
+                Path.GetFileName(fileName),
+                fileName,
+                StringComparison.Ordinal)
+            || fileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            throw new InvalidDataException(
+                "checkpoint.fileName must be a file name without a " +
+                "directory component.");
+        }
+    }
+
+    private static void RejectLegacyProperties(
+        JsonElement root,
+        string sectionName,
+        params string[] legacyNames)
+    {
+        foreach (string legacyName in legacyNames)
+        {
+            if (!HasProperty(root, legacyName))
+                continue;
+            throw new InvalidDataException(
+                $"'{legacyName}' cannot be used together with the " +
+                $"'{sectionName}' section. Move the setting into " +
+                $"'{sectionName}'.");
+        }
+    }
+
+    private static bool HasProperty(JsonElement root, string name)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+            return false;
+        foreach (JsonProperty property in root.EnumerateObject())
+        {
+            if (string.Equals(
+                    property.Name,
+                    name,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     internal void Validate()
@@ -254,6 +433,15 @@ sealed record WikiTrainingConfiguration
                 $"'{HyenaArchitecture}', '{ForgetScanArchitecture}', and " +
                 $"'{ForgetMemoryV2Architecture}'.",
                 nameof(ModelArchitecture));
+        }
+        TensorDType? explicitModelDType = GetExplicitModelDType();
+        if (explicitModelDType == TensorDType.Float16
+            && !IsForgetMemoryV2Architecture())
+        {
+            throw new ArgumentException(
+                "modelDType 'float16' is currently supported only for the " +
+                $"'{ForgetMemoryV2Architecture}' architecture.",
+                nameof(ModelDType));
         }
         if (!float.IsFinite(ForgetMemoryRetentionMinimum)
             || !float.IsFinite(ForgetMemoryRetentionMaximum)
@@ -364,6 +552,38 @@ sealed record WikiTrainingConfiguration
     internal bool IsForgetMemoryV2Architecture()
         => IsArchitecture(ForgetMemoryV2Architecture)
             || IsArchitecture(FrogetMemoryV2ArchitectureAlias);
+
+    internal TensorDType? GetExplicitModelDType()
+    {
+        if (ModelDType is null)
+            return null;
+
+        if (string.Equals(
+            ModelDType,
+            Float16ModelDType,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            return TensorDType.Float16;
+        }
+        if (string.Equals(
+            ModelDType,
+            Float32ModelDType,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            return TensorDType.Float32;
+        }
+
+        throw new ArgumentException(
+            $"Unsupported modelDType '{ModelDType}'. Supported values are " +
+            $"'{Float16ModelDType}' and '{Float32ModelDType}'.",
+            nameof(ModelDType));
+    }
+
+    internal TensorDType GetModelDType()
+        => GetExplicitModelDType()
+            ?? (IsForgetMemoryV2Architecture()
+                ? TensorDType.Float16
+                : TensorDType.Float32);
 
     internal bool IsHyenaConvolution(string expectedAlgorithm)
         => string.Equals(

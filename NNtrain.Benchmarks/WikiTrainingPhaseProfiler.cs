@@ -6,7 +6,12 @@ namespace NNtrain.Benchmarks;
 
 internal static class WikiTrainingPhaseProfiler
 {
-    internal static void Run(string configurationPath)
+    internal static void Run(
+        string configurationPath,
+        TensorDType? dtypeOverride = null,
+        bool? nativeFloat16Override = null,
+        int? warmupStepsOverride = null,
+        int? measuredStepsOverride = null)
     {
         string path = Path.GetFullPath(configurationPath);
         using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
@@ -36,8 +41,11 @@ internal static class WikiTrainingPhaseProfiler
             "nekoMuonNewtonSchulzInterval");
         float weightDecay = ReadSingle(root, "weightDecay");
         int seed = ReadInt(root, "seed");
+        TensorDType dtype = dtypeOverride ?? ReadDType(root);
 
         Tensor.SimdEnabled = root.GetProperty("useSimd").GetBoolean();
+        if (nativeFloat16Override.HasValue)
+            Tensor.Float16NativeEnabled = nativeFloat16Override.Value;
         Tensor.MaxDegreeOfParallelism = ReadInt(
             root,
             "maxDegreeOfParallelism");
@@ -53,7 +61,8 @@ internal static class WikiTrainingPhaseProfiler
             retentionMaximum,
             new Random(seed),
             initializationScale,
-            dropout);
+            dropout,
+            dtype);
         var neko = new NekoMuon(
             model.HiddenWeightParameters,
             new NekoMuonOptions
@@ -83,15 +92,22 @@ internal static class WikiTrainingPhaseProfiler
         Console.WriteLine(
             $"model = batch {batch}, sequence {sequence}, width {width}, " +
             $"hidden {hidden}, layers {layers}, vocabulary {vocabulary}, " +
-            $"key/value {keyWidth}/{valueWidth}");
+            $"key/value {keyWidth}/{valueWidth}, dtype {dtype}, " +
+            $"native-f16c {Tensor.IsFloat16NativeAccelerated}");
         Console.WriteLine(
             $"parameters = {model.Parameters().Sum(parameter => (long)parameter.T.Numel):N0}, " +
             $"Neko matrices = {model.HiddenWeightParameters.Count}");
 
-        int warmupSteps = Math.Max(2, newtonSchulzInterval);
-        int measuredSteps = Math.Max(
-            10,
-            checked(newtonSchulzInterval * 2));
+        int warmupSteps = warmupStepsOverride
+            ?? Math.Max(2, newtonSchulzInterval);
+        int measuredSteps = measuredStepsOverride
+            ?? Math.Max(10, checked(newtonSchulzInterval * 2));
+        if (warmupSteps < 0 || measuredSteps <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(measuredStepsOverride),
+                "Warmup must be non-negative and measured steps positive.");
+        }
         for (int step = 0; step < warmupSteps; step++)
             MeasureStep(
                 model,
@@ -259,6 +275,25 @@ internal static class WikiTrainingPhaseProfiler
 
     private static float ReadSingle(JsonElement root, string name)
         => root.GetProperty(name).GetSingle();
+
+    private static TensorDType ReadDType(JsonElement root)
+    {
+        if (!root.TryGetProperty("modelDType", out JsonElement element)
+            || element.ValueKind == JsonValueKind.Null)
+        {
+            return TensorDType.Float16;
+        }
+
+        return element.GetString()?.ToLowerInvariant() switch
+        {
+            "float16" or "half" => TensorDType.Float16,
+            "float32" => TensorDType.Float32,
+            string value => throw new InvalidDataException(
+                $"Unsupported modelDType '{value}'."),
+            _ => throw new InvalidDataException(
+                "modelDType must be a string."),
+        };
+    }
 
     private readonly record struct PhaseTimes(
         double ZeroGrad,

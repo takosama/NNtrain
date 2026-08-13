@@ -112,6 +112,263 @@ public sealed class TrainingConfigurationTests
     }
 
     [Fact]
+    public void LoadNormalizesGroupedCheckpointAndOptimizationSettings()
+    {
+        using var directory = new TemporaryDirectory();
+        string configurationPath = directory.WriteConfiguration(
+            """
+            {
+              "trainingData": {
+                "imagePath": "train-images",
+                "labelPath": "train-labels"
+              },
+              "evaluationData": {
+                "imagePath": "eval-images",
+                "labelPath": "eval-labels"
+              },
+              "epochs": 8,
+              "optimization": {
+                "optimizer": {
+                  "type": "gainshareadamw",
+                  "learningRate": 0.012,
+                  "auxiliaryLearningRate": 0.003,
+                  "weightDecay": 0.04,
+                  "gainShareBlockDepth": 3,
+                  "gainShareBeta1": 0.71,
+                  "gainShareBeta2": 0.82,
+                  "gainShareEpsilon": 0.00002,
+                  "gainShareRho": 0.83,
+                  "gainShareGamma": 0.76,
+                  "gainShareMinScale": 0.27,
+                  "gainShareMaxScale": 3.2
+                },
+                "scheduler": {
+                  "type": "linearWarmupCosineAnnealing",
+                  "warmupEpochs": 2,
+                  "minimumLearningRateRatio": 0.05
+                }
+              },
+              "checkpoint": {
+                "directory": "artifacts/checkpoints",
+                "fileName": "classifier.state.json",
+                "resume": true,
+                "autoResume": true
+              }
+            }
+            """);
+
+        TrainingConfiguration configuration =
+            TrainingConfiguration.Load(configurationPath);
+
+        Assert.Equal("gainshareadamw", configuration.Optimizer);
+        Assert.Equal(0.012f, configuration.LearningRate);
+        Assert.Equal(0.003f, configuration.AuxiliaryLearningRate);
+        Assert.Equal(0.04f, configuration.WeightDecay);
+        Assert.Equal(3, configuration.GainShareBlockDepth);
+        Assert.Equal(0.71f, configuration.GainShareBeta1);
+        Assert.Equal(0.82f, configuration.GainShareBeta2);
+        Assert.Equal(0.00002f, configuration.GainShareEpsilon);
+        Assert.Equal(0.83f, configuration.GainShareRho);
+        Assert.Equal(0.76f, configuration.GainShareGamma);
+        Assert.Equal(0.27f, configuration.GainShareMinScale);
+        Assert.Equal(3.2f, configuration.GainShareMaxScale);
+        Assert.Equal(2, configuration.WarmupEpochs);
+        Assert.Equal(0.05f, configuration.MinimumLearningRateRatio);
+        Assert.True(configuration.ResumeFromCheckpoint);
+        Assert.True(configuration.AutoResume);
+        Assert.Equal(
+            Path.Combine(
+                directory.Root,
+                "artifacts",
+                "checkpoints",
+                "classifier.state.json"),
+            configuration.CheckpointPath);
+        Assert.False(
+            Directory.Exists(
+                Path.Combine(
+                    directory.Root,
+                    "artifacts",
+                    "checkpoints")));
+    }
+
+    [Fact]
+    public void GroupedCheckpointUsesLegacyDefaultFileName()
+    {
+        using var directory = new TemporaryDirectory();
+        string configurationPath = directory.WriteConfiguration(
+            """
+            {
+              "trainingData": {
+                "imagePath": "train-images",
+                "labelPath": "train-labels"
+              },
+              "evaluationData": {
+                "imagePath": "eval-images",
+                "labelPath": "eval-labels"
+              },
+              "checkpoint": {
+                "directory": "checkpoints"
+              }
+            }
+            """);
+
+        TrainingConfiguration configuration =
+            TrainingConfiguration.Load(configurationPath);
+
+        Assert.Equal(
+            Path.Combine(
+                directory.Root,
+                "checkpoints",
+                "training.checkpoint.json"),
+            configuration.CheckpointPath);
+    }
+
+    [Theory]
+    [InlineData(
+        "\"optimization\": {}, \"optimizer\": \"adamw\"",
+        "optimization")]
+    [InlineData(
+        "\"checkpoint\": {}, \"checkpointPath\": \"state.json\"",
+        "checkpoint")]
+    public void LoadRejectsMixedGroupedAndLegacySettings(
+        string settings,
+        string sectionName)
+    {
+        using var directory = new TemporaryDirectory();
+        string configurationPath = directory.WriteConfiguration(
+            $$"""
+            {
+              "trainingData": {
+                "imagePath": "train-images",
+                "labelPath": "train-labels"
+              },
+              "evaluationData": {
+                "imagePath": "eval-images",
+                "labelPath": "eval-labels"
+              },
+              {{settings}}
+            }
+            """);
+
+        var exception = Assert.Throws<InvalidDataException>(
+            () => TrainingConfiguration.Load(configurationPath));
+
+        Assert.Contains(sectionName, exception.Message);
+    }
+
+    [Fact]
+    public void LoadRejectsUnknownGroupedSchedulerType()
+    {
+        using var directory = new TemporaryDirectory();
+        string configurationPath = directory.WriteConfiguration(
+            """
+            {
+              "trainingData": {
+                "imagePath": "train-images",
+                "labelPath": "train-labels"
+              },
+              "evaluationData": {
+                "imagePath": "eval-images",
+                "labelPath": "eval-labels"
+              },
+              "optimization": {
+                "scheduler": {
+                  "type": "step"
+                }
+              }
+            }
+            """);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => TrainingConfiguration.Load(configurationPath));
+
+        Assert.Contains("step", exception.Message);
+    }
+
+    [Fact]
+    public void LoadRejectsUnknownGroupedOptimizerType()
+    {
+        using var directory = new TemporaryDirectory();
+        string configurationPath = directory.WriteConfiguration(
+            """
+            {
+              "trainingData": {
+                "imagePath": "train-images",
+                "labelPath": "train-labels"
+              },
+              "evaluationData": {
+                "imagePath": "eval-images",
+                "labelPath": "eval-labels"
+              },
+              "optimization": {
+                "optimizer": {
+                  "type": "sgd"
+                }
+              }
+            }
+            """);
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => TrainingConfiguration.Load(configurationPath));
+
+        Assert.Contains("sgd", exception.Message);
+        Assert.Contains("adamw", exception.Message);
+    }
+
+    [Fact]
+    public void LoadRejectsCheckpointFileNameWithDirectoryComponent()
+    {
+        using var directory = new TemporaryDirectory();
+        string configurationPath = directory.WriteConfiguration(
+            """
+            {
+              "trainingData": {
+                "imagePath": "train-images",
+                "labelPath": "train-labels"
+              },
+              "evaluationData": {
+                "imagePath": "eval-images",
+                "labelPath": "eval-labels"
+              },
+              "checkpoint": {
+                "directory": "checkpoints",
+                "fileName": "nested/state.json"
+              }
+            }
+            """);
+
+        var exception = Assert.Throws<InvalidDataException>(
+            () => TrainingConfiguration.Load(configurationPath));
+
+        Assert.Contains("checkpoint.fileName", exception.Message);
+    }
+
+    [Fact]
+    public void LoadRejectsGroupedCheckpointWithoutDirectory()
+    {
+        using var directory = new TemporaryDirectory();
+        string configurationPath = directory.WriteConfiguration(
+            """
+            {
+              "trainingData": {
+                "imagePath": "train-images",
+                "labelPath": "train-labels"
+              },
+              "evaluationData": {
+                "imagePath": "eval-images",
+                "labelPath": "eval-labels"
+              },
+              "checkpoint": {}
+            }
+            """);
+
+        InvalidDataException exception = Assert.Throws<InvalidDataException>(
+            () => TrainingConfiguration.Load(configurationPath));
+
+        Assert.Contains("checkpoint.directory", exception.Message);
+    }
+
+    [Fact]
     public void LoadAppliesDocumentedDefaults()
     {
         using var directory = new TemporaryDirectory();

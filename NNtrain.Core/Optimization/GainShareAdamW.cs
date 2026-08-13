@@ -7,6 +7,8 @@ public sealed class GainShareAdamW : IOptimizer, ILearningRateAdjustable
     private readonly int[] _parameterGroupIndices;
     private GainShareAdamWState _state;
 
+    internal IReadOnlyList<Parameter> Parameters => _parameters;
+
     public GainShareAdamW(
         IEnumerable<IEnumerable<Parameter>> parameterGroups,
         GainShareAdamWOptions? options = null)

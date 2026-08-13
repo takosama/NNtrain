@@ -31,6 +31,7 @@ public sealed class WikiTrainingConfigurationTests
               "hiddenSize": 16,
               "layers": 1,
               "modelArchitecture": "hyena",
+              "modelDType": "float32",
               "forgetMemoryKeyWidth": 6,
               "forgetMemoryValueWidth": 7,
               "forgetMemoryRetentionMinimum": 0.25,
@@ -85,6 +86,8 @@ public sealed class WikiTrainingConfigurationTests
         Assert.Equal(16, configuration.HiddenSize);
         Assert.Equal(1, configuration.Layers);
         Assert.Equal("hyena", configuration.ModelArchitecture);
+        Assert.Equal("float32", configuration.ModelDType);
+        Assert.Equal(TensorDType.Float32, configuration.GetModelDType());
         Assert.Equal(6, configuration.ForgetMemoryKeyWidth);
         Assert.Equal(7, configuration.ForgetMemoryValueWidth);
         Assert.Equal(0.25f, configuration.ForgetMemoryRetentionMinimum);
@@ -107,6 +110,173 @@ public sealed class WikiTrainingConfigurationTests
         Assert.Equal(16, configuration.DatasetSamplePoolSize);
         Assert.False(configuration.UseSimd);
         Assert.Equal(3, configuration.MaxDegreeOfParallelism);
+    }
+
+    [Fact]
+    public void LoadReadsGroupedCheckpointOptimizerAndSchedulerSettings()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.Write(
+            """
+            {
+              "task": "gpt_rin_wiki_jp",
+              "checkpoint": {
+                "directory": "artifacts/checkpoints",
+                "fileName": "latest.json",
+                "resume": true,
+                "autoResume": true
+              },
+              "optimization": {
+                "optimizer": {
+                  "type": "nekomuon",
+                  "learningRate": 0.001,
+                  "auxiliaryLearningRate": 0.002,
+                  "weightDecay": 0.02,
+                  "nekoMuonNewtonSchulzInterval": 7,
+                  "adamWUseBFloat16FirstMoment": true,
+                  "adamWUseBFloat16SecondMoment": true
+                },
+                "scheduler": {
+                  "type": "warmupCosineProgress",
+                  "warmupPercent": 25
+                }
+              }
+            }
+            """);
+
+        WikiTrainingConfiguration configuration =
+            WikiTrainingConfiguration.Load(path);
+
+        Assert.Equal(
+            Path.Combine(
+                directory.Root,
+                "artifacts",
+                "checkpoints",
+                "latest.json"),
+            configuration.CheckpointPath);
+        Assert.True(configuration.ResumeFromCheckpoint);
+        Assert.True(configuration.AutoResume);
+        Assert.Equal("nekomuon", configuration.Optimizer);
+        Assert.Equal(0.001f, configuration.LearningRate);
+        Assert.Equal(0.002f, configuration.AuxiliaryLearningRate);
+        Assert.Equal(0.02f, configuration.WeightDecay);
+        Assert.Equal(7, configuration.NekoMuonNewtonSchulzInterval);
+        Assert.True(configuration.AdamWUseBFloat16FirstMoment);
+        Assert.True(configuration.AdamWUseBFloat16SecondMoment);
+        Assert.Equal(25f, configuration.WarmupPercent);
+    }
+
+    [Fact]
+    public void GroupedCheckpointUsesConfigurationFileNameByDefault()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.Write(
+            """
+            {
+              "task": "gpt_rin_wiki_jp",
+              "checkpoint": {
+                "directory": "checkpoints"
+              }
+            }
+            """);
+
+        WikiTrainingConfiguration configuration =
+            WikiTrainingConfiguration.Load(path);
+
+        Assert.Equal(
+            Path.Combine(
+                directory.Root,
+                "checkpoints",
+                "training.wiki-model.json"),
+            configuration.CheckpointPath);
+    }
+
+    [Fact]
+    public void RejectsMixedGroupedAndLegacyCheckpointSettings()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.Write(
+            """
+            {
+              "task": "gpt_rin_wiki_jp",
+              "checkpointPath": "legacy.json",
+              "checkpoint": { "directory": "checkpoints" }
+            }
+            """);
+
+        InvalidDataException exception = Assert.Throws<InvalidDataException>(
+            () => WikiTrainingConfiguration.Load(path));
+
+        Assert.Contains("checkpointPath", exception.Message);
+        Assert.Contains("checkpoint", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsMixedGroupedAndLegacyOptimizationSettings()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.Write(
+            """
+            {
+              "task": "gpt_rin_wiki_jp",
+              "learningRate": 0.1,
+              "optimization": {
+                "optimizer": { "type": "adamw" },
+                "scheduler": { "type": "warmupCosineProgress" }
+              }
+            }
+            """);
+
+        InvalidDataException exception = Assert.Throws<InvalidDataException>(
+            () => WikiTrainingConfiguration.Load(path));
+
+        Assert.Contains("learningRate", exception.Message);
+        Assert.Contains("optimization", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsUnknownGroupedScheduler()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.Write(
+            """
+            {
+              "task": "gpt_rin_wiki_jp",
+              "optimization": {
+                "optimizer": { "type": "adamw" },
+                "scheduler": { "type": "oneCycle" }
+              }
+            }
+            """);
+
+        ArgumentException exception = Assert.Throws<ArgumentException>(
+            () => WikiTrainingConfiguration.Load(path));
+
+        Assert.Contains("oneCycle", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("../outside.json")]
+    [InlineData("nested/model.json")]
+    public void RejectsCheckpointFileNameWithDirectoryComponent(
+        string fileName)
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.Write(
+            $$"""
+            {
+              "task": "gpt_rin_wiki_jp",
+              "checkpoint": {
+                "directory": "checkpoints",
+                "fileName": "{{fileName}}"
+              }
+            }
+            """);
+
+        InvalidDataException exception = Assert.Throws<InvalidDataException>(
+            () => WikiTrainingConfiguration.Load(path));
+
+        Assert.Contains("checkpoint.fileName", exception.Message);
     }
 
     [Fact]
@@ -135,6 +305,7 @@ public sealed class WikiTrainingConfigurationTests
         configuration.Validate();
         Assert.Equal("forgetmemoryv2", configuration.ModelArchitecture);
         Assert.True(configuration.IsForgetMemoryV2Architecture());
+        Assert.Equal(TensorDType.Float16, configuration.GetModelDType());
         Assert.Equal(
             HyenaConvolutionAlgorithm.Auto,
             configuration.GetHyenaConvolutionAlgorithm());
@@ -167,6 +338,65 @@ public sealed class WikiTrainingConfigurationTests
             configuration.Validate);
 
         Assert.Equal("Optimizer", exception.ParamName);
+    }
+
+    [Fact]
+    public void ExplicitFloat32OverridesTheFloat16V2Default()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            ModelDType = "FLOAT32",
+        };
+
+        configuration.Validate();
+
+        Assert.Equal(TensorDType.Float32, configuration.GetModelDType());
+    }
+
+    [Fact]
+    public void NonV2ArchitectureDefaultsToFloat32()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            ModelArchitecture =
+                WikiTrainingConfiguration.TransformerArchitecture,
+        };
+
+        configuration.Validate();
+
+        Assert.Null(configuration.GetExplicitModelDType());
+        Assert.Equal(TensorDType.Float32, configuration.GetModelDType());
+    }
+
+    [Fact]
+    public void RejectsUnknownModelDType()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            ModelDType = "float8",
+        };
+
+        ArgumentException exception = Assert.Throws<ArgumentException>(
+            configuration.Validate);
+
+        Assert.Equal("ModelDType", exception.ParamName);
+        Assert.Contains("float16", exception.Message);
+        Assert.Contains("float32", exception.Message);
+    }
+
+    [Fact]
+    public void RejectsFloat16ForArchitectureWithoutFloat16Parameters()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            ModelArchitecture = WikiTrainingConfiguration.HyenaArchitecture,
+            ModelDType = WikiTrainingConfiguration.Float16ModelDType,
+        };
+
+        ArgumentException exception = Assert.Throws<ArgumentException>(
+            configuration.Validate);
+
+        Assert.Equal("ModelDType", exception.ParamName);
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using System.Threading;
 
 namespace NNtrain;
@@ -6,6 +7,7 @@ namespace NNtrain;
 partial class Tensor
 {
     private static int _simdEnabled = 1;
+    private static int _float16NativeEnabled = 1;
     private static int _maxDegreeOfParallelism;
 
     /// <summary>
@@ -25,6 +27,21 @@ partial class Tensor
 
     public static bool IsSimdHardwareAccelerated
         => Vector256.IsHardwareAccelerated;
+
+    /// <summary>
+    /// Gets or sets whether optional native Float16 accelerators may be used.
+    /// The portable managed Float32-SIMD path is used when disabled or when no
+    /// compatible native payload/CPU is available.
+    /// </summary>
+    public static bool Float16NativeEnabled
+    {
+        get => Volatile.Read(ref _float16NativeEnabled) != 0;
+        set => Volatile.Write(ref _float16NativeEnabled, value ? 1 : 0);
+    }
+
+    /// <summary>Gets whether an optional native Float16 accelerator is active.</summary>
+    public static bool IsFloat16NativeAccelerated
+        => Float16NativeEnabled && TensorFloat16Native.IsAvailable;
 
     /// <summary>
     /// Gets or sets the maximum number of worker threads used by tensor and
@@ -112,6 +129,24 @@ partial class Tensor
         int offset)
         => Vector256.LoadUnsafe(ref values[offset]);
 
+    private static Vector256<float> LoadVector256(
+        TensorStorage values,
+        int offset)
+        => values.LoadVector256(offset);
+
+    private static Vector256<float> LoadVector256(
+        Half[] values,
+        int offset)
+    {
+        // Keep the direct AVX2 route in the hot loop. The JIT folds this ISA
+        // check on a given machine, unlike a codec-level fallback call per
+        // vector. ARM and other non-AVX2 runtimes still receive the safe
+        // scalar/vector construction fallback.
+        return Avx2.IsSupported
+            ? TensorStorageCodec.LoadFloat16Vector256Avx2(values, offset)
+            : TensorStorageCodec.LoadFloat16Vector256(values, offset);
+    }
+
     private static void StoreVector256(
         Vector256<float> vector,
         float[] destination,
@@ -122,6 +157,16 @@ partial class Tensor
         float[] values,
         int offset)
         => Vector128.LoadUnsafe(ref values[offset]);
+
+    private static Vector128<float> LoadVector128(
+        TensorStorage values,
+        int offset)
+        => values.LoadVector128(offset);
+
+    private static Vector128<float> LoadVector128(
+        Half[] values,
+        int offset)
+        => TensorStorageCodec.LoadFloat16Vector128(values, offset);
 
     private static void StoreVector128(
         Vector128<float> vector,
@@ -221,6 +266,58 @@ partial class Tensor
         }
     }
 
+    private static void MultiplyValues(
+        TensorStorage source,
+        int sourceOffset,
+        float scale,
+        float[] destination,
+        int destinationOffset,
+        int length)
+    {
+        if (source.TryGetFloat32Buffer(out float[] sourceValues))
+        {
+            MultiplyValues(
+                sourceValues,
+                sourceOffset,
+                scale,
+                destination,
+                destinationOffset,
+                length);
+            return;
+        }
+        source.TryGetFloat16Buffer(out Half[] sourceHalf);
+
+        int index = 0;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            Vector256<float> scaleVector = Vector256.Create(scale);
+            for (; index < vectorizedLength; index += width)
+            {
+                StoreVector256(
+                    LoadVector256(sourceHalf, sourceOffset + index)
+                        * scaleVector,
+                    destination,
+                    destinationOffset + index);
+            }
+        }
+        if (CanUseVector128(length - index))
+        {
+            StoreVector128(
+                LoadVector128(sourceHalf, sourceOffset + index)
+                    * Vector128.Create(scale),
+                destination,
+                destinationOffset + index);
+            index += Vector128<float>.Count;
+        }
+        for (; index < length; index++)
+        {
+            destination[destinationOffset + index] =
+                (float)sourceHalf[sourceOffset + index] * scale;
+        }
+    }
+
     private static void AddValues(
         float[] left,
         int leftOffset,
@@ -259,6 +356,70 @@ partial class Tensor
         {
             destination[destinationOffset + index] =
                 left[leftOffset + index] + right[rightOffset + index];
+        }
+    }
+
+    private static void AddValues(
+        TensorStorage left,
+        int leftOffset,
+        TensorStorage right,
+        int rightOffset,
+        float[] destination,
+        int destinationOffset,
+        int length)
+    {
+        if (left.TryGetFloat32Buffer(out float[] leftValues)
+            && right.TryGetFloat32Buffer(out float[] rightValues))
+        {
+            AddValues(
+                leftValues,
+                leftOffset,
+                rightValues,
+                rightOffset,
+                destination,
+                destinationOffset,
+                length);
+            return;
+        }
+        bool leftIsHalf = left.TryGetFloat16Buffer(out Half[] leftHalf);
+        bool rightIsHalf = right.TryGetFloat16Buffer(out Half[] rightHalf);
+
+        int index = 0;
+        if (CanUseSimd(length))
+        {
+            int width = Vector256<float>.Count;
+            int vectorizedLength = length - length % width;
+            for (; index < vectorizedLength; index += width)
+            {
+                StoreVector256(
+                    (leftIsHalf
+                        ? LoadVector256(leftHalf, leftOffset + index)
+                        : LoadVector256(left, leftOffset + index))
+                        + (rightIsHalf
+                            ? LoadVector256(rightHalf, rightOffset + index)
+                            : LoadVector256(right, rightOffset + index)),
+                    destination,
+                    destinationOffset + index);
+            }
+        }
+        if (CanUseVector128(length - index))
+        {
+            StoreVector128(
+                LoadVector128(left, leftOffset + index)
+                    + LoadVector128(right, rightOffset + index),
+                destination,
+                destinationOffset + index);
+            index += Vector128<float>.Count;
+        }
+        for (; index < length; index++)
+        {
+            destination[destinationOffset + index] =
+                (leftIsHalf
+                    ? (float)leftHalf[leftOffset + index]
+                    : left[leftOffset + index])
+                + (rightIsHalf
+                    ? (float)rightHalf[rightOffset + index]
+                    : right[rightOffset + index]);
         }
     }
 
@@ -301,6 +462,67 @@ partial class Tensor
         {
             destination[destinationOffset + index] =
                 left[leftOffset + index] * right[rightOffset + index];
+        }
+    }
+
+    private static void AddScaledValues(
+        float[] destination,
+        int destinationOffset,
+        TensorStorage source,
+        int sourceOffset,
+        float scale,
+        int length)
+    {
+        if (source.TryGetFloat32Buffer(out float[] sourceValues))
+        {
+            AddScaledValues(
+                destination,
+                destinationOffset,
+                sourceValues,
+                sourceOffset,
+                scale,
+                length);
+            return;
+        }
+        source.TryGetFloat16Buffer(out Half[] sourceHalf);
+
+        int index = 0;
+        if (CanUseSimd(length))
+        {
+            int vectorWidth = Vector256<float>.Count;
+            int vectorizedLength = length - length % vectorWidth;
+            Vector256<float> scaleVector = Vector256.Create(scale);
+
+            for (; index < vectorizedLength; index += vectorWidth)
+            {
+                Vector256<float> destinationVector = LoadVector256(
+                    destination,
+                    destinationOffset + index);
+                Vector256<float> sourceVector = LoadVector256(
+                    sourceHalf,
+                    sourceOffset + index);
+                StoreVector256(
+                    destinationVector + sourceVector * scaleVector,
+                    destination,
+                    destinationOffset + index);
+            }
+        }
+
+        if (CanUseVector128(length - index))
+        {
+            StoreVector128(
+                LoadVector128(destination, destinationOffset + index)
+                    + LoadVector128(sourceHalf, sourceOffset + index)
+                        * Vector128.Create(scale),
+                destination,
+                destinationOffset + index);
+            index += Vector128<float>.Count;
+        }
+
+        for (; index < length; index++)
+        {
+            destination[destinationOffset + index] +=
+                (float)sourceHalf[sourceOffset + index] * scale;
         }
     }
 

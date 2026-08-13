@@ -4,6 +4,36 @@ NNtrain is a small neural-network training implementation for studying Tensor
 operations, reverse-mode automatic differentiation, Transformer modules,
 optimizers, dataset boundaries, and training orchestration in C#/.NET 10.
 
+## Float16 and native F16C dense kernels
+
+`FrogetMemoryV2Gpt` uses `TensorDType.Float16` by default. Tensor values and
+activations are physically stored as IEEE binary16; gradients, reductions,
+and optimizer master weights remain Float32. Existing models can opt into
+Float32 explicitly with `dtype: TensorDType.Float32` or
+`"modelDType": "float32"`.
+
+On Windows x64 CPUs with AVX2 and F16C, the optional native dense-kernel
+payload accelerates Float16 `Linear.ForwardBatch` forward and backward while
+retaining Float32 gradient accumulation. Build the payload once after cloning:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\native\f16c\build-win-x64.ps1
+```
+
+The regular managed AVX2/scalar implementation remains the fallback on every
+other runtime, and can be forced for comparison with:
+
+```csharp
+Tensor.Float16NativeEnabled = false;
+```
+
+Profile the same V2 training configuration with or without the payload:
+
+```powershell
+dotnet run --project NNtrain.Benchmarks -c Release -- `
+  --profile-wiki training.forgetmemoryv2-wiki-jp.json float16 true 3 8
+```
+
 ## PyTorch-style API
 
 User-facing training code follows PyTorch's vocabulary while remaining native
@@ -188,20 +218,35 @@ termination, or error leaves it behind. On the next launch, the CLI restores
 the latest checkpoint only when both the interrupted-run marker and checkpoint
 exist. The same marker lease also prevents two processes from updating one
 checkpoint concurrently.
-Set `"autoResume": true` in the training JSON to make this the default without
-passing a CLI flag. The supplied classification and Wikipedia JSON profiles
-enable it.
+Set `checkpoint.autoResume` to `true` in the training JSON to make this the
+default without passing a CLI flag. The supplied classification and Wikipedia
+JSON profiles enable it.
 
 Each 0.1-epoch save also keeps a timestamped SafeTensors history file named
 `<ModelName>_<epoch>_epoch_<yyyyMMdd_HHmm>.safetensors`, for example
 `FrogetMemoryV2Gpt_0.1_epoch_20260312_1224.safetensors`. The fixed checkpoint
 name remains the latest resumable state.
 
-The same behavior can be enabled with `"resumeFromCheckpoint": true` in the
-JSON. Classification defaults to `<config>.checkpoint.json`; Wikipedia uses
-`checkpointPath`. The separate `*.best-model.json` classification artifact
-and `*.best.safetensors` artifacts remain the weights used for evaluation or
-generation.
+Checkpoint placement and restart behavior are grouped in one section. Paths
+are resolved relative to the training JSON, and the directory is created when
+training starts or the first checkpoint is saved:
+
+```json
+"checkpoint": {
+  "directory": "checkpoints/wiki-v2",
+  "fileName": "latest.model.json",
+  "resume": false,
+  "autoResume": true
+}
+```
+
+`fileName` is optional. Classification then defaults to
+`<config>.checkpoint.json`, while Wikipedia defaults to
+`<config>.wiki-model.json`. The fixed JSON file retains the model, optimizer,
+scheduler, and exact restart position; its SafeTensors sidecars and timestamped
+snapshots are written to the same directory. Legacy root-level
+`checkpointPath`, `resumeFromCheckpoint`, and `autoResume` settings are still
+accepted, but must not be mixed with the grouped section.
 
 With no arguments the CLI selects `training.wiki-jp.json` when it is present,
 then falls back to `training.example.json`. The selected absolute path and the
@@ -219,13 +264,36 @@ statistics. Each 32x32 RGB image is emitted directly as 64 row-major 4x4 patch
 tokens with 48 channel-first features per token. Its training augmentation uses
 a four-pixel random crop and random horizontal flip; vertical flipping is
 available but disabled by default.
+Optimizer and scheduler settings now live together in the same training JSON:
+
+```json
+"optimization": {
+  "optimizer": {
+    "type": "gainshareadamw",
+    "learningRate": 0.0003,
+    "weightDecay": 0.0005
+  },
+  "scheduler": {
+    "type": "linearWarmupCosineAnnealing",
+    "warmupEpochs": 5,
+    "minimumLearningRateRatio": 0.01
+  }
+}
+```
+
+Wikipedia training uses scheduler type `warmupCosineProgress` and its
+`warmupPercent` setting. Legacy flat optimizer and scheduler keys remain
+readable for existing configurations, but grouped and legacy forms cannot be
+mixed in one JSON.
+
 GainShareAdamW is the default optimizer. It groups parameters at the configured
 module depth, measures each block's gradient/update alignment through an EMA,
 and redistributes the AdamW update norm between blocks while preserving the
 global squared update norm. The default profile uses learning rate `3e-4`,
 weight decay `5e-4`, rho `0.95`, gamma `1.0`, and scales `0.5` to `2.0`.
-Set `optimizer` to `nekomuon`, `lion`, or `adamw` to retain the other update
-rules. NekoMuon continues to use auxiliary AdamW for non-hidden parameters.
+Set `optimization.optimizer.type` to `nekomuon`, `lion`, or `adamw` to retain
+the other update rules. NekoMuon continues to use auxiliary AdamW for
+non-hidden parameters.
 The CIFAR-100 profile applies five warmup epochs followed by cosine learning-
 rate decay, residual dropout `0.1`, and early stopping after 15 epochs without
 an evaluation-loss improvement. At exit, the best model weights are restored
@@ -356,27 +424,31 @@ The default GPT profile uses a 4096-token BPE vocabulary, reads every Parquet
 document (`maxTrainingDocuments: 0`), and uses the JSON-configured token limit
 from each
 document. `maxTrainingTokens: 0` selects the streaming path, so the complete
-tokenized corpus is not retained in memory. The tokenizer and best checkpoint
-paths are controlled by `tokenizerPath` and `checkpointPath`.
+tokenized corpus is not retained in memory. The tokenizer path is controlled
+by `tokenizerPath`; checkpoint files and sidecars are placed under
+`checkpoint.directory`.
 The byte-level BPE vocabulary reserves `<pad>=0`, `<bos>=1`, `<eos>=2`, and
 `<unk>=3`. Training pads incomplete final sequences with token id 0 and writes
 `-1` to the corresponding targets. `CrossEntropyWithLogits` enables
 `ignoreIndex=-1` by default, excludes those rows from both gradients and the
 mean-loss denominator, and continues to train BOS/EOS normally.
-The optimizer is selected by the JSON. With `optimizer: "adamw"`, AdamW updates
-every model parameter; with `optimizer: "nekomuon"`, NekoMuon updates matrix
-weights while an auxiliary AdamW updates embeddings, normalization parameters,
-biases, and the language-model output head. Their learning rates are controlled
-independently by `learningRate` and `auxiliaryLearningRate`.
-`nekoMuonNewtonSchulzInterval` defaults to 5: moments and weights advance on
+The optimizer is selected by the JSON. With
+`optimization.optimizer.type: "adamw"`, AdamW updates every model parameter;
+with `"nekomuon"`, NekoMuon updates matrix weights while an auxiliary AdamW
+updates embeddings, normalization parameters, biases, and the language-model
+output head. Their learning rates are controlled independently by
+`optimization.optimizer.learningRate` and `auxiliaryLearningRate`.
+`optimization.optimizer.nekoMuonNewtonSchulzInterval` defaults to 5: moments
+and weights advance on
 every step using the normalized current momentum, while the expensive
 Newton--Schulz orthogonalization runs only every fifth step. Set it to 1 for
 orthogonalization on every optimizer step. This cadence reduction is an
 intentional throughput variant; the original Muon implementation instead runs
 five Newton--Schulz iterations on every optimizer step.
-`warmupPercent` defaults to 20: both optimizer groups linearly warm up over the
-first 20% of total training progress, then follow cosine decay for the
-remaining 80%. Finite-token training uses exact optimizer-step progress;
+`optimization.scheduler.warmupPercent` defaults to 20: both optimizer groups
+linearly warm up over the first 20% of total training progress, then follow
+cosine decay for the remaining 80%. Finite-token training uses exact
+optimizer-step progress;
 streaming all-data training uses epoch plus processed-document progress.
 With `useSimd: true`, GPT training uses hardware-accelerated Vector256 kernels
 for fused token/position embeddings, linear algebra, normalization, softmax

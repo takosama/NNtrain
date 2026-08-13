@@ -89,7 +89,11 @@ partial class Tensor
     {
         float sum = SumValues(_data, 0, Numel);
 
-        var result = new Tensor([sum], [1], [this]);
+        var result = new Tensor(
+            [sum],
+            [1],
+            [this],
+            dtype: TensorDType.Float32);
 
         result.Node.BackwardAction = () =>
         {

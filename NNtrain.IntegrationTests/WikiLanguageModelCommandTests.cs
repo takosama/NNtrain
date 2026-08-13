@@ -69,6 +69,12 @@ public sealed class WikiLanguageModelCommandTests
             BpeTokenizer.BaseVocabularySize);
 
         FrogetMemoryV2Gpt model = Assert.IsType<FrogetMemoryV2Gpt>(created);
+        Assert.Equal(TensorDType.Float16, model.DType);
+        Assert.All(
+            model.parameters(),
+            parameter => Assert.Equal(
+                TensorDType.Float16,
+                parameter.T.DType));
         Assert.Equal(5, model.KeyWidth);
         Assert.Equal(7, model.ValueWidth);
         Assert.Equal(0.3f, model.Layers[0].RetentionFloor, precision: 6);
@@ -85,7 +91,8 @@ public sealed class WikiLanguageModelCommandTests
             config.VocabularySize);
 
         Assert.True(config.IsForgetMemoryV2Architecture());
-        Assert.IsType<FrogetMemoryV2Gpt>(model);
+        FrogetMemoryV2Gpt typed = Assert.IsType<FrogetMemoryV2Gpt>(model);
+        Assert.Equal(TensorDType.Float16, typed.DType);
     }
 
     [Fact]
