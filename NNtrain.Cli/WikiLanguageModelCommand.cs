@@ -272,6 +272,14 @@ internal static partial class WikiLanguageModelCommand
                         $"training checkpoint = {config.CheckpointPath} " +
                         $"at epoch " +
                         $"{epoch - 1d + (double)completedBatches / batchTotal:F1}");
+                    string snapshotPath = CheckpointSnapshot.Save(
+                        config.CheckpointPath,
+                        model.GetType().Name,
+                        epoch - 1d
+                            + (double)completedBatches / batchTotal,
+                        model.state_dict());
+                    output.WriteLine(
+                        $"model snapshot = {snapshotPath}");
                 }
                 bool epochEnd = batch + 1 == batchTotal;
                 if (lossGraph is not null
@@ -353,6 +361,13 @@ internal static partial class WikiLanguageModelCommand
                 optimizer,
                 scheduler,
                 globalStep);
+            string epochSnapshotPath = CheckpointSnapshot.Save(
+                config.CheckpointPath,
+                model.GetType().Name,
+                epoch,
+                model.state_dict());
+            output.WriteLine(
+                $"model snapshot = {epochSnapshotPath}");
         }
 
         if (bestState is null)
@@ -650,6 +665,14 @@ internal static partial class WikiLanguageModelCommand
                         $"training checkpoint = {config.CheckpointPath} " +
                         $"at epoch " +
                         $"{epoch - 1d + (double)documentsProcessed / documentsPerEpoch:F1}");
+                    string snapshotPath = CheckpointSnapshot.Save(
+                        config.CheckpointPath,
+                        model.GetType().Name,
+                        epoch - 1d
+                            + (double)documentsProcessed / documentsPerEpoch,
+                        model.state_dict());
+                    output.WriteLine(
+                        $"model snapshot = {snapshotPath}");
                 }
             }
 
@@ -706,6 +729,13 @@ internal static partial class WikiLanguageModelCommand
                 optimizer,
                 scheduler,
                 globalStep);
+            string epochSnapshotPath = CheckpointSnapshot.Save(
+                config.CheckpointPath,
+                model.GetType().Name,
+                epoch,
+                model.state_dict());
+            output.WriteLine(
+                $"model snapshot = {epochSnapshotPath}");
         }
 
         if (bestState is null)

@@ -117,7 +117,7 @@ internal static partial class Program
                     wikiConfig.CheckpointPath);
                 bool resumeWiki = ResolveAutomaticResume(
                     resumeFromCheckpoint,
-                    autoResume,
+                    autoResume || wikiConfig.AutoResume,
                     wikiRun,
                     wikiConfig.CheckpointPath,
                     output);
@@ -147,7 +147,7 @@ internal static partial class Program
                     config.CheckpointPath);
             bool resumeClassification = ResolveAutomaticResume(
                 resumeFromCheckpoint,
-                autoResume,
+                autoResume || config.AutoResume,
                 classificationRun,
                 config.CheckpointPath,
                 output);
@@ -464,6 +464,14 @@ internal static partial class Program
                             $"training checkpoint = " +
                             $"{config.CheckpointPath} at epoch " +
                             $"{epoch - 1d + (double)completedUpdates / updateTotal:F1}");
+                        string snapshotPath = CheckpointSnapshot.Save(
+                            config.CheckpointPath,
+                            model.GetType().Name,
+                            epoch - 1d
+                                + (double)completedUpdates / updateTotal,
+                            model.state_dict());
+                        output.WriteLine(
+                            $"model snapshot = {snapshotPath}");
                     }
                 }
 

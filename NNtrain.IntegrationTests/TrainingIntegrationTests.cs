@@ -157,7 +157,10 @@ public sealed class TrainingIntegrationTests
             directory.Root,
             "resume.json");
 
-        void WriteConfiguration(int epochs, bool resume)
+        void WriteConfiguration(
+            int epochs,
+            bool resume,
+            bool autoResume = false)
         {
             File.WriteAllText(
                 configurationPath,
@@ -177,6 +180,7 @@ public sealed class TrainingIntegrationTests
                   "learningRate": 0.001,
                   "showLossGraph": false,
                   "resumeFromCheckpoint": {{resume.ToString().ToLowerInvariant()}},
+                  "autoResume": {{autoResume.ToString().ToLowerInvariant()}},
                   "checkpointPath": "{{checkpointPath.Replace("\\", "\\\\")}}",
                   "model": {
                     "heads": 1,
@@ -211,14 +215,17 @@ public sealed class TrainingIntegrationTests
                     .GetInt32());
         }
 
-        WriteConfiguration(epochs: 2, resume: false);
+        WriteConfiguration(
+            epochs: 2,
+            resume: false,
+            autoResume: true);
         File.WriteAllText(
             TrainingRunGuard.GetMarkerPath(checkpointPath),
             "{\"interrupted\":true}");
         using var resumedOutput = new StringWriter();
         using var resumedError = new StringWriter();
         int resumedExitCode = Program.Run(
-            ["--config", configurationPath, "--auto-resume"],
+            ["--config", configurationPath],
             resumedOutput,
             resumedError);
 
@@ -388,6 +395,36 @@ public sealed class TrainingIntegrationTests
                 $"at epoch {tenth / 10d:F1}",
                 output.ToString());
         }
+        string[] snapshots = Directory.GetFiles(
+            directory.Root,
+            "TransformerClassifier_*_epoch_*.safetensors");
+        Assert.Equal(10, snapshots.Length);
+        Assert.All(
+            snapshots,
+            path => Assert.NotEmpty(
+                safetensors.torch.load_file(path).Parameters));
+    }
+
+    [Fact]
+    public void CheckpointSnapshotUsesModelEpochAndTimestampFileName()
+    {
+        string checkpointPath = Path.Combine(
+            Path.GetTempPath(),
+            "snapshots",
+            "latest.json");
+
+        string actual = NNtrain.CheckpointSnapshot.GetPath(
+            checkpointPath,
+            "FrogetMemoryV2Gpt",
+            0.1d,
+            new DateTimeOffset(2026, 3, 12, 12, 24, 0, TimeSpan.Zero));
+
+        Assert.Equal(
+            Path.Combine(
+                Path.GetTempPath(),
+                "snapshots",
+                "FrogetMemoryV2Gpt_0.1_epoch_20260312_1224.safetensors"),
+            actual);
     }
 
     [Fact]

@@ -43,6 +43,7 @@
   "useSimd": true,
   "showLossGraph": true,
   "resumeFromCheckpoint": false,
+  "autoResume": true,
   "seed": 1234,
   "model": {
     "heads":16,

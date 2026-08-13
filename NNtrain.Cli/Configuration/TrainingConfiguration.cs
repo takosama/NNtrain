@@ -71,6 +71,8 @@ sealed record TrainingConfiguration
 
     public bool ResumeFromCheckpoint { get; init; }
 
+    public bool AutoResume { get; init; }
+
     public string CheckpointPath { get; init; } = string.Empty;
 
     public int Seed { get; init; } = 1234;

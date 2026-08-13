@@ -5,6 +5,7 @@
   "tokenizerPath": "wiki-jp-bpe.json",
   "checkpointPath": "training.hyena-wiki-jp.model.json",
   "resumeFromCheckpoint": false,
+  "autoResume": true,
 
   "vocabularySize": 4096,
   "tokenizerTrainingDocuments": 5000,

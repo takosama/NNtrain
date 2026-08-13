@@ -16,6 +16,7 @@ public sealed class WikiTrainingConfigurationTests
               "tokenizerPath": "artifacts/tokenizer.json",
               "checkpointPath": "artifacts/model.json",
               "resumeFromCheckpoint": true,
+              "autoResume": true,
               "vocabularySize": 300,
               "tokenizerTrainingDocuments": 3,
               "tokenizerTrainingBytes": 100,
@@ -74,6 +75,7 @@ public sealed class WikiTrainingConfigurationTests
             Path.Combine(directory.Root, "artifacts", "model.json"),
             configuration.CheckpointPath);
         Assert.True(configuration.ResumeFromCheckpoint);
+        Assert.True(configuration.AutoResume);
         Assert.Equal("body", configuration.TextColumn);
         Assert.Equal(300, configuration.VocabularySize);
         Assert.Equal(1, configuration.BatchSize);

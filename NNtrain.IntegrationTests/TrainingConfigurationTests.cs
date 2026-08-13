@@ -43,6 +43,7 @@ public sealed class TrainingConfigurationTests
               "useSimd": false,
               "showLossGraph": false,
               "resumeFromCheckpoint": true,
+              "autoResume": true,
               "checkpointPath": "artifacts/resume.json",
               "seed": 42,
               "model": {
@@ -97,6 +98,7 @@ public sealed class TrainingConfigurationTests
         Assert.False(configuration.UseSimd);
         Assert.False(configuration.ShowLossGraph);
         Assert.True(configuration.ResumeFromCheckpoint);
+        Assert.True(configuration.AutoResume);
         Assert.Equal(
             Path.Combine(directory.Root, "artifacts", "resume.json"),
             configuration.CheckpointPath);

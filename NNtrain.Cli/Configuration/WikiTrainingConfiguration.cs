@@ -38,6 +38,8 @@ sealed record WikiTrainingConfiguration
 
     public bool ResumeFromCheckpoint { get; init; }
 
+    public bool AutoResume { get; init; }
+
     public int VocabularySize { get; init; } = 2048;
 
     public int TokenizerTrainingDocuments { get; init; } = 2000;

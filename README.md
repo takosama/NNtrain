@@ -188,6 +188,14 @@ termination, or error leaves it behind. On the next launch, the CLI restores
 the latest checkpoint only when both the interrupted-run marker and checkpoint
 exist. The same marker lease also prevents two processes from updating one
 checkpoint concurrently.
+Set `"autoResume": true` in the training JSON to make this the default without
+passing a CLI flag. The supplied classification and Wikipedia JSON profiles
+enable it.
+
+Each 0.1-epoch save also keeps a timestamped SafeTensors history file named
+`<ModelName>_<epoch>_epoch_<yyyyMMdd_HHmm>.safetensors`, for example
+`FrogetMemoryV2Gpt_0.1_epoch_20260312_1224.safetensors`. The fixed checkpoint
+name remains the latest resumable state.
 
 The same behavior can be enabled with `"resumeFromCheckpoint": true` in the
 JSON. Classification defaults to `<config>.checkpoint.json`; Wikipedia uses
