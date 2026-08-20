@@ -3,6 +3,11 @@ using NNtrain;
 using NNtrain.Benchmarks;
 
 if (args.Length > 0
+    && string.Equals(args[0], "--compare-ten-step", StringComparison.Ordinal))
+{
+    TenStepCompareProfiler.Run();
+}
+else if (args.Length > 0
     && string.Equals(args[0], "--profile-adamw", StringComparison.Ordinal))
 {
     string configurationPath = args.Length > 1
