@@ -177,6 +177,13 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
 
     public void ZeroGrad()
     {
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            foreach (AdamWParameterRuntime runtime in _parameterRuntime)
+                runtime.Parameter.T.ClearGradient();
+            return;
+        }
+
         if (_workItems.Length > 1 && _totalElements >= 32_768)
         {
             Tensor.RunParallel(
@@ -217,15 +224,6 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         _stepUpdateScale = options.LearningRate * sqrtBc2 / bc1;
         _stepScaledEpsilon = options.Epsilon * sqrtBc2;
 
-        for (int parameterIndex = 0;
-            parameterIndex < _parameters.Count;
-            parameterIndex++)
-        {
-            AdamWParameterRuntime runtime =
-                _parameterRuntime[parameterIndex];
-            runtime.Gradient = runtime.Parameter.T.GradientBuffer;
-        }
-
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
         {
             for (int parameterIndex = 0;
@@ -234,9 +232,6 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
             {
                 AdamWParameterRuntime runtime =
                     _parameterRuntime[parameterIndex];
-                float[] gradient = runtime.Gradient.Length == 0
-                    ? new float[runtime.Data.Length]
-                    : runtime.Gradient;
                 float[] first = runtime.FirstMomentBFloat16 is null
                     ? runtime.FirstMoment
                     : DecodeBFloat16(runtime.FirstMomentBFloat16);
@@ -255,7 +250,6 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                         CudaOptimizerKernels.AdamWUpdateResident(
                             runtime.Parameter.T,
                             deviceIndex,
-                            gradient,
                             runtime.CudaState,
                             options.Beta1,
                             options.Beta2,
@@ -272,7 +266,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                 {
                     CudaOptimizerKernels.AdamWUpdate(
                         runtime.Data,
-                        gradient,
+                        runtime.Parameter.T.GradientBuffer,
                         first,
                         second,
                         options.Beta1,
@@ -294,6 +288,15 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                 }
             }
             return;
+        }
+
+        for (int parameterIndex = 0;
+            parameterIndex < _parameters.Count;
+            parameterIndex++)
+        {
+            AdamWParameterRuntime runtime =
+                _parameterRuntime[parameterIndex];
+            runtime.Gradient = runtime.Parameter.T.GradientBuffer;
         }
 
         if (_workItems.Length > 1 && _totalElements >= 32_768)

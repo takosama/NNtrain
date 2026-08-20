@@ -42,8 +42,16 @@ public static class nn
                     "The maximum gradient norm must be positive.");
             }
 
+            Parameter[] retainedParameters = parameters.ToArray();
+            if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+            {
+                return TensorCudaKernels.ClipGradientNormResident(
+                    retainedParameters,
+                    max_norm);
+            }
+
             var gradients = new List<float[]>();
-            foreach (Parameter parameter in parameters)
+            foreach (Parameter parameter in retainedParameters)
             {
                 if (parameter.T.HasGradientBuffer)
                     gradients.Add(parameter.T.GradientBuffer);

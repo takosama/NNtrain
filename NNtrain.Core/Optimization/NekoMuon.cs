@@ -314,9 +314,6 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                         parameterState.FastMoment,
                         parameterState.SlowMoment,
                         gramLength);
-            float[] gradient = parameter.T.GradientBuffer.Length == 0
-                ? new float[parameter.T.Numel]
-                : parameter.T.GradientBuffer;
             bool applyWeightDecay =
                 parameter.WeightDecay == WeightDecayPolicy.Apply
                 || (options.Decay1D && parameter.T.Rank == 1);
@@ -329,7 +326,6 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                     CudaOptimizerKernels.NekoMuonStepResident(
                         parameter.T,
                         deviceIndex,
-                        gradient,
                         cudaState,
                         originalRows,
                         originalColumns,

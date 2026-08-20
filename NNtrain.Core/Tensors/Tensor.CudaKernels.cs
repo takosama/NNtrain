@@ -8,6 +8,277 @@ namespace NNtrain;
 /// <summary>CUDA kernels shared by the ForgetMemory training graph.</summary>
 internal static class TensorCudaKernels
 {
+    internal static float ClipGradientNormResident(
+        IReadOnlyList<Parameter> parameters,
+        float maxNorm)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        using var squaredSumBuffer = accelerator.Allocate1D<double>(1);
+        squaredSumBuffer.MemSetToZero();
+        var normKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<double>>(
+                GradientSquaredSumKernel);
+        foreach (Parameter parameter in parameters)
+        {
+            Tensor tensor = parameter.T;
+            if (!tensor.HasGradientBuffer)
+                continue;
+            var gradient = tensor.EnsureCudaGradientBuffer();
+            normKernel(tensor.Numel, gradient.View, squaredSumBuffer.View);
+        }
+        accelerator.Synchronize();
+        var squaredSum = new double[1];
+        squaredSumBuffer.CopyToCPU(squaredSum);
+        float totalNorm = (float)Math.Sqrt(squaredSum[0]);
+        if (totalNorm <= maxNorm)
+            return totalNorm;
+
+        float scale = maxNorm / (totalNorm + 1e-6f);
+        var scaleKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, float>(ScaleGradientKernel);
+        foreach (Parameter parameter in parameters)
+        {
+            Tensor tensor = parameter.T;
+            if (!tensor.HasGradientBuffer)
+                continue;
+            var gradient = tensor.EnsureCudaGradientBuffer();
+            scaleKernel(tensor.Numel, gradient.View, scale);
+            tensor.MarkCudaGradientMutated();
+        }
+        accelerator.Synchronize();
+        return totalNorm;
+    }
+
+    internal static MemoryBuffer1D<float, Stride1D.Dense> CopyForwardResident(
+        Tensor input)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        var inputBuffer = input.EnsureCudaFloat32Buffer();
+        var outputBuffer = accelerator.Allocate1D<float>(input.Numel);
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>>(CopyKernel);
+        kernel(input.Numel, inputBuffer.View, outputBuffer.View);
+        accelerator.Synchronize();
+        return outputBuffer;
+    }
+
+    internal static void AccumulateGradientResident(
+        Tensor source,
+        Tensor destination)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        var sourceBuffer = source.EnsureCudaGradientBuffer();
+        var destinationBuffer = destination.EnsureCudaGradientBuffer();
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>>(AccumulateKernel);
+        kernel(source.Numel, sourceBuffer.View, destinationBuffer.View);
+        accelerator.Synchronize();
+        destination.MarkCudaGradientMutated();
+    }
+
+    internal static MemoryBuffer1D<float, Stride1D.Dense> AddForwardResident(
+        Tensor left,
+        Tensor right,
+        bool bfloat16Compute)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        var leftBuffer = left.EnsureCudaFloat32Buffer();
+        var rightBuffer = right.EnsureCudaFloat32Buffer();
+        var outputBuffer = accelerator.Allocate1D<float>(left.Numel);
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>, int>(
+                AddForwardKernel);
+        kernel(
+            left.Numel,
+            leftBuffer.View,
+            rightBuffer.View,
+            outputBuffer.View,
+            bfloat16Compute ? 1 : 0);
+        accelerator.Synchronize();
+        return outputBuffer;
+    }
+
+    internal static void AddBackwardResident(
+        Tensor output,
+        Tensor left,
+        Tensor right)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        var outputGradient = output.EnsureCudaGradientBuffer();
+        var leftGradient = left.EnsureCudaGradientBuffer();
+        var rightGradient = ReferenceEquals(left, right)
+            ? leftGradient
+            : right.EnsureCudaGradientBuffer();
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>, int>(
+                AddBackwardKernel);
+        kernel(
+            output.Numel,
+            outputGradient.View,
+            leftGradient.View,
+            rightGradient.View,
+            ReferenceEquals(left, right) ? 1 : 0);
+        accelerator.Synchronize();
+        left.MarkCudaGradientMutated();
+        if (!ReferenceEquals(left, right))
+            right.MarkCudaGradientMutated();
+    }
+
+    internal static MemoryBuffer1D<float, Stride1D.Dense>
+        EmbeddingForwardResident(
+            Tensor table,
+            int[] indices,
+            int width)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        var tableBuffer = table.EnsureCudaFloat32Buffer();
+        using var indicesBuffer = accelerator.Allocate1D(indices);
+        var outputBuffer = accelerator.Allocate1D<float>(
+            checked(indices.Length * width));
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<int>, ArrayView<float>, int>(
+                EmbeddingForwardKernel);
+        kernel(
+            checked((int)outputBuffer.Length),
+            tableBuffer.View,
+            indicesBuffer.View,
+            outputBuffer.View,
+            width);
+        accelerator.Synchronize();
+        return outputBuffer;
+    }
+
+    internal static void EmbeddingBackwardResident(
+        Tensor output,
+        Tensor table,
+        int[] indices,
+        int width)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        using var indicesBuffer = accelerator.Allocate1D(indices);
+        var outputGradientBuffer = output.EnsureCudaGradientBuffer();
+        var tableGradientBuffer = table.EnsureCudaGradientBuffer();
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<int>, ArrayView<float>, ArrayView<float>, int>(
+                EmbeddingBackwardKernel);
+        kernel(
+            output.Numel,
+            indicesBuffer.View,
+            outputGradientBuffer.View,
+            tableGradientBuffer.View,
+            width);
+        accelerator.Synchronize();
+        table.MarkCudaGradientMutated();
+    }
+
+    internal static MemoryBuffer1D<float, Stride1D.Dense>
+        DropoutForwardResident(
+            Tensor input,
+            uint seed,
+            uint dropThreshold,
+            float scale)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        var inputBuffer = input.EnsureCudaFloat32Buffer();
+        var outputBuffer = accelerator.Allocate1D<float>(input.Numel);
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, uint, uint, float>(
+                DropoutForwardKernel);
+        kernel(
+            input.Numel,
+            inputBuffer.View,
+            outputBuffer.View,
+            seed,
+            dropThreshold,
+            scale);
+        accelerator.Synchronize();
+        return outputBuffer;
+    }
+
+    internal static void DropoutBackwardResident(
+        Tensor output,
+        Tensor input,
+        uint seed,
+        uint dropThreshold,
+        float scale)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        var outputGradientBuffer = output.EnsureCudaGradientBuffer();
+        var inputGradientBuffer = input.EnsureCudaGradientBuffer();
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, uint, uint, float>(
+                DropoutBackwardKernel);
+        kernel(
+            output.Numel,
+            outputGradientBuffer.View,
+            inputGradientBuffer.View,
+            seed,
+            dropThreshold,
+            scale);
+        accelerator.Synchronize();
+        input.MarkCudaGradientMutated();
+    }
+
+    internal static MemoryBuffer1D<float, Stride1D.Dense>
+        AddDropoutForwardResident(
+            Tensor residual,
+            Tensor branch,
+            uint seed,
+            uint dropThreshold,
+            float scale)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        var residualBuffer = residual.EnsureCudaFloat32Buffer();
+        var branchBuffer = branch.EnsureCudaFloat32Buffer();
+        var outputBuffer = accelerator.Allocate1D<float>(residual.Numel);
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
+            uint, uint, float>(AddDropoutForwardKernel);
+        kernel(
+            residual.Numel,
+            residualBuffer.View,
+            branchBuffer.View,
+            outputBuffer.View,
+            seed,
+            dropThreshold,
+            scale);
+        accelerator.Synchronize();
+        return outputBuffer;
+    }
+
+    internal static void AddDropoutBackwardResident(
+        Tensor output,
+        Tensor residual,
+        Tensor branch,
+        bool sameParent,
+        uint seed,
+        uint dropThreshold,
+        float scale)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        var outputGradientBuffer = output.EnsureCudaGradientBuffer();
+        var residualGradientBuffer = residual.EnsureCudaGradientBuffer();
+        MemoryBuffer1D<float, Stride1D.Dense> branchGradientBuffer = sameParent
+            ? residualGradientBuffer
+            : branch.EnsureCudaGradientBuffer();
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>, int,
+            uint, uint, float>(AddDropoutBackwardKernel);
+        kernel(
+            output.Numel,
+            outputGradientBuffer.View,
+            residualGradientBuffer.View,
+            branchGradientBuffer.View,
+            sameParent ? 1 : 0,
+            seed,
+            dropThreshold,
+            scale);
+        accelerator.Synchronize();
+        residual.MarkCudaGradientMutated();
+        if (!sameParent)
+            branch.MarkCudaGradientMutated();
+    }
+
     internal static float[] EmbeddingForward(
         Tensor table,
         int[] indices,
@@ -165,6 +436,113 @@ internal static class TensorCudaKernels
         residualGradientBuffer.CopyToCPU(residualGradient);
         if (!sameParent)
             branchGradientBuffer!.CopyToCPU(branchGradient);
+    }
+
+    internal static MemoryBuffer1D<float, Stride1D.Dense>
+        LinearForwardResident(
+            Tensor input,
+            Tensor weight,
+            Tensor bias,
+            int rows,
+            int inputWidth,
+            int outputWidth,
+            bool applyRelu,
+            bool bfloat16Compute)
+    {
+        int deviceIndex = Tensor.CudaDeviceIndex;
+        CudaAccelerator accelerator =
+            ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+        var inputBuffer = input.EnsureCudaFloat32Buffer(deviceIndex);
+        var weightBuffer = weight.EnsureCudaFloat32Buffer(deviceIndex);
+        var biasBuffer = bias.EnsureCudaFloat32Buffer(deviceIndex);
+        var outputBuffer = accelerator.Allocate1D<float>(
+            checked(rows * outputWidth));
+        CudaBlas.LinearForward(
+            accelerator,
+            deviceIndex,
+            inputBuffer,
+            weightBuffer,
+            outputBuffer,
+            rows,
+            inputWidth,
+            outputWidth,
+            bfloat16Compute);
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, int, int, int>(
+                LinearBiasActivationKernel);
+        kernel(
+            checked(rows * outputWidth),
+            biasBuffer.View,
+            outputBuffer.View,
+            outputWidth,
+            applyRelu ? 1 : 0,
+            bfloat16Compute ? 1 : 0);
+        accelerator.Synchronize();
+        return outputBuffer;
+    }
+
+    internal static void LinearBackwardResident(
+        Tensor input,
+        Tensor weight,
+        Tensor bias,
+        Tensor output,
+        int rows,
+        int inputWidth,
+        int outputWidth,
+        bool applyRelu,
+        bool bfloat16Compute)
+    {
+        int deviceIndex = Tensor.CudaDeviceIndex;
+        CudaAccelerator accelerator =
+            ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+        var inputBuffer = input.EnsureCudaFloat32Buffer(deviceIndex);
+        var weightBuffer = weight.EnsureCudaFloat32Buffer(deviceIndex);
+        var outputBuffer = output.EnsureCudaFloat32Buffer(deviceIndex);
+        var outputGradientBuffer = output.EnsureCudaGradientBuffer(deviceIndex);
+        var inputGradientBuffer = input.EnsureCudaGradientBuffer(deviceIndex);
+        var weightGradientBuffer = weight.EnsureCudaGradientBuffer(deviceIndex);
+        var biasGradientBuffer = bias.EnsureCudaGradientBuffer(deviceIndex);
+        var maskKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, int>(
+                LinearApplyActivationGradientKernel);
+        maskKernel(
+            output.Numel,
+            outputBuffer.View,
+            outputGradientBuffer.View,
+            applyRelu ? 1 : 0);
+        CudaBlas.LinearBackwardInput(
+            accelerator,
+            deviceIndex,
+            outputGradientBuffer,
+            weightBuffer,
+            inputGradientBuffer,
+            rows,
+            inputWidth,
+            outputWidth,
+            bfloat16Compute);
+        CudaBlas.LinearBackwardWeight(
+            accelerator,
+            deviceIndex,
+            inputBuffer,
+            outputGradientBuffer,
+            weightGradientBuffer,
+            rows,
+            inputWidth,
+            outputWidth,
+            bfloat16Compute);
+        var biasKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, int, int>(
+                LinearBackwardBiasKernel);
+        biasKernel(
+            outputWidth,
+            outputGradientBuffer.View,
+            biasGradientBuffer.View,
+            rows,
+            outputWidth);
+        accelerator.Synchronize();
+        input.MarkCudaGradientMutated(deviceIndex);
+        weight.MarkCudaGradientMutated(deviceIndex);
+        bias.MarkCudaGradientMutated(deviceIndex);
     }
 
     internal static float[] LinearForward(
@@ -388,6 +766,101 @@ internal static class TensorCudaKernels
         biasGradientBuffer.CopyToCPU(biasGradient);
     }
 
+    internal static LayerNormResidentContext LayerNormForwardResident(
+        Tensor input,
+        Tensor gamma,
+        Tensor beta,
+        int rows,
+        int columns,
+        float epsilon)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        var inputBuffer = input.EnsureCudaFloat32Buffer();
+        var gammaBuffer = gamma.EnsureCudaFloat32Buffer();
+        var betaBuffer = beta.EnsureCudaFloat32Buffer();
+        var outputBuffer = accelerator.Allocate1D<float>(input.Numel);
+        var normalizedBuffer = accelerator.Allocate1D<float>(input.Numel);
+        var inverseBuffer = accelerator.Allocate1D<float>(rows);
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
+            ArrayView<float>, ArrayView<float>, ArrayView<float>, int, float>(
+                LayerNormForwardKernel);
+        kernel(
+            rows,
+            inputBuffer.View,
+            gammaBuffer.View,
+            betaBuffer.View,
+            outputBuffer.View,
+            normalizedBuffer.View,
+            inverseBuffer.View,
+            columns,
+            epsilon);
+        accelerator.Synchronize();
+        return new LayerNormResidentContext(
+            outputBuffer,
+            normalizedBuffer,
+            inverseBuffer);
+    }
+
+    internal static void LayerNormBackwardResident(
+        Tensor input,
+        Tensor gamma,
+        Tensor beta,
+        Tensor output,
+        LayerNormResidentContext context,
+        int rows,
+        int columns)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        var gammaBuffer = gamma.EnsureCudaFloat32Buffer();
+        var outputGradientBuffer = output.EnsureCudaGradientBuffer();
+        var inputGradientBuffer = input.EnsureCudaGradientBuffer();
+        var gammaGradientBuffer = gamma.EnsureCudaGradientBuffer();
+        var betaGradientBuffer = beta.EnsureCudaGradientBuffer();
+        var inputKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
+            ArrayView<float>, ArrayView<float>, int>(LayerNormBackwardInputKernel);
+        inputKernel(
+            rows,
+            gammaBuffer.View,
+            context.Normalized.View,
+            context.Inverses.View,
+            outputGradientBuffer.View,
+            inputGradientBuffer.View,
+            columns);
+        var parameterKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
+            ArrayView<float>, int, int>(LayerNormBackwardParameterKernel);
+        parameterKernel(
+            columns,
+            context.Normalized.View,
+            outputGradientBuffer.View,
+            gammaGradientBuffer.View,
+            betaGradientBuffer.View,
+            rows,
+            columns);
+        accelerator.Synchronize();
+        input.MarkCudaGradientMutated();
+        gamma.MarkCudaGradientMutated();
+        beta.MarkCudaGradientMutated();
+    }
+
+    internal sealed class LayerNormResidentContext(
+        MemoryBuffer1D<float, Stride1D.Dense> output,
+        MemoryBuffer1D<float, Stride1D.Dense> normalized,
+        MemoryBuffer1D<float, Stride1D.Dense> inverses)
+    {
+        internal MemoryBuffer1D<float, Stride1D.Dense> Output { get; } = output;
+        internal MemoryBuffer1D<float, Stride1D.Dense> Normalized { get; } = normalized;
+        internal MemoryBuffer1D<float, Stride1D.Dense> Inverses { get; } = inverses;
+
+        ~LayerNormResidentContext()
+        {
+            Normalized.Dispose();
+            Inverses.Dispose();
+        }
+    }
+
     internal static (
         float[] Output,
         float[] Normalized,
@@ -478,6 +951,87 @@ internal static class TensorCudaKernels
         betaGradientBuffer.CopyToCPU(betaGradient);
     }
 
+    internal static CrossEntropyResidentContext CrossEntropyForwardResident(
+        Tensor logits,
+        int[] labels,
+        int rows,
+        int columns,
+        int ignoreIndex,
+        int validRows,
+        float labelSmoothing)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        var logitsBuffer = logits.EnsureCudaFloat32Buffer();
+        var labelsBuffer = accelerator.Allocate1D(labels);
+        var probabilitiesBuffer = accelerator.Allocate1D<float>(logits.Numel);
+        var lossBuffer = accelerator.Allocate1D<float>(1);
+        lossBuffer.MemSetToZero();
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<int>, ArrayView<float>,
+            ArrayView<float>, int, int, int, float>(CrossEntropyForwardKernel);
+        kernel(
+            rows,
+            logitsBuffer.View,
+            labelsBuffer.View,
+            probabilitiesBuffer.View,
+            lossBuffer.View,
+            columns,
+            ignoreIndex,
+            validRows,
+            labelSmoothing);
+        accelerator.Synchronize();
+        return new CrossEntropyResidentContext(
+            lossBuffer,
+            probabilitiesBuffer,
+            labelsBuffer);
+    }
+
+    internal static void CrossEntropyBackwardResident(
+        Tensor logits,
+        Tensor loss,
+        CrossEntropyResidentContext context,
+        int columns,
+        int ignoreIndex,
+        int validRows,
+        float labelSmoothing)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        var lossGradientBuffer = loss.EnsureCudaGradientBuffer();
+        var logitsGradientBuffer = logits.EnsureCudaGradientBuffer();
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<int>, ArrayView<float>,
+            ArrayView<float>, int, int, int, float>(
+                CrossEntropyBackwardResidentKernel);
+        kernel(
+            logits.Numel,
+            context.Probabilities.View,
+            context.Labels.View,
+            logitsGradientBuffer.View,
+            lossGradientBuffer.View,
+            columns,
+            ignoreIndex,
+            validRows,
+            labelSmoothing);
+        accelerator.Synchronize();
+        logits.MarkCudaGradientMutated();
+    }
+
+    internal sealed class CrossEntropyResidentContext(
+        MemoryBuffer1D<float, Stride1D.Dense> loss,
+        MemoryBuffer1D<float, Stride1D.Dense> probabilities,
+        MemoryBuffer1D<int, Stride1D.Dense> labels)
+    {
+        internal MemoryBuffer1D<float, Stride1D.Dense> Loss { get; } = loss;
+        internal MemoryBuffer1D<float, Stride1D.Dense> Probabilities { get; } = probabilities;
+        internal MemoryBuffer1D<int, Stride1D.Dense> Labels { get; } = labels;
+
+        ~CrossEntropyResidentContext()
+        {
+            Probabilities.Dispose();
+            Labels.Dispose();
+        }
+    }
+
     internal static (float Loss, float[] Probabilities) CrossEntropyForward(
         float[] logits,
         int[] labels,
@@ -544,6 +1098,63 @@ internal static class TensorCudaKernels
             upstreamGradient);
         accelerator.Synchronize();
         gradientBuffer.CopyToCPU(logitsGradient);
+    }
+
+    private static void GradientSquaredSumKernel(
+        Index1D index,
+        ArrayView<float> gradient,
+        ArrayView<double> squaredSum)
+    {
+        double value = gradient[index];
+        Atomic.Add(ref squaredSum[0], value * value);
+    }
+
+    private static void ScaleGradientKernel(
+        Index1D index,
+        ArrayView<float> gradient,
+        float scale)
+        => gradient[index] *= scale;
+
+    private static void CopyKernel(
+        Index1D index,
+        ArrayView<float> input,
+        ArrayView<float> output)
+        => output[index] = input[index];
+
+    private static void AccumulateKernel(
+        Index1D index,
+        ArrayView<float> source,
+        ArrayView<float> destination)
+        => destination[index] += source[index];
+
+    private static void AddForwardKernel(
+        Index1D index,
+        ArrayView<float> left,
+        ArrayView<float> right,
+        ArrayView<float> output,
+        int bfloat16Compute)
+    {
+        float value = left[index] + right[index];
+        output[index] = bfloat16Compute != 0
+            ? RoundBFloat16(value)
+            : value;
+    }
+
+    private static void AddBackwardKernel(
+        Index1D index,
+        ArrayView<float> outputGradient,
+        ArrayView<float> leftGradient,
+        ArrayView<float> rightGradient,
+        int sameParent)
+    {
+        float value = outputGradient[index];
+        if (sameParent != 0)
+            leftGradient[index] += 2f * value;
+        else
+        {
+            leftGradient[index] += value;
+            rightGradient[index] += value;
+        }
     }
 
     private static void LinearBiasActivationKernel(
@@ -855,6 +1466,30 @@ internal static class TensorCudaKernels
         if (label == ignoreIndex)
             return;
         float scale = upstreamGradient / validRows;
+        float target = labelSmoothing / columns;
+        if (column == label)
+            target += 1f - labelSmoothing;
+        gradient[linear] += scale * (probabilities[linear] - target);
+    }
+
+    private static void CrossEntropyBackwardResidentKernel(
+        Index1D index,
+        ArrayView<float> probabilities,
+        ArrayView<int> labels,
+        ArrayView<float> gradient,
+        ArrayView<float> upstreamGradient,
+        int columns,
+        int ignoreIndex,
+        int validRows,
+        float labelSmoothing)
+    {
+        int linear = index;
+        int row = linear / columns;
+        int column = linear - row * columns;
+        int label = labels[row];
+        if (label == ignoreIndex)
+            return;
+        float scale = upstreamGradient[0] / validRows;
         float target = labelSmoothing / columns;
         if (column == label)
             target += 1f - labelSmoothing;

@@ -12,6 +12,22 @@ partial class Tensor
                 nameof(newShape));
         }
 
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            var cudaBuffer = TensorCudaKernels.CopyForwardResident(this);
+            Tensor cudaResult = FromCudaResult(
+                cudaBuffer,
+                CudaDeviceIndex,
+                newShape,
+                [this],
+                DType);
+            cudaResult.Node.BackwardAction = () =>
+                TensorCudaKernels.AccumulateGradientResident(
+                    cudaResult,
+                    this);
+            return cudaResult;
+        }
+
         var t = new Tensor(_data, newShape, new[] { this });
 
         t.Node.BackwardAction = () =>

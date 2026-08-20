@@ -383,29 +383,28 @@ partial class Tensor
                     $"{ShapeText(beta)}.");
             }
             int rows = Numel / columns;
-            (float[] output, float[] normalized, float[] inverses) =
-                TensorCudaKernels.LayerNormForward(
-                    GetPhysicalFloat32ComputeCache(),
+            TensorCudaKernels.LayerNormResidentContext context =
+                TensorCudaKernels.LayerNormForwardResident(
+                    this,
                     gamma,
                     beta,
                     rows,
                     columns,
                     eps);
-            var cudaResult = new Tensor(
-                output,
+            Tensor cudaResult = FromCudaResult(
+                context.Output,
+                CudaDeviceIndex,
                 _shape,
                 [this, gamma, beta]);
             if (AutogradContext.IsRecordingEnabled)
             {
                 cudaResult.Node.BackwardAction = () =>
-                    TensorCudaKernels.LayerNormBackward(
+                    TensorCudaKernels.LayerNormBackwardResident(
+                        this,
                         gamma,
-                        normalized,
-                        inverses,
-                        cudaResult._grad,
-                        EnsureGradientBuffer(),
-                        gamma.EnsureGradientBuffer(),
-                        beta.EnsureGradientBuffer(),
+                        beta,
+                        cudaResult,
+                        context,
                         rows,
                         columns);
             }

@@ -137,7 +137,14 @@ public partial class Tensor
     }
 
     internal Span<float> MutableGrad => EnsureGradientBuffer();
-    internal float[] GradientBuffer => _grad;
+    internal float[] GradientBuffer
+    {
+        get
+        {
+            EnsureHostGradientCurrent();
+            return _grad;
+        }
+    }
     internal long DataVersion => _dataVersion;
     internal bool HasGradientBuffer => _grad.Length != 0;
 
@@ -391,7 +398,11 @@ public partial class Tensor
 
     public void zero_grad() => ZeroGrad();
 
-    internal void ClearGradient() => _grad.AsSpan().Clear();
+    internal void ClearGradient()
+    {
+        _grad.AsSpan().Clear();
+        ClearCudaGradients();
+    }
 
     internal void ClearGradientRange(int start, int length)
     {
@@ -401,8 +412,10 @@ public partial class Tensor
 
     private float[] EnsureGradientBuffer()
     {
+        EnsureHostGradientCurrent();
         if (_grad.Length == 0)
             _grad = new float[Numel];
+        MarkHostGradientMutable();
         return _grad;
     }
 
@@ -574,6 +587,7 @@ public partial class Tensor
                 ArgumentOutOfRangeException.ThrowIfNegative(index);
                 if (index >= Count)
                     throw new ArgumentOutOfRangeException(nameof(index));
+                owner.EnsureHostGradientCurrent();
                 return owner._grad.Length == 0 ? 0f : owner._grad[index];
             }
             set => throw new NotSupportedException();

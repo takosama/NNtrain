@@ -154,7 +154,6 @@ internal static class CudaOptimizerKernels
     internal static float NekoMuonStepResident(
         Tensor parameter,
         int deviceIndex,
-        float[] gradient,
         NekoMuonResidentState state,
         int originalRows,
         int originalColumns,
@@ -177,7 +176,7 @@ internal static class CudaOptimizerKernels
         CudaAccelerator accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
         var dataBuffer = parameter.EnsureCudaMasterFloat32Buffer(deviceIndex);
-        using var gradientBuffer = accelerator.Allocate1D(gradient);
+        var gradientBuffer = parameter.EnsureCudaGradientBuffer(deviceIndex);
         NekoMuonResidentState.NekoBuffers buffers =
             state.GetOrCreate(deviceIndex);
         var momentsKernel = accelerator.LoadAutoGroupedStreamKernel<
@@ -351,7 +350,6 @@ internal static class CudaOptimizerKernels
     internal static void AdamWUpdateResident(
         Tensor parameter,
         int deviceIndex,
-        float[] gradient,
         AdamWResidentState state,
         float beta1,
         float beta2,
@@ -364,7 +362,7 @@ internal static class CudaOptimizerKernels
         CudaAccelerator accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
         var dataBuffer = parameter.EnsureCudaMasterFloat32Buffer(deviceIndex);
-        using var gradientBuffer = accelerator.Allocate1D(gradient);
+        var gradientBuffer = parameter.EnsureCudaGradientBuffer(deviceIndex);
         AdamWResidentState.Buffers stateBuffers =
             state.GetOrCreate(deviceIndex);
         var kernel = accelerator.LoadAutoGroupedStreamKernel<

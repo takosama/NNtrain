@@ -66,32 +66,32 @@ partial class Tensor
 
         if (ExecutionDevice == TensorDevice.Cuda)
         {
-            (float cudaLoss, float[] probabilities) =
-                TensorCudaKernels.CrossEntropyForward(
-                    GetPhysicalFloat32ComputeCache(),
+            TensorCudaKernels.CrossEntropyResidentContext context =
+                TensorCudaKernels.CrossEntropyForwardResident(
+                    this,
                     retainedLabels,
                     rows,
                     columns,
                     ignoreIndex,
                     validRows,
                     labelSmoothing);
-            var cudaResult = new Tensor(
-                [cudaLoss],
+            Tensor cudaResult = FromCudaResult(
+                context.Loss,
+                CudaDeviceIndex,
                 [1],
                 [this],
                 dtype: TensorDType.Float32);
             if (AutogradContext.IsRecordingEnabled)
             {
                 cudaResult.Node.BackwardAction = () =>
-                    TensorCudaKernels.CrossEntropyBackward(
-                        probabilities,
-                        retainedLabels,
-                        EnsureGradientBuffer(),
+                    TensorCudaKernels.CrossEntropyBackwardResident(
+                        this,
+                        cudaResult,
+                        context,
                         columns,
                         ignoreIndex,
                         validRows,
-                        labelSmoothing,
-                        cudaResult._grad[0]);
+                        labelSmoothing);
             }
             return cudaResult;
         }

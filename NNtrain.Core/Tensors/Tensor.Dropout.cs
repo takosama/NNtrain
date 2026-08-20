@@ -27,20 +27,22 @@ partial class Tensor
 
         if (ExecutionDevice == TensorDevice.Cuda)
         {
-            var cudaResult = new Tensor(
-                TensorCudaKernels.DropoutForward(
-                    GetPhysicalFloat32ComputeCache(),
+            var cudaBuffer = TensorCudaKernels.DropoutForwardResident(
+                    this,
                     seed,
                     dropThreshold,
-                    scale),
+                    scale);
+            Tensor cudaResult = FromCudaResult(
+                cudaBuffer,
+                CudaDeviceIndex,
                 _shape,
                 [this]);
             if (AutogradContext.IsRecordingEnabled)
             {
                 cudaResult.Node.BackwardAction = () =>
-                    TensorCudaKernels.DropoutBackward(
-                        cudaResult._grad,
-                        EnsureGradientBuffer(),
+                    TensorCudaKernels.DropoutBackwardResident(
+                        cudaResult,
+                        this,
                         seed,
                         dropThreshold,
                         scale);
@@ -126,24 +128,24 @@ partial class Tensor
 
         if (ExecutionDevice == TensorDevice.Cuda)
         {
-            var cudaResult = new Tensor(
-                TensorCudaKernels.AddDropoutForward(
-                    GetPhysicalFloat32ComputeCache(),
-                    branch.GetPhysicalFloat32ComputeCache(),
+            var cudaBuffer = TensorCudaKernels.AddDropoutForwardResident(
+                    this,
+                    branch,
                     seed,
                     dropThreshold,
-                    scale),
+                    scale);
+            Tensor cudaResult = FromCudaResult(
+                cudaBuffer,
+                CudaDeviceIndex,
                 _shape,
                 [this, branch]);
             if (AutogradContext.IsRecordingEnabled)
             {
                 cudaResult.Node.BackwardAction = () =>
-                    TensorCudaKernels.AddDropoutBackward(
-                        cudaResult._grad,
-                        EnsureGradientBuffer(),
-                        ReferenceEquals(this, branch)
-                            ? EnsureGradientBuffer()
-                            : branch.EnsureGradientBuffer(),
+                    TensorCudaKernels.AddDropoutBackwardResident(
+                        cudaResult,
+                        this,
+                        branch,
                         ReferenceEquals(this, branch),
                         seed,
                         dropThreshold,

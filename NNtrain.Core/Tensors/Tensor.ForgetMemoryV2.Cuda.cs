@@ -17,6 +17,128 @@ internal static class ForgetMemoryV2Cuda
     private static Context? _context;
     private static readonly Dictionary<int, CudaAccelerator> Accelerators = [];
 
+    internal static ResidentForwardResult ForwardResident(
+        Tensor projected,
+        int batch,
+        int sequence,
+        int projectionWidth,
+        int keyWidth,
+        int valueWidth,
+        float retentionFloor,
+        bool bfloat16Compute)
+    {
+        int deviceIndex = Tensor.CudaDeviceIndex;
+        CudaAccelerator accelerator = GetAccelerator(deviceIndex);
+        int matrixSize = checked(keyWidth * valueWidth);
+        var projectedBuffer = projected.EnsureCudaFloat32Buffer(deviceIndex);
+        var outputBuffer = accelerator.Allocate1D<float>(
+            checked(batch * sequence * valueWidth));
+        var statesBuffer = accelerator.Allocate1D<float>(
+            checked(batch * sequence * matrixSize));
+        using var stateBuffer = accelerator.Allocate1D<float>(
+            checked(batch * matrixSize));
+        stateBuffer.MemSetToZero();
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D,
+            ArrayView<float>,
+            ArrayView<float>,
+            ArrayView<float>,
+            ArrayView<float>,
+            int,
+            int,
+            int,
+            int,
+            float,
+            int>(ForwardKernel);
+        kernel(
+            checked(batch * valueWidth),
+            projectedBuffer.View,
+            outputBuffer.View,
+            statesBuffer.View,
+            stateBuffer.View,
+            sequence,
+            projectionWidth,
+            keyWidth,
+            valueWidth,
+            retentionFloor,
+            bfloat16Compute ? 1 : 0);
+        accelerator.Synchronize();
+        return new ResidentForwardResult(
+            deviceIndex,
+            outputBuffer,
+            statesBuffer);
+    }
+
+    internal static void BackwardResident(
+        Tensor projected,
+        Tensor output,
+        ResidentForwardResult forward,
+        int batch,
+        int sequence,
+        int projectionWidth,
+        int keyWidth,
+        int valueWidth,
+        float retentionFloor,
+        bool bfloat16Compute)
+    {
+        CudaAccelerator accelerator = GetAccelerator(forward.DeviceIndex);
+        int matrixSize = checked(keyWidth * valueWidth);
+        var projectedBuffer = projected.EnsureCudaFloat32Buffer(
+            forward.DeviceIndex);
+        var projectedGradientBuffer = projected.EnsureCudaGradientBuffer(
+            forward.DeviceIndex);
+        var outputGradientBuffer = output.EnsureCudaGradientBuffer(
+            forward.DeviceIndex);
+        using var stateGradientBuffer = accelerator.Allocate1D<float>(
+            checked(batch * matrixSize));
+        using var previousGradientBuffer = accelerator.Allocate1D<float>(
+            checked(batch * matrixSize));
+        stateGradientBuffer.MemSetToZero();
+        previousGradientBuffer.MemSetToZero();
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D,
+            ArrayView<float>,
+            ArrayView<float>,
+            ArrayView<float>,
+            ArrayView<float>,
+            ArrayView<float>,
+            ArrayView<float>,
+            int,
+            int,
+            int,
+            int,
+            float,
+            int>(BackwardKernel);
+        kernel(
+            checked(batch * valueWidth),
+            projectedBuffer.View,
+            projectedGradientBuffer.View,
+            outputGradientBuffer.View,
+            forward.States.View,
+            stateGradientBuffer.View,
+            previousGradientBuffer.View,
+            sequence,
+            projectionWidth,
+            keyWidth,
+            valueWidth,
+            retentionFloor,
+            bfloat16Compute ? 1 : 0);
+        accelerator.Synchronize();
+        projected.MarkCudaGradientMutated(forward.DeviceIndex);
+    }
+
+    internal sealed class ResidentForwardResult(
+        int deviceIndex,
+        MemoryBuffer1D<float, Stride1D.Dense> output,
+        MemoryBuffer1D<float, Stride1D.Dense> states)
+    {
+        internal int DeviceIndex { get; } = deviceIndex;
+        internal MemoryBuffer1D<float, Stride1D.Dense> Output { get; } = output;
+        internal MemoryBuffer1D<float, Stride1D.Dense> States { get; } = states;
+
+        ~ResidentForwardResult() => States.Dispose();
+    }
+
     internal static ForwardResult Forward(
         float[] projected,
         int batch,

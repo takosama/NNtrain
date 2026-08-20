@@ -37,44 +37,38 @@ partial class Tensor
         int outputLength = checked(rows * outputWidth);
         if (ExecutionDevice == TensorDevice.Cuda)
         {
-            float[] inputValues = GetPhysicalFloat32ComputeCache();
-            float[] outputValues = TensorCudaKernels.LinearForward(
-                inputValues,
+            bool bfloat16Compute = DType == TensorDType.BFloat16
+                && weight.DType == TensorDType.BFloat16
+                && bias.DType == TensorDType.BFloat16;
+            var outputBuffer = TensorCudaKernels.LinearForwardResident(
+                this,
                 weight,
                 bias,
                 rows,
                 inputWidth,
                 outputWidth,
                 applyRelu,
-                DType == TensorDType.BFloat16
-                    && weight.DType == TensorDType.BFloat16
-                    && bias.DType == TensorDType.BFloat16);
-            float[] weightValues = weight.GetPhysicalFloat32ComputeCache();
+                bfloat16Compute);
             int[] cudaOutputShape = (int[])_shape.Clone();
             cudaOutputShape[^1] = outputWidth;
-            var cudaResult = new Tensor(
-                outputValues,
+            Tensor cudaResult = FromCudaResult(
+                outputBuffer,
+                CudaDeviceIndex,
                 cudaOutputShape,
                 [this, weight, bias]);
             if (AutogradContext.IsRecordingEnabled)
             {
-                float[] storedOutputValues =
-                    cudaResult.GetPhysicalFloat32ComputeCache();
                 cudaResult.Node.BackwardAction = () =>
-                    TensorCudaKernels.LinearBackward(
-                        inputValues,
-                        weightValues,
-                        storedOutputValues,
-                        cudaResult._grad,
-                        EnsureGradientBuffer(),
-                        weight.EnsureGradientBuffer(),
-                        bias.EnsureGradientBuffer(),
+                    TensorCudaKernels.LinearBackwardResident(
+                        this,
+                        weight,
+                        bias,
+                        cudaResult,
                         rows,
                         inputWidth,
                         outputWidth,
                         applyRelu,
-                        DType == TensorDType.BFloat16
-                            && weight.DType == TensorDType.BFloat16);
+                        bfloat16Compute);
             }
             return cudaResult;
         }

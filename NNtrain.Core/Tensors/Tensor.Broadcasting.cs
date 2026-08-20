@@ -31,6 +31,28 @@ partial class Tensor
         ArgumentNullException.ThrowIfNull(derivative);
 
         BinaryBroadcastPlan plan = BinaryBroadcastPlan.Create(left, right);
+        if (ExecutionDevice == TensorDevice.Cuda
+            && operation == BinaryOperation.Add
+            && !plan.LeftIsScalar
+            && !plan.RightIsScalar)
+        {
+            var cudaBuffer = TensorCudaKernels.AddForwardResident(
+                left,
+                right,
+                left.DType == TensorDType.BFloat16
+                    && right.DType == TensorDType.BFloat16);
+            Tensor cudaResult = FromCudaResult(
+                cudaBuffer,
+                CudaDeviceIndex,
+                plan.ResultShape,
+                [left, right]);
+            cudaResult.Node.BackwardAction = () =>
+                TensorCudaKernels.AddBackwardResident(
+                    cudaResult,
+                    left,
+                    right);
+            return cudaResult;
+        }
         float[] resultData = new float[plan.ElementCount];
 
         if (!TryApplyBinaryForwardSimd(

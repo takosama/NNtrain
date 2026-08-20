@@ -134,46 +134,38 @@ partial class Tensor
         int valueWidth,
         float retentionFloor)
     {
-        float[] projected = GetPhysicalFloat32ComputeCache();
-        NNtrain.ForgetMemoryV2Cuda.ForwardResult forward =
-            NNtrain.ForgetMemoryV2Cuda.Forward(
-            projected,
+        bool bfloat16Compute = DType == TensorDType.BFloat16;
+        NNtrain.ForgetMemoryV2Cuda.ResidentForwardResult forward =
+            NNtrain.ForgetMemoryV2Cuda.ForwardResident(
+            this,
             batch,
             sequence,
             projectionWidth,
             keyWidth,
             valueWidth,
             retentionFloor,
-            DType == TensorDType.BFloat16);
-        var result = new Tensor(
+            bfloat16Compute);
+        Tensor result = FromCudaResult(
             forward.Output,
+            forward.DeviceIndex,
             [batch, sequence, valueWidth],
             [this]);
         if (!AutogradContext.IsRecordingEnabled)
-        {
-            forward.Dispose();
             return result;
-        }
 
         result.Node.BackwardAction = () =>
         {
-            float[] gradient = NNtrain.ForgetMemoryV2Cuda.Backward(
+            NNtrain.ForgetMemoryV2Cuda.BackwardResident(
+                this,
+                result,
                 forward,
-                result._grad,
                 batch,
                 sequence,
                 projectionWidth,
                 keyWidth,
                 valueWidth,
                 retentionFloor,
-                DType == TensorDType.BFloat16);
-            AddScaledValues(
-                EnsureGradientBuffer(),
-                0,
-                gradient,
-                0,
-                1f,
-                gradient.Length);
+                bfloat16Compute);
         };
         return result;
     }

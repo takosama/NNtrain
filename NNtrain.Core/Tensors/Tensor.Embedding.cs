@@ -62,20 +62,22 @@ partial class Tensor
         }
         if (ExecutionDevice == TensorDevice.Cuda)
         {
-            var cudaResult = new Tensor(
-                TensorCudaKernels.EmbeddingForward(
-                    this,
-                    retainedIndices,
-                    width),
+            var cudaBuffer = TensorCudaKernels.EmbeddingForwardResident(
+                this,
+                retainedIndices,
+                width);
+            Tensor cudaResult = FromCudaResult(
+                cudaBuffer,
+                CudaDeviceIndex,
                 resultShape,
                 [this]);
             if (AutogradContext.IsRecordingEnabled)
             {
                 cudaResult.Node.BackwardAction = () =>
-                    TensorCudaKernels.EmbeddingBackward(
+                    TensorCudaKernels.EmbeddingBackwardResident(
+                        cudaResult,
+                        this,
                         retainedIndices,
-                        cudaResult._grad,
-                        EnsureGradientBuffer(),
                         width);
             }
             return cudaResult;
