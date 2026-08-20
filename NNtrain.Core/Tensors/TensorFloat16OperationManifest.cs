@@ -26,7 +26,9 @@ internal static class TensorFloat16OperationManifest
             Factory("From2D(Single[,],String,TensorDType)"),
 
             Conversion("To(TensorDType)"),
+            Conversion("To(TensorDevice)"),
             Conversion("to(TensorDType)"),
+            Conversion("to(TensorDevice)"),
             Conversion("Half()"),
             Conversion("half()"),
             Conversion("ToFloat32()"),

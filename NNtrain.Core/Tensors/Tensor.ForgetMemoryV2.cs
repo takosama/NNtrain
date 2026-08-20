@@ -143,7 +143,8 @@ partial class Tensor
             projectionWidth,
             keyWidth,
             valueWidth,
-            retentionFloor);
+            retentionFloor,
+            DType == TensorDType.BFloat16);
         var result = new Tensor(
             forward.Output,
             [batch, sequence, valueWidth],
@@ -164,7 +165,8 @@ partial class Tensor
                 projectionWidth,
                 keyWidth,
                 valueWidth,
-                retentionFloor);
+                retentionFloor,
+                DType == TensorDType.BFloat16);
             AddScaledValues(
                 EnsureGradientBuffer(),
                 0,
@@ -283,29 +285,49 @@ partial class Tensor
                 int stateRowOffset = valueIndex * keyWidth;
                 float gateSigmoid = ForgetMemorySigmoid(
                     projected[gateOffset + valueIndex]);
-                float retention = retentionFloor
-                    + (1f - retentionFloor) * gateSigmoid;
+                float retention = projected.DType == TensorDType.BFloat16
+                    ? BFloat16Compute(retentionFloor
+                        + BFloat16Compute(1f - retentionFloor)
+                            * gateSigmoid)
+                    : retentionFloor
+                        + (1f - retentionFloor) * gateSigmoid;
                 float beta = ForgetMemorySigmoid(
                     projected[betaOffset + valueIndex]);
-                float write = (1f - retention) * beta;
-                float value = MathF.Tanh(
-                    projected[valueOffset + valueIndex]);
-                float predictedValue = DotProduct(
-                    state,
-                    stateRowOffset,
-                    projected,
-                    keyOffset,
-                    keyWidth);
+                float write = projected.DType == TensorDType.BFloat16
+                    ? BFloat16Compute(BFloat16Compute(1f - retention) * beta)
+                    : (1f - retention) * beta;
+                float value = projected.DType == TensorDType.BFloat16
+                    ? BFloat16Compute(MathF.Tanh(
+                        projected[valueOffset + valueIndex]))
+                    : MathF.Tanh(projected[valueOffset + valueIndex]);
+                float predictedValue = projected.DType == TensorDType.BFloat16
+                    ? DotProductBFloat16(
+                        state,
+                        stateRowOffset,
+                        projected,
+                        keyOffset,
+                        keyWidth)
+                    : DotProduct(
+                        state,
+                        stateRowOffset,
+                        projected,
+                        keyOffset,
+                        keyWidth);
 
-                float error = value - predictedValue;
+                float error = projected.DType == TensorDType.BFloat16
+                    ? BFloat16Compute(value - predictedValue)
+                    : value - predictedValue;
                 UpdateForgetMemoryState(
                     state,
                     stateRowOffset,
                     projected,
                     keyOffset,
                     retention,
-                    write * error,
-                    keyWidth);
+                    projected.DType == TensorDType.BFloat16
+                        ? BFloat16Compute(write * error)
+                        : write * error,
+                    keyWidth,
+                    projected.DType == TensorDType.BFloat16);
             }
 
             if (output is not null)
@@ -316,12 +338,20 @@ partial class Tensor
                     valueIndex++)
                 {
                     int stateRowOffset = valueIndex * keyWidth;
-                    output[outputOffset + valueIndex] = DotProduct(
-                        state,
-                        stateRowOffset,
-                        projected,
-                        queryOffset,
-                        keyWidth);
+                    output[outputOffset + valueIndex] =
+                        projected.DType == TensorDType.BFloat16
+                            ? DotProductBFloat16(
+                                state,
+                                stateRowOffset,
+                                projected,
+                                queryOffset,
+                                keyWidth)
+                            : DotProduct(
+                                state,
+                                stateRowOffset,
+                                projected,
+                                queryOffset,
+                                keyWidth);
                 }
             }
 
@@ -473,8 +503,23 @@ partial class Tensor
         int keyOffset,
         float retention,
         float delta,
-        int length)
+        int length,
+        bool bfloat16Compute = false)
     {
+        if (bfloat16Compute)
+        {
+            for (int bf16Index = 0; bf16Index < length; bf16Index++)
+            {
+                int stateIndex = stateOffset + bf16Index;
+                float retained = BFloat16Compute(
+                    retention * state[stateIndex]);
+                float written = BFloat16Compute(
+                    delta * key[keyOffset + bf16Index]);
+                state[stateIndex] = BFloat16Compute(retained + written);
+            }
+            return;
+        }
+
         int index = 0;
         if (CanUseSimd(length))
         {
@@ -512,6 +557,26 @@ partial class Tensor
                 + delta * key[keyOffset + index];
         }
     }
+
+    private static float DotProductBFloat16(
+        float[] left,
+        int leftOffset,
+        TensorStorage right,
+        int rightOffset,
+        int length)
+    {
+        float sum = 0f;
+        for (int index = 0; index < length; index++)
+        {
+            float product = BFloat16Compute(
+                left[leftOffset + index] * right[rightOffset + index]);
+            sum = BFloat16Compute(sum + product);
+        }
+        return sum;
+    }
+
+    private static float BFloat16Compute(float value)
+        => TensorStorageCodec.RoundToBFloat16Compute(value);
 
     private static void ComputeForgetMemoryBackwardDots(
         TensorStorage key,

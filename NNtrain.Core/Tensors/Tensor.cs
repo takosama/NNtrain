@@ -97,13 +97,17 @@ public partial class Tensor
     /// <summary>Gets the physical storage dtype.</summary>
     public TensorDType DType => _data.DType;
 
-    /// <summary>
-    /// Gets the dtype used by arithmetic after values are loaded from storage.
-    /// </summary>
-    public TensorDType ComputeDType => TensorDType.Float32;
+    /// <summary>Gets the dtype used for tensor operation results.</summary>
+    public TensorDType ComputeDType
+        => DType == TensorDType.BFloat16
+            ? TensorDType.BFloat16
+            : TensorDType.Float32;
 
     /// <summary>Gets the dtype used by reductions and gradient accumulation.</summary>
-    public TensorDType AccumulationDType => TensorDType.Float32;
+    public TensorDType AccumulationDType
+        => DType == TensorDType.BFloat16
+            ? TensorDType.BFloat16
+            : TensorDType.Float32;
 
     public int Rank => _shape.Length;
     public int Numel => _data.Count;
@@ -328,10 +332,7 @@ public partial class Tensor
         return new Tensor(data, [rows, columns], name, dtype);
     }
 
-    /// <summary>
-    /// Converts physical storage while keeping arithmetic, reductions,
-    /// gradients, and optimizer master values in Float32.
-    /// </summary>
+    /// <summary>Converts physical storage and operation result dtype.</summary>
     public Tensor To(TensorDType dtype)
     {
         TensorDTypeContract.ValidateImplemented(dtype, nameof(dtype));
@@ -464,6 +465,7 @@ public partial class Tensor
 
     internal void MarkDataMutated()
     {
+        InvalidateCudaBuffers();
         CudaResidentArrayCache.Invalidate(_physicalFloat32Cache);
         if (DType == TensorDType.Float32
             && _data.TryGetFloat32Buffer(out float[] values))

@@ -169,12 +169,13 @@ internal static class TensorCudaKernels
 
     internal static float[] LinearForward(
         float[] input,
-        float[] weight,
-        float[] bias,
+        Tensor weight,
+        Tensor bias,
         int rows,
         int inputWidth,
         int outputWidth,
-        bool applyRelu)
+        bool applyRelu,
+        bool bfloat16Compute = false)
     {
         int[] devices = Tensor.CudaDeviceIndices
             .Take(Math.Min(rows, Tensor.CudaDeviceIndices.Count))
@@ -182,8 +183,10 @@ internal static class TensorCudaKernels
         if (devices.Length == 1)
         {
             return LinearForwardSingle(
-                ForgetMemoryV2Cuda.GetAccelerator(devices[0]), input, weight,
-                bias, rows, inputWidth, outputWidth, applyRelu);
+                ForgetMemoryV2Cuda.GetAccelerator(devices[0]), devices[0],
+                input, weight, bias, rows, inputWidth, outputWidth, applyRelu,
+                bfloat16Compute,
+                cacheInput: true);
         }
 
         var output = new float[checked(rows * outputWidth)];
@@ -193,9 +196,12 @@ internal static class TensorCudaKernels
             int end = rows * (shard + 1) / devices.Length;
             float[] shardOutput = LinearForwardSingle(
                 ForgetMemoryV2Cuda.GetAccelerator(devices[shard]),
+                devices[shard],
                 input.AsSpan(start * inputWidth, (end - start) * inputWidth)
                     .ToArray(),
-                weight, bias, end - start, inputWidth, outputWidth, applyRelu);
+                weight, bias, end - start, inputWidth, outputWidth, applyRelu,
+                bfloat16Compute,
+                cacheInput: false);
             shardOutput.CopyTo(output, start * outputWidth);
         });
         return output;
@@ -203,31 +209,39 @@ internal static class TensorCudaKernels
 
     private static float[] LinearForwardSingle(
         CudaAccelerator accelerator,
+        int deviceIndex,
         float[] input,
-        float[] weight,
-        float[] bias,
+        Tensor weight,
+        Tensor bias,
         int rows,
         int inputWidth,
         int outputWidth,
-        bool applyRelu)
+        bool applyRelu,
+        bool bfloat16Compute,
+        bool cacheInput)
     {
         var output = new float[checked(rows * outputWidth)];
-        var inputBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, input);
-        var weightBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, weight);
-        var biasBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, bias);
+        using MemoryBuffer1D<float, Stride1D.Dense>? temporaryInputBuffer =
+            cacheInput ? null : accelerator.Allocate1D(input);
+        ArrayView<float> inputView = cacheInput
+            ? CudaResidentArrayCache.GetOrUpload(accelerator, input).View
+            : temporaryInputBuffer!.View;
+        var weightBuffer = weight.EnsureCudaFloat32Buffer(deviceIndex);
+        var biasBuffer = bias.EnsureCudaFloat32Buffer(deviceIndex);
         using var outputBuffer = accelerator.Allocate1D<float>(output.Length);
         var kernel = accelerator.LoadAutoGroupedStreamKernel<
             Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
-            ArrayView<float>, int, int, int>(LinearForwardKernel);
+            ArrayView<float>, int, int, int, int>(LinearForwardKernel);
         kernel(
             output.Length,
-            inputBuffer.View,
+            inputView,
             weightBuffer.View,
             biasBuffer.View,
             outputBuffer.View,
             inputWidth,
             outputWidth,
-            applyRelu ? 1 : 0);
+            applyRelu ? 1 : 0,
+            bfloat16Compute ? 1 : 0);
         accelerator.Synchronize();
         outputBuffer.CopyToCPU(output);
         return output;
@@ -518,17 +532,45 @@ internal static class TensorCudaKernels
         ArrayView<float> output,
         int inputWidth,
         int outputWidth,
-        int applyRelu)
+        int applyRelu,
+        int bfloat16Compute)
     {
         int linear = index;
         int row = linear / outputWidth;
         int column = linear - row * outputWidth;
-        float sum = bias[column];
+        float sum = bfloat16Compute != 0
+            ? RoundBFloat16(bias[column])
+            : bias[column];
         int inputOffset = row * inputWidth;
         int weightOffset = column * inputWidth;
         for (int inner = 0; inner < inputWidth; inner++)
-            sum += input[inputOffset + inner] * weight[weightOffset + inner];
+        {
+            if (bfloat16Compute != 0)
+            {
+                float product = RoundBFloat16(
+                    input[inputOffset + inner] * weight[weightOffset + inner]);
+                sum = RoundBFloat16(sum + product);
+            }
+            else
+            {
+                sum += input[inputOffset + inner]
+                    * weight[weightOffset + inner];
+            }
+        }
         output[linear] = applyRelu != 0 && sum <= 0f ? 0f : sum;
+    }
+
+    private static float RoundBFloat16(float value)
+    {
+        if (value == 0f)
+            return value;
+        float sign = value < 0f ? -1f : 1f;
+        float absolute = XMath.Abs(value);
+        if (absolute > 3.38953139e38f)
+            return value;
+        float exponent = XMath.Floor(XMath.Log(absolute) / 0.6931471805599453f);
+        float step = XMath.Pow(2f, exponent - 7f);
+        return sign * XMath.Floor(absolute / step + 0.5f) * step;
     }
 
     private static void EmbeddingForwardKernel(

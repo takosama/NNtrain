@@ -509,6 +509,20 @@ internal static class TensorStorageCodec
     internal static float DecodeBFloat16(ushort value)
         => BitConverter.UInt32BitsToSingle((uint)value << 16);
 
+    internal static float RoundToBFloat16(float value)
+        => DecodeBFloat16(EncodeBFloat16(value));
+
+    internal static float RoundToBFloat16Compute(float value)
+    {
+        if (value == 0f || float.IsNaN(value) || float.IsInfinity(value))
+            return value;
+        float sign = value < 0f ? -1f : 1f;
+        float absolute = MathF.Abs(value);
+        float exponent = MathF.Floor(MathF.Log2(absolute));
+        float step = MathF.Pow(2f, exponent - 7f);
+        return sign * MathF.Floor(absolute / step + 0.5f) * step;
+    }
+
     internal static Vector256<float> LoadBFloat16Vector256(
         ushort[] source,
         int offset)

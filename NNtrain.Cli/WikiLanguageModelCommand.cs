@@ -178,6 +178,11 @@ internal static partial class WikiLanguageModelCommand
             config,
             tokenizer.VocabularySize,
             modelDType);
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda
+            && model is Module modelModule)
+        {
+            modelModule.To(TensorDevice.Cuda);
+        }
         IOptimizer optimizer = CreateOptimizer(model, config);
         WarmupCosineProgressLRScheduler scheduler =
             lr_scheduler.WarmupCosineProgressLR(

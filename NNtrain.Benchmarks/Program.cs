@@ -5,7 +5,10 @@ using NNtrain.Benchmarks;
 if (args.Length > 0
     && string.Equals(args[0], "--compare-ten-step", StringComparison.Ordinal))
 {
-    TenStepCompareProfiler.Run();
+    int steps = args.Length > 1 ? int.Parse(args[1]) : 10;
+    bool cudaOnly = args.Length > 2
+        && string.Equals(args[2], "cuda-only", StringComparison.Ordinal);
+    TenStepCompareProfiler.Run(steps, cudaOnly);
 }
 else if (args.Length > 0
     && string.Equals(args[0], "--profile-adamw", StringComparison.Ordinal))

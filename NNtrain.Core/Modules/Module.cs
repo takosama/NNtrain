@@ -80,6 +80,15 @@ public abstract class Module
         return this;
     }
 
+    public Module To(TensorDevice device)
+    {
+        foreach (Parameter parameter in Parameters())
+            parameter.T.To(device);
+        return this;
+    }
+
+    public Module to(TensorDevice device) => To(device);
+
     public ModuleState CaptureState()
     {
         Parameter[] parameters = Parameters().ToArray();

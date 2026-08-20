@@ -5,7 +5,7 @@ namespace NNtrain.Benchmarks;
 
 internal static class TenStepCompareProfiler
 {
-    private const int Steps = 10;
+    private const int DefaultSteps = 10;
     private const int Vocabulary = 4096;
     private const int Batch = 2;
     private const int Sequence = 1024;
@@ -19,44 +19,58 @@ internal static class TenStepCompareProfiler
     private const float LearningRate = 0.0003f;
     private const float WeightDecay = 0.01f;
 
-    internal static void Run()
+    internal static void Run(int steps = DefaultSteps, bool cudaOnly = false)
     {
         Console.WriteLine("10-step ForgetMemoryV2 CPU/CUDA training comparison");
         Console.WriteLine(
-            $"conditions: steps={Steps}, batch={Batch}, sequence={Sequence}, "
+            $"conditions: steps={steps}, batch={Batch}, sequence={Sequence}, "
             + $"vocab={Vocabulary}, width={Width}, hidden={Hidden}, "
             + $"layers={Layers}, key/value={KeyWidth}/{ValueWidth}, "
             + $"dtype=bfloat16, dropout={Dropout}, lr={LearningRate}, "
             + $"weight_decay={WeightDecay}, "
-            + "optimizer=Composite(NekoMuon+AdamW), seed=" + Seed);
+            + "optimizer=Composite(NekoMuon+AdamW), "
+            + "adamw_moments=f32/f32, seed=" + Seed);
         Console.WriteLine(
             $"cuda adapters={Tensor.CudaDeviceCount}, "
             + "cuda devices=[0,1] when two adapters are available");
 
         int[] tokens = CreateTokens();
         int[] targets = CreateTargets();
-        Result cpu = RunDevice(
-            "CPU",
-            TensorDevice.Cpu,
-            [0],
-            tokens,
-            targets);
-        Console.WriteLine();
+        Result? cpu = null;
+        if (!cudaOnly)
+        {
+            cpu = RunDevice(
+                "CPU",
+                TensorDevice.Cpu,
+                [0],
+                tokens,
+                targets,
+                steps);
+            Console.WriteLine();
+        }
         Result gpu = RunDevice(
             "CUDA",
             TensorDevice.Cuda,
             Tensor.CudaDeviceCount >= 2 ? [0, 1] : [0],
             tokens,
-            targets);
+            targets,
+            steps);
 
         Console.WriteLine();
         Console.WriteLine("summary");
-        Console.WriteLine(
-            $"CPU : total={cpu.TotalMs:F2} ms, mean={cpu.MeanMs:F2} ms/step, "
-            + $"final_loss={cpu.FinalLoss:F6}");
+        if (cpu is { } cpuResult)
+        {
+            Console.WriteLine(
+                $"CPU : total={cpuResult.TotalMs:F2} ms, "
+                + $"mean={cpuResult.MeanMs:F2} ms/step, "
+                + $"final_loss={cpuResult.FinalLoss:F6}");
+        }
         Console.WriteLine(
             $"CUDA: total={gpu.TotalMs:F2} ms, mean={gpu.MeanMs:F2} ms/step, "
-            + $"final_loss={gpu.FinalLoss:F6}, speedup={cpu.MeanMs / gpu.MeanMs:F2}x");
+            + $"final_loss={gpu.FinalLoss:F6}"
+            + (cpu is { } speedupCpu
+                ? $", speedup={speedupCpu.MeanMs / gpu.MeanMs:F2}x"
+                : ""));
         Console.WriteLine(
             "note: CUDA step 1 includes ILGPU kernel compilation; "
             + "GPU tensors use resident compute-view caches and BF16 host storage.");
@@ -67,7 +81,8 @@ internal static class TenStepCompareProfiler
         TensorDevice device,
         int[] deviceIndices,
         int[] tokens,
-        int[] targets)
+        int[] targets,
+        int steps)
     {
         Tensor.ExecutionDevice = device;
         Tensor.CudaDeviceIndices = deviceIndices;
@@ -96,12 +111,12 @@ internal static class TenStepCompareProfiler
                 model.AuxiliaryParameters,
                 lr: LearningRate,
                 weight_decay: WeightDecay,
-                bf16_first_moment: true,
-                bf16_second_moment: true));
+                bf16_first_moment: false,
+                bf16_second_moment: false));
 
-        var times = new double[Steps];
+        var times = new double[steps];
         float finalLoss = float.NaN;
-        for (int step = 0; step < Steps; step++)
+        for (int step = 0; step < steps; step++)
         {
             model.ZeroGrad();
             long started = Stopwatch.GetTimestamp();

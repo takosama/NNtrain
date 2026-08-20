@@ -24,7 +24,8 @@ internal static class ForgetMemoryV2Cuda
         int projectionWidth,
         int keyWidth,
         int valueWidth,
-        float retentionFloor)
+        float retentionFloor,
+        bool bfloat16Compute)
     {
         int[] devices = Tensor.CudaDeviceIndices
             .Take(Math.Min(batch, Tensor.CudaDeviceIndices.Count))
@@ -33,7 +34,8 @@ internal static class ForgetMemoryV2Cuda
         {
             (float[] singleOutput, ShardContext singleContext) = ForwardSingle(
                 GetAccelerator(devices[0]), projected, batch, sequence,
-                projectionWidth, keyWidth, valueWidth, retentionFloor);
+                projectionWidth, keyWidth, valueWidth, retentionFloor,
+                bfloat16Compute);
             return new ForwardResult(singleOutput, [singleContext]);
         }
 
@@ -52,7 +54,7 @@ internal static class ForgetMemoryV2Cuda
             (float[] shardOutput, ShardContext shardContext) = ForwardSingle(
                 GetAccelerator(devices[shard]), shardProjected, shardBatch,
                 sequence, projectionWidth, keyWidth, valueWidth,
-                retentionFloor);
+                retentionFloor, bfloat16Compute);
             shardOutput.CopyTo(output, start * outputStride);
             shardContext.BatchStart = start;
             contexts[shard] = shardContext;
@@ -68,7 +70,8 @@ internal static class ForgetMemoryV2Cuda
         int projectionWidth,
         int keyWidth,
         int valueWidth,
-        float retentionFloor)
+        float retentionFloor,
+        bool bfloat16Compute)
     {
         int matrixSize = checked(keyWidth * valueWidth);
         var output = new float[checked(batch * sequence * valueWidth)];
@@ -93,7 +96,8 @@ internal static class ForgetMemoryV2Cuda
             int,
             int,
             int,
-            float>(ForwardKernel);
+            float,
+            int>(ForwardKernel);
         kernel(
             checked(batch * valueWidth),
             projectedBuffer.View,
@@ -104,7 +108,8 @@ internal static class ForgetMemoryV2Cuda
             projectionWidth,
             keyWidth,
             valueWidth,
-            retentionFloor);
+            retentionFloor,
+            bfloat16Compute ? 1 : 0);
         accelerator.Synchronize();
         outputBuffer.CopyToCPU(output);
         return (output, new ShardContext(
@@ -119,7 +124,8 @@ internal static class ForgetMemoryV2Cuda
         int projectionWidth,
         int keyWidth,
         int valueWidth,
-        float retentionFloor)
+        float retentionFloor,
+        bool bfloat16Compute)
     {
         ArgumentNullException.ThrowIfNull(forward);
         int projectedStride = checked(sequence * projectionWidth);
@@ -134,7 +140,7 @@ internal static class ForgetMemoryV2Cuda
                     context.BatchStart * outputStride,
                     context.Batch * outputStride).ToArray(),
                 sequence, projectionWidth, keyWidth, valueWidth,
-                retentionFloor);
+                retentionFloor, bfloat16Compute);
             shardGradient.CopyTo(
                 projectedGradient,
                 context.BatchStart * projectedStride);
@@ -149,7 +155,8 @@ internal static class ForgetMemoryV2Cuda
         int projectionWidth,
         int keyWidth,
         int valueWidth,
-        float retentionFloor)
+        float retentionFloor,
+        bool bfloat16Compute)
     {
         CudaAccelerator accelerator = context.Accelerator;
         int batch = context.Batch;
@@ -180,7 +187,8 @@ internal static class ForgetMemoryV2Cuda
             int,
             int,
             int,
-            float>(BackwardKernel);
+            float,
+            int>(BackwardKernel);
         kernel(
             checked(batch * valueWidth),
             context.Projected.View,
@@ -193,7 +201,8 @@ internal static class ForgetMemoryV2Cuda
             projectionWidth,
             keyWidth,
             valueWidth,
-            retentionFloor);
+            retentionFloor,
+            bfloat16Compute ? 1 : 0);
         accelerator.Synchronize();
         projectedGradientBuffer.CopyToCPU(projectedGradient);
         return projectedGradient;
@@ -327,7 +336,8 @@ internal static class ForgetMemoryV2Cuda
         int projectionWidth,
         int keyWidth,
         int valueWidth,
-        float retentionFloor)
+        float retentionFloor,
+        int bfloat16Compute)
     {
         int worker = batchIndex;
         int batch = worker / valueWidth;
@@ -348,24 +358,57 @@ internal static class ForgetMemoryV2Cuda
 
             int row = stateBatchOffset + valueIndex * keyWidth;
             float gate = Sigmoid(projected[gateOffset + valueIndex]);
-            float retention = retentionFloor +
-                (1f - retentionFloor) * gate;
+            float retention = bfloat16Compute != 0
+                ? RoundBFloat16(retentionFloor
+                    + RoundBFloat16(1f - retentionFloor) * gate)
+                : retentionFloor + (1f - retentionFloor) * gate;
             float beta = Sigmoid(projected[betaOffset + valueIndex]);
-            float write = (1f - retention) * beta;
-            float value = XMath.Tanh(projected[valueOffset + valueIndex]);
+            float write = bfloat16Compute != 0
+                ? RoundBFloat16(RoundBFloat16(1f - retention) * beta)
+                : (1f - retention) * beta;
+            float value = bfloat16Compute != 0
+                ? RoundBFloat16(XMath.Tanh(projected[valueOffset + valueIndex]))
+                : XMath.Tanh(projected[valueOffset + valueIndex]);
             float predicted = 0f;
             for (int key = 0; key < keyWidth; key++)
-                predicted += state[row + key] * projected[keyOffset + key];
-            float delta = write * (value - predicted);
+            {
+                if (bfloat16Compute != 0)
+                {
+                    predicted = RoundBFloat16(predicted + RoundBFloat16(
+                        state[row + key] * projected[keyOffset + key]));
+                }
+                else
+                {
+                    predicted += state[row + key] * projected[keyOffset + key];
+                }
+            }
+            float delta = bfloat16Compute != 0
+                ? RoundBFloat16(write * RoundBFloat16(value - predicted))
+                : write * (value - predicted);
             for (int key = 0; key < keyWidth; key++)
             {
-                state[row + key] = retention * state[row + key] +
-                    delta * projected[keyOffset + key];
+                state[row + key] = bfloat16Compute != 0
+                    ? RoundBFloat16(
+                        RoundBFloat16(retention * state[row + key])
+                        + RoundBFloat16(delta * projected[keyOffset + key]))
+                    : retention * state[row + key]
+                        + delta * projected[keyOffset + key];
             }
 
             float recalled = 0f;
             for (int key = 0; key < keyWidth; key++)
-                recalled += state[row + key] * projected[projectedOffset + key];
+            {
+                if (bfloat16Compute != 0)
+                {
+                    recalled = RoundBFloat16(recalled + RoundBFloat16(
+                        state[row + key] * projected[projectedOffset + key]));
+                }
+                else
+                {
+                    recalled += state[row + key]
+                        * projected[projectedOffset + key];
+                }
+            }
             output[outputBatchOffset + time * valueWidth + valueIndex] =
                 recalled;
 
@@ -391,7 +434,8 @@ internal static class ForgetMemoryV2Cuda
         int projectionWidth,
         int keyWidth,
         int valueWidth,
-        float retentionFloor)
+        float retentionFloor,
+        int bfloat16Compute)
     {
         int worker = batchIndex;
         int batch = worker / valueWidth;
@@ -488,4 +532,17 @@ internal static class ForgetMemoryV2Cuda
         => value >= 0f
             ? 1f / (1f + XMath.Exp(-value))
             : XMath.Exp(value) / (1f + XMath.Exp(value));
+
+    private static float RoundBFloat16(float value)
+    {
+        if (value == 0f)
+            return value;
+        float sign = value < 0f ? -1f : 1f;
+        float absolute = XMath.Abs(value);
+        if (absolute > 3.38953139e38f)
+            return value;
+        float exponent = XMath.Floor(XMath.Log(absolute) / 0.6931471805599453f);
+        float step = XMath.Pow(2f, exponent - 7f);
+        return sign * XMath.Floor(absolute / step + 0.5f) * step;
+    }
 }

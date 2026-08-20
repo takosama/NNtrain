@@ -38,15 +38,18 @@ partial class Tensor
         if (ExecutionDevice == TensorDevice.Cuda)
         {
             float[] inputValues = GetPhysicalFloat32ComputeCache();
-            float[] weightValues = weight.GetPhysicalFloat32ComputeCache();
             float[] outputValues = TensorCudaKernels.LinearForward(
                 inputValues,
-                weightValues,
-                bias.GetPhysicalFloat32ComputeCache(),
+                weight,
+                bias,
                 rows,
                 inputWidth,
                 outputWidth,
-                applyRelu);
+                applyRelu,
+                DType == TensorDType.BFloat16
+                    && weight.DType == TensorDType.BFloat16
+                    && bias.DType == TensorDType.BFloat16);
+            float[] weightValues = weight.GetPhysicalFloat32ComputeCache();
             int[] cudaOutputShape = (int[])_shape.Clone();
             cudaOutputShape[^1] = outputWidth;
             var cudaResult = new Tensor(
@@ -170,6 +173,28 @@ partial class Tensor
         {
             int inputOffset = row * inputWidth;
             int outputOffset = row * outputWidth;
+            if (DType == TensorDType.BFloat16
+                && weight.DType == TensorDType.BFloat16
+                && bias.DType == TensorDType.BFloat16)
+            {
+                for (int column = 0; column < outputWidth; column++)
+                {
+                    float value = TensorStorageCodec.RoundToBFloat16Compute(
+                        bias._data[column]);
+                    int weightOffset = column * inputWidth;
+                    for (int inner = 0; inner < inputWidth; inner++)
+                    {
+                        float product = TensorStorageCodec.RoundToBFloat16Compute(
+                            _data[inputOffset + inner]
+                            * weight._data[weightOffset + inner]);
+                        value = TensorStorageCodec.RoundToBFloat16Compute(
+                            value + product);
+                    }
+                    output![outputOffset + column] =
+                        applyRelu && value <= 0f ? 0f : value;
+                }
+                return;
+            }
             if (transposedWeight is not null)
             {
                 bias._data.CopyRangeTo(
