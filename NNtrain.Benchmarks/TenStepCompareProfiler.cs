@@ -6,15 +6,18 @@ namespace NNtrain.Benchmarks;
 internal static class TenStepCompareProfiler
 {
     private const int Steps = 10;
-    private const int Vocabulary = 256;
+    private const int Vocabulary = 4096;
     private const int Batch = 2;
-    private const int Sequence = 16;
-    private const int Width = 32;
-    private const int Hidden = 64;
-    private const int Layers = 2;
-    private const int KeyWidth = 4;
-    private const int ValueWidth = 4;
-    private const int Seed = 20260820;
+    private const int Sequence = 1024;
+    private const int Width = 256;
+    private const int Hidden = 512;
+    private const int Layers = 8;
+    private const int KeyWidth = 16;
+    private const int ValueWidth = 16;
+    private const int Seed = 1234;
+    private const float Dropout = 0.1f;
+    private const float LearningRate = 0.0003f;
+    private const float WeightDecay = 0.01f;
 
     internal static void Run()
     {
@@ -23,7 +26,8 @@ internal static class TenStepCompareProfiler
             $"conditions: steps={Steps}, batch={Batch}, sequence={Sequence}, "
             + $"vocab={Vocabulary}, width={Width}, hidden={Hidden}, "
             + $"layers={Layers}, key/value={KeyWidth}/{ValueWidth}, "
-            + "dtype=bfloat16, dropout=0, lr=0.001, weight_decay=0.01, "
+            + $"dtype=bfloat16, dropout={Dropout}, lr={LearningRate}, "
+            + $"weight_decay={WeightDecay}, "
             + "optimizer=Composite(NekoMuon+AdamW), seed=" + Seed);
         Console.WriteLine(
             $"cuda adapters={Tensor.CudaDeviceCount}, "
@@ -79,19 +83,19 @@ internal static class TenStepCompareProfiler
             retentionMaximum: 0.99f,
             random: new Random(Seed),
             initializationScale: 0.02f,
-            dropout: 0f,
+            dropout: Dropout,
             dtype: TensorDType.BFloat16);
         IOptimizer optimizer = optim.Composite(
             optim.NekoMuon(
                 model.HiddenWeightParameters,
-                lr: 0.001f,
-                newton_schulz_steps: 2,
-                newton_schulz_interval: 2,
-                weight_decay: 0.01f),
+                lr: LearningRate,
+                newton_schulz_steps: 5,
+                newton_schulz_interval: 5,
+                weight_decay: WeightDecay),
             optim.AdamW(
                 model.AuxiliaryParameters,
-                lr: 0.001f,
-                weight_decay: 0.01f,
+                lr: LearningRate,
+                weight_decay: WeightDecay,
                 bf16_first_moment: true,
                 bf16_second_moment: true));
 

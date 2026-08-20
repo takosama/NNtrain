@@ -55,11 +55,13 @@ partial class Tensor
                 [this, weight, bias]);
             if (AutogradContext.IsRecordingEnabled)
             {
+                float[] storedOutputValues =
+                    cudaResult.GetPhysicalFloat32ComputeCache();
                 cudaResult.Node.BackwardAction = () =>
                     TensorCudaKernels.LinearBackward(
                         inputValues,
                         weightValues,
-                        cudaResult.GetPhysicalFloat32ComputeCache(),
+                        storedOutputValues,
                         cudaResult._grad,
                         EnsureGradientBuffer(),
                         weight.EnsureGradientBuffer(),
