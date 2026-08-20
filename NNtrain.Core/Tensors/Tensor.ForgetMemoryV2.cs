@@ -7,9 +7,10 @@ partial class Tensor
     /// retention gate and a delta-rule write.
     /// </summary>
     /// <remarks>
-    /// The packed input layout is [q, k, v, gate, beta]. For each value row,
+    /// The packed input layout is [q, k, v, gate, beta]. Query and key are
+    /// transformed elementwise to tanh(x) / sqrt(keyWidth). For each value row,
     /// g = floor + (1 - floor) sigmoid(gate),
-    /// write = (1 - g) sigmoid(beta), and
+    /// write = (1 - g) sigmoid(beta), and with the normalized key k,
     /// M[t] = g M[t-1] + write (v - M[t-1] k) k^T.
     /// The returned value is M[t] q. The recurrence stays sequential in time,
     /// while independent batches and the dense key dimension use parallel and
@@ -265,6 +266,9 @@ partial class Tensor
         int projectedBatchOffset = batchIndex * sequence * projectionWidth;
         int outputBatchOffset = batchIndex * sequence * valueWidth;
         int matrixSize = valueWidth * keyWidth;
+        float inverseSqrtKeyWidth = 1f / MathF.Sqrt(keyWidth);
+        var normalizedQuery = new float[keyWidth];
+        var normalizedKey = new float[keyWidth];
 
         for (int time = 0; time < sequence; time++)
         {
@@ -275,6 +279,14 @@ partial class Tensor
             int valueOffset = keyOffset + keyWidth;
             int gateOffset = valueOffset + valueWidth;
             int betaOffset = gateOffset + valueWidth;
+
+            for (int keyIndex = 0; keyIndex < keyWidth; keyIndex++)
+            {
+                normalizedQuery[keyIndex] = MathF.Tanh(
+                    projected[queryOffset + keyIndex]) * inverseSqrtKeyWidth;
+                normalizedKey[keyIndex] = MathF.Tanh(
+                    projected[keyOffset + keyIndex]) * inverseSqrtKeyWidth;
+            }
 
             for (int valueIndex = 0; valueIndex < valueWidth; valueIndex++)
             {
@@ -289,22 +301,16 @@ partial class Tensor
                 float value = MathF.Tanh(
                     projected[valueOffset + valueIndex]);
                 float predictedValue = DotProduct(
-                    state,
-                    stateRowOffset,
-                    projected,
-                    keyOffset,
-                    keyWidth);
+                    state, stateRowOffset, normalizedKey, 0, keyWidth);
 
                 float error = value - predictedValue;
-                UpdateForgetMemoryState(
-                    state,
-                    stateRowOffset,
-                    projected,
-                    keyOffset,
-                    retention,
-                    write * error,
-                    keyWidth,
-                    bfloat16Compute: false);
+                float delta = write * error;
+                for (int keyIndex = 0; keyIndex < keyWidth; keyIndex++)
+                {
+                    int stateIndex = stateRowOffset + keyIndex;
+                    state[stateIndex] = retention * state[stateIndex]
+                        + delta * normalizedKey[keyIndex];
+                }
             }
 
             if (output is not null)
@@ -316,11 +322,7 @@ partial class Tensor
                 {
                     int stateRowOffset = valueIndex * keyWidth;
                     output[outputOffset + valueIndex] = DotProduct(
-                        state,
-                        stateRowOffset,
-                        projected,
-                        queryOffset,
-                        keyWidth);
+                        state, stateRowOffset, normalizedQuery, 0, keyWidth);
                 }
             }
 
@@ -349,6 +351,11 @@ partial class Tensor
         int matrixSize = valueWidth * keyWidth;
         var stateGradient = new float[matrixSize];
         var previousStateGradient = new float[matrixSize];
+        float inverseSqrtKeyWidth = 1f / MathF.Sqrt(keyWidth);
+        var normalizedQuery = new float[keyWidth];
+        var normalizedKey = new float[keyWidth];
+        var queryDerivative = new float[keyWidth];
+        var keyDerivative = new float[keyWidth];
 
         for (int time = sequence - 1; time >= 0; time--)
         {
@@ -363,6 +370,20 @@ partial class Tensor
             int currentStateOffset = time * matrixSize;
             int previousStateOffset = (time - 1) * matrixSize;
 
+            for (int keyIndex = 0; keyIndex < keyWidth; keyIndex++)
+            {
+                float queryTanh = MathF.Tanh(
+                    projected[queryOffset + keyIndex]);
+                float keyTanh = MathF.Tanh(
+                    projected[keyOffset + keyIndex]);
+                normalizedQuery[keyIndex] = queryTanh * inverseSqrtKeyWidth;
+                normalizedKey[keyIndex] = keyTanh * inverseSqrtKeyWidth;
+                queryDerivative[keyIndex] =
+                    (1f - queryTanh * queryTanh) * inverseSqrtKeyWidth;
+                keyDerivative[keyIndex] =
+                    (1f - keyTanh * keyTanh) * inverseSqrtKeyWidth;
+            }
+
             Array.Clear(previousStateGradient);
 
             // r[t] = M[t] q[t].
@@ -371,20 +392,14 @@ partial class Tensor
                 int stateRowOffset = valueIndex * keyWidth;
                 float recalledGradient =
                     outputGradient[outputOffset + valueIndex];
-                AddScaledValues(
-                    projectedGradient,
-                    queryOffset,
-                    states,
-                    currentStateOffset + stateRowOffset,
-                    recalledGradient,
-                    keyWidth);
-                AddScaledValues(
-                    stateGradient,
-                    stateRowOffset,
-                    projected,
-                    queryOffset,
-                    recalledGradient,
-                    keyWidth);
+                for (int keyIndex = 0; keyIndex < keyWidth; keyIndex++)
+                {
+                    projectedGradient[queryOffset + keyIndex] +=
+                        states[currentStateOffset + stateRowOffset + keyIndex]
+                        * recalledGradient * queryDerivative[keyIndex];
+                    stateGradient[stateRowOffset + keyIndex] +=
+                        normalizedQuery[keyIndex] * recalledGradient;
+                }
             }
 
             // Differentiate the stable forget + delta update.
@@ -400,18 +415,19 @@ partial class Tensor
                 float write = (1f - retention) * beta;
                 float value = MathF.Tanh(
                     projected[valueOffset + valueIndex]);
-                ComputeForgetMemoryBackwardDots(
-                    projected,
-                    keyOffset,
-                    states,
-                    previousStateOffset + stateRowOffset,
-                    stateGradient,
-                    stateRowOffset,
-                    keyWidth,
-                    time != 0,
-                    out float predictedValue,
-                    out float stateGradientDotKey,
-                    out float retentionGradient);
+                float predictedValue = 0f;
+                float stateGradientDotKey = 0f;
+                float retentionGradient = 0f;
+                for (int keyIndex = 0; keyIndex < keyWidth; keyIndex++)
+                {
+                    float previous = time == 0
+                        ? 0f
+                        : states[previousStateOffset + stateRowOffset + keyIndex];
+                    float gradient = stateGradient[stateRowOffset + keyIndex];
+                    predictedValue += previous * normalizedKey[keyIndex];
+                    stateGradientDotKey += gradient * normalizedKey[keyIndex];
+                    retentionGradient += gradient * previous;
+                }
 
                 float error = value - predictedValue;
                 float writeGradient = error * stateGradientDotKey;
@@ -430,22 +446,20 @@ partial class Tensor
                     * beta
                     * (1f - beta);
 
-                AccumulateForgetMemoryBackwardVectors(
-                    projectedGradient,
-                    keyOffset,
-                    previousStateGradient,
-                    stateRowOffset,
-                    projected,
-                    keyOffset,
-                    states,
-                    previousStateOffset + stateRowOffset,
-                    stateGradient,
-                    stateRowOffset,
-                    keyWidth,
-                    time != 0,
-                    write * error,
-                    errorGradient,
-                    retention);
+                for (int keyIndex = 0; keyIndex < keyWidth; keyIndex++)
+                {
+                    float previous = time == 0
+                        ? 0f
+                        : states[previousStateOffset + stateRowOffset + keyIndex];
+                    float gradient = stateGradient[stateRowOffset + keyIndex];
+                    float normalizedKeyGradient =
+                        gradient * write * error - previous * errorGradient;
+                    projectedGradient[keyOffset + keyIndex] +=
+                        normalizedKeyGradient * keyDerivative[keyIndex];
+                    previousStateGradient[stateRowOffset + keyIndex] =
+                        gradient * retention
+                        - normalizedKey[keyIndex] * errorGradient;
+                }
             }
 
             (stateGradient, previousStateGradient) =

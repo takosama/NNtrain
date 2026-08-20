@@ -481,6 +481,7 @@ internal static class ForgetMemoryV2Cuda
         int outputBatchOffset = batch * sequence * valueWidth;
         int stateBatchOffset = batch * matrixSize;
         int statesBatchOffset = batch * sequence * matrixSize;
+        float inverseSqrtKeyWidth = 1f / XMath.Sqrt((float)keyWidth);
 
         for (int time = 0; time < sequence; time++)
         {
@@ -498,16 +499,28 @@ internal static class ForgetMemoryV2Cuda
             float value = XMath.Tanh(projected[valueOffset + valueIndex]);
             float predicted = 0f;
             for (int key = 0; key < keyWidth; key++)
-                predicted += state[row + key] * projected[keyOffset + key];
+            {
+                float normalizedKey = XMath.Tanh(projected[keyOffset + key])
+                    * inverseSqrtKeyWidth;
+                predicted += state[row + key] * normalizedKey;
+            }
             float delta = write * (value - predicted);
             for (int key = 0; key < keyWidth; key++)
+            {
+                float normalizedKey = XMath.Tanh(projected[keyOffset + key])
+                    * inverseSqrtKeyWidth;
                 state[row + key] = retention * state[row + key]
-                    + delta * projected[keyOffset + key];
+                    + delta * normalizedKey;
+            }
 
             float recalled = 0f;
             for (int key = 0; key < keyWidth; key++)
+            {
+                float normalizedQuery = XMath.Tanh(
+                    projected[projectedOffset + key]) * inverseSqrtKeyWidth;
                 recalled += state[row + key]
-                    * projected[projectedOffset + key];
+                    * normalizedQuery;
+            }
             output[outputBatchOffset + time * valueWidth + valueIndex] =
                 bfloat16Compute != 0 ? RoundBFloat16(recalled) : recalled;
 
@@ -544,6 +557,7 @@ internal static class ForgetMemoryV2Cuda
         int outputBatchOffset = batch * sequence * valueWidth;
         int statesBatchOffset = batch * sequence * matrixSize;
         int gradientBatchOffset = batch * matrixSize;
+        float inverseSqrtKeyWidth = 1f / XMath.Sqrt((float)keyWidth);
 
         for (int time = sequence - 1; time >= 0; time--)
         {
@@ -565,11 +579,16 @@ internal static class ForgetMemoryV2Cuda
                 outputBatchOffset + time * valueWidth + valueIndex];
             for (int key = 0; key < keyWidth; key++)
             {
+                float queryTanh = XMath.Tanh(projected[queryOffset + key]);
+                float normalizedQuery = queryTanh * inverseSqrtKeyWidth;
+                float queryDerivative =
+                    (1f - queryTanh * queryTanh) * inverseSqrtKeyWidth;
                 Atomic.Add(
                     ref projectedGradient[queryOffset + key],
-                    states[currentStateOffset + row + key] * recalledGradient);
+                    states[currentStateOffset + row + key]
+                    * recalledGradient * queryDerivative);
                 stateGradient[gradientRow + key] +=
-                    projected[queryOffset + key] * recalledGradient;
+                    normalizedQuery * recalledGradient;
             }
 
             float gate = Sigmoid(projected[gateOffset + valueIndex]);
@@ -587,7 +606,8 @@ internal static class ForgetMemoryV2Cuda
                     ? 0f
                     : states[previousStateOffset + row + key];
                 float gradient = stateGradient[gradientRow + key];
-                float keyValue = projected[keyOffset + key];
+                float keyValue = XMath.Tanh(projected[keyOffset + key])
+                    * inverseSqrtKeyWidth;
                 predicted += previous * keyValue;
                 stateGradientDotKey += gradient * keyValue;
                 retentionGradient += gradient * previous;
@@ -611,10 +631,14 @@ internal static class ForgetMemoryV2Cuda
                     ? 0f
                     : states[previousStateOffset + row + key];
                 float gradient = stateGradient[gradientRow + key];
-                float keyValue = projected[keyOffset + key];
+                float keyTanh = XMath.Tanh(projected[keyOffset + key]);
+                float keyValue = keyTanh * inverseSqrtKeyWidth;
+                float keyDerivative =
+                    (1f - keyTanh * keyTanh) * inverseSqrtKeyWidth;
                 Atomic.Add(
                     ref projectedGradient[keyOffset + key],
-                    gradient * write * error - previous * errorGradient);
+                    (gradient * write * error - previous * errorGradient)
+                    * keyDerivative);
                 previousGradient[gradientRow + key] =
                     gradient * retention - keyValue * errorGradient;
             }

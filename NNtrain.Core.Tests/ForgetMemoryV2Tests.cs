@@ -22,9 +22,10 @@ public sealed class ForgetMemoryV2Tests
             valueWidth: 1,
             retentionFloor: 0f);
 
-        // v=0.5, g=0.5, write=(1-g)*beta=0.25.
-        // M=0.25*0.5*3=0.375 and r=M*q=0.75.
-        Assert.Equal(0.75f, output.Data[0], precision: 5);
+        // K=1, so k~=tanh(3), q~=tanh(2). With v=0.5, g=0.5,
+        // and write=(1-g)*beta=0.25, M=0.125*k~ and r=M*q~.
+        float expected = 0.125f * MathF.Tanh(3f) * MathF.Tanh(2f);
+        Assert.Equal(expected, output.Data[0], precision: 5);
     }
 
     [Fact]
