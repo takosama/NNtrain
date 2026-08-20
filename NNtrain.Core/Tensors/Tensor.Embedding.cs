@@ -64,7 +64,7 @@ partial class Tensor
         {
             var cudaResult = new Tensor(
                 TensorCudaKernels.EmbeddingForward(
-                    GetPhysicalFloat32ComputeCache(),
+                    this,
                     retainedIndices,
                     width),
                 resultShape,

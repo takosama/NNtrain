@@ -383,12 +383,11 @@ partial class Tensor
                     $"{ShapeText(beta)}.");
             }
             int rows = Numel / columns;
-            float[] gammaValues = gamma.GetPhysicalFloat32ComputeCache();
             (float[] output, float[] normalized, float[] inverses) =
                 TensorCudaKernels.LayerNormForward(
                     GetPhysicalFloat32ComputeCache(),
-                    gammaValues,
-                    beta.GetPhysicalFloat32ComputeCache(),
+                    gamma,
+                    beta,
                     rows,
                     columns,
                     eps);
@@ -400,7 +399,7 @@ partial class Tensor
             {
                 cudaResult.Node.BackwardAction = () =>
                     TensorCudaKernels.LayerNormBackward(
-                        gammaValues,
+                        gamma,
                         normalized,
                         inverses,
                         cudaResult._grad,

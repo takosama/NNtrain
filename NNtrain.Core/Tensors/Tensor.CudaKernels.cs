@@ -9,13 +9,13 @@ namespace NNtrain;
 internal static class TensorCudaKernels
 {
     internal static float[] EmbeddingForward(
-        float[] table,
+        Tensor table,
         int[] indices,
         int width)
     {
         CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
         var output = new float[checked(indices.Length * width)];
-        var tableBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, table);
+        var tableBuffer = table.EnsureCudaFloat32Buffer();
         using var indicesBuffer = accelerator.Allocate1D(indices);
         using var outputBuffer = accelerator.Allocate1D<float>(output.Length);
         var kernel = accelerator.LoadAutoGroupedStreamKernel<
@@ -370,20 +370,20 @@ internal static class TensorCudaKernels
         float[] Output,
         float[] Normalized,
         float[] InverseStandardDeviations) LayerNormForward(
-            float[] input,
-            float[] gamma,
-            float[] beta,
-            int rows,
-            int columns,
-            float epsilon)
+        float[] input,
+        Tensor gamma,
+        Tensor beta,
+        int rows,
+        int columns,
+        float epsilon)
     {
         CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
         var output = new float[input.Length];
         var normalized = new float[input.Length];
         var inverses = new float[rows];
         var inputBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, input);
-        var gammaBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, gamma);
-        var betaBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, beta);
+        var gammaBuffer = gamma.EnsureCudaFloat32Buffer();
+        var betaBuffer = beta.EnsureCudaFloat32Buffer();
         using var outputBuffer = accelerator.Allocate1D<float>(output.Length);
         using var normalizedBuffer =
             accelerator.Allocate1D<float>(normalized.Length);
@@ -410,7 +410,7 @@ internal static class TensorCudaKernels
     }
 
     internal static void LayerNormBackward(
-        float[] gamma,
+        Tensor gamma,
         float[] normalized,
         float[] inverses,
         float[] outputGradient,
@@ -421,7 +421,7 @@ internal static class TensorCudaKernels
         int columns)
     {
         CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
-        var gammaBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, gamma);
+        var gammaBuffer = gamma.EnsureCudaFloat32Buffer();
         var normalizedBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, normalized);
         var inverseBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, inverses);
         using var outputGradientBuffer = accelerator.Allocate1D(outputGradient);

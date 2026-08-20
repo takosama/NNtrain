@@ -48,6 +48,37 @@ public sealed class TensorBFloat16OperationTests
         Assert.Equal(QuantizeBFloat16(output.Data[0]), output.Data[0]);
     }
 
+    [Fact]
+    public void ToCudaMarksTensorDeviceAndCanReturnToCpu()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int previousDeviceIndex = Tensor.CudaDeviceIndex;
+        try
+        {
+            Tensor.CudaDeviceIndex = 0;
+            var tensor = new Tensor(
+                [1.25f, -0.5f],
+                [2],
+                dtype: TensorDType.BFloat16);
+
+            tensor.To(TensorDevice.Cuda);
+            Assert.Equal(TensorDevice.Cuda, tensor.Device);
+
+            tensor.To(TensorDevice.Cpu);
+            Assert.Equal(TensorDevice.Cpu, tensor.Device);
+            Assert.Equal(1.25f, tensor.Data[0]);
+            Assert.Equal(-0.5f, tensor.Data[1]);
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndex = previousDeviceIndex;
+        }
+    }
+
     private static Tensor InvokeLinearLastDim(
         Tensor input,
         Tensor weight,
