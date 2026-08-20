@@ -591,14 +591,30 @@ internal static partial class WikiLanguageModelCommand
                     batchSize,
                     sequenceLength);
                 optimizer.zero_grad();
-                Tensor logits = model.forward(
-                    values.Input,
-                    batchSize,
-                    sequenceLength);
-                Tensor loss = nn.functional.cross_entropy(
-                    logits,
-                    values.Target);
-                loss.backward();
+                float lossValue;
+                if (Tensor.ExecutionDevice == TensorDevice.Cuda
+                    && Tensor.CudaDeviceIndices.Count > 1
+                    && batchSize > 1)
+                {
+                    lossValue = CudaDataParallel.ForwardBackward(
+                        model,
+                        values.Input,
+                        values.Target,
+                        batchSize,
+                        sequenceLength);
+                }
+                else
+                {
+                    Tensor logits = model.forward(
+                        values.Input,
+                        batchSize,
+                        sequenceLength);
+                    Tensor loss = nn.functional.cross_entropy(
+                        logits,
+                        values.Target);
+                    lossValue = loss.item();
+                    loss.backward();
+                }
                 nn.utils.clip_grad_norm_(
                     model.parameters(),
                     max_norm: 1f);
@@ -615,9 +631,9 @@ internal static partial class WikiLanguageModelCommand
                 completedBatchesInEpoch++;
 
                 long targets = values.ValidTargetCount;
-                totalLoss += loss.item() * targets;
+                totalLoss += lossValue * targets;
                 completedTargets += targets;
-                graphWindowLoss += loss.item() * targets;
+                graphWindowLoss += lossValue * targets;
                 graphWindowTargets += targets;
                 if (lossGraph is not null
                     && globalStep % config.GraphUpdateSteps == 0)
@@ -651,7 +667,7 @@ internal static partial class WikiLanguageModelCommand
                     output.WriteLine(
                         $"epoch {epoch}, step {globalStep:N0}, " +
                         $"documents {documentsProcessed:N0}/" +
-                        $"{documentsPerEpoch:N0}, loss = {loss.item():F6}, " +
+                        $"{documentsPerEpoch:N0}, loss = {lossValue:F6}, " +
                         runProgress.Describe(overallProgress));
                 }
             }

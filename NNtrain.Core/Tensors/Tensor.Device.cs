@@ -138,8 +138,11 @@ public partial class Tensor
 
             if (buffer.Version != _gradientVersion)
             {
+                // A different CUDA adapter may have produced another local
+                // gradient for the same data-parallel step. Keep this
+                // adapter's local buffer until the explicit all-reduce.
                 if (!_hostGradientCurrent)
-                    SynchronizeHostGradientFromCudaLocked();
+                    return buffer.Buffer;
                 buffer.Buffer.CopyFromCPU(_grad);
                 buffer.Version = _gradientVersion;
             }
@@ -166,6 +169,34 @@ public partial class Tensor
                 _gradientVersion++;
             }
             buffer.Version = _gradientVersion;
+            _hostGradientCurrent = false;
+        }
+    }
+
+    internal void PrepareCudaGradientBuffers(IReadOnlyList<int> deviceIndices)
+    {
+        ArgumentNullException.ThrowIfNull(deviceIndices);
+        foreach (int deviceIndex in deviceIndices)
+            EnsureCudaGradientBuffer(deviceIndex);
+    }
+
+    internal void MarkCudaGradientsSynchronized(IReadOnlyList<int> deviceIndices)
+    {
+        lock (_deviceSync)
+        {
+            unchecked
+            {
+                _gradientVersion++;
+            }
+            foreach (int deviceIndex in deviceIndices)
+            {
+                if (_cudaGradientBuffers.TryGetValue(
+                    deviceIndex,
+                    out GradientDeviceBuffer? buffer))
+                {
+                    buffer.Version = _gradientVersion;
+                }
+            }
             _hostGradientCurrent = false;
         }
     }

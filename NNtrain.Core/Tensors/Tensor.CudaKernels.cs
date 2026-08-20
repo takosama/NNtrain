@@ -18,6 +18,7 @@ internal static class TensorCudaKernels
         var normKernel = accelerator.LoadAutoGroupedStreamKernel<
             Index1D, ArrayView<float>, ArrayView<double>>(
                 GradientSquaredSumKernel);
+        int[] devices = Tensor.CudaDeviceIndices.ToArray();
         foreach (Parameter parameter in parameters)
         {
             Tensor tensor = parameter.T;
@@ -34,19 +35,64 @@ internal static class TensorCudaKernels
             return totalNorm;
 
         float scale = maxNorm / (totalNorm + 1e-6f);
-        var scaleKernel = accelerator.LoadAutoGroupedStreamKernel<
-            Index1D, ArrayView<float>, float>(ScaleGradientKernel);
         foreach (Parameter parameter in parameters)
         {
             Tensor tensor = parameter.T;
             if (!tensor.HasGradientBuffer)
                 continue;
-            var gradient = tensor.EnsureCudaGradientBuffer();
-            scaleKernel(tensor.Numel, gradient.View, scale);
-            tensor.MarkCudaGradientMutated();
+            foreach (int deviceIndex in devices)
+            {
+                CudaAccelerator device =
+                    ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+                var deviceScaleKernel = device.LoadAutoGroupedStreamKernel<
+                    Index1D, ArrayView<float>, float>(ScaleGradientKernel);
+                var gradient = tensor.EnsureCudaGradientBuffer(deviceIndex);
+                deviceScaleKernel(tensor.Numel, gradient.View, scale);
+                device.Synchronize();
+            }
+            tensor.MarkCudaGradientsSynchronized(devices);
         }
-        accelerator.Synchronize();
         return totalNorm;
+    }
+
+    internal static void AllReduceGradientResident(
+        Tensor tensor,
+        IReadOnlyList<int> deviceIndices)
+    {
+        if (deviceIndices.Count < 2)
+            return;
+        int primaryIndex = deviceIndices[0];
+        CudaAccelerator primary =
+            ForgetMemoryV2Cuda.GetAccelerator(primaryIndex);
+        MemoryBuffer1D<float, Stride1D.Dense> primaryGradient =
+            tensor.EnsureCudaGradientBuffer(primaryIndex);
+        using var staging = primary.Allocate1D<float>(tensor.Numel);
+        var addKernel = primary.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>>(AccumulateKernel);
+        for (int index = 1; index < deviceIndices.Count; index++)
+        {
+            int secondaryIndex = deviceIndices[index];
+            CudaAccelerator secondary =
+                ForgetMemoryV2Cuda.GetAccelerator(secondaryIndex);
+            MemoryBuffer1D<float, Stride1D.Dense> secondaryGradient =
+                tensor.EnsureCudaGradientBuffer(secondaryIndex);
+            secondary.Synchronize();
+            secondaryGradient.View.CopyTo(staging.View);
+            primary.Synchronize();
+            addKernel(tensor.Numel, staging.View, primaryGradient.View);
+        }
+        primary.Synchronize();
+        for (int index = 1; index < deviceIndices.Count; index++)
+        {
+            int secondaryIndex = deviceIndices[index];
+            CudaAccelerator secondary =
+                ForgetMemoryV2Cuda.GetAccelerator(secondaryIndex);
+            MemoryBuffer1D<float, Stride1D.Dense> secondaryGradient =
+                tensor.EnsureCudaGradientBuffer(secondaryIndex);
+            primaryGradient.View.CopyTo(secondaryGradient.View);
+            secondary.Synchronize();
+        }
+        tensor.MarkCudaGradientsSynchronized(deviceIndices);
     }
 
     internal static MemoryBuffer1D<float, Stride1D.Dense> CopyForwardResident(

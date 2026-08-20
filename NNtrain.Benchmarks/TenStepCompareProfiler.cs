@@ -122,10 +122,22 @@ internal static class TenStepCompareProfiler
         {
             model.ZeroGrad();
             long started = Stopwatch.GetTimestamp();
-            Tensor logits = model.Forward(tokens, Batch, Sequence);
-            Tensor loss = logits.CrossEntropyWithLogits(targets);
-            finalLoss = loss.item();
-            loss.Backward();
+            if (device == TensorDevice.Cuda && deviceIndices.Length > 1)
+            {
+                finalLoss = CudaDataParallel.ForwardBackward(
+                    model,
+                    tokens,
+                    targets,
+                    Batch,
+                    Sequence);
+            }
+            else
+            {
+                Tensor logits = model.Forward(tokens, Batch, Sequence);
+                Tensor loss = logits.CrossEntropyWithLogits(targets);
+                finalLoss = loss.item();
+                loss.Backward();
+            }
             nn.utils.clip_grad_norm_(model.parameters(), max_norm: 1f);
             optimizer.Step();
             times[step] = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
