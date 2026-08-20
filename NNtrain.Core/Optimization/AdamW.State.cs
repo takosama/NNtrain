@@ -267,5 +267,10 @@ public partial class AdamW
         internal short[]? SecondMomentBFloat16 { get; set; } =
             secondMomentBFloat16;
         internal bool ApplyWeightDecay { get; set; } = applyWeightDecay;
+        internal CudaOptimizerKernels.AdamWResidentState? CudaState
+        {
+            get;
+            set;
+        }
     }
 }

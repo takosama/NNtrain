@@ -72,7 +72,9 @@ partial class Tensor
                         rows,
                         inputWidth,
                         outputWidth,
-                        applyRelu);
+                        applyRelu,
+                        DType == TensorDType.BFloat16
+                            && weight.DType == TensorDType.BFloat16);
             }
             return cudaResult;
         }
@@ -179,17 +181,11 @@ partial class Tensor
             {
                 for (int column = 0; column < outputWidth; column++)
                 {
-                    float value = TensorStorageCodec.RoundToBFloat16Compute(
-                        bias._data[column]);
+                    float value = bias._data[column];
                     int weightOffset = column * inputWidth;
                     for (int inner = 0; inner < inputWidth; inner++)
-                    {
-                        float product = TensorStorageCodec.RoundToBFloat16Compute(
-                            _data[inputOffset + inner]
-                            * weight._data[weightOffset + inner]);
-                        value = TensorStorageCodec.RoundToBFloat16Compute(
-                            value + product);
-                    }
+                        value += _data[inputOffset + inner]
+                            * weight._data[weightOffset + inner];
                     output![outputOffset + column] =
                         applyRelu && value <= 0f ? 0f : value;
                 }

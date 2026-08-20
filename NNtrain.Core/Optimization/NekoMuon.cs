@@ -11,6 +11,7 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
     private readonly List<Parameter> _parameters;
     private readonly long _totalElements;
     private readonly NekoMuonWorkspace[] _workspaces;
+    private readonly CudaOptimizerKernels.NekoMuonResidentState?[] _cudaStates;
     private NekoMuonState _state;
 
     internal IReadOnlyList<Parameter> Parameters => _parameters;
@@ -56,10 +57,23 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         ValidateOptions(effectiveOptions, nameof(options));
         _state = CreateInitialState(_parameters, effectiveOptions);
         _workspaces = _parameters.Select(CreateWorkspace).ToArray();
+        _cudaStates = new CudaOptimizerKernels.NekoMuonResidentState?[
+            _parameters.Count];
     }
 
     public NekoMuonState CaptureState()
-        => CloneState(_state);
+    {
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            int primaryDevice = Tensor.CudaDeviceIndex;
+            foreach (CudaOptimizerKernels.NekoMuonResidentState? state
+                in _cudaStates)
+            {
+                state?.SynchronizeHost(primaryDevice);
+            }
+        }
+        return CloneState(_state);
+    }
 
     public float LearningRate => _state.Options.LearningRate;
 
@@ -83,6 +97,12 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
     {
         ArgumentNullException.ThrowIfNull(state);
         ValidateState(state);
+        foreach (CudaOptimizerKernels.NekoMuonResidentState? cudaState
+            in _cudaStates)
+        {
+            cudaState?.Dispose();
+        }
+        Array.Clear(_cudaStates);
         _state = CloneState(state);
     }
 
@@ -116,6 +136,16 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         float slowCorrection =
             1f - MathF.Pow(options.BetaSlow, _state.Step);
         long[]? profileTicks = ProfilingEnabled ? new long[9] : null;
+
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            StepCuda(
+                options,
+                fastCorrection,
+                slowCorrection);
+            LastStepProfile = default;
+            return;
+        }
 
         void UpdateParameter(int parameterIndex)
         {
@@ -260,6 +290,77 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                 TicksToMilliseconds(profileTicks[7]),
                 TicksToMilliseconds(profileTicks[8]));
         }
+    }
+
+    private void StepCuda(
+        NekoMuonOptions options,
+        float fastCorrection,
+        float slowCorrection)
+    {
+        void UpdateParameter(int parameterIndex)
+        {
+            Parameter parameter = _parameters[parameterIndex];
+            NekoMuonParameterState parameterState =
+                _state.ParameterStates[parameterIndex];
+            GetMatrixShape(
+                parameter,
+                out int originalRows,
+                out int originalColumns);
+            int rows = Math.Min(originalRows, originalColumns);
+            int gramLength = checked(rows * rows);
+            CudaOptimizerKernels.NekoMuonResidentState cudaState =
+                _cudaStates[parameterIndex] ??=
+                    new CudaOptimizerKernels.NekoMuonResidentState(
+                        parameterState.FastMoment,
+                        parameterState.SlowMoment,
+                        gramLength);
+            float[] gradient = parameter.T.GradientBuffer.Length == 0
+                ? new float[parameter.T.Numel]
+                : parameter.T.GradientBuffer;
+            bool applyWeightDecay =
+                parameter.WeightDecay == WeightDecayPolicy.Apply
+                || (options.Decay1D && parameter.T.Rank == 1);
+            bool runNewtonSchulz =
+                _state.Step % options.NewtonSchulzInterval == 0;
+            float confidence = parameterState.Confidence;
+            foreach (int deviceIndex in Tensor.CudaDeviceIndices)
+            {
+                float deviceConfidence =
+                    CudaOptimizerKernels.NekoMuonStepResident(
+                        parameter.T,
+                        deviceIndex,
+                        gradient,
+                        cudaState,
+                        originalRows,
+                        originalColumns,
+                        options.BetaFast,
+                        options.BetaSlow,
+                        fastCorrection,
+                        slowCorrection,
+                        options.Epsilon,
+                        parameterState.Confidence,
+                        options.Rho,
+                        options.MaxNewtonSchulzSteps,
+                        runNewtonSchulz,
+                        NewtonSchulzA,
+                        NewtonSchulzB,
+                        NewtonSchulzC,
+                        options.LearningRate,
+                        options.WeightDecay,
+                        applyWeightDecay);
+                if (deviceIndex == Tensor.CudaDeviceIndex)
+                    confidence = deviceConfidence;
+            }
+            _state.ParameterStates[parameterIndex] =
+                parameterState with { Confidence = confidence };
+            parameter.T.MarkCudaDataMutated(Tensor.CudaDeviceIndex);
+        }
+
+        if (_parameters.Count > 1 && _totalElements >= 32_768)
+            Tensor.RunParallel(0, _parameters.Count, UpdateParameter);
+        else
+            for (int index = 0; index < _parameters.Count; index++)
+                UpdateParameter(index);
     }
 
     private static void AddProfileTicks(

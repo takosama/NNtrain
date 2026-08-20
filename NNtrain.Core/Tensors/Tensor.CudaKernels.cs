@@ -223,22 +223,29 @@ internal static class TensorCudaKernels
         var output = new float[checked(rows * outputWidth)];
         using MemoryBuffer1D<float, Stride1D.Dense>? temporaryInputBuffer =
             cacheInput ? null : accelerator.Allocate1D(input);
-        ArrayView<float> inputView = cacheInput
-            ? CudaResidentArrayCache.GetOrUpload(accelerator, input).View
-            : temporaryInputBuffer!.View;
+        MemoryBuffer1D<float, Stride1D.Dense> inputBuffer = cacheInput
+            ? CudaResidentArrayCache.GetOrUpload(accelerator, input)
+            : temporaryInputBuffer!;
         var weightBuffer = weight.EnsureCudaFloat32Buffer(deviceIndex);
         var biasBuffer = bias.EnsureCudaFloat32Buffer(deviceIndex);
         using var outputBuffer = accelerator.Allocate1D<float>(output.Length);
+        CudaBlas.LinearForward(
+            accelerator,
+            deviceIndex,
+            inputBuffer,
+            weightBuffer,
+            outputBuffer,
+            rows,
+            inputWidth,
+            outputWidth,
+            bfloat16Compute);
         var kernel = accelerator.LoadAutoGroupedStreamKernel<
-            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
-            ArrayView<float>, int, int, int, int>(LinearForwardKernel);
+            Index1D, ArrayView<float>, ArrayView<float>, int, int, int>(
+                LinearBiasActivationKernel);
         kernel(
             output.Length,
-            inputView,
-            weightBuffer.View,
             biasBuffer.View,
             outputBuffer.View,
-            inputWidth,
             outputWidth,
             applyRelu ? 1 : 0,
             bfloat16Compute ? 1 : 0);
@@ -258,7 +265,8 @@ internal static class TensorCudaKernels
         int rows,
         int inputWidth,
         int outputWidth,
-        bool applyRelu)
+        bool applyRelu,
+        bool bfloat16Compute)
     {
         int[] devices = Tensor.CudaDeviceIndices
             .Take(Math.Min(rows, Tensor.CudaDeviceIndices.Count))
@@ -267,9 +275,10 @@ internal static class TensorCudaKernels
             || ReferenceEquals(inputGradient, weightGradient))
         {
             LinearBackwardSingle(
-                ForgetMemoryV2Cuda.GetAccelerator(devices[0]), input, weight,
+                ForgetMemoryV2Cuda.GetAccelerator(devices[0]), devices[0], input, weight,
                 storedOutput, outputGradient, inputGradient, weightGradient,
-                biasGradient, rows, inputWidth, outputWidth, applyRelu);
+                biasGradient, rows, inputWidth, outputWidth, applyRelu,
+                bfloat16Compute);
             return;
         }
 
@@ -286,12 +295,14 @@ internal static class TensorCudaKernels
             var localBiasGradient = new float[biasGradient.Length];
             LinearBackwardSingle(
                 ForgetMemoryV2Cuda.GetAccelerator(devices[shard]),
+                devices[shard],
                 input.AsSpan(start * inputWidth, shardRows * inputWidth).ToArray(),
                 weight,
                 storedOutput.AsSpan(start * outputWidth, shardRows * outputWidth).ToArray(),
                 outputGradient.AsSpan(start * outputWidth, shardRows * outputWidth).ToArray(),
                 localInputGradient, localWeightGradient, localBiasGradient,
-                shardRows, inputWidth, outputWidth, applyRelu);
+                shardRows, inputWidth, outputWidth, applyRelu,
+                bfloat16Compute);
             shardInputGradients[shard] = localInputGradient;
             shardWeightGradients[shard] = localWeightGradient;
             shardBiasGradients[shard] = localBiasGradient;
@@ -313,6 +324,7 @@ internal static class TensorCudaKernels
 
     private static void LinearBackwardSingle(
         CudaAccelerator accelerator,
+        int deviceIndex,
         float[] input,
         float[] weight,
         float[] storedOutput,
@@ -323,7 +335,8 @@ internal static class TensorCudaKernels
         int rows,
         int inputWidth,
         int outputWidth,
-        bool applyRelu)
+        bool applyRelu,
+        bool bfloat16Compute)
     {
         var inputBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, input);
         var weightBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, weight);
@@ -332,34 +345,43 @@ internal static class TensorCudaKernels
         using var inputGradientBuffer = accelerator.Allocate1D(inputGradient);
         using var weightGradientBuffer = accelerator.Allocate1D(weightGradient);
         using var biasGradientBuffer = accelerator.Allocate1D(biasGradient);
-        var inputKernel = accelerator.LoadAutoGroupedStreamKernel<
-            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
-            ArrayView<float>, int, int, int>(
-                LinearBackwardInputKernel);
-        inputKernel(
-            inputGradient.Length,
-            weightBuffer.View,
+        var maskKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, int>(
+                LinearApplyActivationGradientKernel);
+        maskKernel(
+            outputGradient.Length,
             outputBuffer.View,
             outputGradientBuffer.View,
-            inputGradientBuffer.View,
-            inputWidth,
-            outputWidth,
             applyRelu ? 1 : 0);
-        var parameterKernel = accelerator.LoadAutoGroupedStreamKernel<
-            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
-            ArrayView<float>, ArrayView<float>, int, int,
-            int, int>(LinearBackwardParameterKernel);
-        parameterKernel(
-            weightGradient.Length,
-            inputBuffer.View,
-            outputBuffer.View,
-            outputGradientBuffer.View,
-            weightGradientBuffer.View,
-            biasGradientBuffer.View,
+        CudaBlas.LinearBackwardInput(
+            accelerator,
+            deviceIndex,
+            outputGradientBuffer,
+            weightBuffer,
+            inputGradientBuffer,
             rows,
             inputWidth,
             outputWidth,
-            applyRelu ? 1 : 0);
+            bfloat16Compute);
+        CudaBlas.LinearBackwardWeight(
+            accelerator,
+            deviceIndex,
+            inputBuffer,
+            outputGradientBuffer,
+            weightGradientBuffer,
+            rows,
+            inputWidth,
+            outputWidth,
+            bfloat16Compute);
+        var biasKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, int, int>(
+                LinearBackwardBiasKernel);
+        biasKernel(
+            outputWidth,
+            outputGradientBuffer.View,
+            biasGradientBuffer.View,
+            rows,
+            outputWidth);
         accelerator.Synchronize();
         inputGradientBuffer.CopyToCPU(inputGradient);
         weightGradientBuffer.CopyToCPU(weightGradient);
@@ -524,53 +546,28 @@ internal static class TensorCudaKernels
         gradientBuffer.CopyToCPU(logitsGradient);
     }
 
-    private static void LinearForwardKernel(
+    private static void LinearBiasActivationKernel(
         Index1D index,
-        ArrayView<float> input,
-        ArrayView<float> weight,
         ArrayView<float> bias,
         ArrayView<float> output,
-        int inputWidth,
         int outputWidth,
         int applyRelu,
         int bfloat16Compute)
     {
         int linear = index;
-        int row = linear / outputWidth;
-        int column = linear - row * outputWidth;
-        float sum = bfloat16Compute != 0
-            ? RoundBFloat16(bias[column])
-            : bias[column];
-        int inputOffset = row * inputWidth;
-        int weightOffset = column * inputWidth;
-        for (int inner = 0; inner < inputWidth; inner++)
-        {
-            if (bfloat16Compute != 0)
-            {
-                float product = RoundBFloat16(
-                    input[inputOffset + inner] * weight[weightOffset + inner]);
-                sum = RoundBFloat16(sum + product);
-            }
-            else
-            {
-                sum += input[inputOffset + inner]
-                    * weight[weightOffset + inner];
-            }
-        }
-        output[linear] = applyRelu != 0 && sum <= 0f ? 0f : sum;
+        int column = linear % outputWidth;
+        float sum = output[linear] + bias[column];
+        float result = applyRelu != 0 && sum <= 0f ? 0f : sum;
+        output[linear] = bfloat16Compute != 0
+            ? RoundBFloat16(result)
+            : result;
     }
 
     private static float RoundBFloat16(float value)
     {
-        if (value == 0f)
-            return value;
-        float sign = value < 0f ? -1f : 1f;
-        float absolute = XMath.Abs(value);
-        if (absolute > 3.38953139e38f)
-            return value;
-        float exponent = XMath.Floor(XMath.Log(absolute) / 0.6931471805599453f);
-        float step = XMath.Pow(2f, exponent - 7f);
-        return sign * XMath.Floor(absolute / step + 0.5f) * step;
+        uint bits = Interop.FloatAsInt(value);
+        uint roundingBias = 0x7FFFu + ((bits >> 16) & 1u);
+        return Interop.IntAsFloat((bits + roundingBias) & 0xFFFF0000u);
     }
 
     private static void EmbeddingForwardKernel(
@@ -688,61 +685,29 @@ internal static class TensorCudaKernels
         return bits < dropThreshold ? 0f : scale;
     }
 
-    private static void LinearBackwardInputKernel(
+    private static void LinearApplyActivationGradientKernel(
         Index1D index,
-        ArrayView<float> weight,
         ArrayView<float> output,
         ArrayView<float> outputGradient,
-        ArrayView<float> inputGradient,
-        int inputWidth,
-        int outputWidth,
         int applyRelu)
     {
-        int linear = index;
-        int row = linear / inputWidth;
-        int inner = linear - row * inputWidth;
-        float sum = 0f;
-        int outputOffset = row * outputWidth;
-        for (int column = 0; column < outputWidth; column++)
-        {
-            int outputIndex = outputOffset + column;
-            if (applyRelu == 0 || output[outputIndex] > 0f)
-                sum += outputGradient[outputIndex] *
-                    weight[column * inputWidth + inner];
-        }
-        inputGradient[linear] += sum;
+        int i = index;
+        if (applyRelu != 0 && output[i] <= 0f)
+            outputGradient[i] = 0f;
     }
 
-    private static void LinearBackwardParameterKernel(
-        Index1D index,
-        ArrayView<float> input,
-        ArrayView<float> output,
+    private static void LinearBackwardBiasKernel(
+        Index1D columnIndex,
         ArrayView<float> outputGradient,
-        ArrayView<float> weightGradient,
         ArrayView<float> biasGradient,
         int rows,
-        int inputWidth,
-        int outputWidth,
-        int applyRelu)
+        int outputWidth)
     {
-        int linear = index;
-        int column = linear / inputWidth;
-        int inner = linear - column * inputWidth;
-        float weightSum = 0f;
+        int column = columnIndex;
         float biasSum = 0f;
         for (int row = 0; row < rows; row++)
-        {
-            int outputIndex = row * outputWidth + column;
-            if (applyRelu != 0 && output[outputIndex] <= 0f)
-                continue;
-            float gradient = outputGradient[outputIndex];
-            weightSum += gradient * input[row * inputWidth + inner];
-            if (inner == 0)
-                biasSum += gradient;
-        }
-        weightGradient[linear] += weightSum;
-        if (inner == 0)
-            biasGradient[column] += biasSum;
+            biasSum += outputGradient[row * outputWidth + column];
+        biasGradient[column] += biasSum;
     }
 
     private static void LayerNormForwardKernel(

@@ -10,9 +10,9 @@ namespace NNtrain;
 /// </remarks>
 public partial class Tensor
 {
-    private static TensorDevice _executionDevice;
-    private static int _cudaDeviceIndex;
-    private static int[] _cudaDeviceIndices = [0];
+    private static readonly AsyncLocal<TensorDevice> ExecutionDeviceContext = new();
+    private static readonly AsyncLocal<int> CudaDeviceIndexContext = new();
+    private static readonly AsyncLocal<int[]?> CudaDeviceIndicesContext = new();
 
     /// <summary>
     /// Gets or selects the execution device for kernels with a GPU backend.
@@ -20,24 +20,24 @@ public partial class Tensor
     /// </summary>
     public static TensorDevice ExecutionDevice
     {
-        get => _executionDevice;
+        get => ExecutionDeviceContext.Value;
         set
         {
             if (!Enum.IsDefined(value))
                 throw new ArgumentOutOfRangeException(nameof(value));
-            _executionDevice = value;
+            ExecutionDeviceContext.Value = value;
         }
     }
 
     /// <summary>Gets or selects the zero-based CUDA adapter index.</summary>
     public static int CudaDeviceIndex
     {
-        get => _cudaDeviceIndex;
+        get => CudaDeviceIndexContext.Value;
         set
         {
             ArgumentOutOfRangeException.ThrowIfNegative(value);
-            _cudaDeviceIndex = value;
-            _cudaDeviceIndices = [value];
+            CudaDeviceIndexContext.Value = value;
+            CudaDeviceIndicesContext.Value = [value];
         }
     }
 
@@ -47,7 +47,7 @@ public partial class Tensor
     /// </summary>
     public static IReadOnlyList<int> CudaDeviceIndices
     {
-        get => Array.AsReadOnly(_cudaDeviceIndices);
+        get => Array.AsReadOnly(CudaDeviceIndicesContext.Value ?? [0]);
         set
         {
             ArgumentNullException.ThrowIfNull(value);
@@ -58,8 +58,8 @@ public partial class Tensor
                 throw new ArgumentOutOfRangeException(nameof(value));
             if (indices.Distinct().Count() != indices.Length)
                 throw new ArgumentException("CUDA device indices must be unique.", nameof(value));
-            _cudaDeviceIndices = indices;
-            _cudaDeviceIndex = indices[0];
+            CudaDeviceIndicesContext.Value = indices;
+            CudaDeviceIndexContext.Value = indices[0];
         }
     }
 
@@ -89,7 +89,14 @@ public partial class Tensor
 
     internal AutogradNode Node { get; }
 
-    public IReadOnlyList<float> Data { get; }
+    public IReadOnlyList<float> Data
+    {
+        get
+        {
+            EnsureHostDataCurrent();
+            return _data;
+        }
+    }
     public IReadOnlyList<float> Grad { get; }
     public IReadOnlyList<int> Shape { get; }
     public string Name { get; }
@@ -125,6 +132,7 @@ public partial class Tensor
             throw new InvalidOperationException(
                 "item() requires a tensor containing exactly one value.");
         }
+        EnsureHostDataCurrent();
         return _data[0];
     }
 
@@ -148,7 +156,6 @@ public partial class Tensor
         _shape = (int[])shape.Clone();
         Name = name ?? throw new ArgumentNullException(nameof(name));
 
-        Data = _data;
         Grad = new GradientView(this);
         Shape = Array.AsReadOnly(_shape);
 
@@ -186,7 +193,6 @@ public partial class Tensor
         _shape = (int[])shape.Clone();
         Name = name ?? throw new ArgumentNullException(nameof(name));
 
-        Data = _data;
         Grad = new GradientView(this);
         Shape = Array.AsReadOnly(_shape);
         Node = new AutogradNode();
@@ -216,7 +222,6 @@ public partial class Tensor
         _shape = (int[])shape.Clone();
         Name = name ?? throw new ArgumentNullException(nameof(name));
 
-        Data = _data;
         Grad = new GradientView(this);
         Shape = Array.AsReadOnly(_shape);
 
@@ -248,7 +253,6 @@ public partial class Tensor
         _shape = (int[])shape.Clone();
         Name = name ?? throw new ArgumentNullException(nameof(name));
 
-        Data = _data;
         Grad = new GradientView(this);
         Shape = Array.AsReadOnly(_shape);
 
@@ -418,9 +422,12 @@ public partial class Tensor
     }
 
     internal float[] CaptureData(bool preferMaster)
-        => preferMaster && _masterData is not null
+    {
+        EnsureHostDataCurrent();
+        return preferMaster && _masterData is not null
             ? (float[])_masterData.Clone()
             : _data.ToFloat32Array();
+    }
 
     /// <summary>
     /// Gets a versioned Float32 decoding of a physical Float16 payload.
@@ -429,6 +436,7 @@ public partial class Tensor
     /// </summary>
     internal float[] GetPhysicalFloat32ComputeCache()
     {
+        EnsureHostDataCurrent();
         if (DType == TensorDType.Float32)
             return _data.GetMutableFloat32Buffer();
 

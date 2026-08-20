@@ -72,8 +72,10 @@ internal static class TenStepCompareProfiler
                 ? $", speedup={speedupCpu.MeanMs / gpu.MeanMs:F2}x"
                 : ""));
         Console.WriteLine(
-            "note: CUDA step 1 includes ILGPU kernel compilation; "
-            + "GPU tensors use resident compute-view caches and BF16 host storage.");
+            "note: CUDA step 1 includes kernel/library initialization; "
+            + "Linear uses cuBLAS CUBLAS_COMPUTE_32F_FAST_16BF "
+            + "(BF16 operands, FP32 accumulation); AdamW/NekoMuon FP32 "
+            + "master weights, moments, and workspaces remain GPU-resident.");
     }
 
     private static Result RunDevice(

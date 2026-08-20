@@ -68,6 +68,12 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
 
     public AdamWState CaptureState()
     {
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            int primaryDevice = Tensor.CudaDeviceIndex;
+            foreach (AdamWParameterRuntime runtime in _parameterRuntime)
+                runtime.CudaState?.SynchronizeHost(primaryDevice);
+        }
         if (_options.UseBFloat16FirstMoment
             || _options.UseBFloat16SecondMoment)
         {
@@ -131,6 +137,8 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         _parameterStates = clone.ParameterStates;
         for (int index = 0; index < _parameterRuntime.Length; index++)
         {
+            _parameterRuntime[index].CudaState?.Dispose();
+            _parameterRuntime[index].CudaState = null;
             if (_options.UseBFloat16FirstMoment)
             {
                 _parameterRuntime[index].FirstMoment = [];
@@ -235,23 +243,55 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                 float[] second = runtime.SecondMomentBFloat16 is null
                     ? runtime.SecondMoment
                     : DecodeBFloat16(runtime.SecondMomentBFloat16);
-                CudaOptimizerKernels.AdamWUpdate(
-                    runtime.Data,
-                    gradient,
-                    first,
-                    second,
-                    options.Beta1,
-                    options.Beta2,
-                    options.LearningRate,
-                    options.WeightDecay,
-                    _stepUpdateScale,
-                    _stepScaledEpsilon,
-                    runtime.ApplyWeightDecay);
+                if (runtime.FirstMomentBFloat16 is null
+                    && runtime.SecondMomentBFloat16 is null)
+                {
+                    runtime.CudaState ??=
+                        new CudaOptimizerKernels.AdamWResidentState(
+                            first,
+                            second);
+                    foreach (int deviceIndex in Tensor.CudaDeviceIndices)
+                    {
+                        CudaOptimizerKernels.AdamWUpdateResident(
+                            runtime.Parameter.T,
+                            deviceIndex,
+                            gradient,
+                            runtime.CudaState,
+                            options.Beta1,
+                            options.Beta2,
+                            options.LearningRate,
+                            options.WeightDecay,
+                            _stepUpdateScale,
+                            _stepScaledEpsilon,
+                            runtime.ApplyWeightDecay);
+                    }
+                    runtime.Parameter.T.MarkCudaDataMutated(
+                        Tensor.CudaDeviceIndex);
+                }
+                else
+                {
+                    CudaOptimizerKernels.AdamWUpdate(
+                        runtime.Data,
+                        gradient,
+                        first,
+                        second,
+                        options.Beta1,
+                        options.Beta2,
+                        options.LearningRate,
+                        options.WeightDecay,
+                        _stepUpdateScale,
+                        _stepScaledEpsilon,
+                        runtime.ApplyWeightDecay);
+                }
                 if (runtime.FirstMomentBFloat16 is not null)
                     runtime.FirstMomentBFloat16 = EncodeBFloat16(first);
                 if (runtime.SecondMomentBFloat16 is not null)
                     runtime.SecondMomentBFloat16 = EncodeBFloat16(second);
-                runtime.Parameter.CompleteUpdate();
+                if (runtime.FirstMomentBFloat16 is not null
+                    || runtime.SecondMomentBFloat16 is not null)
+                {
+                    runtime.Parameter.CompleteUpdate();
+                }
             }
             return;
         }
