@@ -130,13 +130,25 @@ internal static class ForgetMemoryV2Cuda
     internal sealed class ResidentForwardResult(
         int deviceIndex,
         MemoryBuffer1D<float, Stride1D.Dense> output,
-        MemoryBuffer1D<float, Stride1D.Dense> states)
+        MemoryBuffer1D<float, Stride1D.Dense> states) : IDisposable
     {
+        private bool _disposed;
         internal int DeviceIndex { get; } = deviceIndex;
         internal MemoryBuffer1D<float, Stride1D.Dense> Output { get; } = output;
         internal MemoryBuffer1D<float, Stride1D.Dense> States { get; } = states;
 
-        ~ResidentForwardResult() => States.Dispose();
+        internal void Dispose()
+        {
+            if (_disposed)
+                return;
+            States.Dispose();
+            _disposed = true;
+            GC.SuppressFinalize(this);
+        }
+
+        void IDisposable.Dispose() => Dispose();
+
+        ~ResidentForwardResult() => Dispose();
     }
 
     internal static ForwardResult Forward(

@@ -16,9 +16,9 @@ namespace NNtrain;
 /// </remarks>
 internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
 {
-    private readonly float[]? _float32;
-    private readonly Half[]? _float16;
-    private readonly ushort[]? _bfloat16;
+    private float[]? _float32;
+    private Half[]? _float16;
+    private ushort[]? _bfloat16;
 
     private TensorStorage(float[] values)
     {
@@ -41,6 +41,12 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
         Count = values.Length;
     }
 
+    private TensorStorage(int count, TensorDType dtype)
+    {
+        Count = count;
+        DType = dtype;
+    }
+
     internal TensorDType DType { get; }
 
     public int Count { get; }
@@ -61,6 +67,7 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
     {
         get
         {
+            EnsureBacking();
             ArgumentOutOfRangeException.ThrowIfNegative(index);
             if (index >= Count)
                 throw new ArgumentOutOfRangeException(nameof(index));
@@ -126,8 +133,31 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
         };
     }
 
+    internal static TensorStorage CreateDevicePlaceholder(
+        int length,
+        TensorDType dtype)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        TensorDTypeContract.ValidateImplemented(dtype, nameof(dtype));
+        return new TensorStorage(length, dtype);
+    }
+
+    private void EnsureBacking()
+    {
+        if (_float32 is not null || _float16 is not null || _bfloat16 is not null)
+            return;
+        if (DType == TensorDType.Float32)
+            _float32 = new float[Count];
+        else if (DType == TensorDType.Float16)
+            _float16 = new Half[Count];
+        else
+            _bfloat16 = new ushort[Count];
+    }
+
     internal TensorStorage Clone()
-        => DType switch
+    {
+        EnsureBacking();
+        return DType switch
         {
             TensorDType.Float32 => new TensorStorage(
                 (float[])_float32!.Clone()),
@@ -137,9 +167,11 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
                 (ushort[])_bfloat16!.Clone()),
             _ => throw UnsupportedDType(),
         };
+    }
 
     internal float[] ToFloat32Array()
     {
+        EnsureBacking();
         if (_float32 is not null)
             return (float[])_float32.Clone();
 
@@ -153,6 +185,7 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
 
     internal void CopyTo(Span<float> destination)
     {
+        EnsureBacking();
         if (destination.Length < Count)
         {
             throw new ArgumentException(
@@ -176,6 +209,7 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
         int sourceOffset,
         Span<float> destination)
     {
+        EnsureBacking();
         if ((uint)sourceOffset > (uint)Count
             || destination.Length > Count - sourceOffset)
         {
@@ -210,6 +244,8 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
         int length)
     {
         ArgumentNullException.ThrowIfNull(destination);
+        EnsureBacking();
+        destination.EnsureBacking();
         if ((uint)sourceOffset > (uint)Count
             || length < 0
             || length > Count - sourceOffset)
@@ -270,6 +306,8 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
         int columns)
     {
         ArgumentNullException.ThrowIfNull(destination);
+        EnsureBacking();
+        destination.EnsureBacking();
         if (rows <= 0 || columns <= 0 || checked(rows * columns) != Count)
             throw new ArgumentException("Transpose dimensions are invalid.");
         if (destination.Count != Count || destination.DType != DType)
@@ -348,6 +386,7 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
 
     internal void CopyFrom(ReadOnlySpan<float> source)
     {
+        EnsureBacking();
         if (source.Length != Count)
         {
             throw new ArgumentException(
@@ -371,6 +410,7 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
         ReadOnlySpan<float> source,
         int destinationOffset)
     {
+        EnsureBacking();
         if (_float32 is not null)
             source.CopyTo(_float32.AsSpan(destinationOffset));
         else if (_float16 is not null)
@@ -384,24 +424,30 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
     }
 
     internal float[] GetMutableFloat32Buffer()
-        => _float32
+    {
+        EnsureBacking();
+        return _float32
             ?? throw new InvalidOperationException(
                 "Only Float32 storage exposes a mutable Float32 buffer.");
+    }
 
     internal bool TryGetFloat32Buffer(out float[] values)
     {
+        EnsureBacking();
         values = _float32!;
         return _float32 is not null;
     }
 
     internal bool TryGetFloat16Buffer(out Half[] values)
     {
+        EnsureBacking();
         values = _float16!;
         return _float16 is not null;
     }
 
     internal Vector256<float> LoadVector256(int offset)
     {
+        EnsureBacking();
         if ((uint)offset > (uint)(Count - Vector256<float>.Count))
             throw new ArgumentOutOfRangeException(nameof(offset));
 
@@ -414,6 +460,7 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
 
     internal Vector128<float> LoadVector128(int offset)
     {
+        EnsureBacking();
         if ((uint)offset > (uint)(Count - Vector128<float>.Count))
             throw new ArgumentOutOfRangeException(nameof(offset));
 

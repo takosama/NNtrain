@@ -7,6 +7,40 @@ namespace NNtrain;
 
 internal static class CudaOptimizerKernels
 {
+    internal static void PrewarmNekoMuon(IReadOnlyList<int> deviceIndices)
+    {
+        foreach (int deviceIndex in deviceIndices)
+        {
+            CudaAccelerator accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+            _ = accelerator.LoadAutoGroupedStreamKernel<
+                Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
+                ArrayView<float>, ArrayView<float>, float, float, float, float>(
+                    NekoMuonMomentsKernel);
+            _ = accelerator.LoadAutoGroupedStreamKernel<
+                Index1D, ArrayView<float>, ArrayView<float>, ArrayView<double>>(
+                    NekoMuonStatsKernel);
+            _ = accelerator.LoadAutoGroupedStreamKernel<
+                Index1D, ArrayView<float>, ArrayView<float>, int, int, int, float>(
+                    NekoMuonInitializeKernel);
+            _ = accelerator.LoadAutoGroupedStreamKernel<
+                Index1D, ArrayView<float>, ArrayView<float>, float>(
+                    NekoMuonInterpolateKernel);
+            _ = accelerator.LoadAutoGroupedStreamKernel<
+                Index1D, ArrayView<float>, ArrayView<float>, int, int>(
+                    NekoMuonTransposeBackKernel);
+            _ = accelerator.LoadAutoGroupedStreamKernel<
+                Index1D, ArrayView<float>, ArrayView<float>, float, float,
+                float, int>(NekoMuonApplyUpdateKernel);
+            _ = accelerator.LoadAutoGroupedStreamKernel<
+                Index1D, ArrayView<float>, ArrayView<float>>(
+                    PublishBFloat16MasterKernel);
+            _ = accelerator.LoadAutoGroupedStreamKernel<
+                Index1D, ArrayView<float>, ArrayView<float>, int, float,
+                float, float>(NekoMuonCombinePolynomialKernel);
+        }
+    }
+
     internal sealed class AdamWResidentState : IDisposable
     {
         private readonly float[] _firstHost;
@@ -383,7 +417,12 @@ internal static class CudaOptimizerKernels
             scaledEpsilon,
             applyWeightDecay ? 1 : 0);
         PublishMaster(parameter, accelerator, deviceIndex, dataBuffer);
-        accelerator.Synchronize();
+    }
+
+    internal static void SynchronizeDevices(IReadOnlyList<int> deviceIndices)
+    {
+        foreach (int deviceIndex in deviceIndices)
+            ForgetMemoryV2Cuda.GetAccelerator(deviceIndex).Synchronize();
     }
 
     internal static void AdamWUpdate(

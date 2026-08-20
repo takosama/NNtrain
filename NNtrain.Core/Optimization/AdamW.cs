@@ -287,6 +287,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                     runtime.Parameter.CompleteUpdate();
                 }
             }
+            CudaOptimizerKernels.SynchronizeDevices(Tensor.CudaDeviceIndices);
             return;
         }
 

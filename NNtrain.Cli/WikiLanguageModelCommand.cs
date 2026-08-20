@@ -613,7 +613,10 @@ internal static partial class WikiLanguageModelCommand
                         logits,
                         values.Target);
                     lossValue = loss.item();
-                    loss.backward();
+                    if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+                        loss.BackwardAndRelease();
+                    else
+                        loss.backward();
                 }
                 nn.utils.clip_grad_norm_(
                     model.parameters(),

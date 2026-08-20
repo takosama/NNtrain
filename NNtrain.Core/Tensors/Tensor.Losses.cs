@@ -83,6 +83,7 @@ partial class Tensor
                 dtype: TensorDType.Float32);
             if (AutogradContext.IsRecordingEnabled)
             {
+                cudaResult.Node.RegisterResource(context);
                 cudaResult.Node.BackwardAction = () =>
                     TensorCudaKernels.CrossEntropyBackwardResident(
                         this,
@@ -92,6 +93,10 @@ partial class Tensor
                         ignoreIndex,
                         validRows,
                         labelSmoothing);
+            }
+            else
+            {
+                context.Dispose();
             }
             return cudaResult;
         }

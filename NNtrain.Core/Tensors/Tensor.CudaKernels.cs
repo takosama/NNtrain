@@ -48,10 +48,11 @@ internal static class TensorCudaKernels
                     Index1D, ArrayView<float>, float>(ScaleGradientKernel);
                 var gradient = tensor.EnsureCudaGradientBuffer(deviceIndex);
                 deviceScaleKernel(tensor.Numel, gradient.View, scale);
-                device.Synchronize();
             }
             tensor.MarkCudaGradientsSynchronized(devices);
         }
+        foreach (int deviceIndex in devices)
+            ForgetMemoryV2Cuda.GetAccelerator(deviceIndex).Synchronize();
         return totalNorm;
     }
 
@@ -93,6 +94,65 @@ internal static class TensorCudaKernels
             secondary.Synchronize();
         }
         tensor.MarkCudaGradientsSynchronized(deviceIndices);
+    }
+
+    internal static void AllReduceGradientsResident(
+        IReadOnlyList<Parameter> parameters,
+        IReadOnlyList<int> deviceIndices)
+    {
+        if (deviceIndices.Count < 2)
+            return;
+        int primaryIndex = deviceIndices[0];
+        CudaAccelerator primary =
+            ForgetMemoryV2Cuda.GetAccelerator(primaryIndex);
+        var addKernel = primary.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>>(AccumulateKernel);
+
+        for (int device = 1; device < deviceIndices.Count; device++)
+        {
+            int secondaryIndex = deviceIndices[device];
+            CudaAccelerator secondary =
+                ForgetMemoryV2Cuda.GetAccelerator(secondaryIndex);
+            secondary.Synchronize();
+            var stagingBuffers = new List<
+                MemoryBuffer1D<float, Stride1D.Dense>>(parameters.Count);
+            foreach (Parameter parameter in parameters)
+            {
+                Tensor tensor = parameter.T;
+                var primaryGradient =
+                    tensor.EnsureCudaGradientBuffer(primaryIndex);
+                var secondaryGradient =
+                    tensor.EnsureCudaGradientBuffer(secondaryIndex);
+                var staging = primary.Allocate1D<float>(tensor.Numel);
+                stagingBuffers.Add(staging);
+                secondaryGradient.View.CopyTo(staging.View);
+                addKernel(tensor.Numel, staging.View, primaryGradient.View);
+            }
+            primary.Synchronize();
+            foreach (MemoryBuffer1D<float, Stride1D.Dense> staging
+                in stagingBuffers)
+            {
+                staging.Dispose();
+            }
+        }
+
+        foreach (int secondaryIndex in deviceIndices.Skip(1))
+        {
+            CudaAccelerator secondary =
+                ForgetMemoryV2Cuda.GetAccelerator(secondaryIndex);
+            foreach (Parameter parameter in parameters)
+            {
+                Tensor tensor = parameter.T;
+                var primaryGradient =
+                    tensor.EnsureCudaGradientBuffer(primaryIndex);
+                var secondaryGradient =
+                    tensor.EnsureCudaGradientBuffer(secondaryIndex);
+                primaryGradient.View.CopyTo(secondaryGradient.View);
+            }
+            secondary.Synchronize();
+        }
+        foreach (Parameter parameter in parameters)
+            parameter.T.MarkCudaGradientsSynchronized(deviceIndices);
     }
 
     internal static MemoryBuffer1D<float, Stride1D.Dense> CopyForwardResident(
@@ -894,17 +954,26 @@ internal static class TensorCudaKernels
     internal sealed class LayerNormResidentContext(
         MemoryBuffer1D<float, Stride1D.Dense> output,
         MemoryBuffer1D<float, Stride1D.Dense> normalized,
-        MemoryBuffer1D<float, Stride1D.Dense> inverses)
+        MemoryBuffer1D<float, Stride1D.Dense> inverses) : IDisposable
     {
+        private bool _disposed;
         internal MemoryBuffer1D<float, Stride1D.Dense> Output { get; } = output;
         internal MemoryBuffer1D<float, Stride1D.Dense> Normalized { get; } = normalized;
         internal MemoryBuffer1D<float, Stride1D.Dense> Inverses { get; } = inverses;
 
-        ~LayerNormResidentContext()
+        internal void Dispose()
         {
+            if (_disposed)
+                return;
             Normalized.Dispose();
             Inverses.Dispose();
+            _disposed = true;
+            GC.SuppressFinalize(this);
         }
+
+        void IDisposable.Dispose() => Dispose();
+
+        ~LayerNormResidentContext() => Dispose();
     }
 
     internal static (
@@ -1065,17 +1134,26 @@ internal static class TensorCudaKernels
     internal sealed class CrossEntropyResidentContext(
         MemoryBuffer1D<float, Stride1D.Dense> loss,
         MemoryBuffer1D<float, Stride1D.Dense> probabilities,
-        MemoryBuffer1D<int, Stride1D.Dense> labels)
+        MemoryBuffer1D<int, Stride1D.Dense> labels) : IDisposable
     {
+        private bool _disposed;
         internal MemoryBuffer1D<float, Stride1D.Dense> Loss { get; } = loss;
         internal MemoryBuffer1D<float, Stride1D.Dense> Probabilities { get; } = probabilities;
         internal MemoryBuffer1D<int, Stride1D.Dense> Labels { get; } = labels;
 
-        ~CrossEntropyResidentContext()
+        internal void Dispose()
         {
+            if (_disposed)
+                return;
             Probabilities.Dispose();
             Labels.Dispose();
+            _disposed = true;
+            GC.SuppressFinalize(this);
         }
+
+        void IDisposable.Dispose() => Dispose();
+
+        ~CrossEntropyResidentContext() => Dispose();
     }
 
     internal static (float Loss, float[] Probabilities) CrossEntropyForward(

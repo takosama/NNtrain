@@ -127,10 +127,18 @@ public partial class Tensor
                 || buffer.Buffer.Length != Numel)
             {
                 buffer?.Dispose();
+                MemoryBuffer1D<float, Stride1D.Dense> gradientBuffer;
                 if (_grad.Length == 0)
-                    _grad = new float[Numel];
+                {
+                    gradientBuffer = accelerator.Allocate1D<float>(Numel);
+                    gradientBuffer.MemSetToZero();
+                }
+                else
+                {
+                    gradientBuffer = accelerator.Allocate1D(_grad);
+                }
                 buffer = new GradientDeviceBuffer(
-                    accelerator.Allocate1D(_grad),
+                    gradientBuffer,
                     _gradientVersion);
                 _cudaGradientBuffers[resolvedDeviceIndex] = buffer;
                 return buffer.Buffer;
@@ -240,11 +248,13 @@ public partial class Tensor
         Tensor[] parents,
         TensorDType? dtype = null)
     {
+        TensorDType resultDType = dtype ?? TensorDTypeContract.Promote(parents);
         var result = new Tensor(
-            new float[checked((int)buffer.Length)],
+            TensorStorage.CreateDevicePlaceholder(
+                checked((int)buffer.Length),
+                resultDType),
             shape,
-            parents,
-            dtype: dtype);
+            parents);
         result.AdoptCudaFloat32Buffer(buffer, deviceIndex);
         return result;
     }
@@ -389,6 +399,25 @@ public partial class Tensor
             _cudaGradientBuffers.Clear();
             _cudaBufferDataVersion = -1;
             _hostDataCurrent = true;
+            _device = TensorDevice.Cpu;
+        }
+    }
+
+    internal void ReleaseCudaGraphBuffers()
+    {
+        lock (_deviceSync)
+        {
+            foreach (DeviceBuffer buffer in _cudaBuffers.Values)
+                buffer.Dispose();
+            foreach (DeviceBuffer buffer in _cudaMasterBuffers.Values)
+                buffer.Dispose();
+            foreach (GradientDeviceBuffer buffer in _cudaGradientBuffers.Values)
+                buffer.Dispose();
+            _cudaBuffers.Clear();
+            _cudaMasterBuffers.Clear();
+            _cudaGradientBuffers.Clear();
+            _hostDataCurrent = true;
+            _hostGradientCurrent = true;
             _device = TensorDevice.Cpu;
         }
     }

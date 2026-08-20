@@ -59,6 +59,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         _workspaces = _parameters.Select(CreateWorkspace).ToArray();
         _cudaStates = new CudaOptimizerKernels.NekoMuonResidentState?[
             _parameters.Count];
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+            CudaOptimizerKernels.PrewarmNekoMuon(Tensor.CudaDeviceIndices);
     }
 
     public NekoMuonState CaptureState()
@@ -352,11 +354,11 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
             parameter.T.MarkCudaDataMutated(Tensor.CudaDeviceIndex);
         }
 
-        if (_parameters.Count > 1 && _totalElements >= 32_768)
-            Tensor.RunParallel(0, _parameters.Count, UpdateParameter);
-        else
-            for (int index = 0; index < _parameters.Count; index++)
-                UpdateParameter(index);
+        // All kernels for a device use its ordered default stream. Launching
+        // parameter updates from many CPU threads cannot add GPU parallelism
+        // and causes a first-use ILGPU compilation stampede.
+        for (int index = 0; index < _parameters.Count; index++)
+            UpdateParameter(index);
     }
 
     private static void AddProfileTicks(

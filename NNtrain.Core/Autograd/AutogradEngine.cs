@@ -6,6 +6,12 @@ namespace NNtrain;
 internal static class AutogradEngine
 {
     internal static void Backward(Tensor output, float[]? seed)
+        => Backward(output, seed, releaseGraph: false);
+
+    internal static void Backward(
+        Tensor output,
+        float[]? seed,
+        bool releaseGraph)
     {
         ArgumentNullException.ThrowIfNull(output);
         ValidateSeed(output, seed);
@@ -18,6 +24,18 @@ internal static class AutogradEngine
 
         for (int index = topologicalOrder.Count - 1; index >= 0; index--)
             topologicalOrder[index].Node.RunBackward();
+
+        if (releaseGraph)
+        {
+            foreach (Tensor tensor in topologicalOrder)
+            {
+                if (!tensor.Node.IsLeaf)
+                {
+                    tensor.ReleaseCudaGraphBuffers();
+                    tensor.Node.ReleaseGraph();
+                }
+            }
+        }
     }
 
     private static List<Tensor> BuildTopologicalOrder(Tensor output)

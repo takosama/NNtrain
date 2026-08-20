@@ -398,6 +398,7 @@ partial class Tensor
                 [this, gamma, beta]);
             if (AutogradContext.IsRecordingEnabled)
             {
+                cudaResult.Node.RegisterResource(context);
                 cudaResult.Node.BackwardAction = () =>
                     TensorCudaKernels.LayerNormBackwardResident(
                         this,
@@ -407,6 +408,10 @@ partial class Tensor
                         context,
                         rows,
                         columns);
+            }
+            else
+            {
+                context.Dispose();
             }
             return cudaResult;
         }

@@ -146,7 +146,8 @@ public partial class Tensor
         }
     }
     internal long DataVersion => _dataVersion;
-    internal bool HasGradientBuffer => _grad.Length != 0;
+    internal bool HasGradientBuffer
+        => _grad.Length != 0 || _cudaGradientBuffers.Count != 0;
 
     public Tensor(
         float[] data,
@@ -225,7 +226,9 @@ public partial class Tensor
             ? TensorStorage.FromOwnedFloat32(data)
             : TensorStorage.Create(data, resultDType);
         bool isRecording = AutogradContext.IsRecordingEnabled;
-        _grad = isRecording ? new float[data.Length] : [];
+        _grad = isRecording && ExecutionDevice != TensorDevice.Cuda
+            ? new float[data.Length]
+            : [];
         _shape = (int[])shape.Clone();
         Name = name ?? throw new ArgumentNullException(nameof(name));
 
@@ -235,7 +238,13 @@ public partial class Tensor
         if (isRecording)
         {
             foreach (Tensor parent in prev)
-                parent.EnsureGradientBuffer();
+            {
+                if (ExecutionDevice == TensorDevice.Cuda
+                    && parent.Device == TensorDevice.Cuda)
+                    parent.EnsureCudaGradientBuffer();
+                else
+                    parent.EnsureGradientBuffer();
+            }
             Node = new AutogradNode(prev);
         }
         else
@@ -256,7 +265,9 @@ public partial class Tensor
 
         _data = data;
         bool isRecording = AutogradContext.IsRecordingEnabled;
-        _grad = isRecording ? new float[data.Count] : [];
+        _grad = isRecording && ExecutionDevice != TensorDevice.Cuda
+            ? new float[data.Count]
+            : [];
         _shape = (int[])shape.Clone();
         Name = name ?? throw new ArgumentNullException(nameof(name));
 
@@ -266,7 +277,13 @@ public partial class Tensor
         if (isRecording)
         {
             foreach (Tensor parent in prev)
-                parent.EnsureGradientBuffer();
+            {
+                if (ExecutionDevice == TensorDevice.Cuda
+                    && parent.Device == TensorDevice.Cuda)
+                    parent.EnsureCudaGradientBuffer();
+                else
+                    parent.EnsureGradientBuffer();
+            }
             Node = new AutogradNode(prev);
         }
         else

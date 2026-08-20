@@ -19,4 +19,11 @@ partial class Tensor
         => AutogradEngine.Backward(this, seed);
 
     public void backward(float[]? gradient = null) => Backward(gradient);
+
+    /// <summary>
+    /// Runs backward propagation and releases the one-shot computation graph's
+    /// intermediate CUDA buffers. Do not reuse this graph after calling it.
+    /// </summary>
+    public void BackwardAndRelease(float[]? seed = null)
+        => AutogradEngine.Backward(this, seed, releaseGraph: true);
 }

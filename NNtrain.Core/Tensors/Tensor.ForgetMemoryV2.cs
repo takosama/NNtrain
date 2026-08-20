@@ -151,8 +151,12 @@ partial class Tensor
             [batch, sequence, valueWidth],
             [this]);
         if (!AutogradContext.IsRecordingEnabled)
+        {
+            forward.Dispose();
             return result;
+        }
 
+        result.Node.RegisterResource(forward);
         result.Node.BackwardAction = () =>
         {
             NNtrain.ForgetMemoryV2Cuda.BackwardResident(

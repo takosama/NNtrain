@@ -30,7 +30,7 @@ public static class CudaDataParallel
             Tensor logits = model.Forward(input, batchSize, sequenceLength);
             Tensor loss = logits.CrossEntropyWithLogits(target, ignoreIndex: ignoreIndex);
             float value = loss.item();
-            loss.Backward();
+            loss.BackwardAndRelease();
             return value;
         }
 
@@ -64,11 +64,10 @@ public static class CudaDataParallel
                 ignoreIndex: ignoreIndex);
             float weight = (float)shardValid / totalValid;
             weightedLosses[shard] = loss.item() * shardValid;
-            loss.Backward([weight]);
+            loss.BackwardAndRelease([weight]);
         });
 
-        foreach (Parameter parameter in parameters)
-            TensorCudaKernels.AllReduceGradientResident(parameter.T, devices);
+        TensorCudaKernels.AllReduceGradientsResident(parameters, devices);
         return (float)(weightedLosses.Sum() / totalValid);
     }
 }
