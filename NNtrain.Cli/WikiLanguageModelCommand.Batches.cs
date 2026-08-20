@@ -65,6 +65,114 @@ internal static partial class WikiLanguageModelCommand
         return new LanguageBatch(input, target, validTargetCount);
     }
 
+    /// <summary>Keeps the shuffle stream independent of other seeded draws.</summary>
+    internal const int ShuffleSeedSalt = 0x5A17;
+
+    /// <summary>
+    /// Randomizes the order of a document stream with a fixed-size shuffle
+    /// buffer, so training does not consume the corpus in file order.
+    /// </summary>
+    /// <remarks>
+    /// The corpus does not fit in memory, so this is local mixing rather than
+    /// a true permutation: a document can move at most about
+    /// <paramref name="bufferSize"/> positions. That is enough to break the
+    /// dump's page-id ordering within a batch, which is what correlates
+    /// consecutive training windows. The order is fully determined by
+    /// <paramref name="random"/>, so a resumed run that replays the epoch and
+    /// skips the documents it already processed sees the same sequence.
+    /// </remarks>
+    internal static IEnumerable<string> ShuffleDocuments(
+        IEnumerable<string> documents,
+        int bufferSize,
+        Random random)
+    {
+        ArgumentNullException.ThrowIfNull(documents);
+        ArgumentNullException.ThrowIfNull(random);
+        if (bufferSize < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(bufferSize),
+                bufferSize,
+                "The shuffle buffer size must be non-negative.");
+        }
+
+        if (bufferSize <= 1)
+        {
+            foreach (string document in documents)
+                yield return document;
+            yield break;
+        }
+
+        var buffer = new List<string>(bufferSize);
+        foreach (string document in documents)
+        {
+            if (buffer.Count < bufferSize)
+            {
+                buffer.Add(document);
+                continue;
+            }
+
+            int index = random.Next(buffer.Count);
+            yield return buffer[index];
+            buffer[index] = document;
+        }
+
+        // Drain what is left in a random order rather than in arrival order.
+        for (int remaining = buffer.Count; remaining > 0; remaining--)
+        {
+            int index = random.Next(remaining);
+            yield return buffer[index];
+            buffer[index] = buffer[remaining - 1];
+        }
+    }
+
+    /// <summary>
+    /// Appends one document to the streaming token buffer as
+    /// <c>&lt;bos&gt; tokens &lt;eos&gt;</c>.
+    /// </summary>
+    /// <param name="maxDocumentTokens">
+    /// Zero keeps the whole document. A positive value truncates it, and a
+    /// truncated document deliberately gets no <c>&lt;eos&gt;</c>: the article
+    /// did not end there, so marking an end teaches the model to stop
+    /// mid-sentence. The finite-corpus path already behaves this way when it
+    /// runs out of its token budget.
+    /// </param>
+    /// <returns>Whether the document was written in full.</returns>
+    internal static bool AppendDocument(
+        List<int> buffer,
+        BpeTokenizer tokenizer,
+        string document,
+        int maxDocumentTokens)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+        ArgumentNullException.ThrowIfNull(tokenizer);
+        ArgumentNullException.ThrowIfNull(document);
+        if (maxDocumentTokens < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxDocumentTokens),
+                maxDocumentTokens,
+                "The document token limit must be non-negative.");
+        }
+
+        buffer.Add(BpeTokenizer.BosTokenId);
+        int[] documentTokens = tokenizer.Encode(document);
+        bool truncated = maxDocumentTokens > 0
+            && documentTokens.Length > maxDocumentTokens;
+        int tokenCount = truncated ? maxDocumentTokens : documentTokens.Length;
+        for (int index = 0; index < tokenCount; index++)
+            buffer.Add(documentTokens[index]);
+        if (!truncated)
+            buffer.Add(BpeTokenizer.EosTokenId);
+        return !truncated;
+    }
+
+    internal static string FormatDocumentTokenLimit(int maxDocumentTokens)
+        => maxDocumentTokens > 0
+            ? $"up to {maxDocumentTokens:N0} tokens/document (longer " +
+                "documents are truncated without <eos>)"
+            : "whole documents, no truncation";
+
     internal static LanguageBatch CreateStreamingBatch(
         List<int> buffer,
         int batchSize,

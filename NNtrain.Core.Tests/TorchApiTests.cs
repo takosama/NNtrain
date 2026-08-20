@@ -205,8 +205,8 @@ public sealed class TorchApiTests
                 checkpoint.Model.Parameters.Length,
                 restored.Model.Parameters.Length);
             Assert.Equal(
-                checkpoint.Optimizer.StateJson,
-                restored.Optimizer.StateJson);
+                checkpoint.Optimizer.StateJsonText,
+                restored.Optimizer.StateJsonText);
             Assert.Equal(1, restored.Scheduler.LastEpoch);
         }
         finally
@@ -323,8 +323,12 @@ public sealed class TorchApiTests
         OptimizerStateDictionary roundTrip = restored.state_dict();
         Assert.Equal(state.OptimizerType, roundTrip.OptimizerType);
         Assert.Equal(2, roundTrip.Children.Length);
-        Assert.Equal(state.Children[0].StateJson, roundTrip.Children[0].StateJson);
-        Assert.Equal(state.Children[1].StateJson, roundTrip.Children[1].StateJson);
+        Assert.Equal(
+            state.Children[0].StateJsonText,
+            roundTrip.Children[0].StateJsonText);
+        Assert.Equal(
+            state.Children[1].StateJsonText,
+            roundTrip.Children[1].StateJsonText);
     }
 
     private sealed class FakeDataset : IImageClassificationDataset

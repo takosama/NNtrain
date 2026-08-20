@@ -6,7 +6,7 @@ optimizers, dataset boundaries, and training orchestration in C#/.NET 10.
 
 ## Float16 and native F16C dense kernels
 
-`FrogetMemoryV2Gpt` uses `TensorDType.Float16` by default. Tensor values and
+`ForgetMemoryV2Gpt` uses `TensorDType.Float16` by default. Tensor values and
 activations are physically stored as IEEE binary16; gradients, reductions,
 and optimizer master weights remain Float32. Existing models can opt into
 Float32 explicitly with `dtype: TensorDType.Float32` or
@@ -224,7 +224,7 @@ JSON profiles enable it.
 
 Each 0.1-epoch save also keeps a timestamped SafeTensors history file named
 `<ModelName>_<epoch>_epoch_<yyyyMMdd_HHmm>.safetensors`, for example
-`FrogetMemoryV2Gpt_0.1_epoch_20260312_1224.safetensors`. The fixed checkpoint
+`ForgetMemoryV2Gpt_0.1_epoch_20260312_1224.safetensors`. The fixed checkpoint
 name remains the latest resumable state.
 
 Checkpoint placement and restart behavior are grouped in one section. Paths
@@ -257,7 +257,7 @@ sample continuation. Image-classification examples remain available in the
 separate CIFAR-100 configuration.
 `TransformerClassifier` is used only by the image-classification command. The
 default Wikipedia configurations select `modelArchitecture:
-"forgetmemoryv2"`, which constructs the custom `FrogetMemoryV2Gpt`; startup
+"forgetmemoryv2"`, which constructs the custom `ForgetMemoryV2Gpt`; startup
 prints the concrete model type so this selection is visible before training.
 The CIFAR-100 configuration normalizes RGB channels using the training-set
 statistics. Each 32x32 RGB image is emitted directly as 64 row-major 4x4 patch
@@ -332,6 +332,25 @@ dotnet run --configuration Release --project NNtrain.Cli -- `
   --config training.forgetmemoryv2-wiki-jp.json
 ```
 
+The supplied ForgetMemoryV2 profile selects `device: "cuda"`,
+`deviceIndices: [0, 1]`, and `modelDType: "bfloat16"`. Dense rows and the batch
+dimension of the stateful ForgetMemoryV2 recurrence are sharded across every
+listed GPU; their backward parameter gradients are reduced before the
+optimizer step.
+Use a single-element array such as `[1]` to select only one adapter.
+ForgetMemoryV2 recurrence,
+dense projections, layer normalization, embeddings, dropout/residual,
+cross-entropy, AdamW updates, and the compute-heavy NekoMuon phases run through
+CUDA (ILGPU, so a separate CUDA Toolkit installation is not required).
+Parameters and activations use two-byte BF16 storage while arithmetic and
+gradient accumulation use Float32. Immutable tensor compute views are cached
+on each adapter and invalidated only when their tensor is updated. In
+particular, ForgetMemory's projected input and full time-state stay resident
+from forward through backward instead of being copied back between the two.
+Host BF16 backing is retained for the public tensor API and checkpoints, so
+CPU-only graph boundaries still synchronize. Set `device` back to `"cpu"` for
+the portable path.
+
 ForgetMemoryV2 is the default model. Set `modelArchitecture` to
 `"forgetmemoryv2"`, `"forgetscan"`, `"hyena"`, or `"transformer"` when an
 explicit architecture is required. `forgetMemoryKeyWidth` and
@@ -359,7 +378,7 @@ apply the gates and recurrence in each tile. Training saves gate values for a
 SIMD reverse scan, while inference omits those buffers. Both paths remain
 causal without storing attention keys or values.
 
-`FrogetMemoryV2Layer` packs q, k, v, retention-gate, and beta projections into
+`ForgetMemoryV2Layer` packs q, k, v, retention-gate, and beta projections into
 one Tensor and evaluates a differentiable matrix memory recurrence:
 `g = lambda + (1-lambda)sigmoid(gate)`,
 `write = (1-g)sigmoid(beta)`,
@@ -372,13 +391,13 @@ and all major backward vectors. Independent batches use `Parallel.For`.
 On a Ryzen 7 5700X, the reproducible two-layer training benchmark
 (`batch=2`, `width=64`, `hidden=128`, key/value width 32) measured:
 
-| Sequence | Attention | FrogetMemoryV2 SIMD |
+| Sequence | Attention | ForgetMemoryV2 SIMD |
 |---:|---:|---:|
 | 64 | 2.184 ms | 2.453 ms |
 | 128 | 4.908 ms | 4.805 ms |
 | 256 | 11.198 ms | 9.218 ms |
 
-Run it with `--filter *FrogetMemoryV2AttentionBenchmarks*`. These compare the
+Run it with `--filter *ForgetMemoryV2AttentionBenchmarks*`. These compare the
 same GPT macro dimensions; parameter counts are close but not exactly equal.
 
 The reproducible ForgetScan microbenchmarks can be run with:

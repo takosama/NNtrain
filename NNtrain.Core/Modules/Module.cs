@@ -273,6 +273,7 @@ public abstract class Module
                 || parameterState.Values.Length != parameter.T.Numel
                 || parameterState.DType is not TensorDType.Float32
                     and not TensorDType.Float16
+                    and not TensorDType.BFloat16
                 || parameterState.StorageMetadata is { IsRaw: false })
             {
                 throw new ArgumentException(

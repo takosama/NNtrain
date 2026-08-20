@@ -64,6 +64,38 @@ partial class Tensor
                 nameof(labels));
         }
 
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            (float cudaLoss, float[] probabilities) =
+                TensorCudaKernels.CrossEntropyForward(
+                    GetPhysicalFloat32ComputeCache(),
+                    retainedLabels,
+                    rows,
+                    columns,
+                    ignoreIndex,
+                    validRows,
+                    labelSmoothing);
+            var cudaResult = new Tensor(
+                [cudaLoss],
+                [1],
+                [this],
+                dtype: TensorDType.Float32);
+            if (AutogradContext.IsRecordingEnabled)
+            {
+                cudaResult.Node.BackwardAction = () =>
+                    TensorCudaKernels.CrossEntropyBackward(
+                        probabilities,
+                        retainedLabels,
+                        EnsureGradientBuffer(),
+                        columns,
+                        ignoreIndex,
+                        validRows,
+                        labelSmoothing,
+                        cudaResult._grad[0]);
+            }
+            return cudaResult;
+        }
+
         float[] rowLosses = new float[rows];
         float[] rowMaximums = new float[rows];
         float[] rowInverseSums = new float[rows];

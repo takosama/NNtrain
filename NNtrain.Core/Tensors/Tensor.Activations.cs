@@ -372,6 +372,47 @@ partial class Tensor
         gamma.CheckRank(1);
         beta.CheckRank(1);
 
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            int columns = _shape[^1];
+            if (gamma._shape[0] != columns || beta._shape[0] != columns)
+            {
+                throw new ArgumentException(
+                    $"LayerNorm parameters must have shape [{columns}], " +
+                    $"but gamma is {ShapeText(gamma)} and beta is " +
+                    $"{ShapeText(beta)}.");
+            }
+            int rows = Numel / columns;
+            float[] gammaValues = gamma.GetPhysicalFloat32ComputeCache();
+            (float[] output, float[] normalized, float[] inverses) =
+                TensorCudaKernels.LayerNormForward(
+                    GetPhysicalFloat32ComputeCache(),
+                    gammaValues,
+                    beta.GetPhysicalFloat32ComputeCache(),
+                    rows,
+                    columns,
+                    eps);
+            var cudaResult = new Tensor(
+                output,
+                _shape,
+                [this, gamma, beta]);
+            if (AutogradContext.IsRecordingEnabled)
+            {
+                cudaResult.Node.BackwardAction = () =>
+                    TensorCudaKernels.LayerNormBackward(
+                        gammaValues,
+                        normalized,
+                        inverses,
+                        cudaResult._grad,
+                        EnsureGradientBuffer(),
+                        gamma.EnsureGradientBuffer(),
+                        beta.EnsureGradientBuffer(),
+                        rows,
+                        columns);
+            }
+            return cudaResult;
+        }
+
         if (Rank == 1)
         {
             int n = _shape[0];

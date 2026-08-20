@@ -3,17 +3,17 @@ namespace NNtrain;
 /// <summary>
 /// Decoder-only language model using stable matrix-valued delta memories.
 /// </summary>
-public sealed class FrogetMemoryV2Gpt : Module, IWikiLanguageModel
+public sealed class ForgetMemoryV2Gpt : Module, IWikiLanguageModel
 {
     private readonly Parameter _tokenEmbedding;
     private readonly Dropout _embeddingDropout;
-    private readonly FrogetMemoryV2Layer[] _layers;
+    private readonly ForgetMemoryV2Layer[] _layers;
     private readonly LayerNorm _finalNorm;
     private readonly Linear _languageModelHead;
     private readonly Parameter[] _hiddenWeightParameters;
     private readonly Parameter[] _auxiliaryParameters;
 
-    public FrogetMemoryV2Gpt(
+    public ForgetMemoryV2Gpt(
         int vocabularySize,
         int contextLength,
         int modelWidth,
@@ -69,7 +69,7 @@ public sealed class FrogetMemoryV2Gpt : Module, IWikiLanguageModel
                 initializationScale,
                 dtype));
         _embeddingDropout = RegisterModule(new Dropout(dropout, random, dtype));
-        _layers = new FrogetMemoryV2Layer[numLayers];
+        _layers = new ForgetMemoryV2Layer[numLayers];
         for (int layerIndex = 0; layerIndex < numLayers; layerIndex++)
         {
             float retentionFloor = numLayers == 1
@@ -79,7 +79,7 @@ public sealed class FrogetMemoryV2Gpt : Module, IWikiLanguageModel
                         * layerIndex
                         / (numLayers - 1f);
             _layers[layerIndex] = RegisterModule(
-                new FrogetMemoryV2Layer(
+                new ForgetMemoryV2Layer(
                     modelWidth,
                     hiddenWidth,
                     keyWidth,
@@ -126,7 +126,7 @@ public sealed class FrogetMemoryV2Gpt : Module, IWikiLanguageModel
 
     public float RetentionMaximum { get; }
 
-    public IReadOnlyList<FrogetMemoryV2Layer> Layers
+    public IReadOnlyList<ForgetMemoryV2Layer> Layers
         => Array.AsReadOnly(_layers);
 
     public IReadOnlyList<Parameter> HiddenWeightParameters
@@ -162,11 +162,109 @@ public sealed class FrogetMemoryV2Gpt : Module, IWikiLanguageModel
                 tokenIds,
                 batchSize,
                 sequenceLength));
-        foreach (FrogetMemoryV2Layer layer in _layers)
+        foreach (ForgetMemoryV2Layer layer in _layers)
             hidden = layer.Forward(hidden);
         hidden = _finalNorm.Forward(hidden);
         return _languageModelHead.ForwardBatch(
             hidden.Reshape(batchSize * sequenceLength, ModelWidth));
+    }
+
+    /// <summary>
+    /// Creates an empty recurrent memory for <see cref="Advance"/>.
+    /// </summary>
+    public ForgetMemoryV2RecurrentState CreateRecurrentState()
+        => new(_layers.Length, checked(KeyWidth * ValueWidth));
+
+    /// <summary>
+    /// Advances <paramref name="state"/> by <paramref name="tokenIds"/> and
+    /// returns logits of shape [1, tokens, vocabulary].
+    /// </summary>
+    /// <remarks>
+    /// Cost is linear in the number of tokens supplied and independent of how
+    /// many tokens the state has already absorbed, because the model carries a
+    /// fixed-size matrix memory instead of a growing key/value cache. The
+    /// context-length bound that <see cref="Forward"/> enforces does not apply
+    /// here: the recurrence has no positional embedding to run past. Feeding
+    /// more tokens than the model was trained on is therefore possible but is
+    /// extrapolation, not a guarantee.
+    /// </remarks>
+    public Tensor Advance(
+        IReadOnlyList<int> tokenIds,
+        ForgetMemoryV2RecurrentState state)
+        => Advance(tokenIds, state, allPositions: true);
+
+    /// <summary>
+    /// Advances <paramref name="state"/> by <paramref name="tokenIds"/> and
+    /// returns logits of shape [1, 1, vocabulary] for the final position only.
+    /// </summary>
+    /// <remarks>
+    /// Sampling needs one distribution per generated token, not one per prompt
+    /// token, and the language-model head is the widest matrix in the model.
+    /// Skipping it for the positions nobody reads is what makes absorbing a
+    /// long prompt cheap.
+    /// </remarks>
+    public Tensor AdvanceToLastLogits(
+        IReadOnlyList<int> tokenIds,
+        ForgetMemoryV2RecurrentState state)
+        => Advance(tokenIds, state, allPositions: false);
+
+    private Tensor Advance(
+        IReadOnlyList<int> tokenIds,
+        ForgetMemoryV2RecurrentState state,
+        bool allPositions)
+    {
+        ArgumentNullException.ThrowIfNull(tokenIds);
+        ArgumentNullException.ThrowIfNull(state);
+        if (tokenIds.Count == 0)
+        {
+            throw new ArgumentException(
+                "At least one token is required.",
+                nameof(tokenIds));
+        }
+        if (state.LayerCount != _layers.Length
+            || state.StateSize != checked(KeyWidth * ValueWidth))
+        {
+            throw new ArgumentException(
+                "The recurrent state was created for a different model.",
+                nameof(state));
+        }
+
+        int[] ids = tokenIds as int[] ?? tokenIds.ToArray();
+        foreach (int token in ids)
+        {
+            if ((uint)token >= (uint)VocabularySize)
+                throw new ArgumentOutOfRangeException(nameof(tokenIds));
+        }
+
+        bool wasTraining = IsTraining;
+        Eval();
+        try
+        {
+            using (AutogradContext.NoGrad())
+            {
+                Tensor hidden = _embeddingDropout.Forward(
+                    _tokenEmbedding.T.EmbeddingLookup(ids, 1, ids.Length));
+                for (int layer = 0; layer < _layers.Length; layer++)
+                {
+                    hidden = _layers[layer].Continue(
+                        hidden,
+                        state.Memory(layer));
+                }
+                if (!allPositions && ids.Length > 1)
+                {
+                    hidden = hidden.Slice(1, ids.Length - 1, 1);
+                }
+                hidden = _finalNorm.Forward(hidden);
+                Tensor logits = _languageModelHead.ForwardBatch(hidden);
+                state.Advanced(ids.Length);
+                return logits;
+            }
+        }
+        finally
+        {
+            if (wasTraining)
+                Train();
+        }
     }
 
     public int[] GenerateTokenIds(
@@ -176,6 +274,27 @@ public sealed class FrogetMemoryV2Gpt : Module, IWikiLanguageModel
         int topK = 40,
         int? stopTokenId = BpeTokenizer.EosTokenId,
         Random? random = null)
+        => GenerateTokenIds(
+            promptTokenIds,
+            maxNewTokens,
+            temperature,
+            topK,
+            stopTokenId,
+            random,
+            onToken: null);
+
+    /// <summary>
+    /// Generates tokens, reporting each one to <paramref name="onToken"/> as
+    /// soon as it is sampled.
+    /// </summary>
+    public int[] GenerateTokenIds(
+        IEnumerable<int> promptTokenIds,
+        int maxNewTokens,
+        float temperature,
+        int topK,
+        int? stopTokenId,
+        Random? random,
+        Action<int>? onToken)
     {
         ArgumentNullException.ThrowIfNull(promptTokenIds);
         if (maxNewTokens < 0)
@@ -207,24 +326,26 @@ public sealed class FrogetMemoryV2Gpt : Module, IWikiLanguageModel
         {
             using (AutogradContext.NoGrad())
             {
+                // The prompt is absorbed once; every generated token then costs
+                // one recurrent step against a fixed-size memory rather than a
+                // full forward pass over the whole prefix.
+                ForgetMemoryV2RecurrentState state = CreateRecurrentState();
+                Tensor logits = AdvanceToLastLogits(result, state);
                 for (int generated = 0; generated < maxNewTokens; generated++)
                 {
-                    int sequenceLength = Math.Min(ContextLength, result.Count);
-                    int[] context = result
-                        .Skip(result.Count - sequenceLength)
-                        .ToArray();
-                    Tensor logits = Forward(context, 1, sequenceLength);
-                    int offset = (sequenceLength - 1) * VocabularySize;
                     int nextToken = Sample(
                         logits.Data,
-                        offset,
+                        0,
                         VocabularySize,
                         temperature,
                         topK,
                         random);
                     result.Add(nextToken);
+                    onToken?.Invoke(nextToken);
                     if (stopTokenId.HasValue && nextToken == stopTokenId.Value)
                         break;
+                    if (generated + 1 < maxNewTokens)
+                        logits = AdvanceToLastLogits([nextToken], state);
                 }
             }
         }
@@ -356,4 +477,66 @@ public sealed class FrogetMemoryV2Gpt : Module, IWikiLanguageModel
         }
         return result;
     }
+}
+
+/// <summary>
+/// Fixed-size recurrent memory for <see cref="ForgetMemoryV2Gpt.Advance"/>.
+/// </summary>
+/// <remarks>
+/// The whole point of the architecture is that this object does not grow with
+/// the number of tokens seen. One layer carries valueWidth * keyWidth floats,
+/// so a 16x16 memory is 1 KiB per layer regardless of whether the model has
+/// read a hundred tokens or a million.
+/// </remarks>
+public sealed class ForgetMemoryV2RecurrentState
+{
+    private readonly float[][] _memories;
+
+    internal ForgetMemoryV2RecurrentState(int layerCount, int stateSize)
+    {
+        if (layerCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(layerCount));
+        if (stateSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(stateSize));
+
+        _memories = new float[layerCount][];
+        for (int layer = 0; layer < layerCount; layer++)
+            _memories[layer] = new float[stateSize];
+        LayerCount = layerCount;
+        StateSize = stateSize;
+    }
+
+    public int LayerCount { get; }
+
+    /// <summary>Floats of memory per layer, that is valueWidth * keyWidth.</summary>
+    public int StateSize { get; }
+
+    /// <summary>Bytes of recurrent state, constant for the whole run.</summary>
+    public long StateBytes => (long)LayerCount * StateSize * sizeof(float);
+
+    /// <summary>Tokens absorbed so far. Does not affect the memory size.</summary>
+    public long TokensSeen { get; private set; }
+
+    /// <summary>Largest absolute memory entry, for divergence checks.</summary>
+    public float PeakMagnitude()
+    {
+        float peak = 0f;
+        foreach (float[] memory in _memories)
+        {
+            foreach (float value in memory)
+                peak = MathF.Max(peak, MathF.Abs(value));
+        }
+        return peak;
+    }
+
+    public void Reset()
+    {
+        foreach (float[] memory in _memories)
+            Array.Clear(memory);
+        TokensSeen = 0;
+    }
+
+    internal float[] Memory(int layer) => _memories[layer];
+
+    internal void Advanced(int tokens) => TokensSeen += tokens;
 }

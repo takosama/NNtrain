@@ -11,21 +11,21 @@
   },
 
   "vocabularySize": 4096,
-  "tokenizerTrainingDocuments": 5000,
+  "tokenizerTrainingDocuments": 500000,
   "tokenizerTrainingBytes": 2000000,
 
   "maxTrainingDocuments": 0,
   "maxTrainingTokens": 0,
-  "maxDocumentTokens": 512,
+  "maxDocumentTokens": 0,
   "validationFraction": 0.0,
-  "epochs": 1,
+  "epochs": 5,
   "batchSize":16,
 
   "contextLength": 512,
-  "modelWidth": 384,
+  "modelWidth": 256,
   "heads": 8,
-  "hiddenSize": 1152,
-  "layers":8,
+  "hiddenSize": 768,
+  "layers":16,
   "modelArchitecture": "forgetmemoryv2",
   "modelDType": "float16",
   "forgetMemoryKeyWidth": 16,
@@ -37,8 +37,8 @@
 
   "optimization": {
     "optimizer": {
-      "type": "adamw",
-      "learningRate": 0.0003,
+      "type": "GainShareAdamW",
+      "learningRate": 0.003,
       "auxiliaryLearningRate": 0.0003,
       "nekoMuonNewtonSchulzInterval": 5,
       "weightDecay": 0.01,
@@ -59,7 +59,7 @@
   "useSimd": true,
   "maxDegreeOfParallelism": 0,
 
-  "maxNewTokens": 80,
-  "temperature": 0.8,
-  "topK": 40
+  "maxNewTokens": 300,
+  "temperature": 0.95,
+  "topK": 20
 }

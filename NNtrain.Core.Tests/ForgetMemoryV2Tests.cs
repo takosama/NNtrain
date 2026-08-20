@@ -1,7 +1,7 @@
 using NNtrain;
 using Xunit;
 
-public sealed class FrogetMemoryV2Tests
+public sealed class ForgetMemoryV2Tests
 {
     [Fact]
     public void SingleTokenImplementsStableDeltaMemoryAndReadout()
@@ -17,7 +17,7 @@ public sealed class FrogetMemoryV2Tests
             ],
             [1, 1, 5]);
 
-        Tensor output = projected.FrogetMemoryV2(
+        Tensor output = projected.ForgetMemoryV2(
             keyWidth: 1,
             valueWidth: 1,
             retentionFloor: 0f);
@@ -45,7 +45,7 @@ public sealed class FrogetMemoryV2Tests
         var projected = new Tensor(
             values,
             [1, sequence, projectionWidth]);
-        Tensor output = projected.FrogetMemoryV2(
+        Tensor output = projected.ForgetMemoryV2(
             keyWidth,
             valueWidth,
             retentionFloor: 0.3f);
@@ -99,9 +99,9 @@ public sealed class FrogetMemoryV2Tests
         }
 
         Tensor first = new Tensor(firstValues, [1, 4, projectionWidth])
-            .FrogetMemoryV2(keyWidth, valueWidth, 0.4f);
+            .ForgetMemoryV2(keyWidth, valueWidth, 0.4f);
         Tensor second = new Tensor(secondValues, [1, 4, projectionWidth])
-            .FrogetMemoryV2(keyWidth, valueWidth, 0.4f);
+            .ForgetMemoryV2(keyWidth, valueWidth, 0.4f);
 
         Assert.Equal(
             first.Data.Take(3 * valueWidth),
@@ -141,7 +141,7 @@ public sealed class FrogetMemoryV2Tests
                 var input = new Tensor(
                     values,
                     [batch, sequence, projectionWidth]);
-                Tensor output = input.FrogetMemoryV2(
+                Tensor output = input.ForgetMemoryV2(
                     keyWidth,
                     valueWidth,
                     0.35f);
@@ -165,9 +165,129 @@ public sealed class FrogetMemoryV2Tests
     }
 
     [Fact]
+    public void CudaForwardBackwardMatchesCpu()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int previousDeviceIndex = Tensor.CudaDeviceIndex;
+        try
+        {
+            const int batch = 2;
+            const int sequence = 4;
+            const int keyWidth = 3;
+            const int valueWidth = 2;
+            const int projectionWidth = 2 * keyWidth + 3 * valueWidth;
+            var random = new Random(456);
+            float[] values = Enumerable.Range(
+                    0,
+                    batch * sequence * projectionWidth)
+                .Select(_ => (float)(random.NextDouble() - 0.5))
+                .ToArray();
+            float[] upstream = Enumerable.Range(
+                    0,
+                    batch * sequence * valueWidth)
+                .Select(_ => (float)(random.NextDouble() - 0.5))
+                .ToArray();
+
+            (float[] Output, float[] Gradient) EvaluateDevice(
+                TensorDevice device)
+            {
+                Tensor.ExecutionDevice = device;
+                Tensor.CudaDeviceIndices = device == TensorDevice.Cuda
+                    && Tensor.CudaDeviceCount >= 2
+                        ? [0, 1]
+                        : [0];
+                var input = new Tensor(
+                    values,
+                    [batch, sequence, projectionWidth],
+                    dtype: TensorDType.BFloat16);
+                Tensor output = input.ForgetMemoryV2(
+                    keyWidth,
+                    valueWidth,
+                    0.35f);
+                output.Backward(upstream);
+                return (output.Data.ToArray(), input.Grad.ToArray());
+            }
+
+            (float[] cpuOutput, float[] cpuGradient) =
+                EvaluateDevice(TensorDevice.Cpu);
+            (float[] cudaOutput, float[] cudaGradient) =
+                EvaluateDevice(TensorDevice.Cuda);
+
+            AssertClose(cpuOutput, cudaOutput, 2e-4f);
+            AssertClose(cpuGradient, cudaGradient, 3e-5f);
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndex = previousDeviceIndex;
+        }
+    }
+
+    [Fact]
+    public void BFloat16GptTrainsWithCudaForgetMemory()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            Tensor.CudaDeviceIndex = 0;
+            var model = new ForgetMemoryV2Gpt(
+                vocabularySize: BpeTokenizer.BaseVocabularySize,
+                contextLength: 3,
+                modelWidth: 8,
+                hiddenWidth: 12,
+                numLayers: 1,
+                keyWidth: 2,
+                valueWidth: 2,
+                dropout: 0f,
+                random: new Random(91),
+                dtype: TensorDType.BFloat16);
+            int[] tokens =
+            [
+                BpeTokenizer.BosTokenId,
+                BpeTokenizer.ByteTokenOffset + 1,
+                BpeTokenizer.EosTokenId,
+            ];
+
+            Tensor logits = model.Forward(tokens, 1, tokens.Length);
+            Tensor loss = logits.CrossEntropyWithLogits(
+                [tokens[1], tokens[2], tokens[0]]);
+            loss.Backward();
+            IOptimizer optimizer = optim.Composite(
+                optim.NekoMuon(
+                    model.HiddenWeightParameters,
+                    lr: 0.01f,
+                    newton_schulz_interval: 5),
+                optim.AdamW(
+                    model.AuxiliaryParameters,
+                    lr: 0.01f,
+                    bf16_first_moment: true,
+                    bf16_second_moment: true));
+            optimizer.Step();
+
+            Assert.Equal(TensorDType.BFloat16, model.DType);
+            Assert.Equal(TensorDType.BFloat16, logits.DType);
+            Assert.True(float.IsFinite(loss.item()));
+            Assert.Contains(
+                model.Parameters(),
+                parameter => parameter.T.Data.All(float.IsFinite));
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+        }
+    }
+
+    [Fact]
     public void GptSchedulesShortToLongMemoryAndTrains()
     {
-        var model = new FrogetMemoryV2Gpt(
+        var model = new ForgetMemoryV2Gpt(
             vocabularySize: BpeTokenizer.BaseVocabularySize,
             contextLength: 4,
             modelWidth: 8,
@@ -234,7 +354,7 @@ public sealed class FrogetMemoryV2Tests
             Tensor output = new Tensor(
                 values,
                 [1, sequence, projectionWidth])
-                .FrogetMemoryV2(keyWidth, valueWidth, 0.3f);
+                .ForgetMemoryV2(keyWidth, valueWidth, 0.3f);
             float result = 0f;
             for (int index = 0; index < output.Numel; index++)
                 result += output.Data[index] * upstream[index];

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace NNtrain;
 
@@ -86,20 +87,38 @@ public static class OptimizerTorchExtensions
         T state)
         => new(
             optimizerType,
-            JsonSerializer.Serialize(state, StateJsonOptions),
+            JsonSerializer.SerializeToElement(state, StateJsonOptions),
             []);
 
     private static T Read<T>(OptimizerStateDictionary state)
     {
-        if (string.IsNullOrWhiteSpace(state.StateJson))
+        if (state.StateJson is not JsonElement element
+            || element.ValueKind is JsonValueKind.Undefined
+                or JsonValueKind.Null)
         {
             throw new ArgumentException(
                 "Optimizer state dictionary has no serialized state.",
                 nameof(state));
         }
-        return JsonSerializer.Deserialize<T>(
-            state.StateJson,
-            StateJsonOptions)
+
+        // Checkpoints written before the state was embedded as real JSON hold
+        // an escaped string here. Both layouts stay readable.
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            string? legacy = element.GetString();
+            if (string.IsNullOrWhiteSpace(legacy))
+            {
+                throw new ArgumentException(
+                    "Optimizer state dictionary has no serialized state.",
+                    nameof(state));
+            }
+
+            return JsonSerializer.Deserialize<T>(legacy, StateJsonOptions)
+                ?? throw new InvalidDataException(
+                    "Optimizer state dictionary was JSON null.");
+        }
+
+        return element.Deserialize<T>(StateJsonOptions)
             ?? throw new InvalidDataException(
                 "Optimizer state dictionary was JSON null.");
     }
@@ -124,10 +143,48 @@ public static class OptimizerTorchExtensions
     }
 }
 
+/// <summary>
+/// Serializable optimizer state.
+/// </summary>
+/// <remarks>
+/// <see cref="StateJson"/> holds the optimizer's own state as embedded JSON.
+/// It used to be a pre-serialized <see cref="string"/>, which made every
+/// checkpoint carry one enormous JSON string value; System.Text.Json refuses
+/// to write a string longer than 166,666,666 characters, so models above
+/// roughly six million parameters could not be saved at all. Storing a
+/// <see cref="JsonElement"/> keeps the numbers as a JSON array, which has no
+/// such limit. Older checkpoints that still hold a string remain loadable.
+/// </remarks>
 public sealed record OptimizerStateDictionary(
     string OptimizerType,
-    string? StateJson,
-    OptimizerStateDictionary[] Children);
+    JsonElement? StateJson,
+    OptimizerStateDictionary[] Children)
+{
+    /// <summary>
+    /// The embedded state as raw JSON text. <see cref="JsonElement"/> has no
+    /// value equality, so comparisons and assertions must use this instead of
+    /// <see cref="StateJson"/> directly.
+    /// </summary>
+    [JsonIgnore]
+    public string? StateJsonText => StateJson?.GetRawText();
+
+    public bool Equals(OptimizerStateDictionary? other)
+        => other is not null
+            && string.Equals(
+                OptimizerType,
+                other.OptimizerType,
+                StringComparison.Ordinal)
+            && string.Equals(
+                StateJsonText,
+                other.StateJsonText,
+                StringComparison.Ordinal)
+            && EqualityComparer<OptimizerStateDictionary[]>.Default.Equals(
+                Children,
+                other.Children);
+
+    public override int GetHashCode()
+        => HashCode.Combine(OptimizerType, StateJsonText);
+}
 
 public interface ILearningRateAdjustable
 {

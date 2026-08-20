@@ -108,6 +108,8 @@ public sealed class Trainer
         float lossValue = forward.Loss.item();
 
         forward.Loss.backward();
+        if (_model is Module module)
+            nn.utils.clip_grad_norm_(module.parameters(), max_norm: 1f);
         _optimizer.step();
 
         return new TrainingStepResult(lossValue, forward.IsCorrect);

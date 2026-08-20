@@ -429,7 +429,7 @@ public sealed class WikiTrainingConfigurationTests
 
     [Theory]
     [InlineData("forgetmemoryv2")]
-    [InlineData("frogetmemoryv2")]
+    [InlineData("forgetmemoryv2")]
     public void AcceptsForgetMemoryV2ArchitectureAndAlias(string architecture)
     {
         var configuration = new WikiTrainingConfiguration

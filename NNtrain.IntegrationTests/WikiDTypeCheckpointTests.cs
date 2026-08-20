@@ -621,7 +621,7 @@ public sealed class WikiDTypeCheckpointTests
         OptimizerStateDictionary actual)
     {
         Assert.Equal(expected.OptimizerType, actual.OptimizerType);
-        Assert.Equal(expected.StateJson, actual.StateJson);
+        Assert.Equal(expected.StateJsonText, actual.StateJsonText);
         Assert.Equal(expected.Children.Length, actual.Children.Length);
         for (int index = 0; index < expected.Children.Length; index++)
         {

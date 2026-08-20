@@ -49,7 +49,7 @@ internal static class WikiTrainingPhaseProfiler
         Tensor.MaxDegreeOfParallelism = ReadInt(
             root,
             "maxDegreeOfParallelism");
-        var model = new FrogetMemoryV2Gpt(
+        var model = new ForgetMemoryV2Gpt(
             vocabulary,
             sequence,
             width,
@@ -224,7 +224,7 @@ internal static class WikiTrainingPhaseProfiler
     }
 
     private static PhaseTimes MeasureStep(
-        FrogetMemoryV2Gpt model,
+        ForgetMemoryV2Gpt model,
         NekoMuon neko,
         AdamW adam,
         int[] tokens,

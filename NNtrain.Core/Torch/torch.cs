@@ -13,6 +13,7 @@ public static class torch
     public const TensorDType float32 = TensorDType.Float32;
     public const TensorDType float16 = TensorDType.Float16;
     public const TensorDType half = TensorDType.Float16;
+    public const TensorDType bfloat16 = TensorDType.BFloat16;
 
     public static class utils
     {
@@ -103,19 +104,35 @@ public static class torch
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
 
+        // Serialize straight into the file. Going through a string would
+        // materialize the whole checkpoint twice - once as UTF-16 and once as
+        // UTF-8 - which for a multi-hundred-megabyte checkpoint is gigabytes of
+        // transient allocation.
         string temporaryPath = fullPath + ".tmp";
-        File.WriteAllText(
+        using (var stream = new FileStream(
             temporaryPath,
-            JsonSerializer.Serialize(value, SerializationOptions));
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            bufferSize: 1024 * 1024,
+            FileOptions.SequentialScan))
+        {
+            JsonSerializer.Serialize(stream, value, SerializationOptions);
+        }
         File.Move(temporaryPath, fullPath, overwrite: true);
     }
 
     public static T load<T>(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        return JsonSerializer.Deserialize<T>(
-            File.ReadAllText(path),
-            SerializationOptions)
+        using var stream = new FileStream(
+            Path.GetFullPath(path),
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 1024 * 1024,
+            FileOptions.SequentialScan);
+        return JsonSerializer.Deserialize<T>(stream, SerializationOptions)
             ?? throw new InvalidDataException(
                 $"Serialized torch object '{path}' was JSON null.");
     }

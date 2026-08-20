@@ -218,6 +218,44 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
             runtime.Gradient = runtime.Parameter.T.GradientBuffer;
         }
 
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            for (int parameterIndex = 0;
+                parameterIndex < _parameterRuntime.Length;
+                parameterIndex++)
+            {
+                AdamWParameterRuntime runtime =
+                    _parameterRuntime[parameterIndex];
+                float[] gradient = runtime.Gradient.Length == 0
+                    ? new float[runtime.Data.Length]
+                    : runtime.Gradient;
+                float[] first = runtime.FirstMomentBFloat16 is null
+                    ? runtime.FirstMoment
+                    : DecodeBFloat16(runtime.FirstMomentBFloat16);
+                float[] second = runtime.SecondMomentBFloat16 is null
+                    ? runtime.SecondMoment
+                    : DecodeBFloat16(runtime.SecondMomentBFloat16);
+                CudaOptimizerKernels.AdamWUpdate(
+                    runtime.Data,
+                    gradient,
+                    first,
+                    second,
+                    options.Beta1,
+                    options.Beta2,
+                    options.LearningRate,
+                    options.WeightDecay,
+                    _stepUpdateScale,
+                    _stepScaledEpsilon,
+                    runtime.ApplyWeightDecay);
+                if (runtime.FirstMomentBFloat16 is not null)
+                    runtime.FirstMomentBFloat16 = EncodeBFloat16(first);
+                if (runtime.SecondMomentBFloat16 is not null)
+                    runtime.SecondMomentBFloat16 = EncodeBFloat16(second);
+                runtime.Parameter.CompleteUpdate();
+            }
+            return;
+        }
+
         if (_workItems.Length > 1 && _totalElements >= 32_768)
             Tensor.RunParallel(0, _workItems.Length, _updateWorkItemAction);
         else

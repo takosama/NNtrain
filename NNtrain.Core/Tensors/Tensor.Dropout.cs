@@ -25,6 +25,29 @@ partial class Tensor
         int columns = _shape[^1];
         int rows = Numel / columns;
 
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            var cudaResult = new Tensor(
+                TensorCudaKernels.DropoutForward(
+                    GetPhysicalFloat32ComputeCache(),
+                    seed,
+                    dropThreshold,
+                    scale),
+                _shape,
+                [this]);
+            if (AutogradContext.IsRecordingEnabled)
+            {
+                cudaResult.Node.BackwardAction = () =>
+                    TensorCudaKernels.DropoutBackward(
+                        cudaResult._grad,
+                        EnsureGradientBuffer(),
+                        seed,
+                        dropThreshold,
+                        scale);
+            }
+            return cudaResult;
+        }
+
         void ForwardRow(int row)
         {
             int offset = row * columns;
@@ -100,6 +123,34 @@ partial class Tensor
         uint dropThreshold = (uint)(probability * (uint.MaxValue + 1d));
         int columns = _shape[^1];
         int rows = Numel / columns;
+
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            var cudaResult = new Tensor(
+                TensorCudaKernels.AddDropoutForward(
+                    GetPhysicalFloat32ComputeCache(),
+                    branch.GetPhysicalFloat32ComputeCache(),
+                    seed,
+                    dropThreshold,
+                    scale),
+                _shape,
+                [this, branch]);
+            if (AutogradContext.IsRecordingEnabled)
+            {
+                cudaResult.Node.BackwardAction = () =>
+                    TensorCudaKernels.AddDropoutBackward(
+                        cudaResult._grad,
+                        EnsureGradientBuffer(),
+                        ReferenceEquals(this, branch)
+                            ? EnsureGradientBuffer()
+                            : branch.EnsureGradientBuffer(),
+                        ReferenceEquals(this, branch),
+                        seed,
+                        dropThreshold,
+                        scale);
+            }
+            return cudaResult;
+        }
 
         void ForwardRow(int row)
         {

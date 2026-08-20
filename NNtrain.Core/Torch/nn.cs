@@ -22,6 +22,56 @@ public static class nn
         }
     }
 
+    public static class utils
+    {
+        /// <summary>
+        /// Clips the global L2 norm of all parameter gradients in place,
+        /// mirroring torch.nn.utils.clip_grad_norm_. Returns the total
+        /// norm measured before clipping.
+        /// </summary>
+        public static float clip_grad_norm_(
+            IEnumerable<Parameter> parameters,
+            float max_norm)
+        {
+            ArgumentNullException.ThrowIfNull(parameters);
+            if (!(max_norm > 0f))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(max_norm),
+                    max_norm,
+                    "The maximum gradient norm must be positive.");
+            }
+
+            var gradients = new List<float[]>();
+            foreach (Parameter parameter in parameters)
+            {
+                if (parameter.T.HasGradientBuffer)
+                    gradients.Add(parameter.T.GradientBuffer);
+            }
+
+            double squaredSum = 0d;
+            foreach (float[] gradient in gradients)
+            {
+                foreach (float value in gradient)
+                    squaredSum += (double)value * value;
+            }
+
+            float totalNorm = (float)Math.Sqrt(squaredSum);
+            if (totalNorm > max_norm)
+            {
+                float scale = max_norm / (totalNorm + 1e-6f);
+                foreach (float[] gradient in gradients)
+                {
+                    Span<float> span = gradient.AsSpan();
+                    for (int index = 0; index < span.Length; index++)
+                        span[index] *= scale;
+                }
+            }
+
+            return totalNorm;
+        }
+    }
+
     public static TransformerClassifier transformer_classifier(
         int seq_len,
         int d_model,
@@ -112,7 +162,7 @@ public static class nn
             init_scale,
             dropout);
 
-    public static FrogetMemoryV2Gpt forget_memory_v2_lm(
+    public static ForgetMemoryV2Gpt forget_memory_v2_lm(
         int vocab_size,
         int context_length,
         int d_model,

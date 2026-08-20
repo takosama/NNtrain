@@ -49,7 +49,7 @@ public sealed class WikiLanguageModelCommandTests
     }
 
     [Fact]
-    public void DefaultConfigurationCreatesFrogetMemoryV2Gpt()
+    public void DefaultConfigurationCreatesForgetMemoryV2Gpt()
     {
         var config = new WikiTrainingConfiguration
         {
@@ -68,7 +68,7 @@ public sealed class WikiLanguageModelCommandTests
             config,
             BpeTokenizer.BaseVocabularySize);
 
-        FrogetMemoryV2Gpt model = Assert.IsType<FrogetMemoryV2Gpt>(created);
+        ForgetMemoryV2Gpt model = Assert.IsType<ForgetMemoryV2Gpt>(created);
         Assert.Equal(TensorDType.Float16, model.DType);
         Assert.All(
             model.parameters(),
@@ -91,7 +91,7 @@ public sealed class WikiLanguageModelCommandTests
             config.VocabularySize);
 
         Assert.True(config.IsForgetMemoryV2Architecture());
-        FrogetMemoryV2Gpt typed = Assert.IsType<FrogetMemoryV2Gpt>(model);
+        ForgetMemoryV2Gpt typed = Assert.IsType<ForgetMemoryV2Gpt>(model);
         Assert.Equal(TensorDType.Float16, typed.DType);
     }
 
@@ -364,8 +364,8 @@ public sealed class WikiLanguageModelCommandTests
                 expectedCurrent.Parameters[0].Values,
                 restored.state_dict().Parameters[0].Values);
             Assert.Equal(
-                sourceOptimizer.state_dict().StateJson,
-                restoredOptimizer.state_dict().StateJson);
+                sourceOptimizer.state_dict().StateJsonText,
+                restoredOptimizer.state_dict().StateJsonText);
             Assert.Equal(
                 sourceScheduler.state_dict(),
                 restoredScheduler.state_dict());

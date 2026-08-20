@@ -285,7 +285,7 @@ partial class Tensor
                 length);
             return;
         }
-        source.TryGetFloat16Buffer(out Half[] sourceHalf);
+        bool sourceIsHalf = source.TryGetFloat16Buffer(out Half[] sourceHalf);
 
         int index = 0;
         if (CanUseSimd(length))
@@ -296,7 +296,9 @@ partial class Tensor
             for (; index < vectorizedLength; index += width)
             {
                 StoreVector256(
-                    LoadVector256(sourceHalf, sourceOffset + index)
+                    (sourceIsHalf
+                        ? LoadVector256(sourceHalf, sourceOffset + index)
+                        : LoadVector256(source, sourceOffset + index))
                         * scaleVector,
                     destination,
                     destinationOffset + index);
@@ -305,7 +307,7 @@ partial class Tensor
         if (CanUseVector128(length - index))
         {
             StoreVector128(
-                LoadVector128(sourceHalf, sourceOffset + index)
+                LoadVector128(source, sourceOffset + index)
                     * Vector128.Create(scale),
                 destination,
                 destinationOffset + index);
@@ -314,7 +316,7 @@ partial class Tensor
         for (; index < length; index++)
         {
             destination[destinationOffset + index] =
-                (float)sourceHalf[sourceOffset + index] * scale;
+                source[sourceOffset + index] * scale;
         }
     }
 
@@ -484,7 +486,7 @@ partial class Tensor
                 length);
             return;
         }
-        source.TryGetFloat16Buffer(out Half[] sourceHalf);
+        bool sourceIsHalf = source.TryGetFloat16Buffer(out Half[] sourceHalf);
 
         int index = 0;
         if (CanUseSimd(length))
@@ -498,9 +500,9 @@ partial class Tensor
                 Vector256<float> destinationVector = LoadVector256(
                     destination,
                     destinationOffset + index);
-                Vector256<float> sourceVector = LoadVector256(
-                    sourceHalf,
-                    sourceOffset + index);
+                Vector256<float> sourceVector = sourceIsHalf
+                    ? LoadVector256(sourceHalf, sourceOffset + index)
+                    : LoadVector256(source, sourceOffset + index);
                 StoreVector256(
                     destinationVector + sourceVector * scaleVector,
                     destination,
@@ -512,7 +514,7 @@ partial class Tensor
         {
             StoreVector128(
                 LoadVector128(destination, destinationOffset + index)
-                    + LoadVector128(sourceHalf, sourceOffset + index)
+                    + LoadVector128(source, sourceOffset + index)
                         * Vector128.Create(scale),
                 destination,
                 destinationOffset + index);
@@ -522,7 +524,7 @@ partial class Tensor
         for (; index < length; index++)
         {
             destination[destinationOffset + index] +=
-                (float)sourceHalf[sourceOffset + index] * scale;
+                source[sourceOffset + index] * scale;
         }
     }
 

@@ -142,13 +142,16 @@ internal static class TensorFloat16OperationManifest
                 "FusedForgetScan()",
                 "TensorFloat16FusedOperationTests.ForgetScanKeepsRecurrenceAndBackwardAccumulationInFloat32"),
             Preserve(
-                "FrogetMemoryV2(Int32,Int32,Single)",
-                "TensorFloat16FusedOperationTests.FrogetMemoryV2KeepsMatrixStateAndGradientsInFloat32"),
+                "ForgetMemoryV2(Int32,Int32,Single)",
+                "TensorFloat16FusedOperationTests.ForgetMemoryV2KeepsMatrixStateAndGradientsInFloat32"),
         ];
 
     internal static IReadOnlyList<TensorFloat16OperationManifestEntry>
         InternalTensorReturningMembers { get; } =
         [
+            Preserve(
+                "ForgetMemoryV2Continue(Int32,Int32,Single,Single[])",
+                "ForgetMemoryV2Tests.GptSchedulesShortToLongMemoryAndTrains"),
             Preserve(
                 "LinearLastDim(Tensor,Tensor,Boolean)",
                 "LinearLastDimTests.Float16ProjectionMatchesFormerFloat16Graph"),

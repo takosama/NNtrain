@@ -48,7 +48,6 @@ partial class Tensor
         var resultShape = new int[outputShape.Length + 1];
         outputShape.CopyTo(resultShape, 0);
         resultShape[^1] = width;
-        var resultData = new float[checked(indices.Length * width)];
         for (int position = 0; position < retainedIndices.Length; position++)
         {
             int row = retainedIndices[position];
@@ -60,6 +59,31 @@ partial class Tensor
                     $"Embedding index at position {position} must be " +
                     $"between 0 and {rows - 1}.");
             }
+        }
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            var cudaResult = new Tensor(
+                TensorCudaKernels.EmbeddingForward(
+                    GetPhysicalFloat32ComputeCache(),
+                    retainedIndices,
+                    width),
+                resultShape,
+                [this]);
+            if (AutogradContext.IsRecordingEnabled)
+            {
+                cudaResult.Node.BackwardAction = () =>
+                    TensorCudaKernels.EmbeddingBackward(
+                        retainedIndices,
+                        cudaResult._grad,
+                        EnsureGradientBuffer(),
+                        width);
+            }
+            return cudaResult;
+        }
+        var resultData = new float[checked(indices.Length * width)];
+        for (int position = 0; position < retainedIndices.Length; position++)
+        {
+            int row = retainedIndices[position];
             _data.CopyRangeTo(
                 row * width,
                 resultData.AsSpan(position * width, width));

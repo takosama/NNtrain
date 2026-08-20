@@ -4,6 +4,17 @@ namespace NNtrain;
 
 internal static partial class WikiLanguageModelCommand
 {
+    /// <summary>
+    /// Formats training wall time for the periodic progress line. Runs shorter
+    /// than an hour stay in seconds so short profiling runs remain readable.
+    /// </summary>
+    private static string FormatElapsed(TimeSpan elapsed)
+        => elapsed.TotalHours >= 1d
+            ? $"{(int)elapsed.TotalHours}:{elapsed.Minutes:00}:{elapsed.Seconds:00}"
+            : elapsed.TotalMinutes >= 1d
+                ? $"{elapsed.Minutes}:{elapsed.Seconds:00}"
+                : $"{elapsed.TotalSeconds:F1} sec";
+
     internal static int Run(
         string configurationPath,
         string? generatePrompt,
@@ -24,6 +35,8 @@ internal static partial class WikiLanguageModelCommand
             Tensor.SimdEnabled = config.UseSimd;
             Tensor.MaxDegreeOfParallelism =
                 config.MaxDegreeOfParallelism;
+            Tensor.ExecutionDevice = config.GetExecutionDevice();
+            Tensor.CudaDeviceIndices = config.DeviceIndices ?? [config.DeviceIndex];
             output.WriteLine(
                 $"simd = {(config.UseSimd ? "enabled" : "disabled")}, " +
                 $"Vector256 hardware = " +
@@ -32,6 +45,13 @@ internal static partial class WikiLanguageModelCommand
                 $"thread parallelism = Parallel.For, workers = " +
                 $"{Tensor.EffectiveMaxDegreeOfParallelism}" +
                 (config.MaxDegreeOfParallelism == 0 ? " (automatic)" : ""));
+            output.WriteLine(
+                $"device = {config.Device.ToLowerInvariant()}" +
+                (Tensor.ExecutionDevice == TensorDevice.Cuda
+                    ? $" [{string.Join(",", Tensor.CudaDeviceIndices)}] " +
+                        $"({Tensor.ExecutionDeviceName}; " +
+                        "ForgetMemory training kernels CUDA, BF16 storage)"
+                    : string.Empty));
             if (generatePrompt is not null)
                 return GenerateOnly(config, generatePrompt, output);
 
@@ -206,6 +226,7 @@ internal static partial class WikiLanguageModelCommand
             ref bestEpoch,
             ref globalStep,
             output);
+        var runProgress = new TrainingProgress();
 
         for (int epoch = resume.Epoch; epoch <= config.Epochs; epoch++)
         {
@@ -247,6 +268,9 @@ internal static partial class WikiLanguageModelCommand
                     logits,
                     values.Target);
                 loss.backward();
+                nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    max_norm: 1f);
                 scheduler.step((globalStep + 1d) / totalTrainingSteps);
                 optimizer.step();
                 globalStep++;
@@ -306,20 +330,25 @@ internal static partial class WikiLanguageModelCommand
                 if (corpus.SampleDocuments.Length > 0
                     && globalStep % config.DatasetSampleEverySteps == 0)
                 {
-                    DatasetContinuation sample = CreateDatasetContinuation(
+                    StreamDatasetContinuation(
+                        globalStep,
                         model,
                         tokenizer,
                         corpus.SampleDocuments,
                         config,
-                        sampleRandom);
-                    WriteDatasetContinuation(globalStep, sample, output);
+                        sampleRandom,
+                        output);
                 }
                 if ((batch + 1) % config.LogEveryBatches == 0
                     || epochEnd)
                 {
                     output.WriteLine(
                         $"epoch {epoch}, batch {batch + 1}/{batchTotal}, " +
-                        $"loss = {loss.item():F6}");
+                        $"loss = {loss.item():F6}, " +
+                        runProgress.Describe(
+                            totalTrainingSteps == 0
+                                ? 0d
+                                : (double)globalStep / totalTrainingSteps));
                 }
             }
 
@@ -469,7 +498,7 @@ internal static partial class WikiLanguageModelCommand
             : Math.Min(availableDocuments, config.MaxTrainingDocuments);
         output.WriteLine(
             $"streaming corpus = {documentsPerEpoch:N0} documents/epoch, " +
-            $"up to {config.MaxDocumentTokens:N0} tokens/document");
+            $"{FormatDocumentTokenLimit(config.MaxDocumentTokens)}");
 
         IWikiLanguageModel model = CreateModel(
             config,
@@ -521,13 +550,16 @@ internal static partial class WikiLanguageModelCommand
             ref bestEpoch,
             ref globalStep,
             output);
+        var runProgress = new TrainingProgress();
 
         for (int epoch = resume.Epoch; epoch <= config.Epochs; epoch++)
         {
             model.train();
             var buffer = new List<int>(
                 config.BatchSize * config.ContextLength
-                + config.MaxDocumentTokens
+                + (config.MaxDocumentTokens > 0
+                    ? config.MaxDocumentTokens
+                    : config.ContextLength)
                 + 2);
             if (epoch == resume.Epoch)
                 buffer.AddRange(resume.TokenBuffer);
@@ -562,6 +594,9 @@ internal static partial class WikiLanguageModelCommand
                     logits,
                     values.Target);
                 loss.backward();
+                nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    max_norm: 1f);
                 double documentProgress = documentsPerEpoch == 0
                     ? 0d
                     : Math.Min(
@@ -597,20 +632,22 @@ internal static partial class WikiLanguageModelCommand
                 if (sampleDocuments.Count > 0
                     && globalStep % config.DatasetSampleEverySteps == 0)
                 {
-                    DatasetContinuation sample = CreateDatasetContinuation(
+                    StreamDatasetContinuation(
+                        globalStep,
                         model,
                         tokenizer,
                         sampleDocuments,
                         config,
-                        generationRandom);
-                    WriteDatasetContinuation(globalStep, sample, output);
+                        generationRandom,
+                        output);
                 }
                 if (globalStep % config.LogEveryBatches == 0)
                 {
                     output.WriteLine(
                         $"epoch {epoch}, step {globalStep:N0}, " +
                         $"documents {documentsProcessed:N0}/" +
-                        $"{documentsPerEpoch:N0}, loss = {loss.item():F6}");
+                        $"{documentsPerEpoch:N0}, loss = {loss.item():F6}, " +
+                        runProgress.Describe(overallProgress));
                 }
             }
 
@@ -618,10 +655,15 @@ internal static partial class WikiLanguageModelCommand
                 ? null
                 : config.MaxTrainingDocuments;
             long documentsToSkip = documentsProcessed;
-            foreach (string document in ReadDocuments(
-                config.DataPath,
-                config.TextColumn,
-                maximumDocuments))
+            // Seeded per epoch so a resumed run replays the same order and the
+            // skip count still lands on the document it left off at.
+            foreach (string document in ShuffleDocuments(
+                ReadDocuments(
+                    config.DataPath,
+                    config.TextColumn,
+                    maximumDocuments),
+                config.ShuffleBufferSize,
+                new Random(HashCode.Combine(config.Seed, epoch, ShuffleSeedSalt))))
             {
                 if (documentsToSkip > 0)
                 {
@@ -640,14 +682,11 @@ internal static partial class WikiLanguageModelCommand
                         reservoirRandom);
                 }
 
-                buffer.Add(BpeTokenizer.BosTokenId);
-                int[] documentTokens = tokenizer.Encode(document);
-                int tokenCount = Math.Min(
-                    documentTokens.Length,
+                AppendDocument(
+                    buffer,
+                    tokenizer,
+                    document,
                     config.MaxDocumentTokens);
-                for (int index = 0; index < tokenCount; index++)
-                    buffer.Add(documentTokens[index]);
-                buffer.Add(BpeTokenizer.EosTokenId);
 
                 while ((buffer.Count - 1) / config.ContextLength
                     >= config.BatchSize)
@@ -783,12 +822,15 @@ internal static partial class WikiLanguageModelCommand
             config.Seed ^ unchecked((int)0xBB67AE85));
         int eligibleSampleDocuments = 0;
         int documentCount = 0;
-        foreach (string document in ReadDocuments(
-            config.DataPath,
-            config.TextColumn,
-            config.MaxTrainingDocuments == 0
-                ? null
-                : config.MaxTrainingDocuments))
+        foreach (string document in ShuffleDocuments(
+            ReadDocuments(
+                config.DataPath,
+                config.TextColumn,
+                config.MaxTrainingDocuments == 0
+                    ? null
+                    : config.MaxTrainingDocuments),
+            config.ShuffleBufferSize,
+            new Random(HashCode.Combine(config.Seed, 1, ShuffleSeedSalt))))
         {
             if (tokens.Count >= config.MaxTrainingTokens)
                 break;
@@ -891,7 +933,7 @@ internal static partial class WikiLanguageModelCommand
         output.WriteLine(
             $"effective training = epochs {config.Epochs}, " +
             $"batch {config.BatchSize}, context {config.ContextLength}, " +
-            $"max document tokens {config.MaxDocumentTokens}");
+            $"{FormatDocumentTokenLimit(config.MaxDocumentTokens)}");
         output.WriteLine(
             $"checkpoint = {config.CheckpointPath}, " +
             $"resume {(config.ResumeFromCheckpoint ? "enabled" : "disabled")}, " +

@@ -415,7 +415,7 @@ public sealed class TrainingIntegrationTests
 
         string actual = NNtrain.CheckpointSnapshot.GetPath(
             checkpointPath,
-            "FrogetMemoryV2Gpt",
+            "ForgetMemoryV2Gpt",
             0.1d,
             new DateTimeOffset(2026, 3, 12, 12, 24, 0, TimeSpan.Zero));
 
@@ -423,7 +423,7 @@ public sealed class TrainingIntegrationTests
             Path.Combine(
                 Path.GetTempPath(),
                 "snapshots",
-                "FrogetMemoryV2Gpt_0.1_epoch_20260312_1224.safetensors"),
+                "ForgetMemoryV2Gpt_0.1_epoch_20260312_1224.safetensors"),
             actual);
     }
 

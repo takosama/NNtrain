@@ -334,6 +334,99 @@ public sealed class BpeTokenizer
 
     public string decode(IEnumerable<int> token_ids) => Decode(token_ids);
 
+    /// <summary>
+    /// Creates a decoder that turns a token stream into text as it arrives.
+    /// </summary>
+    public IncrementalDecoder CreateIncrementalDecoder() => new(this);
+
+    /// <summary>
+    /// Decodes tokens one at a time and emits only complete characters.
+    /// </summary>
+    /// <remarks>
+    /// The vocabulary is byte-level, so a token routinely ends in the middle
+    /// of a UTF-8 sequence - a Japanese character is three bytes and can be
+    /// split across two merges. Decoding each token on its own would print
+    /// replacement characters at those boundaries, so the trailing bytes are
+    /// held until the character they belong to is finished.
+    /// </remarks>
+    public sealed class IncrementalDecoder
+    {
+        private readonly BpeTokenizer _tokenizer;
+        private readonly Decoder _decoder;
+
+        internal IncrementalDecoder(BpeTokenizer tokenizer)
+        {
+            ArgumentNullException.ThrowIfNull(tokenizer);
+            _tokenizer = tokenizer;
+            _decoder = Encoding.UTF8.GetDecoder();
+        }
+
+        /// <summary>
+        /// Feeds one token and returns the characters completed by it, which
+        /// is often empty.
+        /// </summary>
+        public string Append(int tokenId)
+        {
+            if (tokenId is PadTokenId or BosTokenId or EosTokenId)
+                return string.Empty;
+
+            byte[] bytes;
+            if (tokenId == UnknownTokenId)
+            {
+                bytes = Encoding.UTF8.GetBytes("\uFFFD");
+            }
+            else
+            {
+                if ((uint)tokenId >= (uint)_tokenizer._tokenBytes.Length)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(tokenId),
+                        tokenId,
+                        $"Token id must be between 0 and "
+                            + $"{_tokenizer.VocabularySize - 1}.");
+                }
+                bytes = _tokenizer._tokenBytes[tokenId];
+            }
+
+            if (bytes.Length == 0)
+                return string.Empty;
+
+            // One UTF-8 byte yields at most one UTF-16 char; the small margin
+            // covers characters completed from bytes held over from earlier.
+            var characters = new char[bytes.Length + 4];
+            int written = _decoder.GetChars(
+                bytes,
+                0,
+                bytes.Length,
+                characters,
+                0,
+                flush: false);
+            return written == 0
+                ? string.Empty
+                : new string(characters, 0, written);
+        }
+
+        /// <summary>
+        /// Ends the stream, emitting a replacement character if the last token
+        /// left an unfinished UTF-8 sequence.
+        /// </summary>
+        public string Flush()
+        {
+            var characters = new char[4];
+            int written = _decoder.GetChars(
+                [],
+                0,
+                0,
+                characters,
+                0,
+                flush: true);
+            return written == 0
+                ? string.Empty
+                : new string(characters, 0, written);
+        }
+    }
+
+
     public void Save(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);

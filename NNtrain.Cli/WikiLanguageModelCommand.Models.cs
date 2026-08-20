@@ -122,7 +122,7 @@ internal static partial class WikiLanguageModelCommand
                 StringComparison.OrdinalIgnoreCase)
             || string.Equals(
                 GetCheckpointArchitecture(checkpoint),
-                WikiTrainingConfiguration.FrogetMemoryV2ArchitectureAlias,
+                WikiTrainingConfiguration.ForgetMemoryV2ArchitectureAlias,
                 StringComparison.OrdinalIgnoreCase);
 
     internal static IWikiLanguageModel CreateModel(
@@ -132,7 +132,7 @@ internal static partial class WikiLanguageModelCommand
         TensorDType modelDType = GetCheckpointModelDType(checkpoint);
         if (IsCheckpointForgetMemoryV2(checkpoint))
         {
-            return new FrogetMemoryV2Gpt(
+            return new ForgetMemoryV2Gpt(
                 checkpoint.VocabularySize,
                 checkpoint.ContextLength,
                 checkpoint.ModelWidth,
@@ -210,7 +210,9 @@ internal static partial class WikiLanguageModelCommand
         TensorDType dtype = checkpoint.ModelDType
             ?? throw new InvalidDataException(
                 "Wiki model checkpoint does not declare its model dtype.");
-        if (dtype is not TensorDType.Float32 and not TensorDType.Float16)
+        if (dtype is not TensorDType.Float32
+            and not TensorDType.Float16
+            and not TensorDType.BFloat16)
         {
             throw new InvalidDataException(
                 $"Wiki model checkpoint declares unsupported model dtype " +

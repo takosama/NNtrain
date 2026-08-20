@@ -37,7 +37,7 @@ Tensor-returning public/internal member が表にない状態をテスト失敗�
 | Activation | `Sin`, `Relu`, `AddRowWise`, `SoftmaxLastDim`, `LogSoftmaxLastDim`, `LayerNormLastDim`, `AddLayerNormLastDim`, `CausalMask`, `AddBatchWise` | 保持 | `TensorFloat16ActivationAndLossTests`, `TensorFloat16FusedOperationTests`, `TensorFloat16BasicOperationTests` |
 | Regularization | `Dropout`, `AddDropout` | 保持 | `TensorFloat16ActivationAndLossTests` |
 | Embedding | `EmbeddingLookup`, `EmbeddingLookupWithPositions` | 保持 | `TensorFloat16ActivationAndLossTests` |
-| Fused sequence | `FusedMultiHeadAttention`, `FusedCausalHyenaOrder2`（Direct/Fft）, `FusedForgetScan`, `FrogetMemoryV2` | 保持。内部 recurrence/state/gradient は Float32 | `TensorFloat16FusedOperationTests` |
+| Fused sequence | `FusedMultiHeadAttention`, `FusedCausalHyenaOrder2`（Direct/Fft）, `FusedForgetScan`, `ForgetMemoryV2` | 保持。内部 recurrence/state/gradient は Float32 | `TensorFloat16FusedOperationTests` |
 
 `member id` の完全な overload 単位の一覧とテスト名は
 [`TensorFloat16OperationManifest.cs`](../NNtrain.Core/Tensors/TensorFloat16OperationManifest.cs)

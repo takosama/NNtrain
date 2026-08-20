@@ -13,6 +13,22 @@ public sealed partial class NekoMuon
         float slowCorrection)
     {
         int length = fast.Length;
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            CudaOptimizerKernels.NekoMuonMoments(
+                gradientBuffer.Length == 0
+                    ? new float[length]
+                    : gradientBuffer,
+                fast,
+                slow,
+                fastHat,
+                slowHat,
+                options.BetaFast,
+                options.BetaSlow,
+                fastCorrection,
+                slowCorrection);
+            return;
+        }
         int index = 0;
         if (Tensor.SimdEnabled
             && Vector256.IsHardwareAccelerated

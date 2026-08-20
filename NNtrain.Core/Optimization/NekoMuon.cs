@@ -330,6 +330,25 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         int columns,
         long[]? profileTicks)
     {
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            long cudaStart = profileTicks is null
+                ? 0L
+                : Stopwatch.GetTimestamp();
+            CudaOptimizerKernels.NekoMuonNewtonSchulz(
+                source,
+                destination,
+                gram,
+                gramSquared,
+                rows,
+                columns,
+                NewtonSchulzA,
+                NewtonSchulzB,
+                NewtonSchulzC);
+            AddProfileTicks(profileTicks, 8, cudaStart);
+            return;
+        }
+
         long phaseStart = profileTicks is null
             ? 0L
             : Stopwatch.GetTimestamp();

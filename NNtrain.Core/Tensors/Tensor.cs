@@ -10,6 +10,72 @@ namespace NNtrain;
 /// </remarks>
 public partial class Tensor
 {
+    private static TensorDevice _executionDevice;
+    private static int _cudaDeviceIndex;
+    private static int[] _cudaDeviceIndices = [0];
+
+    /// <summary>
+    /// Gets or selects the execution device for kernels with a GPU backend.
+    /// Kernels not yet ported continue to use their CPU implementation.
+    /// </summary>
+    public static TensorDevice ExecutionDevice
+    {
+        get => _executionDevice;
+        set
+        {
+            if (!Enum.IsDefined(value))
+                throw new ArgumentOutOfRangeException(nameof(value));
+            _executionDevice = value;
+        }
+    }
+
+    /// <summary>Gets or selects the zero-based CUDA adapter index.</summary>
+    public static int CudaDeviceIndex
+    {
+        get => _cudaDeviceIndex;
+        set
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(value);
+            _cudaDeviceIndex = value;
+            _cudaDeviceIndices = [value];
+        }
+    }
+
+    /// <summary>
+    /// Gets or selects the CUDA adapters used by data-parallel kernels.
+    /// The first adapter is used by kernels that cannot be partitioned.
+    /// </summary>
+    public static IReadOnlyList<int> CudaDeviceIndices
+    {
+        get => Array.AsReadOnly(_cudaDeviceIndices);
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            if (value.Count == 0)
+                throw new ArgumentException("At least one CUDA device is required.", nameof(value));
+            int[] indices = value.ToArray();
+            if (indices.Any(index => index < 0))
+                throw new ArgumentOutOfRangeException(nameof(value));
+            if (indices.Distinct().Count() != indices.Length)
+                throw new ArgumentException("CUDA device indices must be unique.", nameof(value));
+            _cudaDeviceIndices = indices;
+            _cudaDeviceIndex = indices[0];
+        }
+    }
+
+    /// <summary>Gets the active adapter name and initializes CUDA on demand.</summary>
+    public static string ExecutionDeviceName
+        => ExecutionDevice == TensorDevice.Cuda
+            ? NNtrain.ForgetMemoryV2Cuda.DeviceName
+            : "CPU";
+
+    /// <summary>Reports whether the requested CUDA adapter can be initialized.</summary>
+    public static bool IsCudaAvailable(int deviceIndex = 0)
+        => NNtrain.ForgetMemoryV2Cuda.IsAvailable(deviceIndex);
+
+    /// <summary>Gets the number of CUDA adapters visible to the runtime.</summary>
+    public static int CudaDeviceCount => NNtrain.ForgetMemoryV2Cuda.DeviceCount;
+
     private readonly TensorStorage _data;
     private float[]? _masterData;
     private float[]? _physicalFloat32Cache;
@@ -398,6 +464,12 @@ public partial class Tensor
 
     internal void MarkDataMutated()
     {
+        CudaResidentArrayCache.Invalidate(_physicalFloat32Cache);
+        if (DType == TensorDType.Float32
+            && _data.TryGetFloat32Buffer(out float[] values))
+        {
+            CudaResidentArrayCache.Invalidate(values);
+        }
         unchecked
         {
             _dataVersion++;

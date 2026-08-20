@@ -145,7 +145,7 @@ public sealed class TensorFloat16FusedOperationTests
     }
 
     [Fact]
-    public void FrogetMemoryV2KeepsMatrixStateAndGradientsInFloat32()
+    public void ForgetMemoryV2KeepsMatrixStateAndGradientsInFloat32()
     {
         const int batch = 2;
         const int sequence = 4;
@@ -158,11 +158,11 @@ public sealed class TensorFloat16FusedOperationTests
         Tensor referenceInput = FloatReference(halfInput);
         float[] seed = Pattern(batch * sequence * valueWidth, 0.012f);
 
-        Tensor actual = halfInput.FrogetMemoryV2(
+        Tensor actual = halfInput.ForgetMemoryV2(
             keyWidth,
             valueWidth,
             retentionFloor: 0.25f);
-        Tensor expected = referenceInput.FrogetMemoryV2(
+        Tensor expected = referenceInput.ForgetMemoryV2(
             keyWidth,
             valueWidth,
             retentionFloor: 0.25f);

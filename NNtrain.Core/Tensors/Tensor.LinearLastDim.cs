@@ -35,6 +35,42 @@ partial class Tensor
 
         int rows = Numel / inputWidth;
         int outputLength = checked(rows * outputWidth);
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            float[] inputValues = GetPhysicalFloat32ComputeCache();
+            float[] weightValues = weight.GetPhysicalFloat32ComputeCache();
+            float[] outputValues = TensorCudaKernels.LinearForward(
+                inputValues,
+                weightValues,
+                bias.GetPhysicalFloat32ComputeCache(),
+                rows,
+                inputWidth,
+                outputWidth,
+                applyRelu);
+            int[] cudaOutputShape = (int[])_shape.Clone();
+            cudaOutputShape[^1] = outputWidth;
+            var cudaResult = new Tensor(
+                outputValues,
+                cudaOutputShape,
+                [this, weight, bias]);
+            if (AutogradContext.IsRecordingEnabled)
+            {
+                cudaResult.Node.BackwardAction = () =>
+                    TensorCudaKernels.LinearBackward(
+                        inputValues,
+                        weightValues,
+                        cudaResult.GetPhysicalFloat32ComputeCache(),
+                        cudaResult._grad,
+                        EnsureGradientBuffer(),
+                        weight.EnsureGradientBuffer(),
+                        bias.EnsureGradientBuffer(),
+                        rows,
+                        inputWidth,
+                        outputWidth,
+                        applyRelu);
+            }
+            return cudaResult;
+        }
         // The managed Float16 fallback widens each activation only once for
         // this node. The native F16C path below instead keeps the physical
         // Half payload in cache and widens eight values per instruction.

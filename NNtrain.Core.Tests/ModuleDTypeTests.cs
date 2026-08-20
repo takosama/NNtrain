@@ -105,9 +105,9 @@ public sealed class ModuleDTypeTests
     }
 
     [Fact]
-    public void FrogetMemoryV2DefaultsToFloat16ThroughoutModelAndForward()
+    public void ForgetMemoryV2DefaultsToFloat16ThroughoutModelAndForward()
     {
-        FrogetMemoryV2Gpt model = CreateModel();
+        ForgetMemoryV2Gpt model = CreateModel();
 
         Assert.Equal(TensorDType.Float16, model.DType);
         Assert.All(
@@ -124,9 +124,9 @@ public sealed class ModuleDTypeTests
     }
 
     [Fact]
-    public void FrogetMemoryV2ExplicitFloat32UsesLegacyStoragePath()
+    public void ForgetMemoryV2ExplicitFloat32UsesLegacyStoragePath()
     {
-        FrogetMemoryV2Gpt model = CreateModel(TensorDType.Float32);
+        ForgetMemoryV2Gpt model = CreateModel(TensorDType.Float32);
 
         Assert.Equal(TensorDType.Float32, model.DType);
         Assert.All(
@@ -146,7 +146,7 @@ public sealed class ModuleDTypeTests
     [Fact]
     public void TorchFactoryDefaultsToFloat16AndAllowsFloat32Override()
     {
-        FrogetMemoryV2Gpt defaultModel = nn.forget_memory_v2_lm(
+        ForgetMemoryV2Gpt defaultModel = nn.forget_memory_v2_lm(
             vocab_size: 7,
             context_length: 3,
             d_model: 4,
@@ -155,7 +155,7 @@ public sealed class ModuleDTypeTests
             key_width: 2,
             value_width: 2,
             generator: new Random(31));
-        FrogetMemoryV2Gpt float32Model = nn.forget_memory_v2_lm(
+        ForgetMemoryV2Gpt float32Model = nn.forget_memory_v2_lm(
             vocab_size: 7,
             context_length: 3,
             d_model: 4,
@@ -178,7 +178,7 @@ public sealed class ModuleDTypeTests
                 Assert.Equal(TensorDType.Float32, parameter.T.DType));
     }
 
-    private static FrogetMemoryV2Gpt CreateModel(
+    private static ForgetMemoryV2Gpt CreateModel(
         TensorDType dtype = TensorDType.Float16)
         => new(
             vocabularySize: 7,
@@ -191,7 +191,7 @@ public sealed class ModuleDTypeTests
             random: new Random(29),
             dtype: dtype);
 
-    private static void AssertFloat16Layer(FrogetMemoryV2Layer layer)
+    private static void AssertFloat16Layer(ForgetMemoryV2Layer layer)
     {
         Assert.Equal(TensorDType.Float16, layer.DType);
         Assert.Equal(TensorDType.Float16, layer.Ln1.DType);

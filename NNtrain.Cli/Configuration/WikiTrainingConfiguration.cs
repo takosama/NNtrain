@@ -8,15 +8,20 @@ sealed record WikiTrainingConfiguration
     internal const string TaskName = "gpt_rin_wiki_jp";
     internal const string NekoMuonOptimizer = "nekomuon";
     internal const string AdamWOptimizer = "adamw";
+    internal const string GainShareAdamWOptimizer = "gainshareadamw";
+    internal const string LionOptimizer = "lion";
     internal const string WarmupCosineProgressScheduler =
         "warmupCosineProgress";
     internal const string TransformerArchitecture = "transformer";
     internal const string HyenaArchitecture = "hyena";
     internal const string ForgetScanArchitecture = "forgetscan";
     internal const string ForgetMemoryV2Architecture = "forgetmemoryv2";
-    internal const string FrogetMemoryV2ArchitectureAlias = "frogetmemoryv2";
+    internal const string ForgetMemoryV2ArchitectureAlias = "forgetmemoryv2";
     internal const string Float16ModelDType = "float16";
+    internal const string BFloat16ModelDType = "bfloat16";
     internal const string Float32ModelDType = "float32";
+    internal const string CpuDevice = "cpu";
+    internal const string CudaDevice = "cuda";
     internal const string AutoHyenaConvolution = "auto";
     internal const string DirectHyenaConvolution = "direct";
     internal const string FftHyenaConvolution = "fft";
@@ -58,6 +63,15 @@ sealed record WikiTrainingConfiguration
 
     public int MaxDocumentTokens { get; init; } = 4096;
 
+    /// <summary>
+    /// Documents held back to randomize reading order. Zero reads the corpus
+    /// in file order. A larger buffer mixes further but costs memory, because
+    /// the held documents are raw text: roughly 2.7 KB per Japanese Wikipedia
+    /// article, so the default holds on the order of 700 MB and delays the
+    /// first training step until the buffer is full.
+    /// </summary>
+    public int ShuffleBufferSize { get; init; } = 262_144;
+
     public float ValidationFraction { get; init; } = 0.05f;
 
     public int Epochs { get; init; } = 5;
@@ -78,6 +92,12 @@ sealed record WikiTrainingConfiguration
         ForgetMemoryV2Architecture;
 
     public string? ModelDType { get; init; }
+
+    public string Device { get; init; } = CpuDevice;
+
+    public int DeviceIndex { get; init; }
+
+    public int[]? DeviceIndices { get; init; }
 
     public int ForgetMemoryKeyWidth { get; init; } = 16;
 
@@ -103,6 +123,22 @@ sealed record WikiTrainingConfiguration
     public float AuxiliaryLearningRate { get; init; } = 3e-4f;
 
     public int NekoMuonNewtonSchulzInterval { get; init; } = 5;
+
+    public int GainShareBlockDepth { get; init; } = 1;
+
+    public float GainShareBeta1 { get; init; } = 0.9f;
+
+    public float GainShareBeta2 { get; init; } = 0.999f;
+
+    public float GainShareEpsilon { get; init; } = 1e-8f;
+
+    public float GainShareRho { get; init; } = 0.95f;
+
+    public float GainShareGamma { get; init; } = 1f;
+
+    public float GainShareMinScale { get; init; } = 0.5f;
+
+    public float GainShareMaxScale { get; init; } = 2f;
 
     public float WarmupPercent { get; init; } = 20f;
 
@@ -277,6 +313,14 @@ sealed record WikiTrainingConfiguration
             WeightDecay = optimizer.WeightDecay,
             NekoMuonNewtonSchulzInterval =
                 optimizer.NekoMuonNewtonSchulzInterval,
+            GainShareBlockDepth = optimizer.GainShareBlockDepth,
+            GainShareBeta1 = optimizer.GainShareBeta1,
+            GainShareBeta2 = optimizer.GainShareBeta2,
+            GainShareEpsilon = optimizer.GainShareEpsilon,
+            GainShareRho = optimizer.GainShareRho,
+            GainShareGamma = optimizer.GainShareGamma,
+            GainShareMinScale = optimizer.GainShareMinScale,
+            GainShareMaxScale = optimizer.GainShareMaxScale,
             AdamWUseBFloat16FirstMoment =
                 optimizer.AdamWUseBFloat16FirstMoment,
             AdamWUseBFloat16SecondMoment =
@@ -385,7 +429,8 @@ sealed record WikiTrainingConfiguration
         ValidatePositive(TokenizerTrainingBytes, nameof(TokenizerTrainingBytes));
         ValidateNonNegative(MaxTrainingDocuments, nameof(MaxTrainingDocuments));
         ValidateNonNegative(MaxTrainingTokens, nameof(MaxTrainingTokens));
-        ValidatePositive(MaxDocumentTokens, nameof(MaxDocumentTokens));
+        ValidateNonNegative(MaxDocumentTokens, nameof(MaxDocumentTokens));
+        ValidateNonNegative(ShuffleBufferSize, nameof(ShuffleBufferSize));
         ValidatePositive(Epochs, nameof(Epochs));
         ValidatePositive(BatchSize, nameof(BatchSize));
         ValidatePositive(ContextLength, nameof(ContextLength));
@@ -393,6 +438,17 @@ sealed record WikiTrainingConfiguration
         ValidatePositive(Heads, nameof(Heads));
         ValidatePositive(HiddenSize, nameof(HiddenSize));
         ValidatePositive(Layers, nameof(Layers));
+        ValidateNonNegative(DeviceIndex, nameof(DeviceIndex));
+        if (DeviceIndices is { Length: 0 })
+            throw new ArgumentException("deviceIndices cannot be empty.", nameof(DeviceIndices));
+        if (DeviceIndices is not null
+            && (DeviceIndices.Any(index => index < 0)
+                || DeviceIndices.Distinct().Count() != DeviceIndices.Length))
+        {
+            throw new ArgumentException(
+                "deviceIndices must contain unique, non-negative indices.",
+                nameof(DeviceIndices));
+        }
         ValidatePositive(
             ForgetMemoryKeyWidth,
             nameof(ForgetMemoryKeyWidth));
@@ -435,14 +491,16 @@ sealed record WikiTrainingConfiguration
                 nameof(ModelArchitecture));
         }
         TensorDType? explicitModelDType = GetExplicitModelDType();
-        if (explicitModelDType == TensorDType.Float16
+        if (explicitModelDType is TensorDType.Float16
+                or TensorDType.BFloat16
             && !IsForgetMemoryV2Architecture())
         {
             throw new ArgumentException(
-                "modelDType 'float16' is currently supported only for the " +
+                "16-bit model dtypes are currently supported only for the " +
                 $"'{ForgetMemoryV2Architecture}' architecture.",
                 nameof(ModelDType));
         }
+        _ = GetExecutionDevice();
         if (!float.IsFinite(ForgetMemoryRetentionMinimum)
             || !float.IsFinite(ForgetMemoryRetentionMaximum)
             || ForgetMemoryRetentionMinimum < 0f
@@ -482,13 +540,18 @@ sealed record WikiTrainingConfiguration
             throw new ArgumentOutOfRangeException(nameof(Dropout));
         if (!float.IsFinite(InitializationScale) || InitializationScale <= 0f)
             throw new ArgumentOutOfRangeException(nameof(InitializationScale));
-        if (!IsOptimizer(NekoMuonOptimizer) && !IsOptimizer(AdamWOptimizer))
+        if (!IsOptimizer(NekoMuonOptimizer)
+            && !IsOptimizer(AdamWOptimizer)
+            && !IsOptimizer(GainShareAdamWOptimizer)
+            && !IsOptimizer(LionOptimizer))
         {
             throw new ArgumentException(
                 $"Unsupported optimizer '{Optimizer}'. Supported optimizers " +
-                $"are '{NekoMuonOptimizer}' and '{AdamWOptimizer}'.",
+                $"are '{NekoMuonOptimizer}', '{AdamWOptimizer}', " +
+                $"'{GainShareAdamWOptimizer}', and '{LionOptimizer}'.",
                 nameof(Optimizer));
         }
+        ValidateGainShareSettings();
         if (!float.IsFinite(LearningRate) || LearningRate <= 0f)
             throw new ArgumentOutOfRangeException(nameof(LearningRate));
         if (!float.IsFinite(AuxiliaryLearningRate)
@@ -537,6 +600,78 @@ sealed record WikiTrainingConfiguration
         }
     }
 
+    private void ValidateGainShareSettings()
+    {
+        if (GainShareBlockDepth < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(GainShareBlockDepth),
+                GainShareBlockDepth,
+                "GainShare block depth must be non-negative.");
+        }
+
+        ValidateGainShareUnitInterval(
+            GainShareBeta1,
+            nameof(GainShareBeta1),
+            "beta1");
+        ValidateGainShareUnitInterval(
+            GainShareBeta2,
+            nameof(GainShareBeta2),
+            "beta2");
+        ValidateGainShareUnitInterval(
+            GainShareRho,
+            nameof(GainShareRho),
+            "rho");
+
+        if (!float.IsFinite(GainShareEpsilon) || GainShareEpsilon <= 0f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(GainShareEpsilon),
+                GainShareEpsilon,
+                "GainShare epsilon must be finite and positive.");
+        }
+
+        if (!float.IsFinite(GainShareGamma) || GainShareGamma < 0f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(GainShareGamma),
+                GainShareGamma,
+                "GainShare gamma must be finite and non-negative.");
+        }
+
+        if (!float.IsFinite(GainShareMinScale) || GainShareMinScale <= 0f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(GainShareMinScale),
+                GainShareMinScale,
+                "GainShare minimum scale must be finite and positive.");
+        }
+
+        if (!float.IsFinite(GainShareMaxScale)
+            || GainShareMaxScale < GainShareMinScale)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(GainShareMaxScale),
+                GainShareMaxScale,
+                "GainShare maximum scale must be finite and not less than " +
+                "the minimum scale.");
+        }
+    }
+
+    private static void ValidateGainShareUnitInterval(
+        float value,
+        string parameterName,
+        string settingName)
+    {
+        if (!float.IsFinite(value) || value < 0f || value >= 1f)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                value,
+                $"GainShare {settingName} must be finite and in [0, 1).");
+        }
+    }
+
     internal bool IsOptimizer(string expectedOptimizer)
         => string.Equals(
             Optimizer,
@@ -551,7 +686,7 @@ sealed record WikiTrainingConfiguration
 
     internal bool IsForgetMemoryV2Architecture()
         => IsArchitecture(ForgetMemoryV2Architecture)
-            || IsArchitecture(FrogetMemoryV2ArchitectureAlias);
+            || IsArchitecture(ForgetMemoryV2ArchitectureAlias);
 
     internal TensorDType? GetExplicitModelDType()
     {
@@ -567,6 +702,13 @@ sealed record WikiTrainingConfiguration
         }
         if (string.Equals(
             ModelDType,
+            BFloat16ModelDType,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            return TensorDType.BFloat16;
+        }
+        if (string.Equals(
+            ModelDType,
             Float32ModelDType,
             StringComparison.OrdinalIgnoreCase))
         {
@@ -575,7 +717,8 @@ sealed record WikiTrainingConfiguration
 
         throw new ArgumentException(
             $"Unsupported modelDType '{ModelDType}'. Supported values are " +
-            $"'{Float16ModelDType}' and '{Float32ModelDType}'.",
+            $"'{BFloat16ModelDType}', '{Float16ModelDType}', and " +
+            $"'{Float32ModelDType}'.",
             nameof(ModelDType));
     }
 
@@ -584,6 +727,19 @@ sealed record WikiTrainingConfiguration
             ?? (IsForgetMemoryV2Architecture()
                 ? TensorDType.Float16
                 : TensorDType.Float32);
+
+    internal TensorDevice GetExecutionDevice()
+    {
+        if (string.Equals(Device, CpuDevice, StringComparison.OrdinalIgnoreCase))
+            return TensorDevice.Cpu;
+        if (string.Equals(Device, CudaDevice, StringComparison.OrdinalIgnoreCase))
+            return TensorDevice.Cuda;
+
+        throw new ArgumentException(
+            $"Unsupported device '{Device}'. Supported values are " +
+            $"'{CpuDevice}' and '{CudaDevice}'.",
+            nameof(Device));
+    }
 
     internal bool IsHyenaConvolution(string expectedAlgorithm)
         => string.Equals(

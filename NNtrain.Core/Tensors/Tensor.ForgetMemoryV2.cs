@@ -15,7 +15,7 @@ partial class Tensor
     /// while independent batches and the dense key dimension use parallel and
     /// SIMD kernels.
     /// </remarks>
-    public Tensor FrogetMemoryV2(
+    public Tensor ForgetMemoryV2(
         int keyWidth,
         int valueWidth,
         float retentionFloor)
@@ -39,7 +39,7 @@ partial class Tensor
         if (_shape[2] != expectedProjectionWidth)
         {
             throw new InvalidOperationException(
-                $"FrogetMemoryV2 projection width must be " +
+                $"ForgetMemoryV2 projection width must be " +
                 $"2 * keyWidth + 3 * valueWidth = " +
                 $"{expectedProjectionWidth}.");
         }
@@ -48,12 +48,22 @@ partial class Tensor
         int sequence = _shape[1];
         int projectionWidth = _shape[2];
         int matrixSize = checked(valueWidth * keyWidth);
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            return ForgetMemoryV2Cuda(
+                batch,
+                sequence,
+                projectionWidth,
+                keyWidth,
+                valueWidth,
+                retentionFloor);
+        }
         var output = new float[checked(batch * sequence * valueWidth)];
 
         void ForwardBatch(int batchIndex)
         {
             var state = new float[matrixSize];
-            ForwardFrogetMemoryV2Batch(
+            ForwardForgetMemoryV2Batch(
                 _data,
                 output,
                 state,
@@ -83,7 +93,7 @@ partial class Tensor
             {
                 var states = new float[checked(sequence * matrixSize)];
                 var finalState = new float[matrixSize];
-                ForwardFrogetMemoryV2Batch(
+                ForwardForgetMemoryV2Batch(
                     _data,
                     output: null,
                     finalState,
@@ -94,7 +104,7 @@ partial class Tensor
                     valueWidth,
                     retentionFloor,
                     states);
-                BackwardFrogetMemoryV2Batch(
+                BackwardForgetMemoryV2Batch(
                     _data,
                     _grad,
                     result._grad,
@@ -116,7 +126,133 @@ partial class Tensor
         return result;
     }
 
-    private static void ForwardFrogetMemoryV2Batch(
+    private Tensor ForgetMemoryV2Cuda(
+        int batch,
+        int sequence,
+        int projectionWidth,
+        int keyWidth,
+        int valueWidth,
+        float retentionFloor)
+    {
+        float[] projected = GetPhysicalFloat32ComputeCache();
+        NNtrain.ForgetMemoryV2Cuda.ForwardResult forward =
+            NNtrain.ForgetMemoryV2Cuda.Forward(
+            projected,
+            batch,
+            sequence,
+            projectionWidth,
+            keyWidth,
+            valueWidth,
+            retentionFloor);
+        var result = new Tensor(
+            forward.Output,
+            [batch, sequence, valueWidth],
+            [this]);
+        if (!AutogradContext.IsRecordingEnabled)
+        {
+            forward.Dispose();
+            return result;
+        }
+
+        result.Node.BackwardAction = () =>
+        {
+            float[] gradient = NNtrain.ForgetMemoryV2Cuda.Backward(
+                forward,
+                result._grad,
+                batch,
+                sequence,
+                projectionWidth,
+                keyWidth,
+                valueWidth,
+                retentionFloor);
+            AddScaledValues(
+                EnsureGradientBuffer(),
+                0,
+                gradient,
+                0,
+                1f,
+                gradient.Length);
+        };
+        return result;
+    }
+
+    /// <summary>
+    /// Runs the same recurrence as <see cref="ForgetMemoryV2"/> but starts
+    /// from <paramref name="state"/> and leaves the final memory in it, so a
+    /// caller can advance one token at a time without replaying the prefix.
+    /// </summary>
+    /// <remarks>
+    /// Inference only. The tensor returned carries no backward action, so
+    /// recording must be disabled; the batched entry point remains the one
+    /// used for training.
+    /// </remarks>
+    internal Tensor ForgetMemoryV2Continue(
+        int keyWidth,
+        int valueWidth,
+        float retentionFloor,
+        float[] state)
+    {
+        CheckRank(3);
+        ArgumentNullException.ThrowIfNull(state);
+        if (keyWidth <= 0)
+            throw new ArgumentOutOfRangeException(nameof(keyWidth));
+        if (valueWidth <= 0)
+            throw new ArgumentOutOfRangeException(nameof(valueWidth));
+        if (!float.IsFinite(retentionFloor)
+            || retentionFloor < 0f
+            || retentionFloor >= 1f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(retentionFloor),
+                retentionFloor,
+                "Retention floor must be finite and in [0, 1).");
+        }
+        if (AutogradContext.IsRecordingEnabled)
+        {
+            throw new InvalidOperationException(
+                "ForgetMemoryV2Continue is an inference path and cannot "
+                + "record gradients. Wrap the call in torch.no_grad().");
+        }
+
+        int expectedProjectionWidth = checked(2 * keyWidth + 3 * valueWidth);
+        if (_shape[2] != expectedProjectionWidth)
+        {
+            throw new InvalidOperationException(
+                $"ForgetMemoryV2 projection width must be "
+                + $"2 * keyWidth + 3 * valueWidth = "
+                + $"{expectedProjectionWidth}.");
+        }
+        if (_shape[0] != 1)
+        {
+            throw new InvalidOperationException(
+                "Recurrent stepping carries one memory, so the batch "
+                + "dimension must be 1.");
+        }
+        if (state.Length != checked(valueWidth * keyWidth))
+        {
+            throw new ArgumentException(
+                $"The recurrent state must hold valueWidth * keyWidth = "
+                + $"{valueWidth * keyWidth} values.",
+                nameof(state));
+        }
+
+        int sequence = _shape[1];
+        var output = new float[checked(sequence * valueWidth)];
+        ForwardForgetMemoryV2Batch(
+            _data,
+            output,
+            state,
+            batchIndex: 0,
+            sequence,
+            _shape[2],
+            keyWidth,
+            valueWidth,
+            retentionFloor,
+            states: null);
+        return new Tensor(output, [1, sequence, valueWidth], [this]);
+    }
+
+    private static void ForwardForgetMemoryV2Batch(
         TensorStorage projected,
         float[]? output,
         float[] state,
@@ -145,11 +281,11 @@ partial class Tensor
             for (int valueIndex = 0; valueIndex < valueWidth; valueIndex++)
             {
                 int stateRowOffset = valueIndex * keyWidth;
-                float gateSigmoid = FrogetMemorySigmoid(
+                float gateSigmoid = ForgetMemorySigmoid(
                     projected[gateOffset + valueIndex]);
                 float retention = retentionFloor
                     + (1f - retentionFloor) * gateSigmoid;
-                float beta = FrogetMemorySigmoid(
+                float beta = ForgetMemorySigmoid(
                     projected[betaOffset + valueIndex]);
                 float write = (1f - retention) * beta;
                 float value = MathF.Tanh(
@@ -162,7 +298,7 @@ partial class Tensor
                     keyWidth);
 
                 float error = value - predictedValue;
-                UpdateFrogetMemoryState(
+                UpdateForgetMemoryState(
                     state,
                     stateRowOffset,
                     projected,
@@ -197,7 +333,7 @@ partial class Tensor
         }
     }
 
-    private static void BackwardFrogetMemoryV2Batch(
+    private static void BackwardForgetMemoryV2Batch(
         TensorStorage projected,
         float[] projectedGradient,
         float[] outputGradient,
@@ -256,16 +392,16 @@ partial class Tensor
             for (int valueIndex = 0; valueIndex < valueWidth; valueIndex++)
             {
                 int stateRowOffset = valueIndex * keyWidth;
-                float gateSigmoid = FrogetMemorySigmoid(
+                float gateSigmoid = ForgetMemorySigmoid(
                     projected[gateOffset + valueIndex]);
                 float retention = retentionFloor
                     + (1f - retentionFloor) * gateSigmoid;
-                float beta = FrogetMemorySigmoid(
+                float beta = ForgetMemorySigmoid(
                     projected[betaOffset + valueIndex]);
                 float write = (1f - retention) * beta;
                 float value = MathF.Tanh(
                     projected[valueOffset + valueIndex]);
-                ComputeFrogetMemoryBackwardDots(
+                ComputeForgetMemoryBackwardDots(
                     projected,
                     keyOffset,
                     states,
@@ -295,7 +431,7 @@ partial class Tensor
                     * beta
                     * (1f - beta);
 
-                AccumulateFrogetMemoryBackwardVectors(
+                AccumulateForgetMemoryBackwardVectors(
                     projectedGradient,
                     keyOffset,
                     previousStateGradient,
@@ -318,7 +454,7 @@ partial class Tensor
         }
     }
 
-    private static float FrogetMemorySigmoid(float value)
+    private static float ForgetMemorySigmoid(float value)
     {
         if (value >= 0f)
         {
@@ -330,7 +466,7 @@ partial class Tensor
         return positiveExponential / (1f + positiveExponential);
     }
 
-    private static void UpdateFrogetMemoryState(
+    private static void UpdateForgetMemoryState(
         float[] state,
         int stateOffset,
         TensorStorage key,
@@ -377,7 +513,7 @@ partial class Tensor
         }
     }
 
-    private static void ComputeFrogetMemoryBackwardDots(
+    private static void ComputeForgetMemoryBackwardDots(
         TensorStorage key,
         int keyOffset,
         float[] previousState,
@@ -471,7 +607,7 @@ partial class Tensor
         }
     }
 
-    private static void AccumulateFrogetMemoryBackwardVectors(
+    private static void AccumulateForgetMemoryBackwardVectors(
         float[] keyGradient,
         int keyGradientOffset,
         float[] previousStateGradient,

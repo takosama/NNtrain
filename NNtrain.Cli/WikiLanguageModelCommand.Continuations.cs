@@ -52,6 +52,86 @@ internal static partial class WikiLanguageModelCommand
             generated);
     }
 
+    /// <summary>
+    /// Writes a dataset-continuation sample, streaming the model's own
+    /// continuation to <paramref name="output"/> character by character as it
+    /// is generated.
+    /// </summary>
+    /// <remarks>
+    /// The unit is a character, not a token. The vocabulary is byte-level, so
+    /// writing each token's bytes as they arrive would emit broken characters
+    /// wherever a multi-byte character straddles a merge boundary.
+    /// </remarks>
+    internal static void StreamDatasetContinuation(
+        long step,
+        IWikiLanguageModel model,
+        BpeTokenizer tokenizer,
+        IReadOnlyList<string> documents,
+        WikiTrainingConfiguration config,
+        Random random,
+        TextWriter output)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(tokenizer);
+        ArgumentNullException.ThrowIfNull(documents);
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(random);
+        ArgumentNullException.ThrowIfNull(output);
+        if (documents.Count == 0)
+        {
+            throw new ArgumentException(
+                "At least one dataset sample document is required.",
+                nameof(documents));
+        }
+
+        string document = documents[random.Next(documents.Count)];
+        if (!TryGetDocumentSplit(document, out int split))
+        {
+            throw new ArgumentException(
+                "Dataset sample document must have non-empty first and "
+                + "second halves.",
+                nameof(documents));
+        }
+
+        string prompt = document[..split];
+        string expected = document[split..];
+        const int displayCharacters = 400;
+
+        output.WriteLine();
+        output.WriteLine(
+            $"dataset continuation sample at step {step:N0} "
+            + $"(split {split:N0}/{document.Length:N0} chars):");
+        output.WriteLine("[prompt: first half, final context]");
+        output.WriteLine(TakeTail(prompt, displayCharacters));
+        output.WriteLine("[dataset continuation: second half excerpt]");
+        output.WriteLine(TakeHead(expected, displayCharacters));
+        output.WriteLine("[model continuation]");
+        output.Flush();
+
+        BpeTokenizer.IncrementalDecoder decoder =
+            tokenizer.CreateIncrementalDecoder();
+        int[] promptIds = tokenizer.Encode(prompt, addBos: true);
+        model.GenerateTokenIds(
+            promptIds,
+            config.MaxNewTokens,
+            config.Temperature,
+            config.TopK,
+            BpeTokenizer.EosTokenId,
+            random,
+            token =>
+            {
+                string text = decoder.Append(token);
+                foreach (char character in text)
+                {
+                    output.Write(character);
+                    output.Flush();
+                }
+            });
+        output.Write(decoder.Flush());
+        output.WriteLine();
+        output.WriteLine();
+    }
+
     private static void WriteDatasetContinuation(
         long step,
         DatasetContinuation sample,
@@ -87,13 +167,14 @@ internal static partial class WikiLanguageModelCommand
             return;
         }
 
-        DatasetContinuation sample = CreateDatasetContinuation(
+        StreamDatasetContinuation(
+            step,
             model,
             tokenizer,
             documents,
             config,
-            random);
-        WriteDatasetContinuation(step, sample, output);
+            random,
+            output);
     }
 
     private static bool TryGetDocumentSplit(
