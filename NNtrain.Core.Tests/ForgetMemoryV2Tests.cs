@@ -270,7 +270,7 @@ public sealed class ForgetMemoryV2Tests
                     lr: 0.01f,
                     bf16_first_moment: true,
                     bf16_second_moment: true));
-            optimizer.Step();
+            optimizer.step();
 
             Assert.Equal(TensorDType.BFloat16, model.DType);
             Assert.Equal(TensorDType.BFloat16, logits.DType);

@@ -108,7 +108,7 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         _state = CloneState(state);
     }
 
-    public void ZeroGrad()
+    internal void ZeroGrad()
     {
         if (_parameters.Count > 1 && _totalElements >= 32_768)
         {
@@ -123,7 +123,9 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
             parameter.ZeroGrad();
     }
 
-    public void Step()
+    public void zero_grad() => ZeroGrad();
+
+    internal void Step()
     {
         if (_state.Step == int.MaxValue)
         {
@@ -294,12 +296,39 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         }
     }
 
+    public void step() => Step();
+
+    public OptimizerStateDictionary state_dict()
+        => OptimizerStateDictionary.Create("NekoMuon", CaptureState());
+
+    public void load_state_dict(OptimizerStateDictionary state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        RestoreState(state.Read<NekoMuonState>("NekoMuon"));
+    }
+
     private void StepCuda(
         NekoMuonOptions options,
         float fastCorrection,
         float slowCorrection)
     {
-        void UpdateParameter(int parameterIndex)
+        int[] devices = Tensor.CudaDeviceIndices.ToArray();
+        CudaOptimizerKernels.NekoMuonResidentState GetCudaState(
+            int parameterIndex)
+        {
+            Parameter parameter = _parameters[parameterIndex];
+            GetMatrixShape(parameter, out int originalRows, out int originalColumns);
+            int rows = Math.Min(originalRows, originalColumns);
+            NekoMuonParameterState parameterState =
+                _state.ParameterStates[parameterIndex];
+            return _cudaStates[parameterIndex] ??=
+                new CudaOptimizerKernels.NekoMuonResidentState(
+                    parameterState.FastMoment,
+                    parameterState.SlowMoment,
+                    checked(rows * rows));
+        }
+
+        float QueueParameterUpdate(int parameterIndex, int deviceIndex)
         {
             Parameter parameter = _parameters[parameterIndex];
             NekoMuonParameterState parameterState =
@@ -308,57 +337,143 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                 parameter,
                 out int originalRows,
                 out int originalColumns);
-            int rows = Math.Min(originalRows, originalColumns);
-            int gramLength = checked(rows * rows);
             CudaOptimizerKernels.NekoMuonResidentState cudaState =
-                _cudaStates[parameterIndex] ??=
-                    new CudaOptimizerKernels.NekoMuonResidentState(
-                        parameterState.FastMoment,
-                        parameterState.SlowMoment,
-                        gramLength);
+                GetCudaState(parameterIndex);
             bool applyWeightDecay =
                 parameter.WeightDecay == WeightDecayPolicy.Apply
                 || (options.Decay1D && parameter.T.Rank == 1);
             bool runNewtonSchulz =
                 _state.Step % options.NewtonSchulzInterval == 0;
-            float confidence = parameterState.Confidence;
-            foreach (int deviceIndex in Tensor.CudaDeviceIndices)
+            return CudaOptimizerKernels.NekoMuonFinishStepResident(
+                parameter.T,
+                deviceIndex,
+                cudaState,
+                originalRows,
+                originalColumns,
+                options.BetaFast,
+                options.BetaSlow,
+                fastCorrection,
+                slowCorrection,
+                options.Epsilon,
+                parameterState.Confidence,
+                options.Rho,
+                options.MaxNewtonSchulzSteps,
+                runNewtonSchulz,
+                NewtonSchulzA,
+                NewtonSchulzB,
+                NewtonSchulzC,
+                options.LearningRate,
+                options.WeightDecay,
+                applyWeightDecay);
+        }
+
+        // Queue every moment/statistics update before waiting. Previously the
+        // tiny D2H statistics copy serialized the stream once per parameter,
+        // preventing kernels for later parameters from filling the GPU.
+        void PrepareMomentsAndStatistics()
+        {
+            for (int index = 0; index < _parameters.Count; index++)
             {
-                float deviceConfidence =
-                    CudaOptimizerKernels.NekoMuonStepResident(
-                        parameter.T,
+                CudaOptimizerKernels.NekoMuonResidentState cudaState =
+                    GetCudaState(index);
+                foreach (int deviceIndex in devices)
+                {
+                    CudaOptimizerKernels.NekoMuonPrepareStatsResident(
+                        _parameters[index].T,
                         deviceIndex,
                         cudaState,
-                        originalRows,
-                        originalColumns,
                         options.BetaFast,
                         options.BetaSlow,
                         fastCorrection,
-                        slowCorrection,
-                        options.Epsilon,
-                        parameterState.Confidence,
-                        options.Rho,
-                        options.MaxNewtonSchulzSteps,
-                        runNewtonSchulz,
-                        NewtonSchulzA,
-                        NewtonSchulzB,
-                        NewtonSchulzC,
-                        options.LearningRate,
-                        options.WeightDecay,
-                        applyWeightDecay);
-                if (deviceIndex == Tensor.CudaDeviceIndex)
-                    confidence = deviceConfidence;
+                        slowCorrection);
+                }
             }
-            _state.ParameterStates[parameterIndex] =
-                parameterState with { Confidence = confidence };
-            parameter.T.MarkCudaDataMutated(Tensor.CudaDeviceIndex);
+            foreach (int deviceIndex in devices)
+                ForgetMemoryV2Cuda.GetAccelerator(deviceIndex).Synchronize();
+        }
+        if (CudaOperationProfiler.IsEnabled)
+        {
+            CudaOperationProfiler.MeasureDevices(
+                "optimizer.nekomuon.moments_stats",
+                devices,
+                PrepareMomentsAndStatistics);
+        }
+        else
+        {
+            PrepareMomentsAndStatistics();
         }
 
-        // All kernels for a device use its ordered default stream. Launching
-        // parameter updates from many CPU threads cannot add GPU parallelism
-        // and causes a first-use ILGPU compilation stampede.
-        for (int index = 0; index < _parameters.Count; index++)
-            UpdateParameter(index);
+        void ReadStatistics()
+        {
+            for (int index = 0; index < _parameters.Count; index++)
+            {
+                CudaOptimizerKernels.NekoMuonResidentState cudaState =
+                    GetCudaState(index);
+                foreach (int deviceIndex in devices)
+                {
+                    CudaOptimizerKernels.NekoMuonReadStatsResident(
+                        deviceIndex, cudaState);
+                }
+            }
+        }
+        if (CudaOperationProfiler.IsEnabled)
+        {
+            CudaOperationProfiler.MeasureDevices(
+                "optimizer.nekomuon.stats_d2h",
+                devices,
+                ReadStatistics);
+        }
+        else
+        {
+            ReadStatistics();
+        }
+
+        // Give every CUDA device its own host dispatch loop. This avoids the
+        // parameter-major GPU0/GPU1 alternation and keeps both default streams
+        // populated during Newton-Schulz and weight publication.
+        var confidences = new float[devices.Length, _parameters.Count];
+        void FinishUpdates()
+        {
+            Parallel.For(0, devices.Length, deviceSlot =>
+            {
+                int deviceIndex = devices[deviceSlot];
+                for (int parameterIndex = 0;
+                    parameterIndex < _parameters.Count;
+                    parameterIndex++)
+                {
+                    confidences[deviceSlot, parameterIndex] =
+                        QueueParameterUpdate(parameterIndex, deviceIndex);
+                }
+            });
+        }
+        if (CudaOperationProfiler.IsEnabled)
+        {
+            CudaOperationProfiler.MeasureDevices(
+                "optimizer.nekomuon.initialize_ns_apply",
+                devices,
+                FinishUpdates);
+        }
+        else
+        {
+            FinishUpdates();
+        }
+
+        int primarySlot = Array.IndexOf(devices, Tensor.CudaDeviceIndex);
+        if (primarySlot < 0)
+            primarySlot = 0;
+        for (int parameterIndex = 0;
+            parameterIndex < _parameters.Count;
+            parameterIndex++)
+        {
+            NekoMuonParameterState parameterState =
+                _state.ParameterStates[parameterIndex];
+            _state.ParameterStates[parameterIndex] = parameterState with
+            {
+                Confidence = confidences[primarySlot, parameterIndex],
+            };
+            _parameters[parameterIndex].T.MarkCudaDataMutated(
+                devices[primarySlot]);
+        }
     }
 
     private static void AddProfileTicks(

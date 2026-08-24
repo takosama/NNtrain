@@ -79,6 +79,39 @@ public sealed class TensorBFloat16OperationTests
         }
     }
 
+    [Fact]
+    public void CudaBFloat16UsesPhysicalTwoByteStorageWithoutFloatExpansion()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int previousDeviceIndex = Tensor.CudaDeviceIndex;
+        try
+        {
+            Tensor.CudaDeviceIndex = 0;
+            var tensor = new Tensor(
+                [1.001f, -2.003f, 0.5f, 9.25f],
+                [4],
+                dtype: TensorDType.BFloat16);
+
+            tensor.To(TensorDevice.Cuda);
+            var physicalBuffer = tensor.EnsureCudaBFloat16Buffer(0);
+
+            Assert.Equal(tensor.Numel, physicalBuffer.Length);
+            Assert.Equal(
+                tensor.Numel * sizeof(ushort),
+                physicalBuffer.Length * sizeof(ushort));
+            Assert.Throws<InvalidOperationException>(
+                () => tensor.EnsureCudaFloat32Buffer(0));
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndex = previousDeviceIndex;
+        }
+    }
+
     private static Tensor InvokeLinearLastDim(
         Tensor input,
         Tensor weight,

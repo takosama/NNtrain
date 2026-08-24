@@ -1,4 +1,4 @@
-﻿namespace NNtrain;
+namespace NNtrain;
 
 public partial class AdamW : IOptimizer, ILearningRateAdjustable
 {
@@ -175,7 +175,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         RefreshWeightDecayFlags();
     }
 
-    public void ZeroGrad()
+    internal void ZeroGrad()
     {
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
         {
@@ -197,6 +197,8 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
             ClearWorkItem(index);
     }
 
+    public void zero_grad() => ZeroGrad();
+
     private void ClearWorkItem(int workItemIndex)
     {
         AdamWWorkItem workItem = _workItems[workItemIndex];
@@ -206,7 +208,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
             .ClearGradientRange(workItem.Start, workItem.Length);
     }
 
-    public void Step()
+    internal void Step()
     {
         if (_step == int.MaxValue)
         {
@@ -317,6 +319,17 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                 .Parameter
                 .CompleteUpdate();
         }
+    }
+
+    public void step() => Step();
+
+    public OptimizerStateDictionary state_dict()
+        => OptimizerStateDictionary.Create("AdamW", CaptureState());
+
+    public void load_state_dict(OptimizerStateDictionary state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        RestoreState(state.Read<AdamWState>("AdamW"));
     }
 
 }

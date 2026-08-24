@@ -7,6 +7,11 @@ namespace NNtrain;
 
 internal static class CudaOptimizerKernels
 {
+    // cuBLAS launch/setup overhead dominates the tiny Gram matrices used by
+    // vectors, norms, and narrow projections.  The direct kernels also fold
+    // the polynomial combine into the final multiply.
+    private const int DirectNewtonSchulzMaxRows = 32;
+
     internal static void PrewarmNekoMuon(IReadOnlyList<int> deviceIndices)
     {
         foreach (int deviceIndex in deviceIndices)
@@ -15,11 +20,8 @@ internal static class CudaOptimizerKernels
                 ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
             _ = accelerator.LoadAutoGroupedStreamKernel<
                 Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
-                ArrayView<float>, ArrayView<float>, float, float, float, float>(
-                    NekoMuonMomentsKernel);
-            _ = accelerator.LoadAutoGroupedStreamKernel<
-                Index1D, ArrayView<float>, ArrayView<float>, ArrayView<double>>(
-                    NekoMuonStatsKernel);
+                ArrayView<float>, ArrayView<float>, ArrayView<double>, float,
+                float, float, float>(NekoMuonMomentsAndStatsKernel);
             _ = accelerator.LoadAutoGroupedStreamKernel<
                 Index1D, ArrayView<float>, ArrayView<float>, int, int, int, float>(
                     NekoMuonInitializeKernel);
@@ -38,6 +40,13 @@ internal static class CudaOptimizerKernels
             _ = accelerator.LoadAutoGroupedStreamKernel<
                 Index1D, ArrayView<float>, ArrayView<float>, int, float,
                 float, float>(NekoMuonCombinePolynomialKernel);
+            _ = accelerator.LoadAutoGroupedStreamKernel<
+                Index1D, ArrayView<float>, ArrayView<float>, int, int>(
+                    SymmetricGramKernel);
+            _ = accelerator.LoadAutoGroupedStreamKernel<
+                Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
+                ArrayView<float>, int, int, float, float, float>(
+                    NewtonSchulzKernel);
         }
     }
 
@@ -129,7 +138,8 @@ internal static class CudaOptimizerKernels
                 accelerator.Allocate1D<float>(_length),
                 accelerator.Allocate1D<float>(_gramLength),
                 accelerator.Allocate1D<float>(_gramLength),
-                accelerator.Allocate1D<double>(4));
+                accelerator.Allocate1D<double>(4),
+                new double[4]);
             _buffers.Add(deviceIndex, buffers);
             return buffers;
         }
@@ -158,7 +168,8 @@ internal static class CudaOptimizerKernels
             MemoryBuffer1D<float, Stride1D.Dense> next,
             MemoryBuffer1D<float, Stride1D.Dense> gram,
             MemoryBuffer1D<float, Stride1D.Dense> gramSquared,
-            MemoryBuffer1D<double, Stride1D.Dense> stats) : IDisposable
+            MemoryBuffer1D<double, Stride1D.Dense> stats,
+            double[] statsHost) : IDisposable
         {
             internal MemoryBuffer1D<float, Stride1D.Dense> Fast { get; } = fast;
             internal MemoryBuffer1D<float, Stride1D.Dense> Slow { get; } = slow;
@@ -169,6 +180,7 @@ internal static class CudaOptimizerKernels
             internal MemoryBuffer1D<float, Stride1D.Dense> Gram { get; } = gram;
             internal MemoryBuffer1D<float, Stride1D.Dense> GramSquared { get; } = gramSquared;
             internal MemoryBuffer1D<double, Stride1D.Dense> Stats { get; } = stats;
+            internal double[] StatsHost { get; } = statsHost;
 
             public void Dispose()
             {
@@ -185,7 +197,49 @@ internal static class CudaOptimizerKernels
         }
     }
 
-    internal static float NekoMuonStepResident(
+    internal static void NekoMuonPrepareStatsResident(
+        Tensor parameter,
+        int deviceIndex,
+        NekoMuonResidentState state,
+        float betaFast,
+        float betaSlow,
+        float fastCorrection,
+        float slowCorrection)
+    {
+        CudaAccelerator accelerator =
+            ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+        var gradientBuffer = parameter.EnsureCudaGradientBuffer(deviceIndex);
+        NekoMuonResidentState.NekoBuffers buffers =
+            state.GetOrCreate(deviceIndex);
+        buffers.Stats.MemSetToZero();
+        var momentsKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
+            ArrayView<float>, ArrayView<float>, ArrayView<double>, float,
+            float, float, float>(NekoMuonMomentsAndStatsKernel);
+        momentsKernel(
+            parameter.Numel,
+            gradientBuffer.View,
+            buffers.Fast.View,
+            buffers.Slow.View,
+            buffers.FastHat.View,
+            buffers.SlowHat.View,
+            buffers.Stats.View,
+            betaFast,
+            betaSlow,
+            fastCorrection,
+            slowCorrection);
+    }
+
+    internal static void NekoMuonReadStatsResident(
+        int deviceIndex,
+        NekoMuonResidentState state)
+    {
+        NekoMuonResidentState.NekoBuffers buffers =
+            state.GetOrCreate(deviceIndex);
+        buffers.Stats.CopyToCPU(buffers.StatsHost);
+    }
+
+    internal static float NekoMuonFinishStepResident(
         Tensor parameter,
         int deviceIndex,
         NekoMuonResidentState state,
@@ -210,37 +264,9 @@ internal static class CudaOptimizerKernels
         CudaAccelerator accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
         var dataBuffer = parameter.EnsureCudaMasterFloat32Buffer(deviceIndex);
-        var gradientBuffer = parameter.EnsureCudaGradientBuffer(deviceIndex);
         NekoMuonResidentState.NekoBuffers buffers =
             state.GetOrCreate(deviceIndex);
-        var momentsKernel = accelerator.LoadAutoGroupedStreamKernel<
-            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
-            ArrayView<float>, ArrayView<float>, float, float, float, float>(
-                NekoMuonMomentsKernel);
-        momentsKernel(
-            parameter.Numel,
-            gradientBuffer.View,
-            buffers.Fast.View,
-            buffers.Slow.View,
-            buffers.FastHat.View,
-            buffers.SlowHat.View,
-            betaFast,
-            betaSlow,
-            fastCorrection,
-            slowCorrection);
-
-        buffers.Stats.MemSetToZero();
-        var statsKernel = accelerator.LoadAutoGroupedStreamKernel<
-            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<double>>(
-                NekoMuonStatsKernel);
-        statsKernel(
-            parameter.Numel,
-            buffers.FastHat.View,
-            buffers.SlowHat.View,
-            buffers.Stats.View);
-        accelerator.Synchronize();
-        var stats = new double[4];
-        buffers.Stats.CopyToCPU(stats);
+        double[] stats = buffers.StatsHost;
         double alignmentDenominator =
             Math.Sqrt(stats[1]) * Math.Sqrt(stats[2]) + epsilon;
         double alignment = Math.Max(0d, stats[0] / alignmentDenominator);
@@ -324,7 +350,6 @@ internal static class CudaOptimizerKernels
             weightDecay,
             applyWeightDecay ? 1 : 0);
         PublishMaster(parameter, accelerator, deviceIndex, dataBuffer);
-        accelerator.Synchronize();
         return confidence;
     }
 
@@ -336,6 +361,15 @@ internal static class CudaOptimizerKernels
     {
         if (parameter.DType == TensorDType.Float32)
             return;
+        if (parameter.DType == TensorDType.BFloat16)
+        {
+            var bfloat16Compute = parameter.EnsureCudaBFloat16Buffer(deviceIndex);
+            var bfloat16Kernel = accelerator.LoadAutoGroupedStreamKernel<
+                Index1D, ArrayView<float>, ArrayView<ushort>>(
+                    PublishPhysicalBFloat16MasterKernel);
+            bfloat16Kernel(parameter.Numel, master.View, bfloat16Compute.View);
+            return;
+        }
         var compute = parameter.EnsureCudaFloat32Buffer(deviceIndex);
         var publishKernel = accelerator.LoadAutoGroupedStreamKernel<
             Index1D, ArrayView<float>, ArrayView<float>>(
@@ -356,6 +390,33 @@ internal static class CudaOptimizerKernels
         float coefficientB,
         float coefficientC)
     {
+        if (rows <= DirectNewtonSchulzMaxRows)
+        {
+            var gramKernel = accelerator.LoadAutoGroupedStreamKernel<
+                Index1D, ArrayView<float>, ArrayView<float>, int, int>(
+                    SymmetricGramKernel);
+            gramKernel(
+                checked(rows * rows), source.View, gram.View, rows, columns);
+            gramKernel(
+                checked(rows * rows), gram.View, gramSquared.View, rows, rows);
+            var updateKernel = accelerator.LoadAutoGroupedStreamKernel<
+                Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
+                ArrayView<float>, int, int, float, float, float>(
+                    NewtonSchulzKernel);
+            updateKernel(
+                checked(rows * columns),
+                source.View,
+                gram.View,
+                gramSquared.View,
+                destination.View,
+                rows,
+                columns,
+                coefficientA,
+                coefficientB,
+                coefficientC);
+            return;
+        }
+
         CudaBlas.MuonGram(
             accelerator, deviceIndex, source, gram, rows, columns);
         CudaBlas.MuonGram(
@@ -624,6 +685,17 @@ internal static class CudaOptimizerKernels
             (bits + roundingBias) & 0xFFFF0000u);
     }
 
+    private static void PublishPhysicalBFloat16MasterKernel(
+        Index1D index,
+        ArrayView<float> master,
+        ArrayView<ushort> compute)
+    {
+        int i = index;
+        uint bits = Interop.FloatAsInt(master[i]);
+        uint roundingBias = 0x7FFFu + ((bits >> 16) & 1u);
+        compute[i] = (ushort)((bits + roundingBias) >> 16);
+    }
+
     private static void NekoMuonMomentsKernel(
         Index1D index,
         ArrayView<float> gradient,
@@ -645,6 +717,37 @@ internal static class CudaOptimizerKernels
         slow[i] = nextSlow;
         fastHat[i] = nextFast / fastCorrection;
         slowHat[i] = nextSlow / slowCorrection;
+    }
+
+    private static void NekoMuonMomentsAndStatsKernel(
+        Index1D index,
+        ArrayView<float> gradient,
+        ArrayView<float> fast,
+        ArrayView<float> slow,
+        ArrayView<float> fastHat,
+        ArrayView<float> slowHat,
+        ArrayView<double> stats,
+        float betaFast,
+        float betaSlow,
+        float fastCorrection,
+        float slowCorrection)
+    {
+        int i = index;
+        float nextFast = betaFast * fast[i] +
+            (1f - betaFast) * gradient[i];
+        float nextSlow = betaSlow * slow[i] +
+            (1f - betaSlow) * gradient[i];
+        float correctedFast = nextFast / fastCorrection;
+        float correctedSlow = nextSlow / slowCorrection;
+        float residual = correctedFast - correctedSlow;
+        fast[i] = nextFast;
+        slow[i] = nextSlow;
+        fastHat[i] = correctedFast;
+        slowHat[i] = correctedSlow;
+        Atomic.Add(ref stats[0], (double)correctedFast * correctedSlow);
+        Atomic.Add(ref stats[1], (double)correctedFast * correctedFast);
+        Atomic.Add(ref stats[2], (double)correctedSlow * correctedSlow);
+        Atomic.Add(ref stats[3], (double)residual * residual);
     }
 
     private static void NekoMuonApplyUpdateKernel(

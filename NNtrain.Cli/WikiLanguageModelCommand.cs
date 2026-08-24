@@ -147,7 +147,7 @@ internal static partial class WikiLanguageModelCommand
         output.WriteLine("loading and tokenizing Wikipedia documents...");
         TrainingCorpus corpus = LoadTrainingCorpus(config, tokenizer, output);
         int[] tokens = corpus.Tokens;
-        int sequenceCount = DivideRoundUp(
+        int sequenceCount = TrainingRunner.DivideRoundUp(
             tokens.Length - 1,
             config.ContextLength);
         if (sequenceCount < 2)
@@ -174,14 +174,14 @@ internal static partial class WikiLanguageModelCommand
             $"{config.DatasetSampleEverySteps:N0} steps, sample pool " +
             $"{corpus.SampleDocuments.Length}");
 
-        IWikiLanguageModel model = CreateModel(
+        LanguageModel model = CreateModel(
             config,
             tokenizer.VocabularySize,
             modelDType);
         if (Tensor.ExecutionDevice == TensorDevice.Cuda
             && model is Module modelModule)
         {
-            modelModule.To(TensorDevice.Cuda);
+            modelModule.to(TensorDevice.Cuda);
         }
         IOptimizer optimizer = CreateOptimizer(model, config);
         WarmupCosineProgressLRScheduler scheduler =
@@ -213,7 +213,7 @@ internal static partial class WikiLanguageModelCommand
         int[] order = Enumerable.Range(0, trainingSequences).ToArray();
         var sampleRandom = new Random(config.Seed ^ 0x6A09E667);
         long globalStep = 0;
-        int batchesPerEpoch = DivideRoundUp(
+        int batchesPerEpoch = TrainingRunner.DivideRoundUp(
             trainingSequences,
             config.BatchSize);
         long totalTrainingSteps = checked(
@@ -233,10 +233,16 @@ internal static partial class WikiLanguageModelCommand
             output);
         var runProgress = new TrainingProgress();
 
-        for (int epoch = resume.Epoch; epoch <= config.Epochs; epoch++)
+        using NoGcTrainingWindow noGcWindow =
+            TrainingRunner.BeginNoGcTrainingWindow();
+        foreach (TrainingEpoch epochRun in TrainingRunner.Epochs(
+            resume.Epoch,
+            config.Epochs,
+            resume.CompletedBatches))
         {
-            Shuffle(
-                order,
+            int epoch = epochRun.Number;
+            TrainingRunner.Shuffle(
+                order.AsSpan(),
                 new Random(HashCode.Combine(config.Seed, epoch)));
             model.train();
             double totalLoss = epoch == resume.Epoch
@@ -250,9 +256,7 @@ internal static partial class WikiLanguageModelCommand
             int batchTotal = batchesPerEpoch;
             var timer = Stopwatch.StartNew();
 
-            int firstBatch = epoch == resume.Epoch
-                ? resume.CompletedBatches
-                : 0;
+            int firstBatch = epochRun.ResumeUnit;
             for (int batch = firstBatch; batch < batchTotal; batch++)
             {
                 int count = Math.Min(
@@ -278,6 +282,7 @@ internal static partial class WikiLanguageModelCommand
                     max_norm: 1f);
                 scheduler.step((globalStep + 1d) / totalTrainingSteps);
                 optimizer.step();
+                noGcWindow.Pulse();
                 globalStep++;
 
                 int validTargets = values.ValidTargetCount;
@@ -286,7 +291,7 @@ internal static partial class WikiLanguageModelCommand
                 graphWindowLoss += loss.item() * validTargets;
                 graphWindowTargets += validTargets;
                 int completedBatches = batch + 1;
-                if (Program.CrossedCheckpointBoundary(
+                if (TrainingRunner.ShouldSaveCheckpoint(
                     completedBatches,
                     batchTotal))
                 {
@@ -460,7 +465,7 @@ internal static partial class WikiLanguageModelCommand
         bool configuredDTypeDiffers =
             config.GetModelDType() != checkpointDType;
 
-        IWikiLanguageModel model = CreateModel(checkpoint, config.Seed);
+        LanguageModel model = CreateModel(checkpoint, config.Seed);
         ModuleState generationState = LoadGenerationModelState(
             checkpoint,
             config.CheckpointPath);
@@ -505,7 +510,7 @@ internal static partial class WikiLanguageModelCommand
             $"streaming corpus = {documentsPerEpoch:N0} documents/epoch, " +
             $"{FormatDocumentTokenLimit(config.MaxDocumentTokens)}");
 
-        IWikiLanguageModel model = CreateModel(
+        LanguageModel model = CreateModel(
             config,
             tokenizer.VocabularySize,
             modelDType);
@@ -557,8 +562,14 @@ internal static partial class WikiLanguageModelCommand
             output);
         var runProgress = new TrainingProgress();
 
-        for (int epoch = resume.Epoch; epoch <= config.Epochs; epoch++)
+        using NoGcTrainingWindow noGcWindow =
+            TrainingRunner.BeginNoGcTrainingWindow();
+        foreach (TrainingEpoch epochRun in TrainingRunner.Epochs(
+            resume.Epoch,
+            config.Epochs,
+            resume.CompletedBatches))
         {
+            int epoch = epochRun.Number;
             model.train();
             var buffer = new List<int>(
                 config.BatchSize * config.ContextLength
@@ -579,9 +590,7 @@ internal static partial class WikiLanguageModelCommand
             long documentsProcessed = epoch == resume.Epoch
                 ? resume.CompletedDocuments
                 : 0;
-            int completedBatchesInEpoch = epoch == resume.Epoch
-                ? resume.CompletedBatches
-                : 0;
+            int completedBatchesInEpoch = epochRun.ResumeUnit;
             var timer = Stopwatch.StartNew();
 
             void TrainBatch(int batchSize, int sequenceLength)
@@ -630,6 +639,7 @@ internal static partial class WikiLanguageModelCommand
                     (epoch - 1d + documentProgress) / config.Epochs;
                 scheduler.step(overallProgress);
                 optimizer.step();
+                noGcWindow.Pulse();
                 globalStep++;
                 completedBatchesInEpoch++;
 
@@ -759,7 +769,7 @@ internal static partial class WikiLanguageModelCommand
             while (buffer.Count > 1)
             {
                 int remainingTargets = buffer.Count - 1;
-                int remainingSequences = DivideRoundUp(
+                int remainingSequences = TrainingRunner.DivideRoundUp(
                     remainingTargets,
                     config.ContextLength);
                 int batchSize = Math.Min(
@@ -900,7 +910,7 @@ internal static partial class WikiLanguageModelCommand
     }
 
     private static float Evaluate(
-        IWikiLanguageModel model,
+        LanguageModel model,
         int[] tokens,
         int validationStartSequence,
         int validationSequences,
@@ -942,7 +952,7 @@ internal static partial class WikiLanguageModelCommand
         TensorDType modelDType,
         TextWriter output)
     {
-        string architectureDetails = config.IsForgetMemoryV2Architecture()
+        string architectureDetails = config.IsForgetMemoryArchitecture()
             ? $", matrix delta memory key {config.ForgetMemoryKeyWidth}, " +
                 $"value {config.ForgetMemoryValueWidth}, retention " +
                 $"{config.ForgetMemoryRetentionMinimum:G}-" +
@@ -1004,13 +1014,13 @@ internal static partial class WikiLanguageModelCommand
     }
 
     private static void WriteGeneration(
-        IWikiLanguageModel model,
+        LanguageModel model,
         BpeTokenizer tokenizer,
         string prompt,
         WikiTrainingConfiguration config,
         TextWriter output)
     {
-        string generated = model.Generate(
+        string generated = model.generate(
             prompt,
             tokenizer,
             config.MaxNewTokens,
@@ -1019,18 +1029,6 @@ internal static partial class WikiLanguageModelCommand
             new Random(config.Seed ^ 0x27D4EB2D));
         output.WriteLine("generated text:");
         output.WriteLine(generated);
-    }
-
-    private static int DivideRoundUp(int value, int divisor)
-        => value / divisor + (value % divisor == 0 ? 0 : 1);
-
-    private static void Shuffle(int[] values, Random random)
-    {
-        for (int index = values.Length - 1; index > 0; index--)
-        {
-            int other = random.Next(index + 1);
-            (values[index], values[other]) = (values[other], values[index]);
-        }
     }
 
     private readonly record struct TrainingCorpus(

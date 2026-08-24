@@ -137,7 +137,7 @@ public sealed class CudaTrainingKernelTests
                     weight_decay: 0.02f,
                     bf16_first_moment: true,
                     bf16_second_moment: true);
-                optimizer.Step();
+                optimizer.step();
                 return (parameter.T.Data.ToArray(), optimizer.state_dict());
             }
 
@@ -161,7 +161,7 @@ public sealed class CudaTrainingKernelTests
                     newton_schulz_steps: 2,
                     newton_schulz_interval: 1,
                     weight_decay: 0.02f);
-                optimizer.Step();
+                optimizer.step();
                 return parameter.T.Data.ToArray();
             }
 

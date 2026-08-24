@@ -3,6 +3,79 @@ using Xunit;
 
 public sealed class TorchApiTests
 {
+    [Theory]
+    [InlineData("cpu", TensorDevice.Cpu, 0, "cpu")]
+    [InlineData("cuda", TensorDevice.Cuda, 0, "cuda:0")]
+    [InlineData("CUDA:1", TensorDevice.Cuda, 1, "cuda:1")]
+    public void DeviceParsesPyTorchStyleNames(
+        string value,
+        TensorDevice type,
+        int index,
+        string expectedText)
+    {
+        TorchDevice device = torch.device(value);
+
+        Assert.Equal(type, device.Type);
+        Assert.Equal(index, device.Index);
+        Assert.Equal(expectedText, device.ToString());
+    }
+
+    [Fact]
+    public void UseDeviceRestoresThePreviousExecutionContext()
+    {
+        Tensor.ExecutionDevice = TensorDevice.Cpu;
+
+        using (torch.use_device(torch.device("cuda:1")))
+        {
+            Assert.Equal(TensorDevice.Cuda, Tensor.ExecutionDevice);
+            Assert.Equal(1, Tensor.CudaDeviceIndex);
+        }
+
+        Assert.Equal(TensorDevice.Cpu, Tensor.ExecutionDevice);
+    }
+
+    [Fact]
+    public void TensorRetainsItsIndexedCudaDevice()
+    {
+        if (torch.cuda.device_count() < 2)
+            return;
+
+        Tensor tensor = torch.tensor(
+            [1f],
+            [1],
+            device: torch.device("cuda:1"));
+
+        Assert.Equal(torch.device("cuda:1"), tensor.device);
+        Assert.Equal(1f, tensor.item());
+    }
+
+    [Fact]
+    public void ModuleAndLanguageModelExposeCanonicalLifecycleNames()
+    {
+        string[] moduleMethods = typeof(Module)
+            .GetMethods()
+            .Select(method => method.Name)
+            .ToArray();
+        Assert.DoesNotContain("Train", moduleMethods);
+        Assert.DoesNotContain("Eval", moduleMethods);
+        Assert.DoesNotContain("Parameters", moduleMethods);
+        Assert.DoesNotContain("CaptureState", moduleMethods);
+        Assert.Contains("train", moduleMethods);
+        Assert.Contains("eval", moduleMethods);
+        Assert.Contains("parameters", moduleMethods);
+        Assert.Contains("state_dict", moduleMethods);
+
+        string[] languageMethods = typeof(LanguageModel)
+            .GetMethods()
+            .Select(method => method.Name)
+            .ToArray();
+        Assert.DoesNotContain("Forward", languageMethods);
+        Assert.DoesNotContain("Generate", languageMethods);
+        Assert.Contains("forward", languageMethods);
+        Assert.Contains("generate", languageMethods);
+        Assert.Contains("generate_token_ids", languageMethods);
+    }
+
     [Fact]
     public void DataLoaderBatchesAndShufflesDataset()
     {

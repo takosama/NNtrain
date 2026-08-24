@@ -3,7 +3,7 @@ namespace NNtrain;
 /// <summary>
 /// Decoder-only language model using stable matrix-valued delta memories.
 /// </summary>
-public sealed class ForgetMemoryV2Gpt : Module, IWikiLanguageModel
+public class ForgetMemoryV2Gpt : LanguageModel
 {
     private readonly Parameter _tokenEmbedding;
     private readonly Dropout _embeddingDropout;
@@ -27,6 +27,41 @@ public sealed class ForgetMemoryV2Gpt : Module, IWikiLanguageModel
         float initializationScale = 0.02f,
         float dropout = 0f,
         TensorDType dtype = TensorDType.Float16)
+        : this(
+            vocabularySize,
+            contextLength,
+            modelWidth,
+            hiddenWidth,
+            numLayers,
+            keyWidth,
+            valueWidth,
+            retentionMinimum,
+            retentionMaximum,
+            random,
+            initializationScale,
+            dropout,
+            dtype,
+            useV3: false,
+            useDrn: false)
+    {
+    }
+
+    protected ForgetMemoryV2Gpt(
+        int vocabularySize,
+        int contextLength,
+        int modelWidth,
+        int hiddenWidth,
+        int numLayers,
+        int keyWidth,
+        int valueWidth,
+        float retentionMinimum,
+        float retentionMaximum,
+        Random? random,
+        float initializationScale,
+        float dropout,
+        TensorDType dtype,
+        bool useV3,
+        bool useDrn)
         : base(dtype)
     {
         if (vocabularySize <= 0)
@@ -59,6 +94,8 @@ public sealed class ForgetMemoryV2Gpt : Module, IWikiLanguageModel
         ValueWidth = valueWidth;
         RetentionMinimum = retentionMinimum;
         RetentionMaximum = retentionMaximum;
+        UseV3 = useV3;
+        UseDrn = useDrn;
         random ??= new Random(1);
 
         _tokenEmbedding = RegisterParameter(
@@ -88,7 +125,9 @@ public sealed class ForgetMemoryV2Gpt : Module, IWikiLanguageModel
                     random,
                     initializationScale,
                     dropout,
-                    dtype));
+                    dtype,
+                    useV3,
+                    useDrn));
         }
         _finalNorm = RegisterModule(
             new LayerNorm(modelWidth, dtype: dtype));
@@ -112,11 +151,11 @@ public sealed class ForgetMemoryV2Gpt : Module, IWikiLanguageModel
             .ToArray();
     }
 
-    public int VocabularySize { get; }
+    public override int VocabularySize { get; }
 
-    public int ContextLength { get; }
+    public override int ContextLength { get; }
 
-    public int ModelWidth { get; }
+    public override int ModelWidth { get; }
 
     public int KeyWidth { get; }
 
@@ -126,16 +165,20 @@ public sealed class ForgetMemoryV2Gpt : Module, IWikiLanguageModel
 
     public float RetentionMaximum { get; }
 
+    public bool UseV3 { get; }
+
+    public bool UseDrn { get; }
+
     public IReadOnlyList<ForgetMemoryV2Layer> Layers
         => Array.AsReadOnly(_layers);
 
-    public IReadOnlyList<Parameter> HiddenWeightParameters
+    public override IReadOnlyList<Parameter> HiddenWeightParameters
         => Array.AsReadOnly(_hiddenWeightParameters);
 
-    public IReadOnlyList<Parameter> AuxiliaryParameters
+    public override IReadOnlyList<Parameter> AuxiliaryParameters
         => Array.AsReadOnly(_auxiliaryParameters);
 
-    public Tensor Forward(
+    internal override Tensor Forward(
         int[] tokenIds,
         int batchSize,
         int sequenceLength)
@@ -267,7 +310,7 @@ public sealed class ForgetMemoryV2Gpt : Module, IWikiLanguageModel
         }
     }
 
-    public int[] GenerateTokenIds(
+    internal override int[] GenerateTokenIds(
         IEnumerable<int> promptTokenIds,
         int maxNewTokens,
         float temperature = 0.8f,
@@ -287,7 +330,7 @@ public sealed class ForgetMemoryV2Gpt : Module, IWikiLanguageModel
     /// Generates tokens, reporting each one to <paramref name="onToken"/> as
     /// soon as it is sampled.
     /// </summary>
-    public int[] GenerateTokenIds(
+    internal override int[] GenerateTokenIds(
         IEnumerable<int> promptTokenIds,
         int maxNewTokens,
         float temperature,
@@ -325,27 +368,43 @@ public sealed class ForgetMemoryV2Gpt : Module, IWikiLanguageModel
         try
         {
             using (AutogradContext.NoGrad())
+            using (CudaInferenceScope cacheSession = CudaInferenceScope.Begin(
+                resetPool: true,
+                clearPoolOnDispose: true))
             {
                 // The prompt is absorbed once; every generated token then costs
                 // one recurrent step against a fixed-size memory rather than a
                 // full forward pass over the whole prefix.
                 ForgetMemoryV2RecurrentState state = CreateRecurrentState();
-                Tensor logits = AdvanceToLastLogits(result, state);
-                for (int generated = 0; generated < maxNewTokens; generated++)
+                CudaInferenceScope inferenceScope =
+                    CudaInferenceScope.Begin();
+                try
                 {
-                    int nextToken = Sample(
-                        logits.Data,
-                        0,
-                        VocabularySize,
-                        temperature,
-                        topK,
-                        random);
-                    result.Add(nextToken);
-                    onToken?.Invoke(nextToken);
-                    if (stopTokenId.HasValue && nextToken == stopTokenId.Value)
-                        break;
-                    if (generated + 1 < maxNewTokens)
-                        logits = AdvanceToLastLogits([nextToken], state);
+                    Tensor logits = AdvanceToLastLogits(result, state);
+                    for (int generated = 0; generated < maxNewTokens; generated++)
+                    {
+                        int nextToken = Sample(
+                            logits.Data,
+                            0,
+                            VocabularySize,
+                            temperature,
+                            topK,
+                            random);
+                        result.Add(nextToken);
+                        onToken?.Invoke(nextToken);
+                        inferenceScope.Dispose();
+                        if (stopTokenId.HasValue && nextToken == stopTokenId.Value)
+                            break;
+                        if (generated + 1 < maxNewTokens)
+                        {
+                            inferenceScope = CudaInferenceScope.Begin();
+                            logits = AdvanceToLastLogits([nextToken], state);
+                        }
+                    }
+                }
+                finally
+                {
+                    inferenceScope.Dispose();
                 }
             }
         }
@@ -358,7 +417,7 @@ public sealed class ForgetMemoryV2Gpt : Module, IWikiLanguageModel
         return result.ToArray();
     }
 
-    public string Generate(
+    internal override string Generate(
         string prompt,
         BpeTokenizer tokenizer,
         int maxNewTokens,
@@ -476,6 +535,85 @@ public sealed class ForgetMemoryV2Gpt : Module, IWikiLanguageModel
             }
         }
         return result;
+    }
+}
+
+/// <summary>
+/// Decoder-only language model using the V3 matrix-memory recurrence.
+/// </summary>
+public sealed class ForgetMemoryV3Gpt : ForgetMemoryV2Gpt
+{
+    public ForgetMemoryV3Gpt(
+        int vocabularySize,
+        int contextLength,
+        int modelWidth,
+        int hiddenWidth,
+        int numLayers,
+        int keyWidth = 16,
+        int valueWidth = 16,
+        float retentionMinimum = 0.5f,
+        float retentionMaximum = 0.99f,
+        Random? random = null,
+        float initializationScale = 0.02f,
+        float dropout = 0f,
+        TensorDType dtype = TensorDType.Float16)
+        : base(
+            vocabularySize,
+            contextLength,
+            modelWidth,
+            hiddenWidth,
+            numLayers,
+            keyWidth,
+            valueWidth,
+            retentionMinimum,
+            retentionMaximum,
+            random,
+            initializationScale,
+            dropout,
+            dtype,
+            useV3: true,
+            useDrn: false)
+    {
+    }
+}
+
+/// <summary>
+/// Decoder-only language model using delta writes, read-before-write, and
+/// L2-normalized queries and keys.
+/// </summary>
+public sealed class ForgetMemoryDRNGpt : ForgetMemoryV2Gpt
+{
+    public ForgetMemoryDRNGpt(
+        int vocabularySize,
+        int contextLength,
+        int modelWidth,
+        int hiddenWidth,
+        int numLayers,
+        int keyWidth = 16,
+        int valueWidth = 16,
+        float retentionMinimum = 0.5f,
+        float retentionMaximum = 0.99f,
+        Random? random = null,
+        float initializationScale = 0.02f,
+        float dropout = 0f,
+        TensorDType dtype = TensorDType.Float16)
+        : base(
+            vocabularySize,
+            contextLength,
+            modelWidth,
+            hiddenWidth,
+            numLayers,
+            keyWidth,
+            valueWidth,
+            retentionMinimum,
+            retentionMaximum,
+            random,
+            initializationScale,
+            dropout,
+            dtype,
+            useV3: false,
+            useDrn: true)
+    {
     }
 }
 

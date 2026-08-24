@@ -5,29 +5,32 @@
   "tokenizerPath": "wiki-jp-bpe.json",
   "checkpoint": {
     "directory": "checkpoints",
-    "fileName": "training.forgetmemoryv2-wiki-jp.model.json",
+    "fileName": "training.forgetmemorydrn-wiki-jp.model.json",
     "resume": false,
     "autoResume": true
   },
 
   "vocabularySize": 4096,
-  "tokenizerTrainingDocuments": 500000,
+  "tokenizerTrainingDocuments": 5000,
   "tokenizerTrainingBytes": 2000000,
 
   "maxTrainingDocuments": 0,
   "maxTrainingTokens": 0,
-  "maxDocumentTokens": 0,
+  "maxDocumentTokens": 1024,
   "validationFraction": 0.0,
-  "epochs": 5,
-  "batchSize":16,
+  "epochs": 1,
+  "batchSize": 16,
 
-  "contextLength": 512,
-  "modelWidth": 256,
+  "contextLength": 1024,
+  "modelWidth": 512,
   "heads": 8,
-  "hiddenSize": 768,
-  "layers":16,
-  "modelArchitecture": "forgetmemoryv2",
-  "modelDType": "float16",
+  "hiddenSize": 1024,
+  "layers": 16,
+  "modelArchitecture": "forgetmemorydrn",
+  "device": "cuda",
+  "deviceIndex": 0,
+  "deviceIndices": [0, 1],
+  "modelDType": "bfloat16",
   "forgetMemoryKeyWidth": 16,
   "forgetMemoryValueWidth": 16,
   "forgetMemoryRetentionMinimum": 0.5,
@@ -37,13 +40,13 @@
 
   "optimization": {
     "optimizer": {
-      "type": "GainShareAdamW",
-      "learningRate": 0.003,
+      "type": "adamw",
+      "learningRate": 0.0003,
       "auxiliaryLearningRate": 0.0003,
       "nekoMuonNewtonSchulzInterval": 5,
       "weightDecay": 0.01,
-      "adamWUseBFloat16FirstMoment": true,
-      "adamWUseBFloat16SecondMoment": true
+      "adamWUseBFloat16FirstMoment": false,
+      "adamWUseBFloat16SecondMoment": false
     },
     "scheduler": {
       "type": "warmupCosineProgress",
@@ -59,7 +62,7 @@
   "useSimd": true,
   "maxDegreeOfParallelism": 0,
 
-  "maxNewTokens": 300,
-  "temperature": 0.95,
-  "topK": 20
+  "maxNewTokens": 80,
+  "temperature": 0.8,
+  "topK": 40
 }

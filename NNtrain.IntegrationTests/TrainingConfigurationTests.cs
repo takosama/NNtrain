@@ -5,6 +5,60 @@ using Xunit;
 public sealed class TrainingConfigurationTests
 {
     [Fact]
+    public void CheckedInClassificationProfileUsesVersionTwoSchema()
+    {
+        string path = Path.GetFullPath(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "..", "..", "..", "..",
+                "training.cifar100.json"));
+
+        TrainingConfiguration configuration =
+            TrainingConfiguration.Load(path);
+
+        Assert.Equal(200, configuration.Epochs);
+    }
+
+    [Fact]
+    public void LoadReadsVersionTwoClassificationSections()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.WriteConfiguration(
+            """
+            {
+              "schemaVersion": 2,
+              "task": { "type": "image-classification" },
+              "data": {
+                "trainingData": {
+                  "imagePath": "train-images",
+                  "labelPath": "train-labels"
+                },
+                "evaluationData": {
+                  "imagePath": "eval-images",
+                  "labelPath": "eval-labels"
+                }
+              },
+              "training": {
+                "epochs": 3,
+                "batchSize": 8,
+                "microBatchCount": 2
+              },
+              "runtime": { "seed": 17, "useSimd": false },
+              "model": { "heads": 2, "hiddenSize": 16, "layers": 1 }
+            }
+            """);
+
+        TrainingConfiguration configuration =
+            TrainingConfiguration.Load(path);
+
+        Assert.Equal(3, configuration.Epochs);
+        Assert.Equal(16, configuration.EffectiveBatchSize);
+        Assert.Equal(17, configuration.Seed);
+        Assert.False(configuration.UseSimd);
+        Assert.Equal(2, configuration.Model.Heads);
+    }
+
+    [Fact]
     public void LoadReadsEverySettingAndResolvesDatasetPaths()
     {
         using var directory = new TemporaryDirectory();

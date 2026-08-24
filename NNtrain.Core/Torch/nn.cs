@@ -115,7 +115,9 @@ public static class nn
         int num_layers,
         float dropout = 0f,
         float init_scale = 0.02f,
-        Random? generator = null)
+        Random? generator = null,
+        TensorDType dtype = TensorDType.Float32,
+        bool tie_word_embeddings = false)
         => new(
             vocab_size,
             context_length,
@@ -125,7 +127,9 @@ public static class nn
             num_layers,
             generator ?? torch.generator(),
             init_scale,
-            dropout);
+            dropout,
+            dtype,
+            tie_word_embeddings);
 
     public static HyenaGpt hyena_lm(
         int vocab_size,
@@ -171,6 +175,64 @@ public static class nn
             dropout);
 
     public static ForgetMemoryV2Gpt forget_memory_v2_lm(
+        int vocab_size,
+        int context_length,
+        int d_model,
+        int dim_feedforward,
+        int num_layers,
+        int key_width = 16,
+        int value_width = 16,
+        float retention_min = 0.5f,
+        float retention_max = 0.99f,
+        float dropout = 0f,
+        float init_scale = 0.02f,
+        Random? generator = null,
+        TensorDType dtype = TensorDType.Float16)
+        => new(
+            vocab_size,
+            context_length,
+            d_model,
+            dim_feedforward,
+            num_layers,
+            key_width,
+            value_width,
+            retention_min,
+            retention_max,
+            generator ?? torch.generator(),
+            init_scale,
+            dropout,
+            dtype);
+
+    public static ForgetMemoryV3Gpt forget_memory_v3_lm(
+        int vocab_size,
+        int context_length,
+        int d_model,
+        int dim_feedforward,
+        int num_layers,
+        int key_width = 16,
+        int value_width = 16,
+        float retention_min = 0.5f,
+        float retention_max = 0.99f,
+        float dropout = 0f,
+        float init_scale = 0.02f,
+        Random? generator = null,
+        TensorDType dtype = TensorDType.Float16)
+        => new(
+            vocab_size,
+            context_length,
+            d_model,
+            dim_feedforward,
+            num_layers,
+            key_width,
+            value_width,
+            retention_min,
+            retention_max,
+            generator ?? torch.generator(),
+            init_scale,
+            dropout,
+            dtype);
+
+    public static ForgetMemoryDRNGpt forget_memory_drn_lm(
         int vocab_size,
         int context_length,
         int d_model,

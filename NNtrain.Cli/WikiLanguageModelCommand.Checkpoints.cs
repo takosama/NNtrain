@@ -110,7 +110,7 @@ internal static partial class WikiLanguageModelCommand
 
     internal static WikiResumePosition RestoreTrainingCheckpoint(
         WikiTrainingConfiguration config,
-        IWikiLanguageModel model,
+        LanguageModel model,
         IOptimizer optimizer,
         WarmupCosineProgressLRScheduler scheduler,
         ref ModuleState? bestState,
@@ -193,7 +193,7 @@ internal static partial class WikiLanguageModelCommand
         ModuleState bestState,
         float bestLoss,
         int bestEpoch,
-        IWikiLanguageModel model,
+        LanguageModel model,
         IOptimizer optimizer,
         WarmupCosineProgressLRScheduler scheduler,
         long globalStep,
@@ -238,7 +238,8 @@ internal static partial class WikiLanguageModelCommand
                 currentTokenBuffer,
                 model is Module module
                     ? module.DType
-                    : config.GetModelDType()));
+                    : config.GetModelDType(),
+                config.TieWordEmbeddings));
     }
 
     internal static string GetSafeTensorsPath(string checkpointPath)
@@ -405,5 +406,6 @@ internal static partial class WikiLanguageModelCommand
         long CurrentTargetCount = 0,
         long CompletedDocumentsInEpoch = 0,
         int[]? CurrentTokenBuffer = null,
-        TensorDType? ModelDType = null);
+        TensorDType? ModelDType = null,
+        bool TieWordEmbeddings = false);
 }

@@ -16,17 +16,17 @@
 
   "maxTrainingDocuments": 0,
   "maxTrainingTokens": 0,
-  "maxDocumentTokens": 1024,
+  "maxDocumentTokens": 512,
   "validationFraction": 0.0,
   "epochs": 1,
-  "batchSize": 2,
+  "batchSize":   96,
 
-  "contextLength": 1024,
+  "contextLength": 512,
   "modelWidth": 256,
   "heads": 8,
-  "hiddenSize": 512,
+  "hiddenSize": 768,
   "layers": 8,
-  "modelArchitecture": "forgetmemoryv2",
+  "modelArchitecture": "forgetmemorydrn",
   "device": "cuda",
   "deviceIndex": 0,
   "deviceIndices": [0, 1],
@@ -41,9 +41,9 @@
   "optimization": {
     "optimizer": {
       "type": "nekomuon",
-      "learningRate": 0.0003,
-      "auxiliaryLearningRate": 0.0003,
-      "nekoMuonNewtonSchulzInterval": 5,
+      "learningRate": 0.03,
+      "auxiliaryLearningRate": 0.03,
+      "nekoMuonNewtonSchulzInterval": 1,
       "weightDecay": 0.01,
       "adamWUseBFloat16FirstMoment": false,
       "adamWUseBFloat16SecondMoment": false
@@ -62,7 +62,7 @@
   "useSimd": true,
   "maxDegreeOfParallelism": 0,
 
-  "maxNewTokens": 80,
+  "maxNewTokens": 200,
   "temperature": 0.8,
   "topK": 40
 }

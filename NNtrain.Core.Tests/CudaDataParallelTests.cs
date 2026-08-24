@@ -4,6 +4,85 @@ using Xunit;
 public sealed class CudaDataParallelTests
 {
     [Fact]
+    public void TransformerCudaGenerationReusesInferenceArenaSafely()
+    {
+        if (Tensor.CudaDeviceCount == 0)
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            Tensor.CudaDeviceIndices = [0];
+            var model = new GptRinWikiJp(
+                vocabularySize: 32,
+                contextLength: 4,
+                dModel: 8,
+                numHeads: 2,
+                dHidden: 16,
+                numLayers: 1,
+                rng: new Random(29),
+                dtype: TensorDType.BFloat16);
+
+            for (int iteration = 0; iteration < 3; iteration++)
+            {
+                int[] generated = model.GenerateTokenIds(
+                    [1, 2],
+                    maxNewTokens: 6,
+                    temperature: 0f,
+                    stopTokenId: null,
+                    random: new Random(31));
+                Assert.Equal(8, generated.Length);
+                Assert.All(generated, token => Assert.InRange(token, 0, 31));
+            }
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndices = previousIndices;
+        }
+    }
+
+    [Fact]
+    public void TransformerTwoGpuForwardBackwardIsFinite()
+    {
+        if (Tensor.CudaDeviceCount < 2)
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            Tensor.CudaDeviceIndices = [0, 1];
+            var model = new GptRinWikiJp(
+                vocabularySize: 32,
+                contextLength: 4,
+                dModel: 8,
+                numHeads: 2,
+                dHidden: 16,
+                numLayers: 1,
+                rng: new Random(13),
+                dtype: TensorDType.BFloat16);
+
+            float loss = CudaDataParallel.ForwardBackward(
+                model,
+                [1, 2, 3, 4, 5, 6, 7, 8],
+                [2, 3, 4, 5, 6, 7, 8, 9],
+                batchSize: 2,
+                sequenceLength: 4);
+
+            Assert.True(float.IsFinite(loss));
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndices = previousIndices;
+        }
+    }
+
+    [Fact]
     public void TwoGpuGradientsMatchSingleGpu()
     {
         if (Tensor.CudaDeviceCount < 2)

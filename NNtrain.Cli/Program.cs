@@ -17,6 +17,7 @@ internal static partial class Program
 
         string configurationPath;
         string? generatePrompt = null;
+        string? generationConfigurationPath = null;
         bool resumeFromCheckpoint = false;
         bool autoResume = false;
         if (args.Length == 0)
@@ -75,6 +76,15 @@ internal static partial class Program
             configurationPath = args[1];
             autoResume = true;
         }
+        else if (args.Length == 2
+            && string.Equals(
+                args[0],
+                "--generate-config",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            configurationPath = string.Empty;
+            generationConfigurationPath = args[1];
+        }
         else if (args.Length == 4
             && string.Equals(
                 args[0],
@@ -92,12 +102,15 @@ internal static partial class Program
         {
             error.WriteLine(
                 "Usage: NNtrain.Cli [--config <training-config.json>] " +
-                "[--resume | --auto-resume | --generate <prompt>]");
+                "[--resume | --auto-resume | --generate <prompt>] " +
+                "[--generate-config <generate.json>]");
             return 1;
         }
 
         try
         {
+            if (generationConfigurationPath is not null)
+                return GenerateCommand.Run(generationConfigurationPath, output, error);
             if (WikiTrainingConfiguration.IsWikiConfiguration(
                 configurationPath))
             {
@@ -334,8 +347,12 @@ internal static partial class Program
                         : $", update {firstUpdate + 1}"));
             }
 
-            for (int epoch = firstEpoch; epoch <= config.Epochs; epoch++)
+            foreach (TrainingEpoch epochRun in TrainingRunner.Epochs(
+                firstEpoch,
+                config.Epochs,
+                firstUpdate))
             {
+                int epoch = epochRun.Number;
                 DataLoader trainLoader = torch.utils.data.DataLoader(
                     trainData,
                     batch_size: config.ResolvedMicroBatchSize,
@@ -347,7 +364,7 @@ internal static partial class Program
                         HashCode.Combine(
                             config.Seed ^ 0x51F15EED,
                             epoch)));
-                int resumeUpdate = epoch == firstEpoch ? firstUpdate : 0;
+                int resumeUpdate = epochRun.ResumeUnit;
                 IReadOnlyList<float> scheduledRates = resumeUpdate > 0
                     ? scheduler.get_last_lr()
                     : scheduler.step();
@@ -367,7 +384,7 @@ internal static partial class Program
                 var trainTimer = Stopwatch.StartNew();
                 int microBatchSize = trainLoader.batch_size;
                 int microBatchTotal = trainLoader.Count;
-                int updateTotal = DivideRoundUp(
+                int updateTotal = TrainingRunner.DivideRoundUp(
                     microBatchTotal,
                     config.MicroBatchCount);
                 using IEnumerator<DataBatch> trainingBatches =
@@ -443,7 +460,7 @@ internal static partial class Program
 
                     optimizer.step();
                     int completedUpdates = update + 1;
-                    if (CrossedCheckpointBoundary(
+                    if (TrainingRunner.ShouldSaveCheckpoint(
                         completedUpdates,
                         updateTotal))
                     {
@@ -628,29 +645,6 @@ internal static partial class Program
         }
     }
 
-    internal static int DivideRoundUp(int value, int divisor)
-    {
-        if (value < 0)
-            throw new ArgumentOutOfRangeException(nameof(value));
-        if (divisor <= 0)
-            throw new ArgumentOutOfRangeException(nameof(divisor));
-
-        return value / divisor + (value % divisor == 0 ? 0 : 1);
-    }
-
-    internal static bool CrossedCheckpointBoundary(
-        int completedUnits,
-        int totalUnits)
-    {
-        if (completedUnits <= 0 || completedUnits > totalUnits)
-            throw new ArgumentOutOfRangeException(nameof(completedUnits));
-        if (totalUnits <= 0)
-            throw new ArgumentOutOfRangeException(nameof(totalUnits));
-        int previousTenth = (completedUnits - 1) * 10 / totalUnits;
-        int currentTenth = completedUnits * 10 / totalUnits;
-        return currentTenth > previousTenth;
-    }
-
     internal static bool ResolveAutomaticResume(
         bool explicitResume,
         bool autoResume,
@@ -719,16 +713,6 @@ internal static partial class Program
             currentTrainingCorrect,
             currentTrainingSamples);
 
-    private static void Shuffle(int[] values, Random random)
-    {
-        for (int index = values.Length - 1; index > 0; index--)
-        {
-            int swapIndex = random.Next(index + 1);
-            (values[index], values[swapIndex]) =
-                (values[swapIndex], values[index]);
-        }
-    }
-
     private static string GetSimdStatus()
     {
         if (!Tensor.SimdEnabled)
@@ -750,7 +734,7 @@ internal static partial class Program
             TrainingConfiguration.GainShareAdamWOptimizer))
         {
             return optim.GainShareAdamW(
-                model.MakeGainShareParameterGroups(
+                model.make_gainshare_parameter_groups(
                     configuration.GainShareBlockDepth),
                 lr: configuration.LearningRate,
                 beta1: configuration.GainShareBeta1,
@@ -792,79 +776,6 @@ internal static partial class Program
             model.parameters(),
             lr: configuration.LearningRate,
             weight_decay: configuration.WeightDecay);
-    }
-
-    internal static float CalculateLearningRateFactor(
-        int epoch,
-        int totalEpochs,
-        int warmupEpochs,
-        float minimumRatio)
-    {
-        if (epoch <= 0 || epoch > totalEpochs)
-            throw new ArgumentOutOfRangeException(nameof(epoch));
-        if (totalEpochs <= 0)
-            throw new ArgumentOutOfRangeException(nameof(totalEpochs));
-        if (warmupEpochs < 0 || warmupEpochs >= totalEpochs)
-            throw new ArgumentOutOfRangeException(nameof(warmupEpochs));
-        if (!float.IsFinite(minimumRatio)
-            || minimumRatio <= 0f
-            || minimumRatio > 1f)
-        {
-            throw new ArgumentOutOfRangeException(nameof(minimumRatio));
-        }
-
-        if (warmupEpochs > 0 && epoch <= warmupEpochs)
-            return (float)epoch / warmupEpochs;
-
-        int decayEpochs = totalEpochs - warmupEpochs;
-        float progress = (float)(epoch - warmupEpochs) / decayEpochs;
-        float cosine = 0.5f * (1f + MathF.Cos(MathF.PI * progress));
-        return minimumRatio + (1f - minimumRatio) * cosine;
-    }
-
-    internal static LearningRates SetScheduledLearningRates(
-        IOptimizer optimizer,
-        TrainingConfiguration configuration,
-        int epoch)
-    {
-        ArgumentNullException.ThrowIfNull(optimizer);
-        ArgumentNullException.ThrowIfNull(configuration);
-
-        float factor = CalculateLearningRateFactor(
-            epoch,
-            configuration.Epochs,
-            configuration.WarmupEpochs,
-            configuration.MinimumLearningRateRatio);
-        float primary = configuration.LearningRate * factor;
-
-        if (optimizer is CompositeOptimizer composite)
-        {
-            if (composite.Optimizers.Count != 2
-                || composite.Optimizers[0]
-                    is not ILearningRateAdjustable primaryOptimizer
-                || composite.Optimizers[1]
-                    is not ILearningRateAdjustable auxiliaryOptimizer)
-            {
-                throw new InvalidOperationException(
-                    "The configured composite optimizer does not expose " +
-                    "the expected learning-rate groups.");
-            }
-
-            float auxiliary = configuration.AuxiliaryLearningRate * factor;
-            primaryOptimizer.SetLearningRate(primary);
-            auxiliaryOptimizer.SetLearningRate(auxiliary);
-            return new LearningRates(primary, auxiliary);
-        }
-
-        if (optimizer is not ILearningRateAdjustable adjustable)
-        {
-            throw new InvalidOperationException(
-                $"Optimizer '{optimizer.GetType().Name}' does not support " +
-                "learning-rate scheduling.");
-        }
-
-        adjustable.SetLearningRate(primary);
-        return new LearningRates(primary, null);
     }
 
     private static void SaveModelCheckpoint(

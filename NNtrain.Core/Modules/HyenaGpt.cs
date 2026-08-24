@@ -4,7 +4,7 @@ namespace NNtrain;
 /// A decoder-only Japanese language model whose sequence mixer is Hyena
 /// rather than self-attention.
 /// </summary>
-public sealed class HyenaGpt : Module, IWikiLanguageModel
+public sealed class HyenaGpt : LanguageModel
 {
     private readonly Parameter _tokenEmbedding;
     private readonly Dropout _embeddingDropout;
@@ -95,11 +95,11 @@ public sealed class HyenaGpt : Module, IWikiLanguageModel
             .ToArray();
     }
 
-    public int VocabularySize { get; }
+    public override int VocabularySize { get; }
 
-    public int ContextLength { get; }
+    public override int ContextLength { get; }
 
-    public int ModelWidth { get; }
+    public override int ModelWidth { get; }
 
     public int FilterWidth { get; }
 
@@ -108,21 +108,21 @@ public sealed class HyenaGpt : Module, IWikiLanguageModel
     /// <summary>
     /// Hyena, filter-MLP, and feed-forward matrix weights for NekoMuon.
     /// </summary>
-    public IReadOnlyList<Parameter> HiddenWeightParameters
+    public override IReadOnlyList<Parameter> HiddenWeightParameters
         => Array.AsReadOnly(_hiddenWeightParameters);
 
     /// <summary>
     /// Embeddings, normalization parameters, biases, diagonal terms, and the
     /// language-model head for the auxiliary optimizer.
     /// </summary>
-    public IReadOnlyList<Parameter> AuxiliaryParameters
+    public override IReadOnlyList<Parameter> AuxiliaryParameters
         => Array.AsReadOnly(_auxiliaryParameters);
 
     /// <summary>
     /// Returns next-token logits with shape
     /// [batchSize * sequenceLength, vocabularySize].
     /// </summary>
-    public Tensor Forward(
+    internal override Tensor Forward(
         int[] tokenIds,
         int batchSize,
         int sequenceLength)
@@ -160,7 +160,7 @@ public sealed class HyenaGpt : Module, IWikiLanguageModel
     /// Autoregressively samples token ids and returns the prompt plus generated
     /// continuation.
     /// </summary>
-    public int[] GenerateTokenIds(
+    internal override int[] GenerateTokenIds(
         IEnumerable<int> promptTokenIds,
         int maxNewTokens,
         float temperature = 0.8f,
@@ -197,9 +197,14 @@ public sealed class HyenaGpt : Module, IWikiLanguageModel
         try
         {
             using (AutogradContext.NoGrad())
+            using (CudaInferenceScope cacheSession = CudaInferenceScope.Begin(
+                resetPool: true,
+                clearPoolOnDispose: true))
             {
                 for (int generated = 0; generated < maxNewTokens; generated++)
                 {
+                    using CudaInferenceScope inferenceScope =
+                        CudaInferenceScope.Begin();
                     int sequenceLength = Math.Min(ContextLength, result.Count);
                     int[] context = result
                         .Skip(result.Count - sequenceLength)
@@ -228,7 +233,7 @@ public sealed class HyenaGpt : Module, IWikiLanguageModel
         return result.ToArray();
     }
 
-    public string Generate(
+    internal override string Generate(
         string prompt,
         BpeTokenizer tokenizer,
         int maxNewTokens,

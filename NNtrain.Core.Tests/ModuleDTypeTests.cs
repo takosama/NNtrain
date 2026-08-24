@@ -104,6 +104,34 @@ public sealed class ModuleDTypeTests
             });
     }
 
+    [Theory]
+    [InlineData(TensorDType.Float16)]
+    [InlineData(TensorDType.BFloat16)]
+    public void TransformerLanguageModelSupports16BitDTypes(
+        TensorDType dtype)
+    {
+        var model = new GptRinWikiJp(
+            vocabularySize: 7,
+            contextLength: 3,
+            dModel: 4,
+            numHeads: 1,
+            dHidden: 8,
+            numLayers: 1,
+            rng: new Random(53),
+            dtype: dtype);
+
+        Assert.Equal(dtype, model.DType);
+        Assert.All(
+            model.Parameters(),
+            parameter => Assert.Equal(dtype, parameter.T.DType));
+
+        Tensor logits = model.Forward([1, 2, 3], 1, 3);
+
+        Assert.Equal(dtype, logits.DType);
+        Assert.Equal(21, logits.Numel);
+        Assert.All(logits.Data, value => Assert.True(float.IsFinite(value)));
+    }
+
     [Fact]
     public void ForgetMemoryV2DefaultsToFloat16ThroughoutModelAndForward()
     {

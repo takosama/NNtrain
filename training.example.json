@@ -1,39 +1,53 @@
 {
-  "task": "gpt_rin_wiki_jp",
-  "dataPath": "data/wiki",
-  "textColumn": "text",
-  "tokenizerPath": "wiki-jp-bpe.json",
-  "checkpoint": {
-    "directory": "checkpoints",
-    "fileName": "training.forgetmemoryv2-wiki-jp.model.json",
-    "resume": false,
-    "autoResume": true
+  "schemaVersion": 2,
+  "task": {
+    "type": "wiki-language-model"
   },
-
-  "vocabularySize": 4000,
-  "tokenizerTrainingDocuments": 500000,
-  "tokenizerTrainingBytes": 2000000,
-
-  "maxTrainingDocuments": 0,
-  "maxTrainingTokens": 0,
-  "maxDocumentTokens": 4096,
-  "validationFraction": 0.0,
-  "epochs": 4,
-  "batchSize": 1,
-
-  "contextLength": 1024,
-  "modelWidth": 384,
-  "heads": 8,
-  "hiddenSize": 1152,
-  "layers": 16,
-  "modelArchitecture": "forgetmemoryv2",
-  "forgetMemoryKeyWidth": 16,
-  "forgetMemoryValueWidth": 16,
-  "forgetMemoryRetentionMinimum": 0.5,
-  "forgetMemoryRetentionMaximum": 0.99,
-  "dropout": 0.1,
-  "initializationScale": 0.02,
-
+  "data": {
+    "dataPath": "data/wiki",
+    "textColumn": "text",
+    "tokenizerPath": "wiki-jp-bpe.json",
+    "tokenizerTrainingDocuments": 500000,
+    "tokenizerTrainingBytes": 2000000,
+    "maxTrainingDocuments": 0,
+    "maxTrainingTokens": 0,
+    "maxDocumentTokens": 4096
+  },
+  "model": {
+    "vocabularySize": 4000,
+    "contextLength": 1024,
+    "modelWidth": 384,
+    "heads": 8,
+    "hiddenSize": 1152,
+    "layers": 16,
+    "modelArchitecture": "forgetmemoryv3",
+    "forgetMemoryKeyWidth": 16,
+    "forgetMemoryValueWidth": 16,
+    "forgetMemoryRetentionMinimum": 0.5,
+    "forgetMemoryRetentionMaximum": 0.99,
+    "dropout": 0.1,
+    "initializationScale": 0.02
+  },
+  "training": {
+    "validationFraction": 0.0,
+    "epochs": 4,
+    "batchSize": 1
+  },
+  "runtime": {
+    "seed": 1234,
+    "useSimd": true,
+    "maxDegreeOfParallelism": 0
+  },
+  "reporting": {
+    "logEveryBatches": 10,
+    "showLossGraph": true,
+    "graphUpdateSteps": 100,
+    "datasetSampleEverySteps": 1000,
+    "datasetSamplePoolSize": 32,
+    "maxNewTokens": 80,
+    "temperature": 0.8,
+    "topK": 40
+  },
   "optimization": {
     "optimizer": {
       "type": "adamw",
@@ -49,16 +63,10 @@
       "warmupPercent": 20
     }
   },
-  "seed": 1234,
-  "logEveryBatches": 10,
-  "showLossGraph": true,
-  "graphUpdateSteps": 100,
-  "datasetSampleEverySteps": 1000,
-  "datasetSamplePoolSize": 32,
-  "useSimd": true,
-  "maxDegreeOfParallelism": 0,
-
-  "maxNewTokens": 80,
-  "temperature": 0.8,
-  "topK": 40
+  "checkpoint": {
+    "directory": "checkpoints",
+    "fileName": "training.forgetmemoryv3-wiki-jp.model.json",
+    "resume": false,
+    "autoResume": true
+  }
 }

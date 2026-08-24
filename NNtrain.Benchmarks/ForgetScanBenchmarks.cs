@@ -291,7 +291,7 @@ public class ForgetScanOptimizerBenchmarks
     {
         Tensor.SimdEnabled = useSimd;
         Tensor.MaxDegreeOfParallelism = maxDegreeOfParallelism;
-        optimizer.Step();
+        optimizer.step();
     }
 }
 
@@ -356,7 +356,7 @@ public class ForgetMemoryV2AttentionBenchmarks
     public float ForgetMemoryV2()
         => Train(_memory);
 
-    private float Train(IWikiLanguageModel model)
+    private float Train(LanguageModel model)
     {
         foreach (Parameter parameter in model.Parameters())
             parameter.ZeroGrad();

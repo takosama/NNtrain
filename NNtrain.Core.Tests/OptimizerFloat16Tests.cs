@@ -97,7 +97,7 @@ public sealed class OptimizerFloat16Tests
             });
         long originalVersion = parameter.T.DataVersion;
 
-        optimizer.Step();
+        optimizer.step();
 
         Assert.Equal(originalVersion + 1, parameter.T.DataVersion);
         AssertShadowMatchesMaster(parameter);
@@ -276,7 +276,7 @@ public sealed class OptimizerFloat16Tests
                     WeightDecay = 0f,
                 }));
 
-        optimizer.Step();
+        optimizer.step();
 
         Assert.Equal(adamVersion + 1, adamParameter.T.DataVersion);
         Assert.Equal(lionVersion + 1, lionParameter.T.DataVersion);

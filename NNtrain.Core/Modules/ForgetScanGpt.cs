@@ -3,7 +3,7 @@ namespace NNtrain;
 /// <summary>
 /// Decoder-only language model using content-dependent forgetful state scans.
 /// </summary>
-public sealed class ForgetScanGpt : Module, IWikiLanguageModel
+public sealed class ForgetScanGpt : LanguageModel
 {
     private readonly Parameter _tokenEmbedding;
     private readonly Dropout _embeddingDropout;
@@ -84,19 +84,19 @@ public sealed class ForgetScanGpt : Module, IWikiLanguageModel
             .ToArray();
     }
 
-    public int VocabularySize { get; }
+    public override int VocabularySize { get; }
 
-    public int ContextLength { get; }
+    public override int ContextLength { get; }
 
-    public int ModelWidth { get; }
+    public override int ModelWidth { get; }
 
-    public IReadOnlyList<Parameter> HiddenWeightParameters
+    public override IReadOnlyList<Parameter> HiddenWeightParameters
         => Array.AsReadOnly(_hiddenWeightParameters);
 
-    public IReadOnlyList<Parameter> AuxiliaryParameters
+    public override IReadOnlyList<Parameter> AuxiliaryParameters
         => Array.AsReadOnly(_auxiliaryParameters);
 
-    public Tensor Forward(
+    internal override Tensor Forward(
         int[] tokenIds,
         int batchSize,
         int sequenceLength)
@@ -130,7 +130,7 @@ public sealed class ForgetScanGpt : Module, IWikiLanguageModel
             hidden.Reshape(batchSize * sequenceLength, ModelWidth));
     }
 
-    public int[] GenerateTokenIds(
+    internal override int[] GenerateTokenIds(
         IEnumerable<int> promptTokenIds,
         int maxNewTokens,
         float temperature = 0.8f,
@@ -167,9 +167,14 @@ public sealed class ForgetScanGpt : Module, IWikiLanguageModel
         try
         {
             using (AutogradContext.NoGrad())
+            using (CudaInferenceScope cacheSession = CudaInferenceScope.Begin(
+                resetPool: true,
+                clearPoolOnDispose: true))
             {
                 for (int generated = 0; generated < maxNewTokens; generated++)
                 {
+                    using CudaInferenceScope inferenceScope =
+                        CudaInferenceScope.Begin();
                     int sequenceLength = Math.Min(ContextLength, result.Count);
                     int[] context = result
                         .Skip(result.Count - sequenceLength)
@@ -198,7 +203,7 @@ public sealed class ForgetScanGpt : Module, IWikiLanguageModel
         return result.ToArray();
     }
 
-    public string Generate(
+    internal override string Generate(
         string prompt,
         BpeTokenizer tokenizer,
         int maxNewTokens,

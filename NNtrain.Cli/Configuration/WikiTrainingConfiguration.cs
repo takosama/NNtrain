@@ -16,7 +16,9 @@ sealed record WikiTrainingConfiguration
     internal const string HyenaArchitecture = "hyena";
     internal const string ForgetScanArchitecture = "forgetscan";
     internal const string ForgetMemoryV2Architecture = "forgetmemoryv2";
-    internal const string ForgetMemoryV2ArchitectureAlias = "forgetmemoryv2";
+    internal const string ForgetMemoryV2ArchitectureAlias = "frogetmemoryv2";
+    internal const string ForgetMemoryV3Architecture = "forgetmemoryv3";
+    internal const string ForgetMemoryDrnArchitecture = "forgetmemorydrn";
     internal const string Float16ModelDType = "float16";
     internal const string BFloat16ModelDType = "bfloat16";
     internal const string Float32ModelDType = "float32";
@@ -89,9 +91,11 @@ sealed record WikiTrainingConfiguration
     public int Layers { get; init; } = 4;
 
     public string ModelArchitecture { get; init; } =
-        ForgetMemoryV2Architecture;
+        ForgetMemoryV3Architecture;
 
     public string? ModelDType { get; init; }
+
+    public bool TieWordEmbeddings { get; init; }
 
     public string Device { get; init; } = CpuDevice;
 
@@ -174,8 +178,19 @@ sealed record WikiTrainingConfiguration
 
     internal static bool IsWikiConfiguration(string path)
     {
+        string json = File.ReadAllText(Path.GetFullPath(path));
+        TrainingConfigurationV2.NormalizedConfiguration normalized =
+            TrainingConfigurationV2.Normalize(json);
+        if (normalized.IsV2)
+        {
+            return string.Equals(
+                normalized.TaskType,
+                TrainingConfigurationV2.LanguageModelTask,
+                StringComparison.OrdinalIgnoreCase);
+        }
+
         using JsonDocument document = JsonDocument.Parse(
-            File.ReadAllText(Path.GetFullPath(path)),
+            json,
             new JsonDocumentOptions
             {
                 AllowTrailingCommas = true,
@@ -205,6 +220,19 @@ sealed record WikiTrainingConfiguration
     {
         string fullPath = Path.GetFullPath(path);
         string json = File.ReadAllText(fullPath);
+        TrainingConfigurationV2.NormalizedConfiguration normalized =
+            TrainingConfigurationV2.Normalize(json);
+        if (normalized.IsV2
+            && !string.Equals(
+                normalized.TaskType,
+                TrainingConfigurationV2.LanguageModelTask,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"Configuration task '{normalized.TaskType}' is not a " +
+                "wiki-language-model task.");
+        }
+        json = normalized.Json;
         using JsonDocument document = JsonDocument.Parse(
             json,
             new JsonDocumentOptions
@@ -481,23 +509,26 @@ sealed record WikiTrainingConfiguration
         if (!IsArchitecture(TransformerArchitecture)
             && !IsArchitecture(HyenaArchitecture)
             && !IsArchitecture(ForgetScanArchitecture)
-            && !IsForgetMemoryV2Architecture())
+            && !IsForgetMemoryArchitecture())
         {
             throw new ArgumentException(
                 $"Unsupported model architecture '{ModelArchitecture}'. " +
                 $"Supported architectures are '{TransformerArchitecture}' " +
                 $"'{HyenaArchitecture}', '{ForgetScanArchitecture}', and " +
-                $"'{ForgetMemoryV2Architecture}'.",
+                $"'{ForgetMemoryV2Architecture}', and " +
+                $"'{ForgetMemoryV3Architecture}', and " +
+                $"'{ForgetMemoryDrnArchitecture}'.",
                 nameof(ModelArchitecture));
         }
         TensorDType? explicitModelDType = GetExplicitModelDType();
         if (explicitModelDType is TensorDType.Float16
                 or TensorDType.BFloat16
-            && !IsForgetMemoryV2Architecture())
+            && !IsForgetMemoryArchitecture()
+            && !IsArchitecture(TransformerArchitecture))
         {
             throw new ArgumentException(
                 "16-bit model dtypes are currently supported only for the " +
-                $"'{ForgetMemoryV2Architecture}' architecture.",
+                "Transformer and ForgetMemory architectures.",
                 nameof(ModelDType));
         }
         _ = GetExecutionDevice();
@@ -688,6 +719,17 @@ sealed record WikiTrainingConfiguration
         => IsArchitecture(ForgetMemoryV2Architecture)
             || IsArchitecture(ForgetMemoryV2ArchitectureAlias);
 
+    internal bool IsForgetMemoryV3Architecture()
+        => IsArchitecture(ForgetMemoryV3Architecture);
+
+    internal bool IsForgetMemoryDrnArchitecture()
+        => IsArchitecture(ForgetMemoryDrnArchitecture);
+
+    internal bool IsForgetMemoryArchitecture()
+        => IsForgetMemoryV2Architecture()
+            || IsForgetMemoryV3Architecture()
+            || IsForgetMemoryDrnArchitecture();
+
     internal TensorDType? GetExplicitModelDType()
     {
         if (ModelDType is null)
@@ -724,7 +766,7 @@ sealed record WikiTrainingConfiguration
 
     internal TensorDType GetModelDType()
         => GetExplicitModelDType()
-            ?? (IsForgetMemoryV2Architecture()
+            ?? (IsForgetMemoryArchitecture()
                 ? TensorDType.Float16
                 : TensorDType.Float32);
 

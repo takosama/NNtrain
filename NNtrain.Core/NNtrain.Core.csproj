@@ -16,6 +16,12 @@
           Link="NNtrain.F16C.dll" />
   </ItemGroup>
 
+  <ItemGroup Condition="Exists('runtimes\win-x64\native\NNtrain.CudaKernels.dll')">
+    <None Include="runtimes\win-x64\native\NNtrain.CudaKernels.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="NNtrain.CudaKernels.dll" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="ILGPU" Version="1.5.3" />
     <PackageReference Include="ILGPU.Algorithms" Version="1.5.3" />

@@ -59,16 +59,45 @@ public sealed class CompositeOptimizer : IOptimizer
 
     internal IReadOnlyList<Parameter> Parameters { get; }
 
-    public void ZeroGrad()
+    internal void ZeroGrad()
     {
         foreach (IOptimizer optimizer in _optimizers)
-            optimizer.ZeroGrad();
+            optimizer.zero_grad();
     }
 
-    public void Step()
+    public void zero_grad() => ZeroGrad();
+
+    internal void Step()
     {
         foreach (IOptimizer optimizer in _optimizers)
-            optimizer.Step();
+            optimizer.step();
+    }
+
+    public void step() => Step();
+
+    public OptimizerStateDictionary state_dict()
+        => new(
+            "CompositeOptimizer",
+            StateJson: null,
+            _optimizers.Select(optimizer => optimizer.state_dict()).ToArray());
+
+    public void load_state_dict(OptimizerStateDictionary state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        if (!string.Equals(
+                state.OptimizerType,
+                "CompositeOptimizer",
+                StringComparison.Ordinal)
+            || state.Children is null
+            || state.Children.Length != _optimizers.Length)
+        {
+            throw new ArgumentException(
+                "Composite optimizer state does not match its children.",
+                nameof(state));
+        }
+
+        for (int index = 0; index < _optimizers.Length; index++)
+            _optimizers[index].load_state_dict(state.Children[index]);
     }
 
     private static IReadOnlyList<Parameter> GetParameters(

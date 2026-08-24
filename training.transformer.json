@@ -1,0 +1,69 @@
+{
+  "task": "gpt_rin_wiki_jp",
+  "dataPath": "data/wiki",
+  "textColumn": "text",
+  "tokenizerPath": "wiki-jp-bpe.json",
+  "checkpoint": {
+    "directory": "checkpoints",
+    "fileName": "training.transformer.tied.model.json",
+    "resume": false,
+    "autoResume": true
+  },
+
+  "vocabularySize": 11500,
+  "tokenizerTrainingDocuments": 1000000,
+  "tokenizerTrainingBytes": 200000000,
+
+  "maxTrainingDocuments": 0,
+  "maxTrainingTokens": 0,
+  "maxDocumentTokens": 512,
+  "validationFraction": 0.0,
+  "epochs": 2,
+  "batchSize": 48,
+
+  "contextLength": 512,
+  "modelWidth": 384,
+  "heads":16,
+  "hiddenSize": 1152,
+  "layers": 16,
+  "modelArchitecture": "transformer",
+  "device": "cuda",
+  "deviceIndex": 0,
+  "deviceIndices": [0, 1],
+  "modelDType": "bfloat16",
+  "tieWordEmbeddings": true,
+  "forgetMemoryKeyWidth": 16,
+  "forgetMemoryValueWidth": 16,
+  "forgetMemoryRetentionMinimum": 0.5,
+  "forgetMemoryRetentionMaximum": 0.99,
+  "dropout": 0.1,
+  "initializationScale": 0.02,
+
+  "optimization": {
+    "optimizer": {
+      "type": "nekomuon",
+      "learningRate": 0.03,
+      "auxiliaryLearningRate": 0.03,
+      "nekoMuonNewtonSchulzInterval":5,
+      "weightDecay": 0.01,
+      "adamWUseBFloat16FirstMoment": false,
+      "adamWUseBFloat16SecondMoment": false
+    },
+    "scheduler": {
+      "type": "warmupCosineProgress",
+      "warmupPercent": 20
+    }
+  },
+  "seed": 1234,
+  "logEveryBatches": 10,
+  "showLossGraph": true,
+  "graphUpdateSteps": 100,
+  "datasetSampleEverySteps": 100,
+  "datasetSamplePoolSize": 32,
+  "useSimd": true,
+  "maxDegreeOfParallelism": 0,
+
+  "maxNewTokens": 200,
+  "temperature": 0.8,
+  "topK": 40
+}

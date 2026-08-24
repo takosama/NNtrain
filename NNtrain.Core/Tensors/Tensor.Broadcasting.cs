@@ -36,6 +36,24 @@ partial class Tensor
             && !plan.LeftIsScalar
             && !plan.RightIsScalar)
         {
+            if (left.DType == TensorDType.BFloat16
+                && right.DType == TensorDType.BFloat16)
+            {
+                var bfloat16Buffer =
+                    TensorCudaKernels.AddForwardBFloat16Resident(left, right);
+                Tensor bfloat16Result = FromCudaResult(
+                    bfloat16Buffer,
+                    CudaDeviceIndex,
+                    plan.ResultShape,
+                    [left, right],
+                    TensorDType.BFloat16);
+                bfloat16Result.Node.BackwardAction = () =>
+                    TensorCudaKernels.AddBackwardResident(
+                        bfloat16Result,
+                        left,
+                        right);
+                return bfloat16Result;
+            }
             var cudaBuffer = TensorCudaKernels.AddForwardResident(
                 left,
                 right,

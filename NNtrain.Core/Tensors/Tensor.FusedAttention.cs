@@ -44,6 +44,122 @@ partial class Tensor
 
         int headWidth = modelWidth / numHeads;
         float scale = 1f / MathF.Sqrt(headWidth);
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            int deviceIndex = CudaDeviceIndex;
+            if (DType == TensorDType.BFloat16)
+            {
+                var bfloat16Context = CudaOperationProfiler.IsEnabled
+                    ? CudaOperationProfiler.Measure(
+                        "forward.attention",
+                        () => TensorCudaKernels.AttentionForwardBFloat16Resident(
+                            this,
+                            batch,
+                            sequence,
+                            modelWidth,
+                            numHeads,
+                            causal))
+                    : TensorCudaKernels.AttentionForwardBFloat16Resident(
+                        this,
+                        batch,
+                        sequence,
+                        modelWidth,
+                        numHeads,
+                        causal);
+                int[] bfloat16OutputShape = Rank == 3
+                    ? [batch, sequence, modelWidth]
+                    : [sequence, modelWidth];
+                Tensor bfloat16Result = FromCudaResult(
+                    bfloat16Context.Output,
+                    deviceIndex,
+                    bfloat16OutputShape,
+                    [this],
+                    TensorDType.BFloat16);
+                if (AutogradContext.IsRecordingEnabled)
+                {
+                    bfloat16Result.Node.RegisterResource(bfloat16Context);
+                    bfloat16Result.Node.BackwardAction = () =>
+                    {
+                        if (CudaOperationProfiler.IsEnabled)
+                        {
+                            CudaOperationProfiler.Measure(
+                                "backward.attention",
+                                () => TensorCudaKernels
+                                    .AttentionBackwardBFloat16Resident(
+                                        this,
+                                        bfloat16Result,
+                                        bfloat16Context,
+                                        batch,
+                                        sequence,
+                                        modelWidth,
+                                        numHeads,
+                                        causal));
+                        }
+                        else
+                        {
+                            TensorCudaKernels.AttentionBackwardBFloat16Resident(
+                                this,
+                                bfloat16Result,
+                                bfloat16Context,
+                                batch,
+                                sequence,
+                                modelWidth,
+                                numHeads,
+                                causal);
+                        }
+                    };
+                }
+                else if (!CudaInferenceScope.TrackResource(bfloat16Context))
+                {
+                    bfloat16Context.Dispose();
+                }
+                return bfloat16Result;
+            }
+            var cudaContext = CudaOperationProfiler.IsEnabled
+                ? CudaOperationProfiler.Measure(
+                    "forward.attention",
+                    () => TensorCudaKernels.AttentionForwardResident(
+                        this, batch, sequence, modelWidth, numHeads, causal))
+                : TensorCudaKernels.AttentionForwardResident(
+                    this, batch, sequence, modelWidth, numHeads, causal);
+            int[] cudaOutputShape = Rank == 3
+                ? [batch, sequence, modelWidth]
+                : [sequence, modelWidth];
+            Tensor cudaResult = FromCudaResult(
+                cudaContext.Output, deviceIndex, cudaOutputShape, [this]);
+            if (AutogradContext.IsRecordingEnabled)
+            {
+                cudaResult.Node.RegisterResource(cudaContext);
+                cudaResult.Node.BackwardAction = () =>
+                {
+                    if (CudaOperationProfiler.IsEnabled)
+                    {
+                        CudaOperationProfiler.Measure(
+                            "backward.attention",
+                            () => TensorCudaKernels.AttentionBackwardResident(
+                                this, cudaResult, cudaContext, batch, sequence,
+                                modelWidth, numHeads, causal));
+                    }
+                    else
+                    {
+                        TensorCudaKernels.AttentionBackwardResident(
+                            this, cudaResult, cudaContext, batch, sequence,
+                            modelWidth, numHeads, causal);
+                    }
+                };
+            }
+            else
+            {
+                if (!CudaInferenceScope.TrackResource(cudaContext))
+                    cudaContext.Dispose();
+            }
+            return cudaResult;
+        }
+
+        // Only the CPU implementation reads the host-side QKV array.  Keeping
+        // this below the CUDA dispatch avoids a full device-to-host copy and a
+        // stream synchronization for every Transformer layer.
+        EnsureHostDataCurrent();
         int workItemCount = checked(batch * numHeads);
         int probabilityMatrixLength = checked(sequence * sequence);
         float[] probabilities = new float[
@@ -132,8 +248,11 @@ partial class Tensor
             ? [batch, sequence, modelWidth]
             : [sequence, modelWidth];
         var result = new Tensor(output, outputShape, [this]);
+        result.EnsureHostGradientStorage();
         result.Node.BackwardAction = () =>
         {
+            result.EnsureHostGradientStorage();
+            EnsureHostGradientStorage();
             void BackwardHead(int workItem)
             {
                 int batchIndex = workItem / numHeads;

@@ -1,6 +1,6 @@
 ﻿namespace NNtrain;
 
-public class TransformerClassifier : Module, IClassificationModel
+public class TransformerClassifier : Module
 {
     private readonly TransformerBlock[] _blocks;
     private readonly Parameter[] _hiddenWeightParameters;
@@ -13,10 +13,6 @@ public class TransformerClassifier : Module, IClassificationModel
     public int DModel { get; }
     public int SeqLen { get; }
     public int NumClasses { get; }
-
-    int IClassificationModel.InputRows => SeqLen;
-    int IClassificationModel.InputColumns => DModel;
-    int IClassificationModel.ClassCount => NumClasses;
 
     public TransformerClassifier(
         int seqLen,

@@ -6,8 +6,117 @@ using ILGPU.Runtime.Cuda;
 namespace NNtrain;
 
 /// <summary>CUDA kernels shared by the ForgetMemory training graph.</summary>
-internal static class TensorCudaKernels
+internal static partial class TensorCudaKernels
 {
+    internal static AttentionResidentContext
+        AttentionForwardResident(
+            Tensor projected,
+            int batch,
+            int sequence,
+            int modelWidth,
+            int numHeads,
+            bool causal)
+    {
+        int deviceIndex = Tensor.CudaDeviceIndex;
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+        var input = projected.EnsureCudaFloat32Buffer(deviceIndex);
+        var output = Tensor.RentCudaFloatBuffer(
+            deviceIndex, checked(batch * sequence * modelWidth));
+        if (CudaFlashAttention.TryForward(accelerator, input, output, batch,
+            sequence, modelWidth, numHeads, causal))
+        {
+            return new AttentionResidentContext(
+                output, null, accelerator, nativeFlashAttention: true);
+        }
+        int queries = checked(batch * numHeads * sequence);
+        var probabilities = Tensor.RentCudaFloatBuffer(
+            deviceIndex, checked(queries * sequence));
+        var scoreKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>,
+            int, int, int, int, int>(AttentionScoreKernel);
+        scoreKernel(checked(queries * sequence), input.View, probabilities.View,
+            sequence, modelWidth, numHeads, modelWidth / numHeads,
+            causal ? 1 : 0);
+        var softmaxKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, int, int>(AttentionSoftmaxKernel);
+        softmaxKernel(queries, probabilities.View, sequence, causal ? 1 : 0);
+        var outputKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
+            int, int, int, int>(AttentionOutputKernel);
+        outputKernel(checked(batch * sequence * modelWidth), input.View,
+            probabilities.View, output.View, sequence, modelWidth, numHeads,
+            modelWidth / numHeads);
+        return new AttentionResidentContext(
+            output, probabilities, accelerator);
+    }
+
+    internal static void AttentionBackwardResident(
+        Tensor projected,
+        Tensor output,
+        AttentionResidentContext context,
+        int batch,
+        int sequence,
+        int modelWidth,
+        int numHeads,
+        bool causal)
+    {
+        int deviceIndex = Tensor.CudaDeviceIndex;
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+        var input = projected.EnsureCudaFloat32Buffer(deviceIndex);
+        var outputGradient = output.EnsureCudaGradientBuffer(deviceIndex);
+        var inputGradient = projected.EnsureCudaGradientBuffer(deviceIndex);
+        if (context.NativeFlashAttention)
+        {
+            CudaFlashAttention.Backward(accelerator, input, context.Output,
+                outputGradient, inputGradient, batch, sequence, modelWidth,
+                numHeads, causal);
+            projected.MarkCudaGradientMutated(deviceIndex);
+            return;
+        }
+        int queries = checked(batch * numHeads * sequence);
+        var scoreGradients = Tensor.RentCudaFloatBuffer(
+            deviceIndex, checked(queries * sequence));
+        var scoreGradientKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
+            ArrayView<float>, int, int, int, int>(
+                AttentionScoreGradientKernel);
+        scoreGradientKernel(queries, input.View, outputGradient.View,
+            context.Probabilities!.View, scoreGradients.View, sequence,
+            modelWidth, numHeads, modelWidth / numHeads);
+        var projectedGradientKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
+            ArrayView<float>, ArrayView<float>, int, int, int, int, int>(
+                AttentionProjectedGradientKernel);
+        projectedGradientKernel(projected.Numel, input.View,
+            outputGradient.View, context.Probabilities.View,
+            scoreGradients.View, inputGradient.View, sequence, modelWidth,
+            numHeads, modelWidth / numHeads, causal ? 1 : 0);
+        // The scratch buffer can be returned immediately: all users run on
+        // the same ordered CUDA stream, so a later renter is ordered after
+        // this kernel without a host-side barrier.
+        Tensor.ReturnCudaFloatBuffer(accelerator, scoreGradients);
+        projected.MarkCudaGradientMutated(deviceIndex);
+    }
+
+    internal sealed class AttentionResidentContext(
+        MemoryBuffer1D<float, Stride1D.Dense> output,
+        MemoryBuffer1D<float, Stride1D.Dense>? probabilities,
+        CudaAccelerator accelerator,
+        bool nativeFlashAttention = false) : IDisposable
+    {
+        private int _disposed;
+        internal MemoryBuffer1D<float, Stride1D.Dense> Output { get; } = output;
+        internal MemoryBuffer1D<float, Stride1D.Dense>? Probabilities { get; } = probabilities;
+        internal bool NativeFlashAttention { get; } = nativeFlashAttention;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            if (Probabilities is not null)
+                Tensor.ReturnCudaFloatBuffer(accelerator, Probabilities);
+        }
+    }
+
     internal static float ClipGradientNormResident(
         IReadOnlyList<Parameter> parameters,
         float maxNorm)
@@ -98,10 +207,17 @@ internal static class TensorCudaKernels
 
     internal static void AllReduceGradientsResident(
         IReadOnlyList<Parameter> parameters,
-        IReadOnlyList<int> deviceIndices)
+        IReadOnlyList<int> deviceIndices,
+        FlatGradientPlan? flatPlan = null)
     {
         if (deviceIndices.Count < 2)
             return;
+        if (flatPlan is not null
+            && flatPlan.Matches(parameters, deviceIndices))
+        {
+            AllReduceFlatGradientsResident(parameters, deviceIndices, flatPlan);
+            return;
+        }
         int primaryIndex = deviceIndices[0];
         CudaAccelerator primary =
             ForgetMemoryV2Cuda.GetAccelerator(primaryIndex);
@@ -114,8 +230,6 @@ internal static class TensorCudaKernels
             CudaAccelerator secondary =
                 ForgetMemoryV2Cuda.GetAccelerator(secondaryIndex);
             secondary.Synchronize();
-            var stagingBuffers = new List<
-                MemoryBuffer1D<float, Stride1D.Dense>>(parameters.Count);
             foreach (Parameter parameter in parameters)
             {
                 Tensor tensor = parameter.T;
@@ -123,17 +237,11 @@ internal static class TensorCudaKernels
                     tensor.EnsureCudaGradientBuffer(primaryIndex);
                 var secondaryGradient =
                     tensor.EnsureCudaGradientBuffer(secondaryIndex);
-                var staging = primary.Allocate1D<float>(tensor.Numel);
-                stagingBuffers.Add(staging);
+                var staging = tensor.EnsureCudaStagingBuffer(primaryIndex);
                 secondaryGradient.View.CopyTo(staging.View);
                 addKernel(tensor.Numel, staging.View, primaryGradient.View);
             }
             primary.Synchronize();
-            foreach (MemoryBuffer1D<float, Stride1D.Dense> staging
-                in stagingBuffers)
-            {
-                staging.Dispose();
-            }
         }
 
         foreach (int secondaryIndex in deviceIndices.Skip(1))
@@ -155,17 +263,224 @@ internal static class TensorCudaKernels
             parameter.T.MarkCudaGradientsSynchronized(deviceIndices);
     }
 
+    private static void AllReduceFlatGradientsResident(
+        IReadOnlyList<Parameter> parameters,
+        IReadOnlyList<int> deviceIndices,
+        FlatGradientPlan plan)
+    {
+        Parallel.For(0, deviceIndices.Count, device =>
+        {
+            int deviceIndex = deviceIndices[device];
+            CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+            var flat = plan.GetFlatBuffer(deviceIndex);
+            flat.MemSetToZero();
+            var pack = accelerator.LoadAutoGroupedStreamKernel<
+                Index1D, ArrayView<float>, ArrayView<float>, int>(PackGradientKernel);
+            for (int parameter = 0; parameter < parameters.Count; parameter++)
+            {
+                Tensor tensor = parameters[parameter].T;
+                var gradient = tensor.EnsureCudaGradientBuffer(deviceIndex);
+                pack(tensor.Numel, gradient.View, flat.View, plan.Offsets[parameter]);
+            }
+            accelerator.Synchronize();
+        });
+
+        if (deviceIndices.Count == 2)
+        {
+            // Preserve both original gradients before either device starts
+            // accumulating. This removes the GPU-0 gather/broadcast bottleneck.
+            Parallel.For(0, 2, device =>
+            {
+                int destinationIndex = deviceIndices[device];
+                int sourceIndex = deviceIndices[1 - device];
+                plan.GetFlatBuffer(sourceIndex).View.CopyTo(
+                    plan.GetStagingBuffer(destinationIndex).View);
+                ForgetMemoryV2Cuda.GetAccelerator(destinationIndex).Synchronize();
+            });
+
+            Parallel.For(0, 2, device =>
+            {
+                int deviceIndex = deviceIndices[device];
+                CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+                var add = accelerator.LoadAutoGroupedStreamKernel<
+                    Index1D, ArrayView<float>, ArrayView<float>>(AccumulateKernel);
+                add(
+                    plan.TotalElements,
+                    plan.GetStagingBuffer(deviceIndex).View,
+                    plan.GetFlatBuffer(deviceIndex).View);
+                accelerator.Synchronize();
+            });
+        }
+        else
+        {
+            // Ring all-reduce for N devices. The staging/exchange buffers carry
+            // one immutable contribution around the ring while each device
+            // accumulates locally into its flat buffer.
+            Parallel.For(0, deviceIndices.Count, device =>
+            {
+                int deviceIndex = deviceIndices[device];
+                plan.GetFlatBuffer(deviceIndex).View.CopyTo(
+                    plan.GetStagingBuffer(deviceIndex).View);
+                ForgetMemoryV2Cuda.GetAccelerator(deviceIndex).Synchronize();
+            });
+
+            for (int round = 0; round < deviceIndices.Count - 1; round++)
+            {
+                bool stagingIsSource = (round & 1) == 0;
+                Parallel.For(0, deviceIndices.Count, device =>
+                {
+                    int destinationIndex = deviceIndices[device];
+                    int predecessorIndex = deviceIndices[
+                        (device + deviceIndices.Count - 1) % deviceIndices.Count];
+                    var source = stagingIsSource
+                        ? plan.GetStagingBuffer(predecessorIndex)
+                        : plan.GetExchangeBuffer(predecessorIndex);
+                    var destination = stagingIsSource
+                        ? plan.GetExchangeBuffer(destinationIndex)
+                        : plan.GetStagingBuffer(destinationIndex);
+                    source.View.CopyTo(destination.View);
+                    ForgetMemoryV2Cuda.GetAccelerator(destinationIndex).Synchronize();
+                });
+
+                Parallel.For(0, deviceIndices.Count, device =>
+                {
+                    int deviceIndex = deviceIndices[device];
+                    CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+                    var received = stagingIsSource
+                        ? plan.GetExchangeBuffer(deviceIndex)
+                        : plan.GetStagingBuffer(deviceIndex);
+                    var add = accelerator.LoadAutoGroupedStreamKernel<
+                        Index1D, ArrayView<float>, ArrayView<float>>(AccumulateKernel);
+                    add(
+                        plan.TotalElements,
+                        received.View,
+                        plan.GetFlatBuffer(deviceIndex).View);
+                    accelerator.Synchronize();
+                });
+            }
+        }
+
+        Parallel.For(0, deviceIndices.Count, device =>
+        {
+            int deviceIndex = deviceIndices[device];
+            CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+            var flat = plan.GetFlatBuffer(deviceIndex);
+            var unpack = accelerator.LoadAutoGroupedStreamKernel<
+                Index1D, ArrayView<float>, ArrayView<float>, int>(UnpackGradientKernel);
+            for (int parameter = 0; parameter < parameters.Count; parameter++)
+            {
+                Tensor tensor = parameters[parameter].T;
+                var gradient = tensor.EnsureCudaGradientBuffer(deviceIndex);
+                unpack(tensor.Numel, flat.View, gradient.View, plan.Offsets[parameter]);
+            }
+            accelerator.Synchronize();
+        });
+        foreach (Parameter parameter in parameters)
+            parameter.T.MarkCudaGradientsSynchronized(deviceIndices);
+    }
+
+    internal sealed class FlatGradientPlan : IDisposable
+    {
+        private readonly Parameter[] _parameters;
+        private readonly int[] _devices;
+        private readonly Dictionary<int, MemoryBuffer1D<float, Stride1D.Dense>> _flat = [];
+        private readonly Dictionary<int, MemoryBuffer1D<float, Stride1D.Dense>> _staging = [];
+        private readonly Dictionary<int, MemoryBuffer1D<float, Stride1D.Dense>> _exchange = [];
+
+        internal FlatGradientPlan(
+            IReadOnlyList<Parameter> parameters,
+            IReadOnlyList<int> devices)
+        {
+            _parameters = parameters.ToArray();
+            _devices = devices.ToArray();
+            Offsets = new int[_parameters.Length];
+            int total = 0;
+            for (int index = 0; index < _parameters.Length; index++)
+            {
+                Offsets[index] = total;
+                total = checked(total + _parameters[index].T.Numel);
+            }
+            TotalElements = total;
+            foreach (int device in _devices)
+            {
+                CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator(device);
+                _flat[device] = accelerator.Allocate1D<float>(total);
+                _staging[device] = accelerator.Allocate1D<float>(total);
+                if (_devices.Length > 2)
+                    _exchange[device] = accelerator.Allocate1D<float>(total);
+            }
+        }
+
+        internal int[] Offsets { get; }
+        internal int TotalElements { get; }
+        internal MemoryBuffer1D<float, Stride1D.Dense> GetFlatBuffer(int device)
+            => _flat[device];
+        internal MemoryBuffer1D<float, Stride1D.Dense> GetStagingBuffer(int device)
+            => _staging[device];
+        internal MemoryBuffer1D<float, Stride1D.Dense> GetExchangeBuffer(int device)
+            => _exchange[device];
+        internal bool Matches(
+            IReadOnlyList<Parameter> parameters,
+            IReadOnlyList<int> devices)
+            => parameters.Count == _parameters.Length
+                && devices.SequenceEqual(_devices)
+                && parameters.Select((parameter, index) =>
+                    ReferenceEquals(parameter, _parameters[index])).All(value => value);
+
+        public void Dispose()
+        {
+            foreach (var buffer in _flat.Values)
+                buffer.Dispose();
+            foreach (var buffer in _staging.Values)
+                buffer.Dispose();
+            foreach (var buffer in _exchange.Values)
+                buffer.Dispose();
+            _flat.Clear();
+            _staging.Clear();
+            _exchange.Clear();
+        }
+    }
+
     internal static MemoryBuffer1D<float, Stride1D.Dense> CopyForwardResident(
         Tensor input)
     {
         CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
         var inputBuffer = input.EnsureCudaFloat32Buffer();
-        var outputBuffer = accelerator.Allocate1D<float>(input.Numel);
+        var outputBuffer = Tensor.RentCudaFloatBuffer(
+            Tensor.CudaDeviceIndex, input.Numel);
         var kernel = accelerator.LoadAutoGroupedStreamKernel<
             Index1D, ArrayView<float>, ArrayView<float>>(CopyKernel);
         kernel(input.Numel, inputBuffer.View, outputBuffer.View);
-        accelerator.Synchronize();
         return outputBuffer;
+    }
+
+    internal static MemoryBuffer1D<float, Stride1D.Dense>
+        CopyRangeForwardResident(Tensor input, int sourceOffset, int length)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        var inputBuffer = input.EnsureCudaFloat32Buffer();
+        var outputBuffer = Tensor.RentCudaFloatBuffer(
+            Tensor.CudaDeviceIndex, length);
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, int>(CopyRangeKernel);
+        kernel(length, inputBuffer.View, outputBuffer.View, sourceOffset);
+        return outputBuffer;
+    }
+
+    internal static void AccumulateGradientRangeResident(
+        Tensor source,
+        Tensor destination,
+        int destinationOffset)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        var sourceBuffer = source.EnsureCudaGradientBuffer();
+        var destinationBuffer = destination.EnsureCudaGradientBuffer();
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, int>(
+                AccumulateRangeKernel);
+        kernel(source.Numel, sourceBuffer.View, destinationBuffer.View,
+            destinationOffset);
+        destination.MarkCudaGradientMutated();
     }
 
     internal static void AccumulateGradientResident(
@@ -178,7 +493,6 @@ internal static class TensorCudaKernels
         var kernel = accelerator.LoadAutoGroupedStreamKernel<
             Index1D, ArrayView<float>, ArrayView<float>>(AccumulateKernel);
         kernel(source.Numel, sourceBuffer.View, destinationBuffer.View);
-        accelerator.Synchronize();
         destination.MarkCudaGradientMutated();
     }
 
@@ -190,7 +504,8 @@ internal static class TensorCudaKernels
         CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
         var leftBuffer = left.EnsureCudaFloat32Buffer();
         var rightBuffer = right.EnsureCudaFloat32Buffer();
-        var outputBuffer = accelerator.Allocate1D<float>(left.Numel);
+        var outputBuffer = Tensor.RentCudaFloatBuffer(
+            Tensor.CudaDeviceIndex, left.Numel);
         var kernel = accelerator.LoadAutoGroupedStreamKernel<
             Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>, int>(
                 AddForwardKernel);
@@ -200,7 +515,6 @@ internal static class TensorCudaKernels
             rightBuffer.View,
             outputBuffer.View,
             bfloat16Compute ? 1 : 0);
-        accelerator.Synchronize();
         return outputBuffer;
     }
 
@@ -224,7 +538,6 @@ internal static class TensorCudaKernels
             leftGradient.View,
             rightGradient.View,
             ReferenceEquals(left, right) ? 1 : 0);
-        accelerator.Synchronize();
         left.MarkCudaGradientMutated();
         if (!ReferenceEquals(left, right))
             right.MarkCudaGradientMutated();
@@ -239,8 +552,8 @@ internal static class TensorCudaKernels
         CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
         var tableBuffer = table.EnsureCudaFloat32Buffer();
         using var indicesBuffer = accelerator.Allocate1D(indices);
-        var outputBuffer = accelerator.Allocate1D<float>(
-            checked(indices.Length * width));
+        var outputBuffer = Tensor.RentCudaFloatBuffer(
+            Tensor.CudaDeviceIndex, checked(indices.Length * width));
         var kernel = accelerator.LoadAutoGroupedStreamKernel<
             Index1D, ArrayView<float>, ArrayView<int>, ArrayView<float>, int>(
                 EmbeddingForwardKernel);
@@ -277,6 +590,68 @@ internal static class TensorCudaKernels
         table.MarkCudaGradientMutated();
     }
 
+    internal static EmbeddingPositionsResidentContext
+        EmbeddingWithPositionsForwardResident(
+            Tensor tokenTable,
+            Tensor positionTable,
+            int[] indices,
+            int sequenceLength,
+            int width)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        var tokens = tokenTable.EnsureCudaFloat32Buffer();
+        var positions = positionTable.EnsureCudaFloat32Buffer();
+        var indicesBuffer = Tensor.RentCudaIntBuffer(
+            Tensor.CudaDeviceIndex, indices);
+        var output = Tensor.RentCudaFloatBuffer(
+            Tensor.CudaDeviceIndex, checked(indices.Length * width));
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<int>,
+            ArrayView<float>, int, int>(EmbeddingPositionsForwardKernel);
+        kernel(checked(indices.Length * width), tokens.View, positions.View,
+            indicesBuffer.View, output.View, sequenceLength, width);
+        return new EmbeddingPositionsResidentContext(
+            output, indicesBuffer, accelerator);
+    }
+
+    internal static void EmbeddingWithPositionsBackwardResident(
+        Tensor output,
+        Tensor tokenTable,
+        Tensor positionTable,
+        EmbeddingPositionsResidentContext context,
+        int sequenceLength,
+        int width)
+    {
+        CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        var outputGradient = output.EnsureCudaGradientBuffer();
+        var tokenGradient = tokenTable.EnsureCudaGradientBuffer();
+        var positionGradient = positionTable.EnsureCudaGradientBuffer();
+        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<int>, ArrayView<float>, ArrayView<float>,
+            ArrayView<float>, int, int>(EmbeddingPositionsBackwardKernel);
+        kernel(output.Numel, context.Indices.View, outputGradient.View,
+            tokenGradient.View, positionGradient.View, sequenceLength, width);
+        tokenTable.MarkCudaGradientMutated();
+        positionTable.MarkCudaGradientMutated();
+    }
+
+    internal sealed class EmbeddingPositionsResidentContext(
+        MemoryBuffer1D<float, Stride1D.Dense> output,
+        MemoryBuffer1D<int, Stride1D.Dense> indices,
+        CudaAccelerator accelerator) : IDisposable
+    {
+        private int _disposed;
+        internal MemoryBuffer1D<float, Stride1D.Dense> Output { get; } = output;
+        internal MemoryBuffer1D<int, Stride1D.Dense> Indices { get; } = indices;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            Tensor.ReturnCudaIntBuffer(accelerator, Indices);
+            GC.SuppressFinalize(this);
+        }
+    }
+
     internal static MemoryBuffer1D<float, Stride1D.Dense>
         DropoutForwardResident(
             Tensor input,
@@ -286,7 +661,8 @@ internal static class TensorCudaKernels
     {
         CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
         var inputBuffer = input.EnsureCudaFloat32Buffer();
-        var outputBuffer = accelerator.Allocate1D<float>(input.Numel);
+        var outputBuffer = Tensor.RentCudaFloatBuffer(
+            Tensor.CudaDeviceIndex, input.Numel);
         var kernel = accelerator.LoadAutoGroupedStreamKernel<
             Index1D, ArrayView<float>, ArrayView<float>, uint, uint, float>(
                 DropoutForwardKernel);
@@ -297,7 +673,6 @@ internal static class TensorCudaKernels
             seed,
             dropThreshold,
             scale);
-        accelerator.Synchronize();
         return outputBuffer;
     }
 
@@ -321,7 +696,6 @@ internal static class TensorCudaKernels
             seed,
             dropThreshold,
             scale);
-        accelerator.Synchronize();
         input.MarkCudaGradientMutated();
     }
 
@@ -336,7 +710,8 @@ internal static class TensorCudaKernels
         CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
         var residualBuffer = residual.EnsureCudaFloat32Buffer();
         var branchBuffer = branch.EnsureCudaFloat32Buffer();
-        var outputBuffer = accelerator.Allocate1D<float>(residual.Numel);
+        var outputBuffer = Tensor.RentCudaFloatBuffer(
+            Tensor.CudaDeviceIndex, residual.Numel);
         var kernel = accelerator.LoadAutoGroupedStreamKernel<
             Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
             uint, uint, float>(AddDropoutForwardKernel);
@@ -348,7 +723,6 @@ internal static class TensorCudaKernels
             seed,
             dropThreshold,
             scale);
-        accelerator.Synchronize();
         return outputBuffer;
     }
 
@@ -379,7 +753,6 @@ internal static class TensorCudaKernels
             seed,
             dropThreshold,
             scale);
-        accelerator.Synchronize();
         residual.MarkCudaGradientMutated();
         if (!sameParent)
             branch.MarkCudaGradientMutated();
@@ -561,8 +934,8 @@ internal static class TensorCudaKernels
         var inputBuffer = input.EnsureCudaFloat32Buffer(deviceIndex);
         var weightBuffer = weight.EnsureCudaFloat32Buffer(deviceIndex);
         var biasBuffer = bias.EnsureCudaFloat32Buffer(deviceIndex);
-        var outputBuffer = accelerator.Allocate1D<float>(
-            checked(rows * outputWidth));
+        var outputBuffer = Tensor.RentCudaFloatBuffer(
+            deviceIndex, checked(rows * outputWidth));
         CudaBlas.LinearForward(
             accelerator,
             deviceIndex,
@@ -583,7 +956,6 @@ internal static class TensorCudaKernels
             outputWidth,
             applyRelu ? 1 : 0,
             bfloat16Compute ? 1 : 0);
-        accelerator.Synchronize();
         return outputBuffer;
     }
 
@@ -645,7 +1017,6 @@ internal static class TensorCudaKernels
             biasGradientBuffer.View,
             rows,
             outputWidth);
-        accelerator.Synchronize();
         input.MarkCudaGradientMutated(deviceIndex);
         weight.MarkCudaGradientMutated(deviceIndex);
         bias.MarkCudaGradientMutated(deviceIndex);
@@ -884,9 +1255,10 @@ internal static class TensorCudaKernels
         var inputBuffer = input.EnsureCudaFloat32Buffer();
         var gammaBuffer = gamma.EnsureCudaFloat32Buffer();
         var betaBuffer = beta.EnsureCudaFloat32Buffer();
-        var outputBuffer = accelerator.Allocate1D<float>(input.Numel);
-        var normalizedBuffer = accelerator.Allocate1D<float>(input.Numel);
-        var inverseBuffer = accelerator.Allocate1D<float>(rows);
+        int deviceIndex = Tensor.CudaDeviceIndex;
+        var outputBuffer = Tensor.RentCudaFloatBuffer(deviceIndex, input.Numel);
+        var normalizedBuffer = Tensor.RentCudaFloatBuffer(deviceIndex, input.Numel);
+        var inverseBuffer = Tensor.RentCudaFloatBuffer(deviceIndex, rows);
         var kernel = accelerator.LoadAutoGroupedStreamKernel<
             Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
             ArrayView<float>, ArrayView<float>, ArrayView<float>, int, float>(
@@ -901,11 +1273,11 @@ internal static class TensorCudaKernels
             inverseBuffer.View,
             columns,
             epsilon);
-        accelerator.Synchronize();
         return new LayerNormResidentContext(
             outputBuffer,
             normalizedBuffer,
-            inverseBuffer);
+            inverseBuffer,
+            accelerator);
     }
 
     internal static void LayerNormBackwardResident(
@@ -945,7 +1317,6 @@ internal static class TensorCudaKernels
             betaGradientBuffer.View,
             rows,
             columns);
-        accelerator.Synchronize();
         input.MarkCudaGradientMutated();
         gamma.MarkCudaGradientMutated();
         beta.MarkCudaGradientMutated();
@@ -954,7 +1325,8 @@ internal static class TensorCudaKernels
     internal sealed class LayerNormResidentContext(
         MemoryBuffer1D<float, Stride1D.Dense> output,
         MemoryBuffer1D<float, Stride1D.Dense> normalized,
-        MemoryBuffer1D<float, Stride1D.Dense> inverses) : IDisposable
+        MemoryBuffer1D<float, Stride1D.Dense> inverses,
+        CudaAccelerator accelerator) : IDisposable
     {
         private bool _disposed;
         internal MemoryBuffer1D<float, Stride1D.Dense> Output { get; } = output;
@@ -965,8 +1337,8 @@ internal static class TensorCudaKernels
         {
             if (_disposed)
                 return;
-            Normalized.Dispose();
-            Inverses.Dispose();
+            Tensor.ReturnCudaFloatBuffer(accelerator, Normalized);
+            Tensor.ReturnCudaFloatBuffer(accelerator, Inverses);
             _disposed = true;
             GC.SuppressFinalize(this);
         }
@@ -1077,28 +1449,50 @@ internal static class TensorCudaKernels
     {
         CudaAccelerator accelerator = ForgetMemoryV2Cuda.GetAccelerator();
         var logitsBuffer = logits.EnsureCudaFloat32Buffer();
-        var labelsBuffer = accelerator.Allocate1D(labels);
-        var probabilitiesBuffer = accelerator.Allocate1D<float>(logits.Numel);
-        var lossBuffer = accelerator.Allocate1D<float>(1);
+        var labelsBuffer = Tensor.RentCudaIntBuffer(
+            Tensor.CudaDeviceIndex, labels);
+        int deviceIndex = Tensor.CudaDeviceIndex;
+        const int lanes = 32;
+        var partialMaxima = Tensor.RentCudaFloatBuffer(
+            deviceIndex, checked(rows * lanes));
+        var partialSums = Tensor.RentCudaFloatBuffer(
+            deviceIndex, checked(rows * lanes));
+        var maximaBuffer = Tensor.RentCudaFloatBuffer(deviceIndex, rows);
+        var inverseSumsBuffer = Tensor.RentCudaFloatBuffer(deviceIndex, rows);
+        var lossBuffer = Tensor.RentCudaFloatBuffer(deviceIndex, 1);
         lossBuffer.MemSetToZero();
-        var kernel = accelerator.LoadAutoGroupedStreamKernel<
+        var statsKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
+            int, int>(CrossEntropyPartialStatsKernel);
+        statsKernel(checked(rows * lanes), logitsBuffer.View,
+            partialMaxima.View, partialSums.View, columns, lanes);
+        var reduceKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
+            int>(CrossEntropyReduceStatsKernel);
+        reduceKernel(rows, partialMaxima.View, partialSums.View,
+            maximaBuffer.View, lanes);
+        var exponentialKernel = accelerator.LoadAutoGroupedStreamKernel<
+            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
+            int, int>(CrossEntropyPartialExponentialKernel);
+        exponentialKernel(checked(rows * lanes), logitsBuffer.View,
+            maximaBuffer.View, partialMaxima.View, columns, lanes);
+        var finalizeKernel = accelerator.LoadAutoGroupedStreamKernel<
             Index1D, ArrayView<float>, ArrayView<int>, ArrayView<float>,
-            ArrayView<float>, int, int, int, float>(CrossEntropyForwardKernel);
-        kernel(
-            rows,
-            logitsBuffer.View,
-            labelsBuffer.View,
-            probabilitiesBuffer.View,
-            lossBuffer.View,
-            columns,
-            ignoreIndex,
-            validRows,
-            labelSmoothing);
-        accelerator.Synchronize();
+            ArrayView<float>, ArrayView<float>, ArrayView<float>,
+            ArrayView<float>, int, int, int, int, float>(
+                CrossEntropyFinalizeKernel);
+        finalizeKernel(rows, logitsBuffer.View, labelsBuffer.View,
+            partialMaxima.View, partialSums.View, maximaBuffer.View,
+            inverseSumsBuffer.View, lossBuffer.View, columns, lanes,
+            ignoreIndex, validRows, labelSmoothing);
+        Tensor.ReturnCudaFloatBuffer(accelerator, partialMaxima);
+        Tensor.ReturnCudaFloatBuffer(accelerator, partialSums);
         return new CrossEntropyResidentContext(
             lossBuffer,
-            probabilitiesBuffer,
-            labelsBuffer);
+            maximaBuffer,
+            inverseSumsBuffer,
+            labelsBuffer,
+            accelerator);
     }
 
     internal static void CrossEntropyBackwardResident(
@@ -1114,12 +1508,15 @@ internal static class TensorCudaKernels
         var lossGradientBuffer = loss.EnsureCudaGradientBuffer();
         var logitsGradientBuffer = logits.EnsureCudaGradientBuffer();
         var kernel = accelerator.LoadAutoGroupedStreamKernel<
-            Index1D, ArrayView<float>, ArrayView<int>, ArrayView<float>,
-            ArrayView<float>, int, int, int, float>(
+            Index1D, ArrayView<float>, ArrayView<float>, ArrayView<float>,
+            ArrayView<int>, ArrayView<float>, ArrayView<float>, int, int,
+            int, float>(
                 CrossEntropyBackwardResidentKernel);
         kernel(
             logits.Numel,
-            context.Probabilities.View,
+            logits.EnsureCudaFloat32Buffer().View,
+            context.Maxima.View,
+            context.InverseSums.View,
             context.Labels.View,
             logitsGradientBuffer.View,
             lossGradientBuffer.View,
@@ -1127,26 +1524,29 @@ internal static class TensorCudaKernels
             ignoreIndex,
             validRows,
             labelSmoothing);
-        accelerator.Synchronize();
         logits.MarkCudaGradientMutated();
     }
 
     internal sealed class CrossEntropyResidentContext(
         MemoryBuffer1D<float, Stride1D.Dense> loss,
-        MemoryBuffer1D<float, Stride1D.Dense> probabilities,
-        MemoryBuffer1D<int, Stride1D.Dense> labels) : IDisposable
+        MemoryBuffer1D<float, Stride1D.Dense> maxima,
+        MemoryBuffer1D<float, Stride1D.Dense> inverseSums,
+        MemoryBuffer1D<int, Stride1D.Dense> labels,
+        CudaAccelerator accelerator) : IDisposable
     {
         private bool _disposed;
         internal MemoryBuffer1D<float, Stride1D.Dense> Loss { get; } = loss;
-        internal MemoryBuffer1D<float, Stride1D.Dense> Probabilities { get; } = probabilities;
+        internal MemoryBuffer1D<float, Stride1D.Dense> Maxima { get; } = maxima;
+        internal MemoryBuffer1D<float, Stride1D.Dense> InverseSums { get; } = inverseSums;
         internal MemoryBuffer1D<int, Stride1D.Dense> Labels { get; } = labels;
 
         internal void Dispose()
         {
             if (_disposed)
                 return;
-            Probabilities.Dispose();
-            Labels.Dispose();
+            Tensor.ReturnCudaFloatBuffer(accelerator, Maxima);
+            Tensor.ReturnCudaFloatBuffer(accelerator, InverseSums);
+            Tensor.ReturnCudaIntBuffer(accelerator, Labels);
             _disposed = true;
             GC.SuppressFinalize(this);
         }
@@ -1245,11 +1645,39 @@ internal static class TensorCudaKernels
         ArrayView<float> output)
         => output[index] = input[index];
 
+    private static void CopyRangeKernel(
+        Index1D index,
+        ArrayView<float> input,
+        ArrayView<float> output,
+        int sourceOffset)
+        => output[index] = input[sourceOffset + index];
+
     private static void AccumulateKernel(
         Index1D index,
         ArrayView<float> source,
         ArrayView<float> destination)
         => destination[index] += source[index];
+
+    private static void AccumulateRangeKernel(
+        Index1D index,
+        ArrayView<float> source,
+        ArrayView<float> destination,
+        int destinationOffset)
+        => destination[destinationOffset + index] += source[index];
+
+    private static void PackGradientKernel(
+        Index1D index,
+        ArrayView<float> source,
+        ArrayView<float> destination,
+        int destinationOffset)
+        => destination[destinationOffset + index] = source[index];
+
+    private static void UnpackGradientKernel(
+        Index1D index,
+        ArrayView<float> source,
+        ArrayView<float> destination,
+        int sourceOffset)
+        => destination[index] = source[sourceOffset + index];
 
     private static void AddForwardKernel(
         Index1D index,
@@ -1331,6 +1759,43 @@ internal static class TensorCudaKernels
         Atomic.Add(
             ref tableGradient[indices[position] * width + column],
             outputGradient[linear]);
+    }
+
+    private static void EmbeddingPositionsForwardKernel(
+        Index1D index,
+        ArrayView<float> tokenTable,
+        ArrayView<float> positionTable,
+        ArrayView<int> tokenIndices,
+        ArrayView<float> output,
+        int sequenceLength,
+        int width)
+    {
+        int linear = index;
+        int tokenPosition = linear / width;
+        int column = linear - tokenPosition * width;
+        int token = tokenIndices[tokenPosition];
+        int position = tokenPosition % sequenceLength;
+        output[linear] = tokenTable[token * width + column]
+            + positionTable[position * width + column];
+    }
+
+    private static void EmbeddingPositionsBackwardKernel(
+        Index1D index,
+        ArrayView<int> tokenIndices,
+        ArrayView<float> outputGradient,
+        ArrayView<float> tokenGradient,
+        ArrayView<float> positionGradient,
+        int sequenceLength,
+        int width)
+    {
+        int linear = index;
+        int tokenPosition = linear / width;
+        int column = linear - tokenPosition * width;
+        int token = tokenIndices[tokenPosition];
+        int position = tokenPosition % sequenceLength;
+        float gradient = outputGradient[linear];
+        Atomic.Add(ref tokenGradient[token * width + column], gradient);
+        Atomic.Add(ref positionGradient[position * width + column], gradient);
     }
 
     private static void DropoutForwardKernel(
@@ -1507,6 +1972,331 @@ internal static class TensorCudaKernels
         }
     }
 
+    private static void AttentionScoreKernel(
+        Index1D matrixIndex,
+        ArrayView<float> projected,
+        ArrayView<float> probabilities,
+        int sequence,
+        int modelWidth,
+        int numHeads,
+        int headWidth,
+        int causal)
+    {
+        int linear = matrixIndex;
+        int key = linear % sequence;
+        int queryWork = linear / sequence;
+        int query = queryWork % sequence;
+        if (causal != 0 && key > query)
+        {
+            probabilities[linear] = float.NegativeInfinity;
+            return;
+        }
+        int batchHead = queryWork / sequence;
+        int head = batchHead % numHeads;
+        int batch = batchHead / numHeads;
+        int projectedWidth = 3 * modelWidth;
+        int batchInput = batch * sequence * projectedWidth;
+        int headOffset = head * headWidth;
+        int queryOffset = batchInput + query * projectedWidth + headOffset;
+        int keyOffset = batchInput + key * projectedWidth + modelWidth + headOffset;
+        float score = 0f;
+        for (int column = 0; column < headWidth; column++)
+            score += projected[queryOffset + column] * projected[keyOffset + column];
+        probabilities[linear] = score / XMath.Sqrt(headWidth);
+    }
+
+    private static void AttentionSoftmaxKernel(
+        Index1D queryWorkIndex,
+        ArrayView<float> probabilities,
+        int sequence,
+        int causal)
+    {
+        int work = queryWorkIndex;
+        int query = work % sequence;
+        int lastKey = causal != 0 ? query : sequence - 1;
+        int offset = work * sequence;
+        float maximum = float.NegativeInfinity;
+        for (int key = 0; key <= lastKey; key++)
+            maximum = XMath.Max(maximum, probabilities[offset + key]);
+        float sum = 0f;
+        for (int key = 0; key <= lastKey; key++)
+        {
+            float value = XMath.Exp(probabilities[offset + key] - maximum);
+            probabilities[offset + key] = value;
+            sum += value;
+        }
+        float inverse = 1f / sum;
+        for (int key = 0; key <= lastKey; key++)
+            probabilities[offset + key] *= inverse;
+        for (int key = lastKey + 1; key < sequence; key++)
+            probabilities[offset + key] = 0f;
+    }
+
+    private static void AttentionOutputKernel(
+        Index1D outputIndex,
+        ArrayView<float> projected,
+        ArrayView<float> probabilities,
+        ArrayView<float> output,
+        int sequence,
+        int modelWidth,
+        int numHeads,
+        int headWidth)
+    {
+        int linear = outputIndex;
+        int column = linear % modelWidth;
+        int token = linear / modelWidth;
+        int query = token % sequence;
+        int batch = token / sequence;
+        int head = column / headWidth;
+        int headColumn = column - head * headWidth;
+        int projectedWidth = 3 * modelWidth;
+        int probabilityOffset = ((batch * numHeads + head) * sequence + query)
+            * sequence;
+        float sum = 0f;
+        for (int key = 0; key < sequence; key++)
+        {
+            int valueOffset = batch * sequence * projectedWidth
+                + key * projectedWidth + 2 * modelWidth
+                + head * headWidth + headColumn;
+            sum += probabilities[probabilityOffset + key] * projected[valueOffset];
+        }
+        output[linear] = sum;
+    }
+
+    private static void AttentionScoreGradientKernel(
+        Index1D queryWorkIndex,
+        ArrayView<float> projected,
+        ArrayView<float> outputGradient,
+        ArrayView<float> probabilities,
+        ArrayView<float> scoreGradients,
+        int sequence,
+        int modelWidth,
+        int numHeads,
+        int headWidth)
+    {
+        int work = queryWorkIndex;
+        int query = work % sequence;
+        int batchHead = work / sequence;
+        int head = batchHead % numHeads;
+        int batch = batchHead / numHeads;
+        int projectedWidth = 3 * modelWidth;
+        int outputOffset = batch * sequence * modelWidth
+            + query * modelWidth + head * headWidth;
+        int probabilityOffset = work * sequence;
+        float softmaxDot = 0f;
+        for (int key = 0; key < sequence; key++)
+        {
+            int valueOffset = batch * sequence * projectedWidth
+                + key * projectedWidth + 2 * modelWidth + head * headWidth;
+            float probabilityGradient = 0f;
+            for (int column = 0; column < headWidth; column++)
+                probabilityGradient += outputGradient[outputOffset + column]
+                    * projected[valueOffset + column];
+            scoreGradients[probabilityOffset + key] = probabilityGradient;
+            softmaxDot += probabilities[probabilityOffset + key]
+                * probabilityGradient;
+        }
+        float scale = 1f / XMath.Sqrt(headWidth);
+        for (int key = 0; key < sequence; key++)
+        {
+            int index = probabilityOffset + key;
+            scoreGradients[index] = scale * probabilities[index]
+                * (scoreGradients[index] - softmaxDot);
+        }
+    }
+
+    private static void AttentionProjectedGradientKernel(
+        Index1D projectedIndex,
+        ArrayView<float> projected,
+        ArrayView<float> outputGradient,
+        ArrayView<float> probabilities,
+        ArrayView<float> scoreGradients,
+        ArrayView<float> projectedGradient,
+        int sequence,
+        int modelWidth,
+        int numHeads,
+        int headWidth,
+        int causal)
+    {
+        int linear = projectedIndex;
+        int projectedWidth = 3 * modelWidth;
+        int projectedColumn = linear % projectedWidth;
+        int token = linear / projectedWidth;
+        int position = token % sequence;
+        int batch = token / sequence;
+        int section = projectedColumn / modelWidth;
+        int column = projectedColumn - section * modelWidth;
+        int head = column / headWidth;
+        int headColumn = column - head * headWidth;
+        float sum = 0f;
+        if (section == 0)
+        {
+            int rowOffset = ((batch * numHeads + head) * sequence + position)
+                * sequence;
+            int lastKey = causal != 0 ? position : sequence - 1;
+            for (int key = 0; key <= lastKey; key++)
+            {
+                int keyIndex = batch * sequence * projectedWidth
+                    + key * projectedWidth + modelWidth
+                    + head * headWidth + headColumn;
+                sum += scoreGradients[rowOffset + key] * projected[keyIndex];
+            }
+        }
+        else
+        {
+            int firstQuery = causal != 0 ? position : 0;
+            for (int query = firstQuery; query < sequence; query++)
+            {
+                int rowOffset = ((batch * numHeads + head) * sequence + query)
+                    * sequence;
+                if (section == 1)
+                {
+                    int queryIndex = batch * sequence * projectedWidth
+                        + query * projectedWidth + head * headWidth + headColumn;
+                    sum += scoreGradients[rowOffset + position]
+                        * projected[queryIndex];
+                }
+                else
+                {
+                    int gradientIndex = batch * sequence * modelWidth
+                        + query * modelWidth + head * headWidth + headColumn;
+                    sum += probabilities[rowOffset + position]
+                        * outputGradient[gradientIndex];
+                }
+            }
+        }
+        projectedGradient[linear] += sum;
+    }
+
+    private static void AttentionForwardKernel(
+        Index1D queryIndex,
+        ArrayView<float> projected,
+        ArrayView<float> output,
+        ArrayView<float> maxima,
+        ArrayView<float> inverseSums,
+        int sequence,
+        int modelWidth,
+        int numHeads,
+        int headWidth,
+        int causal)
+    {
+        int work = queryIndex;
+        int query = work % sequence;
+        int batchHead = work / sequence;
+        int head = batchHead % numHeads;
+        int batch = batchHead / numHeads;
+        int projectedWidth = 3 * modelWidth;
+        int batchInput = batch * sequence * projectedWidth;
+        int headOffset = head * headWidth;
+        int queryOffset = batchInput + query * projectedWidth + headOffset;
+        int lastKey = causal != 0 ? query : sequence - 1;
+        float scale = 1f / XMath.Sqrt(headWidth);
+        float maximum = float.NegativeInfinity;
+        for (int key = 0; key <= lastKey; key++)
+        {
+            int keyOffset = batchInput + key * projectedWidth + modelWidth + headOffset;
+            float score = 0f;
+            for (int column = 0; column < headWidth; column++)
+                score += projected[queryOffset + column] * projected[keyOffset + column];
+            maximum = XMath.Max(maximum, score * scale);
+        }
+        float sum = 0f;
+        for (int key = 0; key <= lastKey; key++)
+        {
+            int keyOffset = batchInput + key * projectedWidth + modelWidth + headOffset;
+            float score = 0f;
+            for (int column = 0; column < headWidth; column++)
+                score += projected[queryOffset + column] * projected[keyOffset + column];
+            sum += XMath.Exp(score * scale - maximum);
+        }
+        maxima[work] = maximum;
+        inverseSums[work] = 1f / sum;
+        int outputOffset = batch * sequence * modelWidth
+            + query * modelWidth + headOffset;
+        for (int column = 0; column < headWidth; column++)
+            output[outputOffset + column] = 0f;
+        for (int key = 0; key <= lastKey; key++)
+        {
+            int keyOffset = batchInput + key * projectedWidth + modelWidth + headOffset;
+            int valueOffset = batchInput + key * projectedWidth + 2 * modelWidth + headOffset;
+            float score = 0f;
+            for (int column = 0; column < headWidth; column++)
+                score += projected[queryOffset + column] * projected[keyOffset + column];
+            float probability = XMath.Exp(score * scale - maximum) * inverseSums[work];
+            for (int column = 0; column < headWidth; column++)
+                output[outputOffset + column] += probability * projected[valueOffset + column];
+        }
+    }
+
+    private static void AttentionBackwardKernel(
+        Index1D queryIndex,
+        ArrayView<float> projected,
+        ArrayView<float> outputGradient,
+        ArrayView<float> projectedGradient,
+        ArrayView<float> maxima,
+        ArrayView<float> inverseSums,
+        int sequence,
+        int modelWidth,
+        int numHeads,
+        int headWidth,
+        int causal)
+    {
+        int work = queryIndex;
+        int query = work % sequence;
+        int batchHead = work / sequence;
+        int head = batchHead % numHeads;
+        int batch = batchHead / numHeads;
+        int projectedWidth = 3 * modelWidth;
+        int batchInput = batch * sequence * projectedWidth;
+        int headOffset = head * headWidth;
+        int queryOffset = batchInput + query * projectedWidth + headOffset;
+        int outputOffset = batch * sequence * modelWidth + query * modelWidth + headOffset;
+        int lastKey = causal != 0 ? query : sequence - 1;
+        float scale = 1f / XMath.Sqrt(headWidth);
+        float maximum = maxima[work];
+        float inverseSum = inverseSums[work];
+        float softmaxDot = 0f;
+        for (int key = 0; key <= lastKey; key++)
+        {
+            int keyOffset = batchInput + key * projectedWidth + modelWidth + headOffset;
+            int valueOffset = batchInput + key * projectedWidth + 2 * modelWidth + headOffset;
+            float score = 0f;
+            float probabilityGradient = 0f;
+            for (int column = 0; column < headWidth; column++)
+            {
+                score += projected[queryOffset + column] * projected[keyOffset + column];
+                probabilityGradient += outputGradient[outputOffset + column]
+                    * projected[valueOffset + column];
+            }
+            float probability = XMath.Exp(score * scale - maximum) * inverseSum;
+            softmaxDot += probability * probabilityGradient;
+        }
+        for (int key = 0; key <= lastKey; key++)
+        {
+            int keyOffset = batchInput + key * projectedWidth + modelWidth + headOffset;
+            int valueOffset = batchInput + key * projectedWidth + 2 * modelWidth + headOffset;
+            float score = 0f;
+            float probabilityGradient = 0f;
+            for (int column = 0; column < headWidth; column++)
+            {
+                score += projected[queryOffset + column] * projected[keyOffset + column];
+                probabilityGradient += outputGradient[outputOffset + column]
+                    * projected[valueOffset + column];
+            }
+            float probability = XMath.Exp(score * scale - maximum) * inverseSum;
+            float scoreGradient = scale * probability * (probabilityGradient - softmaxDot);
+            for (int column = 0; column < headWidth; column++)
+            {
+                projectedGradient[queryOffset + column] +=
+                    scoreGradient * projected[keyOffset + column];
+                Atomic.Add(ref projectedGradient[keyOffset + column],
+                    scoreGradient * projected[queryOffset + column]);
+                Atomic.Add(ref projectedGradient[valueOffset + column],
+                    probability * outputGradient[outputOffset + column]);
+            }
+        }
+    }
+
     private static void LayerNormBackwardParameterKernel(
         Index1D columnIndex,
         ArrayView<float> normalized,
@@ -1528,6 +2318,99 @@ internal static class TensorCudaKernels
         }
         gammaGradient[column] += gammaSum;
         betaGradient[column] += betaSum;
+    }
+
+    private static void CrossEntropyPartialStatsKernel(
+        Index1D workIndex,
+        ArrayView<float> logits,
+        ArrayView<float> partialMaxima,
+        ArrayView<float> partialLogitSums,
+        int columns,
+        int lanes)
+    {
+        int work = workIndex;
+        int lane = work % lanes;
+        int row = work / lanes;
+        int offset = row * columns;
+        float maximum = float.NegativeInfinity;
+        float sum = 0f;
+        for (int column = lane; column < columns; column += lanes)
+        {
+            float value = logits[offset + column];
+            maximum = XMath.Max(maximum, value);
+            sum += value;
+        }
+        partialMaxima[work] = maximum;
+        partialLogitSums[work] = sum;
+    }
+
+    private static void CrossEntropyReduceStatsKernel(
+        Index1D rowIndex,
+        ArrayView<float> partialMaxima,
+        ArrayView<float> partialLogitSums,
+        ArrayView<float> maxima,
+        int lanes)
+    {
+        int offset = rowIndex * lanes;
+        float maximum = float.NegativeInfinity;
+        for (int lane = 0; lane < lanes; lane++)
+            maximum = XMath.Max(maximum, partialMaxima[offset + lane]);
+        maxima[rowIndex] = maximum;
+    }
+
+    private static void CrossEntropyPartialExponentialKernel(
+        Index1D workIndex,
+        ArrayView<float> logits,
+        ArrayView<float> maxima,
+        ArrayView<float> partialExponentialSums,
+        int columns,
+        int lanes)
+    {
+        int work = workIndex;
+        int lane = work % lanes;
+        int row = work / lanes;
+        int offset = row * columns;
+        float sum = 0f;
+        for (int column = lane; column < columns; column += lanes)
+            sum += XMath.Exp(logits[offset + column] - maxima[row]);
+        partialExponentialSums[work] = sum;
+    }
+
+    private static void CrossEntropyFinalizeKernel(
+        Index1D rowIndex,
+        ArrayView<float> logits,
+        ArrayView<int> labels,
+        ArrayView<float> partialExponentialSums,
+        ArrayView<float> partialLogitSums,
+        ArrayView<float> maxima,
+        ArrayView<float> inverseSums,
+        ArrayView<float> loss,
+        int columns,
+        int lanes,
+        int ignoreIndex,
+        int validRows,
+        float labelSmoothing)
+    {
+        int row = rowIndex;
+        int partialOffset = row * lanes;
+        float exponentialSum = 0f;
+        float logitSum = 0f;
+        for (int lane = 0; lane < lanes; lane++)
+        {
+            exponentialSum += partialExponentialSums[partialOffset + lane];
+            logitSum += partialLogitSums[partialOffset + lane];
+        }
+        inverseSums[row] = 1f / exponentialSum;
+        int label = labels[row];
+        if (label == ignoreIndex)
+            return;
+        float normalizer = maxima[row] + XMath.Log(exponentialSum);
+        float negativeLogLikelihood = normalizer
+            - logits[row * columns + label];
+        float uniformLoss = normalizer - logitSum / columns;
+        float rowLoss = (1f - labelSmoothing) * negativeLogLikelihood
+            + labelSmoothing * uniformLoss;
+        Atomic.Add(ref loss[0], rowLoss / validRows);
     }
 
     private static void CrossEntropyForwardKernel(
@@ -1598,7 +2481,9 @@ internal static class TensorCudaKernels
 
     private static void CrossEntropyBackwardResidentKernel(
         Index1D index,
-        ArrayView<float> probabilities,
+        ArrayView<float> logits,
+        ArrayView<float> maxima,
+        ArrayView<float> inverseSums,
         ArrayView<int> labels,
         ArrayView<float> gradient,
         ArrayView<float> upstreamGradient,
@@ -1617,6 +2502,8 @@ internal static class TensorCudaKernels
         float target = labelSmoothing / columns;
         if (column == label)
             target += 1f - labelSmoothing;
-        gradient[linear] += scale * (probabilities[linear] - target);
+        float probability = XMath.Exp(logits[linear] - maxima[row])
+            * inverseSums[row];
+        gradient[linear] += scale * (probability - target);
     }
 }

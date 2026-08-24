@@ -3,7 +3,7 @@ namespace NNtrain;
 internal static partial class WikiLanguageModelCommand
 {
     internal static IOptimizer CreateOptimizer(
-        IWikiLanguageModel model,
+        LanguageModel model,
         WikiTrainingConfiguration config)
     {
         ArgumentNullException.ThrowIfNull(model);
@@ -33,7 +33,7 @@ internal static partial class WikiLanguageModelCommand
             WikiTrainingConfiguration.GainShareAdamWOptimizer))
         {
             return optim.GainShareAdamW(
-                model.MakeGainShareParameterGroups(
+                model.make_gainshare_parameter_groups(
                     config.GainShareBlockDepth),
                 lr: config.LearningRate,
                 beta1: config.GainShareBeta1,
@@ -62,61 +62,8 @@ internal static partial class WikiLanguageModelCommand
             bf16_second_moment: config.AdamWUseBFloat16SecondMoment);
     }
 
-    internal static float CalculateLearningRateFactor(
-        double overallProgress,
-        float warmupPercent)
-    {
-        return WarmupCosineProgressLRScheduler.CalculateFactor(
-            overallProgress,
-            warmupPercent);
-    }
-
-    internal static float SetScheduledLearningRates(
-        IOptimizer optimizer,
-        WikiTrainingConfiguration config,
-        double overallProgress)
-    {
-        ArgumentNullException.ThrowIfNull(optimizer);
-        ArgumentNullException.ThrowIfNull(config);
-        float factor = CalculateLearningRateFactor(
-            overallProgress,
-            config.WarmupPercent);
-
-        if (config.IsOptimizer(WikiTrainingConfiguration.NekoMuonOptimizer))
-        {
-            if (optimizer is not CompositeOptimizer composite
-                || composite.Optimizers.Count != 2
-                || composite.Optimizers[0]
-                    is not ILearningRateAdjustable primary
-                || composite.Optimizers[1]
-                    is not ILearningRateAdjustable auxiliary)
-            {
-                throw new InvalidOperationException(
-                    "NekoMuon scheduling requires adjustable primary and " +
-                    "auxiliary optimizers.");
-            }
-
-            primary.SetLearningRate(
-                MathF.Max(float.Epsilon, config.LearningRate * factor));
-            auxiliary.SetLearningRate(
-                MathF.Max(
-                    float.Epsilon,
-                    config.AuxiliaryLearningRate * factor));
-            return factor;
-        }
-
-        if (optimizer is not ILearningRateAdjustable adjustable)
-        {
-            throw new InvalidOperationException(
-                "Learning-rate scheduling requires an adjustable optimizer.");
-        }
-        adjustable.SetLearningRate(
-            MathF.Max(float.Epsilon, config.LearningRate * factor));
-        return factor;
-    }
-
     private static void WriteOptimizerSummary(
-        IWikiLanguageModel model,
+        LanguageModel model,
         WikiTrainingConfiguration config,
         TextWriter output)
     {
@@ -135,7 +82,8 @@ internal static partial class WikiLanguageModelCommand
             WikiTrainingConfiguration.GainShareAdamWOptimizer))
         {
             IReadOnlyList<IReadOnlyList<Parameter>> groups =
-                model.MakeGainShareParameterGroups(config.GainShareBlockDepth);
+                model.make_gainshare_parameter_groups(
+                    config.GainShareBlockDepth);
             output.WriteLine(
                 $"optimizer = GainShareAdamW " +
                 $"({groups.Sum(group => group.Count)} parameters in " +

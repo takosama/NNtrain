@@ -14,24 +14,24 @@ internal sealed class AutogradNode
     private bool _hasBackwardAction;
     private List<IDisposable>? _resources;
 
-    internal AutogradNode(IEnumerable<Tensor>? parents = null)
+    internal AutogradNode(Tensor[]? parents = null)
         : this(parents, isDetached: false)
     {
     }
 
-    private AutogradNode(IEnumerable<Tensor>? parents, bool isDetached)
+    private AutogradNode(Tensor[]? parents, bool isDetached)
     {
-        _parents = parents?.ToArray() ?? [];
-        if (_parents.Any(static parent => parent is null))
+        _parents = parents is null ? [] : (Tensor[])parents.Clone();
+        if (Array.Exists(_parents, static parent => parent is null))
         {
             throw new ArgumentException(
                 "An autograd node cannot contain a null parent.",
                 nameof(parents));
         }
 
-        _parentDataVersions = _parents
-            .Select(static parent => parent.DataVersion)
-            .ToArray();
+        _parentDataVersions = new long[_parents.Length];
+        for (int index = 0; index < _parents.Length; index++)
+            _parentDataVersions[index] = _parents[index].DataVersion;
         _isDetached = isDetached;
         Parents = Array.AsReadOnly(_parents);
     }

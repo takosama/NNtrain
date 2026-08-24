@@ -120,6 +120,19 @@ sealed record TrainingConfiguration
 
         string fullConfigurationPath = Path.GetFullPath(configurationPath);
         string json = File.ReadAllText(fullConfigurationPath);
+        TrainingConfigurationV2.NormalizedConfiguration normalized =
+            TrainingConfigurationV2.Normalize(json);
+        if (normalized.IsV2
+            && !string.Equals(
+                normalized.TaskType,
+                TrainingConfigurationV2.ClassificationTask,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"Configuration task '{normalized.TaskType}' is not an " +
+                "image-classification task.");
+        }
+        json = normalized.Json;
         ValidateJsonSectionExclusivity(json);
         TrainingConfiguration configuration =
             JsonSerializer.Deserialize<TrainingConfiguration>(

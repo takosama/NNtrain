@@ -55,22 +55,22 @@ dataset contract rather than from MNIST-specific constants.
 
 ## Training orchestration
 
-Phase 6-4 moves epoch and step processing from `Program` into `Trainer`.
-`Trainer` depends on three contracts: `IClassificationModel`,
-`IImageClassificationDataset`, and `IOptimizer`.
+The CLI uses one internal `TrainingRunner` lifecycle for classification,
+finite language-model training, and streaming language-model training. It owns
+epoch/resume iteration, deterministic shuffling, progress-unit rounding, and
+fractional checkpoint boundaries. Task implementations own dataset iteration,
+forward/backward, evaluation, and task-specific checkpoint payloads.
 
-For every step, Trainer selects a sample, builds the input and one-hot target,
-clears gradients, performs forward and loss calculation, runs backward, updates
-through the optimizer, and records loss and correctness. For every epoch, it
-returns a `TrainingEpochResult` containing the one-based epoch number, counts,
-and separate training and evaluation `TrainingMetrics` values. Each metrics
-value groups average loss, accuracy ratio, and elapsed time.
-
-`TrainerOptions` owns epoch count, steps per epoch, and the sampling random seed.
-An optional epoch-completed callback supports progress reporting without moving
-the loop back into the application entry point.
+Library consumers use the explicit PyTorch-style loop shown in the README;
+there is no second public Trainer abstraction with different batching or
+checkpoint semantics.
 
 ## JSON training configuration
+
+Schema version 2 uses an explicit `task.type` and common `data`, `model`,
+`training`, `runtime`, `optimization`, `checkpoint`, and `reporting` sections.
+Unknown sections and properties are rejected. Checked-in configurations use
+this layout.
 
 Phase 6-6 moves run settings out of `Program`. The `--config` CLI option loads a
 JSON object containing:
@@ -119,17 +119,17 @@ See `training.example.json` at the repository root for a complete configuration.
 
 ## Training and evaluation separation
 
-Phase 6-7 gives Trainer distinct training and evaluation datasets. Training
+Classification uses distinct training and evaluation datasets. Training
 samples are selected using the configured seed and are the only samples that
 run backward or optimizer updates. After each training epoch, every evaluation
 sample is processed sequentially inside `AutogradContext.NoGrad()`. The epoch
 result reports both metric sets independently.
 
-`TrainingComposition` validates all four data files before constructing MNIST
-readers and produces `TrainingComponents` containing Trainer, model, and AdamW.
+CLI composition validates all four data files before constructing readers,
+the model, optimizer, and scheduler.
 Missing files report whether the training/evaluation image/label file is absent,
 the resolved path, and where to correct it. `Program` only handles CLI/config
-loading, composition, `Trainer.Run()`, reporting, and user-facing errors.
+loading, composition, task execution, reporting, and user-facing errors.
 
 The CLI retains the model state with the lowest evaluation loss, restores it
 after training or early stopping, and atomically writes it beside the selected

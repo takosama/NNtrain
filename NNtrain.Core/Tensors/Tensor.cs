@@ -10,34 +10,34 @@ namespace NNtrain;
 /// </remarks>
 public partial class Tensor
 {
-    private static readonly AsyncLocal<TensorDevice> ExecutionDeviceContext = new();
-    private static readonly AsyncLocal<int> CudaDeviceIndexContext = new();
-    private static readonly AsyncLocal<int[]?> CudaDeviceIndicesContext = new();
-
     /// <summary>
     /// Gets or selects the execution device for kernels with a GPU backend.
     /// Kernels not yet ported continue to use their CPU implementation.
     /// </summary>
     public static TensorDevice ExecutionDevice
     {
-        get => ExecutionDeviceContext.Value;
+        get => TensorExecutionContext.Device.Type;
         set
         {
             if (!Enum.IsDefined(value))
                 throw new ArgumentOutOfRangeException(nameof(value));
-            ExecutionDeviceContext.Value = value;
+            TorchDevice current = TensorExecutionContext.Device;
+            TensorExecutionContext.Device = new TorchDevice(
+                value,
+                value == TensorDevice.Cuda ? current.Index : 0);
         }
     }
 
     /// <summary>Gets or selects the zero-based CUDA adapter index.</summary>
     public static int CudaDeviceIndex
     {
-        get => CudaDeviceIndexContext.Value;
+        get => TensorExecutionContext.Device.IsCuda
+            ? TensorExecutionContext.Device.Index
+            : TensorExecutionContext.CudaDevices[0];
         set
         {
             ArgumentOutOfRangeException.ThrowIfNegative(value);
-            CudaDeviceIndexContext.Value = value;
-            CudaDeviceIndicesContext.Value = [value];
+            TensorExecutionContext.CudaDevices = [value];
         }
     }
 
@@ -47,31 +47,17 @@ public partial class Tensor
     /// </summary>
     public static IReadOnlyList<int> CudaDeviceIndices
     {
-        get => Array.AsReadOnly(CudaDeviceIndicesContext.Value ?? [0]);
-        set
-        {
-            ArgumentNullException.ThrowIfNull(value);
-            if (value.Count == 0)
-                throw new ArgumentException("At least one CUDA device is required.", nameof(value));
-            int[] indices = value.ToArray();
-            if (indices.Any(index => index < 0))
-                throw new ArgumentOutOfRangeException(nameof(value));
-            if (indices.Distinct().Count() != indices.Length)
-                throw new ArgumentException("CUDA device indices must be unique.", nameof(value));
-            CudaDeviceIndicesContext.Value = indices;
-            CudaDeviceIndexContext.Value = indices[0];
-        }
+        get => TensorExecutionContext.CudaDevices;
+        set => TensorExecutionContext.CudaDevices = value;
     }
 
     /// <summary>Gets the active adapter name and initializes CUDA on demand.</summary>
     public static string ExecutionDeviceName
-        => ExecutionDevice == TensorDevice.Cuda
-            ? NNtrain.ForgetMemoryV2Cuda.DeviceName
-            : "CPU";
+        => TensorBackends.Get(ExecutionDevice).GetName(CudaDeviceIndex);
 
     /// <summary>Reports whether the requested CUDA adapter can be initialized.</summary>
     public static bool IsCudaAvailable(int deviceIndex = 0)
-        => NNtrain.ForgetMemoryV2Cuda.IsAvailable(deviceIndex);
+        => TensorBackends.Get(TensorDevice.Cuda).IsAvailable(deviceIndex);
 
     /// <summary>Gets the number of CUDA adapters visible to the runtime.</summary>
     public static int CudaDeviceCount => NNtrain.ForgetMemoryV2Cuda.DeviceCount;
@@ -239,10 +225,8 @@ public partial class Tensor
         {
             foreach (Tensor parent in prev)
             {
-                if (ExecutionDevice == TensorDevice.Cuda
-                    && parent.Device == TensorDevice.Cuda)
-                    parent.EnsureCudaGradientBuffer();
-                else
+                if (ExecutionDevice != TensorDevice.Cuda
+                    || parent.Device != TensorDevice.Cuda)
                     parent.EnsureGradientBuffer();
             }
             Node = new AutogradNode(prev);
@@ -278,10 +262,8 @@ public partial class Tensor
         {
             foreach (Tensor parent in prev)
             {
-                if (ExecutionDevice == TensorDevice.Cuda
-                    && parent.Device == TensorDevice.Cuda)
-                    parent.EnsureCudaGradientBuffer();
-                else
+                if (ExecutionDevice != TensorDevice.Cuda
+                    || parent.Device != TensorDevice.Cuda)
                     parent.EnsureGradientBuffer();
             }
             Node = new AutogradNode(prev);

@@ -19,6 +19,33 @@ public sealed class ForgetMemoryV2Layer : Module
         float initializationScale = 0.02f,
         float dropout = 0f,
         TensorDType dtype = TensorDType.Float16)
+        : this(
+            modelWidth,
+            hiddenWidth,
+            keyWidth,
+            valueWidth,
+            retentionFloor,
+            random,
+            initializationScale,
+            dropout,
+            dtype,
+            useV3: false,
+            useDrn: false)
+    {
+    }
+
+    internal ForgetMemoryV2Layer(
+        int modelWidth,
+        int hiddenWidth,
+        int keyWidth,
+        int valueWidth,
+        float retentionFloor,
+        Random? random,
+        float initializationScale,
+        float dropout,
+        TensorDType dtype,
+        bool useV3,
+        bool useDrn)
         : base(dtype)
     {
         if (modelWidth <= 0)
@@ -47,6 +74,8 @@ public sealed class ForgetMemoryV2Layer : Module
         KeyWidth = keyWidth;
         ValueWidth = valueWidth;
         RetentionFloor = retentionFloor;
+        UseV3 = useV3;
+        UseDrn = useDrn;
         random ??= new Random(1);
 
         Ln1 = RegisterModule(new LayerNorm(modelWidth, dtype: dtype));
@@ -83,6 +112,10 @@ public sealed class ForgetMemoryV2Layer : Module
     public int ValueWidth { get; }
 
     public float RetentionFloor { get; }
+
+    public bool UseV3 { get; }
+
+    public bool UseDrn { get; }
 
     internal LayerNorm Ln1 { get; }
 
@@ -121,11 +154,23 @@ public sealed class ForgetMemoryV2Layer : Module
         }
 
         Tensor projected = _memoryProjection.ForwardBatch(Ln1.Forward(input));
-        Tensor recalled = projected.ForgetMemoryV2Continue(
-            KeyWidth,
-            ValueWidth,
-            RetentionFloor,
-            state);
+        Tensor recalled = UseDrn
+            ? projected.ForgetMemoryDRNContinue(
+                KeyWidth,
+                ValueWidth,
+                RetentionFloor,
+                state)
+            : UseV3
+                ? projected.ForgetMemoryV3Continue(
+                    KeyWidth,
+                    ValueWidth,
+                    RetentionFloor,
+                    state)
+                : projected.ForgetMemoryV2Continue(
+                    KeyWidth,
+                    ValueWidth,
+                    RetentionFloor,
+                    state);
         Tensor memoryOutput = _outputProjection.ForwardBatch(recalled);
         Tensor mixed = MemoryDropout.AddResidual(input, memoryOutput);
         return FfnDropout.AddResidual(
@@ -157,10 +202,20 @@ public sealed class ForgetMemoryV2Layer : Module
             : input;
         Tensor projected = _memoryProjection.ForwardBatch(
             Ln1.Forward(batchedInput));
-        Tensor recalled = projected.ForgetMemoryV2(
-            KeyWidth,
-            ValueWidth,
-            RetentionFloor);
+        Tensor recalled = UseDrn
+            ? projected.ForgetMemoryDRN(
+                KeyWidth,
+                ValueWidth,
+                RetentionFloor)
+            : UseV3
+                ? projected.ForgetMemoryV3(
+                    KeyWidth,
+                    ValueWidth,
+                    RetentionFloor)
+                : projected.ForgetMemoryV2(
+                    KeyWidth,
+                    ValueWidth,
+                    RetentionFloor);
         Tensor memoryOutput = _outputProjection.ForwardBatch(recalled);
         Tensor mixed = MemoryDropout.AddResidual(
             batchedInput,

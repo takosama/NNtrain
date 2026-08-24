@@ -3,6 +3,66 @@ using Xunit;
 
 public sealed class WikiTrainingConfigurationTests
 {
+    [Theory]
+    [InlineData("training.example.json")]
+    [InlineData("training.transformer.json")]
+    [InlineData("training.hyena-wiki-jp.json")]
+    [InlineData("training.forgetscan-wiki-jp.json")]
+    public void CheckedInWikiProfilesUseVersionTwoSchema(string fileName)
+    {
+        string path = Path.GetFullPath(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "..", "..", "..", "..",
+                fileName));
+
+        WikiTrainingConfiguration configuration =
+            WikiTrainingConfiguration.Load(path);
+
+        Assert.True(WikiTrainingConfiguration.IsWikiConfiguration(path));
+        Assert.True(configuration.Epochs > 0);
+    }
+
+    [Fact]
+    public void LoadReadsVersionTwoWikiSections()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.Write(
+            """
+            {
+              "schemaVersion": 2,
+              "task": { "type": "wiki-language-model" },
+              "data": { "dataPath": "data/wiki", "textColumn": "body" },
+              "training": {
+                "epochs": 2,
+                "batchSize": 1,
+                "validationFraction": 0.0
+              },
+              "runtime": { "device": "cpu", "seed": 29 },
+              "model": {
+                "vocabularySize": 300,
+                "contextLength": 4,
+                "modelWidth": 8,
+                "heads": 2,
+                "hiddenSize": 16,
+                "layers": 1,
+                "modelArchitecture": "transformer"
+              }
+            }
+            """);
+
+        WikiTrainingConfiguration configuration =
+            WikiTrainingConfiguration.Load(path);
+
+        Assert.True(WikiTrainingConfiguration.IsWikiConfiguration(path));
+        Assert.Equal(2, configuration.Epochs);
+        Assert.Equal(29, configuration.Seed);
+        Assert.Equal(8, configuration.ModelWidth);
+        Assert.Equal(
+            Path.Combine(directory.Root, "data", "wiki"),
+            configuration.DataPath);
+    }
+
     [Fact]
     public void LoadReadsWikiSettingsAndResolvesPaths()
     {
@@ -303,8 +363,8 @@ public sealed class WikiTrainingConfigurationTests
         };
 
         configuration.Validate();
-        Assert.Equal("forgetmemoryv2", configuration.ModelArchitecture);
-        Assert.True(configuration.IsForgetMemoryV2Architecture());
+        Assert.Equal("forgetmemoryv3", configuration.ModelArchitecture);
+        Assert.True(configuration.IsForgetMemoryV3Architecture());
         Assert.Equal(TensorDType.Float16, configuration.GetModelDType());
         Assert.Equal(
             HyenaConvolutionAlgorithm.Auto,
@@ -331,7 +391,7 @@ public sealed class WikiTrainingConfigurationTests
     {
         var configuration = new WikiTrainingConfiguration
         {
-            Optimizer = "lion",
+            Optimizer = "rmsprop",
         };
 
         ArgumentException exception = Assert.Throws<ArgumentException>(
@@ -399,6 +459,25 @@ public sealed class WikiTrainingConfigurationTests
         Assert.Equal("ModelDType", exception.ParamName);
     }
 
+    [Theory]
+    [InlineData("float16", TensorDType.Float16)]
+    [InlineData("bfloat16", TensorDType.BFloat16)]
+    public void Allows16BitTransformerModelDType(
+        string configuredDType,
+        TensorDType expectedDType)
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            ModelArchitecture =
+                WikiTrainingConfiguration.TransformerArchitecture,
+            ModelDType = configuredDType,
+        };
+
+        configuration.Validate();
+
+        Assert.Equal(expectedDType, configuration.GetModelDType());
+    }
+
     [Fact]
     public void RejectsUnsupportedModelArchitecture()
     {
@@ -429,7 +508,7 @@ public sealed class WikiTrainingConfigurationTests
 
     [Theory]
     [InlineData("forgetmemoryv2")]
-    [InlineData("forgetmemoryv2")]
+    [InlineData("frogetmemoryv2")]
     public void AcceptsForgetMemoryV2ArchitectureAndAlias(string architecture)
     {
         var configuration = new WikiTrainingConfiguration
@@ -444,6 +523,35 @@ public sealed class WikiTrainingConfigurationTests
         configuration.Validate();
 
         Assert.True(configuration.IsForgetMemoryV2Architecture());
+    }
+
+    [Fact]
+    public void AcceptsForgetMemoryV3Architecture()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            ModelArchitecture = "forgetmemoryv3",
+        };
+
+        configuration.Validate();
+
+        Assert.True(configuration.IsForgetMemoryV3Architecture());
+        Assert.True(configuration.IsForgetMemoryArchitecture());
+    }
+
+    [Fact]
+    public void AcceptsForgetMemoryDrnArchitecture()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            ModelArchitecture = "forgetmemorydrn",
+        };
+
+        configuration.Validate();
+
+        Assert.True(configuration.IsForgetMemoryDrnArchitecture());
+        Assert.True(configuration.IsForgetMemoryArchitecture());
+        Assert.Equal(TensorDType.Float16, configuration.GetModelDType());
     }
 
     [Fact]

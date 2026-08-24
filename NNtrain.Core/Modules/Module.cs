@@ -62,9 +62,9 @@ public abstract class Module
         return module;
     }
 
-    public void Train() => SetTraining(true);
+    internal void Train() => SetTraining(true);
 
-    public void Eval() => SetTraining(false);
+    internal void Eval() => SetTraining(false);
 
     // PyTorch-style aliases. The PascalCase API remains available for
     // existing callers while new training code can use the familiar surface.
@@ -80,7 +80,7 @@ public abstract class Module
         return this;
     }
 
-    public Module To(TensorDevice device)
+    internal Module To(TensorDevice device)
     {
         foreach (Parameter parameter in Parameters())
             parameter.T.To(device);
@@ -89,7 +89,14 @@ public abstract class Module
 
     public Module to(TensorDevice device) => To(device);
 
-    public ModuleState CaptureState()
+    public Module to(TorchDevice device)
+    {
+        foreach (Parameter parameter in Parameters())
+            parameter.T.to(device);
+        return this;
+    }
+
+    internal ModuleState CaptureState()
     {
         Parameter[] parameters = Parameters().ToArray();
         var states = new ModuleParameterState[parameters.Length];
@@ -107,7 +114,7 @@ public abstract class Module
         return new ModuleState(ModuleState.CurrentFormatVersion, states);
     }
 
-    public IReadOnlyList<IReadOnlyList<Parameter>>
+    internal IReadOnlyList<IReadOnlyList<Parameter>>
         MakeGainShareParameterGroups(int blockDepth = 1)
     {
         if (blockDepth < 0)
@@ -133,7 +140,11 @@ public abstract class Module
         return groups.AsReadOnly();
     }
 
-    public void RestoreState(ModuleState state)
+    public IReadOnlyList<IReadOnlyList<Parameter>>
+        make_gainshare_parameter_groups(int block_depth = 1)
+        => MakeGainShareParameterGroups(block_depth);
+
+    internal void RestoreState(ModuleState state)
     {
         ArgumentNullException.ThrowIfNull(state);
         Parameter[] parameters = Parameters().ToArray();
@@ -148,7 +159,7 @@ public abstract class Module
         }
     }
 
-    public IEnumerable<Parameter> Parameters()
+    internal IEnumerable<Parameter> Parameters()
     {
         var seenParameters =
             new HashSet<Parameter>(ReferenceEqualityComparer.Instance);
@@ -210,7 +221,7 @@ public abstract class Module
         }
     }
 
-    public void ZeroGrad()
+    internal void ZeroGrad()
     {
         Parameter[] parameters = Parameters().ToArray();
 

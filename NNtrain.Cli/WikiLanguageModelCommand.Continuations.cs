@@ -3,7 +3,7 @@ namespace NNtrain;
 internal static partial class WikiLanguageModelCommand
 {
     internal static DatasetContinuation CreateDatasetContinuation(
-        IWikiLanguageModel model,
+        LanguageModel model,
         BpeTokenizer tokenizer,
         IReadOnlyList<string> documents,
         WikiTrainingConfiguration config,
@@ -33,7 +33,7 @@ internal static partial class WikiLanguageModelCommand
         string prompt = document[..split];
         string expected = document[split..];
         int[] promptIds = tokenizer.Encode(prompt, addBos: true);
-        int[] generatedIds = model.GenerateTokenIds(
+        int[] generatedIds = model.generate_token_ids(
             promptIds,
             config.MaxNewTokens,
             config.Temperature,
@@ -64,7 +64,7 @@ internal static partial class WikiLanguageModelCommand
     /// </remarks>
     internal static void StreamDatasetContinuation(
         long step,
-        IWikiLanguageModel model,
+        LanguageModel model,
         BpeTokenizer tokenizer,
         IReadOnlyList<string> documents,
         WikiTrainingConfiguration config,
@@ -111,7 +111,7 @@ internal static partial class WikiLanguageModelCommand
         BpeTokenizer.IncrementalDecoder decoder =
             tokenizer.CreateIncrementalDecoder();
         int[] promptIds = tokenizer.Encode(prompt, addBos: true);
-        model.GenerateTokenIds(
+        model.generate_token_ids(
             promptIds,
             config.MaxNewTokens,
             config.Temperature,
@@ -151,7 +151,7 @@ internal static partial class WikiLanguageModelCommand
     }
 
     private static void WriteFinalDatasetContinuation(
-        IWikiLanguageModel model,
+        LanguageModel model,
         BpeTokenizer tokenizer,
         IReadOnlyList<string> documents,
         WikiTrainingConfiguration config,

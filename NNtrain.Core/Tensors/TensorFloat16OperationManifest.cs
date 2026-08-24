@@ -29,6 +29,7 @@ internal static class TensorFloat16OperationManifest
             Conversion("To(TensorDevice)"),
             Conversion("to(TensorDType)"),
             Conversion("to(TensorDevice)"),
+            Conversion("to(TorchDevice)"),
             Conversion("Half()"),
             Conversion("half()"),
             Conversion("ToFloat32()"),
@@ -146,6 +147,12 @@ internal static class TensorFloat16OperationManifest
             Preserve(
                 "ForgetMemoryV2(Int32,Int32,Single)",
                 "TensorFloat16FusedOperationTests.ForgetMemoryV2KeepsMatrixStateAndGradientsInFloat32"),
+            Preserve(
+                "ForgetMemoryV3(Int32,Int32,Single)",
+                "ForgetMemoryV3Tests.IntegratedTensorBackwardMatchesFiniteDifferences"),
+            Preserve(
+                "ForgetMemoryDRN(Int32,Int32,Single)",
+                "ForgetMemoryDRNTests.IntegratedBackwardMatchesFiniteDifferences"),
         ];
 
     internal static IReadOnlyList<TensorFloat16OperationManifestEntry>
@@ -155,8 +162,17 @@ internal static class TensorFloat16OperationManifest
                 "ForgetMemoryV2Continue(Int32,Int32,Single,Single[])",
                 "ForgetMemoryV2Tests.GptSchedulesShortToLongMemoryAndTrains"),
             Preserve(
+                "ForgetMemoryV3Continue(Int32,Int32,Single,Single[])",
+                "ForgetMemoryV3Tests.GptUsesV3InEveryLayer"),
+            Preserve(
+                "ForgetMemoryDRNContinue(Int32,Int32,Single,Single[])",
+                "ForgetMemoryDRNTests.GptUsesDrnInEveryLayerAndTrains"),
+            Preserve(
                 "LinearLastDim(Tensor,Tensor,Boolean)",
                 "LinearLastDimTests.Float16ProjectionMatchesFormerFloat16Graph"),
+            Preserve(
+                "SelectLastSequenceToken()",
+                "GptRinWikiJpTests.GreedyGenerationReturnsValidTokensAndRestoresTrainingMode"),
         ];
 
     /// <summary>

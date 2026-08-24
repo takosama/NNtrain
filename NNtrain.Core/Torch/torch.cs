@@ -74,19 +74,42 @@ public static class torch
         }
     }
 
+    public static TorchDevice device(string value) => TorchDevice.Parse(value);
+
+    public static IDisposable use_device(TorchDevice device)
+        => TensorExecutionContext.Push(device);
+
+    public static class cuda
+    {
+        public static bool is_available(int device_index = 0)
+            => TensorBackends
+                .Get(TensorDevice.Cuda)
+                .IsAvailable(device_index);
+
+        public static int device_count() => Tensor.CudaDeviceCount;
+    }
+
     public static Tensor tensor(
         float[] data,
         int[] shape,
         string name = "",
-        TensorDType dtype = TensorDType.Float32)
-        => new(data, shape, name, dtype);
+        TensorDType dtype = TensorDType.Float32,
+        TorchDevice? device = null)
+    {
+        var result = new Tensor(data, shape, name, dtype);
+        return device is TorchDevice target ? result.to(target) : result;
+    }
 
     public static Tensor zeros(params int[] shape) => Tensor.Zeros(shape);
 
     public static Tensor zeros(
         int[] shape,
-        TensorDType dtype)
-        => Tensor.Zeros(dtype, shape);
+        TensorDType dtype,
+        TorchDevice? device = null)
+    {
+        Tensor result = Tensor.Zeros(dtype, shape);
+        return device is TorchDevice target ? result.to(target) : result;
+    }
 
     public static Tensor scalar(
         float value,

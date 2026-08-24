@@ -13,6 +13,7 @@ internal static unsafe class CudaBlas
     private const int OperationNone = 0;
     private const int OperationTranspose = 1;
     private const int CudaR32F = 0;
+    private const int CudaR16BF = 14;
     private const int Compute32FFast16BFloat = 75;
     private const int GemmDefault = -1;
 
@@ -59,6 +60,93 @@ internal static unsafe class CudaBlas
             GemmDefault);
         ThrowIfFailed(status, "cublasGemmEx");
     }
+
+    internal static void LinearForwardBFloat16(
+        CudaAccelerator accelerator,
+        int deviceIndex,
+        MemoryBuffer1D<ushort, Stride1D.Dense> input,
+        MemoryBuffer1D<ushort, Stride1D.Dense> weight,
+        MemoryBuffer1D<ushort, Stride1D.Dense> output,
+        int rows,
+        int inputWidth,
+        int outputWidth)
+    {
+        accelerator.Bind();
+        nint handle = GetHandle(deviceIndex);
+        float alpha = 1f;
+        float beta = 0f;
+        int status = CublasGemmEx(
+            handle,
+            OperationTranspose,
+            OperationNone,
+            outputWidth,
+            rows,
+            inputWidth,
+            (nint)(&alpha),
+            weight.NativePtr,
+            CudaR16BF,
+            inputWidth,
+            input.NativePtr,
+            CudaR16BF,
+            inputWidth,
+            (nint)(&beta),
+            output.NativePtr,
+            CudaR16BF,
+            outputWidth,
+            Compute32FFast16BFloat,
+            GemmDefault);
+        ThrowIfFailed(status, "cublasGemmEx(BF16)");
+    }
+
+    internal static void LinearBackwardInputBFloat16(
+        CudaAccelerator accelerator,
+        int deviceIndex,
+        MemoryBuffer1D<ushort, Stride1D.Dense> outputGradient,
+        MemoryBuffer1D<ushort, Stride1D.Dense> weight,
+        MemoryBuffer1D<float, Stride1D.Dense> inputGradient,
+        int rows,
+        int inputWidth,
+        int outputWidth)
+        => GemmBFloat16ToFloat32(
+            accelerator,
+            deviceIndex,
+            OperationNone,
+            OperationNone,
+            inputWidth,
+            rows,
+            outputWidth,
+            weight,
+            inputWidth,
+            outputGradient,
+            outputWidth,
+            inputGradient,
+            inputWidth,
+            beta: 1f);
+
+    internal static void LinearBackwardWeightBFloat16(
+        CudaAccelerator accelerator,
+        int deviceIndex,
+        MemoryBuffer1D<ushort, Stride1D.Dense> input,
+        MemoryBuffer1D<ushort, Stride1D.Dense> outputGradient,
+        MemoryBuffer1D<float, Stride1D.Dense> weightGradient,
+        int rows,
+        int inputWidth,
+        int outputWidth)
+        => GemmBFloat16ToFloat32(
+            accelerator,
+            deviceIndex,
+            OperationNone,
+            OperationTranspose,
+            inputWidth,
+            outputWidth,
+            rows,
+            input,
+            inputWidth,
+            outputGradient,
+            outputWidth,
+            weightGradient,
+            inputWidth,
+            beta: 1f);
 
     internal static void LinearBackwardInput(
         CudaAccelerator accelerator,
@@ -165,6 +253,48 @@ internal static unsafe class CudaBlas
             bfloat16 ? Compute32FFast16BFloat : 68,
             GemmDefault);
         ThrowIfFailed(status, "cublasGemmEx");
+    }
+
+    private static void GemmBFloat16ToFloat32(
+        CudaAccelerator accelerator,
+        int deviceIndex,
+        int transA,
+        int transB,
+        int m,
+        int n,
+        int k,
+        MemoryBuffer1D<ushort, Stride1D.Dense> a,
+        int lda,
+        MemoryBuffer1D<ushort, Stride1D.Dense> b,
+        int ldb,
+        MemoryBuffer1D<float, Stride1D.Dense> c,
+        int ldc,
+        float beta)
+    {
+        accelerator.Bind();
+        nint handle = GetHandle(deviceIndex);
+        float alpha = 1f;
+        int status = CublasGemmEx(
+            handle,
+            transA,
+            transB,
+            m,
+            n,
+            k,
+            (nint)(&alpha),
+            a.NativePtr,
+            CudaR16BF,
+            lda,
+            b.NativePtr,
+            CudaR16BF,
+            ldb,
+            (nint)(&beta),
+            c.NativePtr,
+            CudaR32F,
+            ldc,
+            Compute32FFast16BFloat,
+            GemmDefault);
+        ThrowIfFailed(status, "cublasGemmEx(BF16->FP32)");
     }
 
     private static nint GetHandle(int deviceIndex)
