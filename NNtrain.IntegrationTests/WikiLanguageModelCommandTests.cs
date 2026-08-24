@@ -49,7 +49,7 @@ public sealed class WikiLanguageModelCommandTests
     }
 
     [Fact]
-    public void DefaultConfigurationCreatesFrogetMemoryV2Gpt()
+    public void DefaultConfigurationCreatesForgetMemoryV3Gpt()
     {
         var config = new WikiTrainingConfiguration
         {
@@ -64,11 +64,11 @@ public sealed class WikiLanguageModelCommandTests
             ForgetMemoryRetentionMaximum = 0.9f,
         };
 
-        IWikiLanguageModel created = WikiLanguageModelCommand.CreateModel(
+        LanguageModel created = WikiLanguageModelCommand.CreateModel(
             config,
             BpeTokenizer.BaseVocabularySize);
 
-        FrogetMemoryV2Gpt model = Assert.IsType<FrogetMemoryV2Gpt>(created);
+        ForgetMemoryV3Gpt model = Assert.IsType<ForgetMemoryV3Gpt>(created);
         Assert.Equal(TensorDType.Float16, model.DType);
         Assert.All(
             model.parameters(),
@@ -82,17 +82,43 @@ public sealed class WikiLanguageModelCommandTests
     }
 
     [Fact]
-    public void DefaultWikiJsonSelectsCustomForgetMemoryV2Model()
+    public void DefaultWikiJsonSelectsCustomForgetMemoryV3Model()
     {
         var config = new WikiTrainingConfiguration();
 
-        IWikiLanguageModel model = WikiLanguageModelCommand.CreateModel(
+        LanguageModel model = WikiLanguageModelCommand.CreateModel(
             config,
             config.VocabularySize);
 
-        Assert.True(config.IsForgetMemoryV2Architecture());
-        FrogetMemoryV2Gpt typed = Assert.IsType<FrogetMemoryV2Gpt>(model);
+        Assert.True(config.IsForgetMemoryV3Architecture());
+        ForgetMemoryV3Gpt typed = Assert.IsType<ForgetMemoryV3Gpt>(model);
         Assert.Equal(TensorDType.Float16, typed.DType);
+    }
+
+    [Fact]
+    public void ExplicitDrnArchitectureCreatesForgetMemoryDrnModel()
+    {
+        var config = new WikiTrainingConfiguration
+        {
+            ModelArchitecture = "forgetmemorydrn",
+            ContextLength = 8,
+            ModelWidth = 12,
+            Heads = 3,
+            HiddenSize = 20,
+            Layers = 2,
+            ForgetMemoryKeyWidth = 5,
+            ForgetMemoryValueWidth = 7,
+        };
+
+        LanguageModel created = WikiLanguageModelCommand.CreateModel(
+            config,
+            BpeTokenizer.BaseVocabularySize);
+
+        ForgetMemoryDRNGpt model = Assert.IsType<ForgetMemoryDRNGpt>(created);
+        Assert.True(model.UseDrn);
+        Assert.Equal(TensorDType.Float16, model.DType);
+        Assert.Equal(5, model.KeyWidth);
+        Assert.Equal(7, model.ValueWidth);
     }
 
     [Fact]
@@ -138,7 +164,7 @@ public sealed class WikiLanguageModelCommandTests
                 "effective training = epochs 5, batch 7, context 12",
                 output.ToString());
             Assert.Contains(
-                "effective model = forgetmemoryv2, vocabulary 2048, " +
+                "effective model = forgetmemoryv3, vocabulary 2048, " +
                 "width 12, heads 3, " +
                 "hidden 20, layers 3",
                 output.ToString());
@@ -194,10 +220,12 @@ public sealed class WikiLanguageModelCommandTests
                 .Options
                 .NewtonSchulzInterval);
 
-        float factor = WikiLanguageModelCommand.SetScheduledLearningRates(
-            optimizer,
-            config,
-            overallProgress: 0.1d);
+        WarmupCosineProgressLRScheduler scheduler =
+            lr_scheduler.WarmupCosineProgressLR(
+                optimizer,
+                config.WarmupPercent);
+        IReadOnlyList<float> rates = scheduler.step(0.1d);
+        float factor = rates[0] / config.LearningRate;
 
         Assert.Equal(0.5f, factor, precision: 6);
         Assert.Equal(
@@ -219,7 +247,7 @@ public sealed class WikiLanguageModelCommandTests
         double progress,
         float expected)
     {
-        float actual = WikiLanguageModelCommand.CalculateLearningRateFactor(
+        float actual = WarmupCosineProgressLRScheduler.CalculateFactor(
             progress,
             warmupPercent: 20f);
 
@@ -253,10 +281,11 @@ public sealed class WikiLanguageModelCommandTests
         Assert.True(state.Options.UseBFloat16FirstMoment);
         Assert.True(state.Options.UseBFloat16SecondMoment);
 
-        WikiLanguageModelCommand.SetScheduledLearningRates(
-            optimizer,
-            config,
-            overallProgress: 0.6d);
+        WarmupCosineProgressLRScheduler scheduler =
+            lr_scheduler.WarmupCosineProgressLR(
+                optimizer,
+                config.WarmupPercent);
+        scheduler.step(0.6d);
 
         Assert.Equal(
             0.005f,
@@ -288,7 +317,7 @@ public sealed class WikiLanguageModelCommandTests
                 Optimizer = WikiTrainingConfiguration.AdamWOptimizer,
                 Dropout = 0f,
             };
-            IWikiLanguageModel source =
+            LanguageModel source =
                 WikiLanguageModelCommand.CreateModel(
                     config,
                     config.VocabularySize);
@@ -327,7 +356,7 @@ public sealed class WikiLanguageModelCommandTests
                 sourceScheduler,
                 globalStep: 7);
 
-            IWikiLanguageModel restored =
+            LanguageModel restored =
                 WikiLanguageModelCommand.CreateModel(
                     config,
                     config.VocabularySize);
@@ -364,8 +393,8 @@ public sealed class WikiLanguageModelCommandTests
                 expectedCurrent.Parameters[0].Values,
                 restored.state_dict().Parameters[0].Values);
             Assert.Equal(
-                sourceOptimizer.state_dict().StateJson,
-                restoredOptimizer.state_dict().StateJson);
+                sourceOptimizer.state_dict().StateJsonText,
+                restoredOptimizer.state_dict().StateJsonText);
             Assert.Equal(
                 sourceScheduler.state_dict(),
                 restoredScheduler.state_dict());

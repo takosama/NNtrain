@@ -25,7 +25,7 @@ internal static class AdamWJsonProfiler
                 StringComparison.OrdinalIgnoreCase)
             && !string.Equals(
                 architecture,
-                "frogetmemoryv2",
+                "forgetmemoryv2",
                 StringComparison.OrdinalIgnoreCase))
         {
             throw new NotSupportedException(
@@ -56,7 +56,7 @@ internal static class AdamWJsonProfiler
             root,
             "maxDegreeOfParallelism");
 
-        var model = new FrogetMemoryV2Gpt(
+        var model = new ForgetMemoryV2Gpt(
             vocabulary,
             sequence,
             width,

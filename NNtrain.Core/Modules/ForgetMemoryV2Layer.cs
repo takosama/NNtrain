@@ -4,12 +4,12 @@ namespace NNtrain;
 /// Pre-normalized GPT layer backed by a stable, matrix-valued delta-rule
 /// memory.
 /// </summary>
-public sealed class FrogetMemoryV2Layer : Module
+public sealed class ForgetMemoryV2Layer : Module
 {
     private readonly Linear _memoryProjection;
     private readonly Linear _outputProjection;
 
-    public FrogetMemoryV2Layer(
+    public ForgetMemoryV2Layer(
         int modelWidth,
         int hiddenWidth,
         int keyWidth,
@@ -19,6 +19,33 @@ public sealed class FrogetMemoryV2Layer : Module
         float initializationScale = 0.02f,
         float dropout = 0f,
         TensorDType dtype = TensorDType.Float16)
+        : this(
+            modelWidth,
+            hiddenWidth,
+            keyWidth,
+            valueWidth,
+            retentionFloor,
+            random,
+            initializationScale,
+            dropout,
+            dtype,
+            useV3: false,
+            useDrn: false)
+    {
+    }
+
+    internal ForgetMemoryV2Layer(
+        int modelWidth,
+        int hiddenWidth,
+        int keyWidth,
+        int valueWidth,
+        float retentionFloor,
+        Random? random,
+        float initializationScale,
+        float dropout,
+        TensorDType dtype,
+        bool useV3,
+        bool useDrn)
         : base(dtype)
     {
         if (modelWidth <= 0)
@@ -47,6 +74,8 @@ public sealed class FrogetMemoryV2Layer : Module
         KeyWidth = keyWidth;
         ValueWidth = valueWidth;
         RetentionFloor = retentionFloor;
+        UseV3 = useV3;
+        UseDrn = useDrn;
         random ??= new Random(1);
 
         Ln1 = RegisterModule(new LayerNorm(modelWidth, dtype: dtype));
@@ -84,6 +113,10 @@ public sealed class FrogetMemoryV2Layer : Module
 
     public float RetentionFloor { get; }
 
+    public bool UseV3 { get; }
+
+    public bool UseDrn { get; }
+
     internal LayerNorm Ln1 { get; }
 
     public Dropout MemoryDropout { get; }
@@ -94,19 +127,70 @@ public sealed class FrogetMemoryV2Layer : Module
 
     public Dropout FfnDropout { get; }
 
+    /// <summary>Elements of recurrent memory this layer carries.</summary>
+    internal int StateSize => checked(ValueWidth * KeyWidth);
+
+    /// <summary>
+    /// Applies the layer to <paramref name="input"/> of shape
+    /// [1, sequence, width], continuing from and updating
+    /// <paramref name="state"/>. Everything except the memory recurrence is
+    /// identical to <see cref="Forward"/>.
+    /// </summary>
+    internal Tensor Continue(Tensor input, float[] state)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(state);
+        if (input.Rank != 3 || input.Shape[0] != 1)
+        {
+            throw new InvalidOperationException(
+                "Recurrent stepping requires input of shape "
+                + "[1, sequence, width].");
+        }
+        if (input.Shape[^1] != ModelWidth)
+        {
+            throw new ArgumentException(
+                $"ForgetMemoryV2 input width must be {ModelWidth}.",
+                nameof(input));
+        }
+
+        Tensor projected = _memoryProjection.ForwardBatch(Ln1.Forward(input));
+        Tensor recalled = UseDrn
+            ? projected.ForgetMemoryDRNContinue(
+                KeyWidth,
+                ValueWidth,
+                RetentionFloor,
+                state)
+            : UseV3
+                ? projected.ForgetMemoryV3Continue(
+                    KeyWidth,
+                    ValueWidth,
+                    RetentionFloor,
+                    state)
+                : projected.ForgetMemoryV2Continue(
+                    KeyWidth,
+                    ValueWidth,
+                    RetentionFloor,
+                    state);
+        Tensor memoryOutput = _outputProjection.ForwardBatch(recalled);
+        Tensor mixed = MemoryDropout.AddResidual(input, memoryOutput);
+        return FfnDropout.AddResidual(
+            mixed,
+            Ffn.Forward(Ln2.Forward(mixed)));
+    }
+
     public Tensor Forward(Tensor input)
     {
         ArgumentNullException.ThrowIfNull(input);
         if (input.Rank is not (2 or 3))
         {
             throw new InvalidOperationException(
-                "FrogetMemoryV2 input must have shape [sequence, width] or " +
+                "ForgetMemoryV2 input must have shape [sequence, width] or " +
                 "[batch, sequence, width].");
         }
         if (input.Shape[^1] != ModelWidth)
         {
             throw new ArgumentException(
-                $"FrogetMemoryV2 input width must be {ModelWidth}.",
+                $"ForgetMemoryV2 input width must be {ModelWidth}.",
                 nameof(input));
         }
 
@@ -118,10 +202,20 @@ public sealed class FrogetMemoryV2Layer : Module
             : input;
         Tensor projected = _memoryProjection.ForwardBatch(
             Ln1.Forward(batchedInput));
-        Tensor recalled = projected.FrogetMemoryV2(
-            KeyWidth,
-            ValueWidth,
-            RetentionFloor);
+        Tensor recalled = UseDrn
+            ? projected.ForgetMemoryDRN(
+                KeyWidth,
+                ValueWidth,
+                RetentionFloor)
+            : UseV3
+                ? projected.ForgetMemoryV3(
+                    KeyWidth,
+                    ValueWidth,
+                    RetentionFloor)
+                : projected.ForgetMemoryV2(
+                    KeyWidth,
+                    ValueWidth,
+                    RetentionFloor);
         Tensor memoryOutput = _outputProjection.ForwardBatch(recalled);
         Tensor mixed = MemoryDropout.AddResidual(
             batchedInput,

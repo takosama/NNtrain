@@ -5,6 +5,41 @@ using static TensorCharacterizationTests;
 public sealed class TensorFusedOperationTests
 {
     [Fact]
+    public void CudaFusedAttentionMatchesCpuForwardBackward()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+        const int batch = 2;
+        const int sequence = 5;
+        const int modelWidth = 8;
+        const int heads = 2;
+        float[] values = Pattern(batch * sequence * 3 * modelWidth, 31, 0.013f);
+        float[] seed = Pattern(batch * sequence * modelWidth, 19, 0.016f);
+        TensorDevice previous = Tensor.ExecutionDevice;
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cpu;
+            var cpuInput = new Tensor(values, [batch, sequence, 3 * modelWidth]);
+            Tensor cpu = cpuInput.FusedMultiHeadAttention(heads, causal: true);
+            cpu.Backward(seed);
+
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            Tensor.CudaDeviceIndex = 0;
+            var cudaInput = new Tensor(values, [batch, sequence, 3 * modelWidth]);
+            Tensor cuda = cudaInput.FusedMultiHeadAttention(heads, causal: true);
+            float[] cudaOutput = cuda.Data.ToArray();
+            cuda.BackwardAndRelease(seed);
+
+            AssertClose(cpu.Data, cudaOutput, 3e-5f);
+            AssertClose(cpuInput.Grad, cudaInput.Grad, 5e-4f);
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previous;
+        }
+    }
+
+    [Fact]
     public void FusedMultiHeadAttentionMatchesComposedRankTwoAttention()
     {
         const int sequence = 4;

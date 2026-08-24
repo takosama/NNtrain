@@ -32,7 +32,35 @@ class Linear : Module
                 new[] { outFeatures },
                 "B",
                 WeightDecayPolicy.Exclude,
-                dtype));
+            dtype));
+    }
+
+    /// <summary>
+    /// Creates an output projection whose matrix is shared with another
+    /// module (normally the token embedding). The shared parameter remains
+    /// registered only at its original owner; this module owns only the bias.
+    /// </summary>
+    internal Linear(Parameter sharedWeight, int inFeatures, int outFeatures)
+        : base(sharedWeight?.T.DType ?? throw new ArgumentNullException(
+            nameof(sharedWeight)))
+    {
+        if (sharedWeight.T.Rank != 2
+            || sharedWeight.T.Shape[0] != outFeatures
+            || sharedWeight.T.Shape[1] != inFeatures)
+        {
+            throw new ArgumentException(
+                "Shared linear weight must have shape [outFeatures, inFeatures].",
+                nameof(sharedWeight));
+        }
+
+        W = sharedWeight;
+        B = RegisterParameter(
+            new Parameter(
+                new float[outFeatures],
+                [outFeatures],
+                "B",
+                WeightDecayPolicy.Exclude,
+                sharedWeight.T.DType));
     }
 
     public Tensor Forward(Tensor x) // x: (in)

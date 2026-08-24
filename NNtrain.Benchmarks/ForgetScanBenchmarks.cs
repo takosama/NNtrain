@@ -291,7 +291,7 @@ public class ForgetScanOptimizerBenchmarks
     {
         Tensor.SimdEnabled = useSimd;
         Tensor.MaxDegreeOfParallelism = maxDegreeOfParallelism;
-        optimizer.Step();
+        optimizer.step();
     }
 }
 
@@ -301,7 +301,7 @@ public class ForgetScanOptimizerBenchmarks
     launchCount: 1,
     warmupCount: 3,
     iterationCount: 8)]
-public class FrogetMemoryV2AttentionBenchmarks
+public class ForgetMemoryV2AttentionBenchmarks
 {
     private const int VocabularySize = 256;
     private const int BatchSize = 2;
@@ -312,7 +312,7 @@ public class FrogetMemoryV2AttentionBenchmarks
     private int[] _tokens = null!;
     private int[] _targets = null!;
     private GptRinWikiJp _attention = null!;
-    private FrogetMemoryV2Gpt _memory = null!;
+    private ForgetMemoryV2Gpt _memory = null!;
 
     [Params(64, 128, 256)]
     public int SequenceLength { get; set; }
@@ -337,7 +337,7 @@ public class FrogetMemoryV2AttentionBenchmarks
             HiddenWidth,
             Layers,
             rng: new Random(1357));
-        _memory = new FrogetMemoryV2Gpt(
+        _memory = new ForgetMemoryV2Gpt(
             VocabularySize,
             SequenceLength,
             ModelWidth,
@@ -353,10 +353,10 @@ public class FrogetMemoryV2AttentionBenchmarks
         => Train(_attention);
 
     [Benchmark]
-    public float FrogetMemoryV2()
+    public float ForgetMemoryV2()
         => Train(_memory);
 
-    private float Train(IWikiLanguageModel model)
+    private float Train(LanguageModel model)
     {
         foreach (Parameter parameter in model.Parameters())
             parameter.ZeroGrad();

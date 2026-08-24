@@ -1,4 +1,4 @@
-﻿namespace NNtrain;
+namespace NNtrain;
 
 public partial class AdamW : IOptimizer, ILearningRateAdjustable
 {
@@ -68,6 +68,12 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
 
     public AdamWState CaptureState()
     {
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            int primaryDevice = Tensor.CudaDeviceIndex;
+            foreach (AdamWParameterRuntime runtime in _parameterRuntime)
+                runtime.CudaState?.SynchronizeHost(primaryDevice);
+        }
         if (_options.UseBFloat16FirstMoment
             || _options.UseBFloat16SecondMoment)
         {
@@ -131,6 +137,8 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         _parameterStates = clone.ParameterStates;
         for (int index = 0; index < _parameterRuntime.Length; index++)
         {
+            _parameterRuntime[index].CudaState?.Dispose();
+            _parameterRuntime[index].CudaState = null;
             if (_options.UseBFloat16FirstMoment)
             {
                 _parameterRuntime[index].FirstMoment = [];
@@ -167,8 +175,15 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         RefreshWeightDecayFlags();
     }
 
-    public void ZeroGrad()
+    internal void ZeroGrad()
     {
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            foreach (AdamWParameterRuntime runtime in _parameterRuntime)
+                runtime.Parameter.T.ClearGradient();
+            return;
+        }
+
         if (_workItems.Length > 1 && _totalElements >= 32_768)
         {
             Tensor.RunParallel(
@@ -182,6 +197,8 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
             ClearWorkItem(index);
     }
 
+    public void zero_grad() => ZeroGrad();
+
     private void ClearWorkItem(int workItemIndex)
     {
         AdamWWorkItem workItem = _workItems[workItemIndex];
@@ -191,7 +208,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
             .ClearGradientRange(workItem.Start, workItem.Length);
     }
 
-    public void Step()
+    internal void Step()
     {
         if (_step == int.MaxValue)
         {
@@ -208,6 +225,73 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         _stepOptions = options;
         _stepUpdateScale = options.LearningRate * sqrtBc2 / bc1;
         _stepScaledEpsilon = options.Epsilon * sqrtBc2;
+
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            for (int parameterIndex = 0;
+                parameterIndex < _parameterRuntime.Length;
+                parameterIndex++)
+            {
+                AdamWParameterRuntime runtime =
+                    _parameterRuntime[parameterIndex];
+                float[] first = runtime.FirstMomentBFloat16 is null
+                    ? runtime.FirstMoment
+                    : DecodeBFloat16(runtime.FirstMomentBFloat16);
+                float[] second = runtime.SecondMomentBFloat16 is null
+                    ? runtime.SecondMoment
+                    : DecodeBFloat16(runtime.SecondMomentBFloat16);
+                if (runtime.FirstMomentBFloat16 is null
+                    && runtime.SecondMomentBFloat16 is null)
+                {
+                    runtime.CudaState ??=
+                        new CudaOptimizerKernels.AdamWResidentState(
+                            first,
+                            second);
+                    foreach (int deviceIndex in Tensor.CudaDeviceIndices)
+                    {
+                        CudaOptimizerKernels.AdamWUpdateResident(
+                            runtime.Parameter.T,
+                            deviceIndex,
+                            runtime.CudaState,
+                            options.Beta1,
+                            options.Beta2,
+                            options.LearningRate,
+                            options.WeightDecay,
+                            _stepUpdateScale,
+                            _stepScaledEpsilon,
+                            runtime.ApplyWeightDecay);
+                    }
+                    runtime.Parameter.T.MarkCudaDataMutated(
+                        Tensor.CudaDeviceIndex);
+                }
+                else
+                {
+                    CudaOptimizerKernels.AdamWUpdate(
+                        runtime.Data,
+                        runtime.Parameter.T.GradientBuffer,
+                        first,
+                        second,
+                        options.Beta1,
+                        options.Beta2,
+                        options.LearningRate,
+                        options.WeightDecay,
+                        _stepUpdateScale,
+                        _stepScaledEpsilon,
+                        runtime.ApplyWeightDecay);
+                }
+                if (runtime.FirstMomentBFloat16 is not null)
+                    runtime.FirstMomentBFloat16 = EncodeBFloat16(first);
+                if (runtime.SecondMomentBFloat16 is not null)
+                    runtime.SecondMomentBFloat16 = EncodeBFloat16(second);
+                if (runtime.FirstMomentBFloat16 is not null
+                    || runtime.SecondMomentBFloat16 is not null)
+                {
+                    runtime.Parameter.CompleteUpdate();
+                }
+            }
+            CudaOptimizerKernels.SynchronizeDevices(Tensor.CudaDeviceIndices);
+            return;
+        }
 
         for (int parameterIndex = 0;
             parameterIndex < _parameters.Count;
@@ -235,6 +319,17 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                 .Parameter
                 .CompleteUpdate();
         }
+    }
+
+    public void step() => Step();
+
+    public OptimizerStateDictionary state_dict()
+        => OptimizerStateDictionary.Create("AdamW", CaptureState());
+
+    public void load_state_dict(OptimizerStateDictionary state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        RestoreState(state.Read<AdamWState>("AdamW"));
     }
 
 }

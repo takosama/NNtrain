@@ -51,8 +51,8 @@ public sealed class OptimizerInterfaceTests
         var second = new CountingOptimizer();
         IOptimizer optimizer = new CompositeOptimizer(first, second);
 
-        optimizer.ZeroGrad();
-        optimizer.Step();
+        optimizer.zero_grad();
+        optimizer.step();
 
         Assert.Equal(1, first.ZeroGradCalls);
         Assert.Equal(1, first.StepCalls);
@@ -73,7 +73,7 @@ public sealed class OptimizerInterfaceTests
                 WeightDecay = 0f,
             });
 
-        optimizer.Step();
+        optimizer.step();
 
         AssertClose([0.9f], parameter.T.Data, 2e-5f);
     }
@@ -87,7 +87,7 @@ public sealed class OptimizerInterfaceTests
         second.T.MutableGrad[0] = 4f;
         IOptimizer optimizer = new AdamW([first, second]);
 
-        optimizer.ZeroGrad();
+        optimizer.zero_grad();
 
         AssertClose([0f], first.T.Grad);
         AssertClose([0f], second.T.Grad);
@@ -102,7 +102,28 @@ public sealed class OptimizerInterfaceTests
             .Order()
             .ToArray();
 
-        Assert.Equal(["Step", "ZeroGrad"], methods);
+        Assert.Equal(
+            ["load_state_dict", "state_dict", "step", "zero_grad"],
+            methods);
+    }
+
+    [Theory]
+    [InlineData(typeof(AdamW))]
+    [InlineData(typeof(Lion))]
+    [InlineData(typeof(NekoMuon))]
+    [InlineData(typeof(GainShareAdamW))]
+    [InlineData(typeof(CompositeOptimizer))]
+    public void ConcreteOptimizersDoNotRepublishPascalLifecycle(Type type)
+    {
+        string[] publicMethods = type
+            .GetMethods()
+            .Select(method => method.Name)
+            .ToArray();
+
+        Assert.DoesNotContain("Step", publicMethods);
+        Assert.DoesNotContain("ZeroGrad", publicMethods);
+        Assert.Contains("step", publicMethods);
+        Assert.Contains("zero_grad", publicMethods);
     }
 
     private static Parameter CreateParameter(string name)
@@ -120,8 +141,8 @@ public sealed class OptimizerInterfaceTests
 
         internal int StepCalls { get; private set; }
 
-        public void ZeroGrad() => ZeroGradCalls++;
+        public void zero_grad() => ZeroGradCalls++;
 
-        public void Step() => StepCalls++;
+        public void step() => StepCalls++;
     }
 }

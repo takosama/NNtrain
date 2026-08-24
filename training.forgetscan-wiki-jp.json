@@ -1,35 +1,49 @@
 {
-  "task": "gpt_rin_wiki_jp",
-  "dataPath": "data/wiki",
-  "textColumn": "text",
-  "tokenizerPath": "wiki-jp-bpe.json",
-  "checkpoint": {
-    "directory": "checkpoints",
-    "fileName": "training.forgetscan-wiki-jp.model.json",
-    "resume": false,
-    "autoResume": true
+  "schemaVersion": 2,
+  "task": {
+    "type": "wiki-language-model"
   },
-
-  "vocabularySize": 4096,
-  "tokenizerTrainingDocuments": 5000,
-  "tokenizerTrainingBytes": 2000000,
-
-  "maxTrainingDocuments": 0,
-  "maxTrainingTokens": 0,
-  "maxDocumentTokens": 4096,
-  "validationFraction": 0.0,
-  "epochs": 1,
-  "batchSize": 16,
-
-  "contextLength": 64,
-  "modelWidth": 512,
-  "heads": 16,
-  "hiddenSize": 512,
-  "layers": 16,
-  "modelArchitecture": "forgetscan",
-  "dropout": 0.1,
-  "initializationScale": 0.02,
-
+  "data": {
+    "dataPath": "data/wiki",
+    "textColumn": "text",
+    "tokenizerPath": "wiki-jp-bpe.json",
+    "tokenizerTrainingDocuments": 5000,
+    "tokenizerTrainingBytes": 2000000,
+    "maxTrainingDocuments": 0,
+    "maxTrainingTokens": 0,
+    "maxDocumentTokens": 4096
+  },
+  "model": {
+    "vocabularySize": 4096,
+    "contextLength": 64,
+    "modelWidth": 512,
+    "heads": 16,
+    "hiddenSize": 512,
+    "layers": 16,
+    "modelArchitecture": "forgetscan",
+    "dropout": 0.1,
+    "initializationScale": 0.02
+  },
+  "training": {
+    "validationFraction": 0.0,
+    "epochs": 1,
+    "batchSize": 16
+  },
+  "runtime": {
+    "seed": 1234,
+    "useSimd": true,
+    "maxDegreeOfParallelism": 0
+  },
+  "reporting": {
+    "logEveryBatches": 10,
+    "showLossGraph": true,
+    "graphUpdateSteps": 100,
+    "datasetSampleEverySteps": 100,
+    "datasetSamplePoolSize": 32,
+    "maxNewTokens": 80,
+    "temperature": 0.8,
+    "topK": 40
+  },
   "optimization": {
     "optimizer": {
       "type": "nekomuon",
@@ -45,16 +59,10 @@
       "warmupPercent": 20
     }
   },
-  "seed": 1234,
-  "logEveryBatches": 10,
-  "showLossGraph": true,
-  "graphUpdateSteps": 100,
-  "datasetSampleEverySteps": 100,
-  "datasetSamplePoolSize": 32,
-  "useSimd": true,
-  "maxDegreeOfParallelism": 0,
-
-  "maxNewTokens": 80,
-  "temperature": 0.8,
-  "topK": 40
+  "checkpoint": {
+    "directory": "checkpoints",
+    "fileName": "training.forgetscan-wiki-jp.model.json",
+    "resume": false,
+    "autoResume": true
+  }
 }

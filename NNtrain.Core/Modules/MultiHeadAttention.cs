@@ -11,7 +11,14 @@ class MultiHeadAttention : Module
     public int NumHeads { get; }
     public int DHead { get; }
 
-    public MultiHeadAttention(int dModel, int numHeads, bool causal = false, Random? rng = null, float initScale = 0.02f)
+    public MultiHeadAttention(
+        int dModel,
+        int numHeads,
+        bool causal = false,
+        Random? rng = null,
+        float initScale = 0.02f,
+        TensorDType dtype = TensorDType.Float32)
+        : base(dtype)
     {
         if (numHeads <= 0)
             throw new ArgumentOutOfRangeException(
@@ -29,8 +36,8 @@ class MultiHeadAttention : Module
         rng ??= new Random(1);
 
         Qkv = RegisterModule(
-            new Linear(dModel, 3 * dModel, rng, initScale));
-        Wo = RegisterModule(new Linear(dModel, dModel, rng, initScale));
+            new Linear(dModel, 3 * dModel, rng, initScale, dtype));
+        Wo = RegisterModule(new Linear(dModel, dModel, rng, initScale, dtype));
     }
 
     public Tensor Forward(Tensor x) // (T, D) or (B, T, D)

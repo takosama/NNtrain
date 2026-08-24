@@ -22,6 +22,64 @@ public static class nn
         }
     }
 
+    public static class utils
+    {
+        /// <summary>
+        /// Clips the global L2 norm of all parameter gradients in place,
+        /// mirroring torch.nn.utils.clip_grad_norm_. Returns the total
+        /// norm measured before clipping.
+        /// </summary>
+        public static float clip_grad_norm_(
+            IEnumerable<Parameter> parameters,
+            float max_norm)
+        {
+            ArgumentNullException.ThrowIfNull(parameters);
+            if (!(max_norm > 0f))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(max_norm),
+                    max_norm,
+                    "The maximum gradient norm must be positive.");
+            }
+
+            Parameter[] retainedParameters = parameters.ToArray();
+            if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+            {
+                return TensorCudaKernels.ClipGradientNormResident(
+                    retainedParameters,
+                    max_norm);
+            }
+
+            var gradients = new List<float[]>();
+            foreach (Parameter parameter in retainedParameters)
+            {
+                if (parameter.T.HasGradientBuffer)
+                    gradients.Add(parameter.T.GradientBuffer);
+            }
+
+            double squaredSum = 0d;
+            foreach (float[] gradient in gradients)
+            {
+                foreach (float value in gradient)
+                    squaredSum += (double)value * value;
+            }
+
+            float totalNorm = (float)Math.Sqrt(squaredSum);
+            if (totalNorm > max_norm)
+            {
+                float scale = max_norm / (totalNorm + 1e-6f);
+                foreach (float[] gradient in gradients)
+                {
+                    Span<float> span = gradient.AsSpan();
+                    for (int index = 0; index < span.Length; index++)
+                        span[index] *= scale;
+                }
+            }
+
+            return totalNorm;
+        }
+    }
+
     public static TransformerClassifier transformer_classifier(
         int seq_len,
         int d_model,
@@ -57,7 +115,9 @@ public static class nn
         int num_layers,
         float dropout = 0f,
         float init_scale = 0.02f,
-        Random? generator = null)
+        Random? generator = null,
+        TensorDType dtype = TensorDType.Float32,
+        bool tie_word_embeddings = false)
         => new(
             vocab_size,
             context_length,
@@ -67,7 +127,9 @@ public static class nn
             num_layers,
             generator ?? torch.generator(),
             init_scale,
-            dropout);
+            dropout,
+            dtype,
+            tie_word_embeddings);
 
     public static HyenaGpt hyena_lm(
         int vocab_size,
@@ -112,7 +174,65 @@ public static class nn
             init_scale,
             dropout);
 
-    public static FrogetMemoryV2Gpt forget_memory_v2_lm(
+    public static ForgetMemoryV2Gpt forget_memory_v2_lm(
+        int vocab_size,
+        int context_length,
+        int d_model,
+        int dim_feedforward,
+        int num_layers,
+        int key_width = 16,
+        int value_width = 16,
+        float retention_min = 0.5f,
+        float retention_max = 0.99f,
+        float dropout = 0f,
+        float init_scale = 0.02f,
+        Random? generator = null,
+        TensorDType dtype = TensorDType.Float16)
+        => new(
+            vocab_size,
+            context_length,
+            d_model,
+            dim_feedforward,
+            num_layers,
+            key_width,
+            value_width,
+            retention_min,
+            retention_max,
+            generator ?? torch.generator(),
+            init_scale,
+            dropout,
+            dtype);
+
+    public static ForgetMemoryV3Gpt forget_memory_v3_lm(
+        int vocab_size,
+        int context_length,
+        int d_model,
+        int dim_feedforward,
+        int num_layers,
+        int key_width = 16,
+        int value_width = 16,
+        float retention_min = 0.5f,
+        float retention_max = 0.99f,
+        float dropout = 0f,
+        float init_scale = 0.02f,
+        Random? generator = null,
+        TensorDType dtype = TensorDType.Float16)
+        => new(
+            vocab_size,
+            context_length,
+            d_model,
+            dim_feedforward,
+            num_layers,
+            key_width,
+            value_width,
+            retention_min,
+            retention_max,
+            generator ?? torch.generator(),
+            init_scale,
+            dropout,
+            dtype);
+
+    public static ForgetMemoryDRNGpt forget_memory_drn_lm(
         int vocab_size,
         int context_length,
         int d_model,

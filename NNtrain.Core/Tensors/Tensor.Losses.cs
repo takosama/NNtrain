@@ -64,6 +64,140 @@ partial class Tensor
                 nameof(labels));
         }
 
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            if (DType == TensorDType.BFloat16)
+            {
+                TensorCudaKernels.CrossEntropyResidentContext bfloat16Context =
+                    CudaOperationProfiler.IsEnabled
+                    ? CudaOperationProfiler.Measure(
+                        "forward.cross_entropy",
+                        () => TensorCudaKernels
+                            .CrossEntropyForwardBFloat16Resident(
+                                this,
+                                retainedLabels,
+                                rows,
+                                columns,
+                                ignoreIndex,
+                                validRows,
+                                labelSmoothing))
+                    : TensorCudaKernels.CrossEntropyForwardBFloat16Resident(
+                        this,
+                        retainedLabels,
+                        rows,
+                        columns,
+                        ignoreIndex,
+                        validRows,
+                        labelSmoothing);
+                Tensor bfloat16Result = FromCudaResult(
+                    bfloat16Context.Loss,
+                    CudaDeviceIndex,
+                    [1],
+                    [this],
+                    dtype: TensorDType.Float32);
+                if (AutogradContext.IsRecordingEnabled)
+                {
+                    bfloat16Result.Node.RegisterResource(bfloat16Context);
+                    bfloat16Result.Node.BackwardAction = () =>
+                    {
+                        if (CudaOperationProfiler.IsEnabled)
+                        {
+                            CudaOperationProfiler.Measure(
+                                "backward.cross_entropy",
+                                () => TensorCudaKernels
+                                    .CrossEntropyBackwardBFloat16Resident(
+                                        this,
+                                        bfloat16Result,
+                                        bfloat16Context,
+                                        columns,
+                                        ignoreIndex,
+                                        validRows,
+                                        labelSmoothing));
+                        }
+                        else
+                        {
+                            TensorCudaKernels.CrossEntropyBackwardBFloat16Resident(
+                                this,
+                                bfloat16Result,
+                                bfloat16Context,
+                                columns,
+                                ignoreIndex,
+                                validRows,
+                                labelSmoothing);
+                        }
+                    };
+                }
+                else if (!CudaInferenceScope.TrackResource(bfloat16Context))
+                {
+                    bfloat16Context.Dispose();
+                }
+                return bfloat16Result;
+            }
+            TensorCudaKernels.CrossEntropyResidentContext context =
+                CudaOperationProfiler.IsEnabled
+                ? CudaOperationProfiler.Measure(
+                    "forward.cross_entropy",
+                    () => TensorCudaKernels.CrossEntropyForwardResident(
+                        this,
+                        retainedLabels,
+                        rows,
+                        columns,
+                        ignoreIndex,
+                        validRows,
+                        labelSmoothing))
+                : TensorCudaKernels.CrossEntropyForwardResident(
+                    this,
+                    retainedLabels,
+                    rows,
+                    columns,
+                    ignoreIndex,
+                    validRows,
+                    labelSmoothing);
+            Tensor cudaResult = FromCudaResult(
+                context.Loss,
+                CudaDeviceIndex,
+                [1],
+                [this],
+                dtype: TensorDType.Float32);
+            if (AutogradContext.IsRecordingEnabled)
+            {
+                cudaResult.Node.RegisterResource(context);
+                cudaResult.Node.BackwardAction = () =>
+                {
+                    if (CudaOperationProfiler.IsEnabled)
+                    {
+                        CudaOperationProfiler.Measure(
+                            "backward.cross_entropy",
+                            () => TensorCudaKernels.CrossEntropyBackwardResident(
+                                this,
+                                cudaResult,
+                                context,
+                                columns,
+                                ignoreIndex,
+                                validRows,
+                                labelSmoothing));
+                    }
+                    else
+                    {
+                        TensorCudaKernels.CrossEntropyBackwardResident(
+                            this,
+                            cudaResult,
+                            context,
+                            columns,
+                            ignoreIndex,
+                            validRows,
+                            labelSmoothing);
+                    }
+                };
+            }
+            else
+            {
+                if (!CudaInferenceScope.TrackResource(context))
+                    context.Dispose();
+            }
+            return cudaResult;
+        }
+
         float[] rowLosses = new float[rows];
         float[] rowMaximums = new float[rows];
         float[] rowInverseSums = new float[rows];

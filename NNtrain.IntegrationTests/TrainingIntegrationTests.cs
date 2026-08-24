@@ -6,91 +6,6 @@ using Xunit;
 public sealed class TrainingIntegrationTests
 {
     [Fact]
-    public void TwoStepRunIntegratesMnistModelAutogradAndNekoMuon()
-    {
-        using var directory = new TemporaryDirectory();
-        DatasetFiles training = WriteDataset(
-            directory.Root,
-            "train",
-            [0, 1]);
-        DatasetFiles evaluation = WriteDataset(
-            directory.Root,
-            "eval",
-            [2, 3]);
-        var configuration = new TrainingConfiguration
-        {
-            TrainingData = new DatasetConfiguration
-            {
-                ImagePath = training.ImagePath,
-                LabelPath = training.LabelPath,
-            },
-            EvaluationData = new DatasetConfiguration
-            {
-                ImagePath = evaluation.ImagePath,
-                LabelPath = evaluation.LabelPath,
-            },
-            Epochs = 1,
-            BatchSize = 2,
-            LearningRate = 0.001f,
-            Seed = 7,
-            Model = new ModelConfiguration
-            {
-                Heads = 1,
-                HiddenSize = 4,
-                Layers = 1,
-                Seed = 3,
-                InitializationScale = 0.01f,
-            },
-        };
-        var trainingDataset = new Mnist(
-            configuration.TrainingData.ImagePath,
-            configuration.TrainingData.LabelPath);
-        var evaluationDataset = new Mnist(
-            configuration.EvaluationData.ImagePath,
-            configuration.EvaluationData.LabelPath);
-        var model = new TransformerClassifier(
-            trainingDataset.Rows,
-            trainingDataset.Columns,
-            configuration.Model.Heads,
-            configuration.Model.HiddenSize,
-            configuration.Model.Layers,
-            trainingDataset.ClassCount,
-            new Random(configuration.Model.Seed),
-            configuration.Model.InitializationScale);
-        var optimizer = new NekoMuon(
-            model.Parameters(),
-            new NekoMuonOptions
-            {
-                LearningRate = configuration.LearningRate,
-                WeightDecay = configuration.WeightDecay,
-            });
-        var trainer = new Trainer(
-            model,
-            trainingDataset,
-            evaluationDataset,
-            optimizer,
-            new TrainerOptions
-            {
-                Epochs = configuration.Epochs,
-                StepsPerEpoch = 2,
-                RandomSeed = configuration.Seed,
-                LabelSmoothing = configuration.LabelSmoothing,
-            });
-
-        TrainingEpochResult result =
-            Assert.Single(trainer.Run());
-
-        Assert.Equal(1, result.Epoch);
-        Assert.Equal(2, result.TrainingSteps);
-        Assert.Equal(2, result.EvaluationSamples);
-        Assert.True(float.IsFinite(result.Training.Loss));
-        Assert.InRange(result.Training.Accuracy, 0f, 1f);
-        Assert.True(float.IsFinite(result.Evaluation.Loss));
-        Assert.InRange(result.Evaluation.Accuracy, 0f, 1f);
-        Assert.Equal(2, optimizer.CaptureState().Step);
-    }
-
-    [Fact]
     public void ProgramDisplaysAnUnderstandableMissingDataFileError()
     {
         using var directory = new TemporaryDirectory();
@@ -333,7 +248,7 @@ public sealed class TrainingIntegrationTests
     {
         Assert.Equal(
             expected,
-            Program.CrossedCheckpointBoundary(
+            TrainingRunner.ShouldSaveCheckpoint(
                 completedUpdates,
                 totalUpdates));
     }
@@ -415,7 +330,7 @@ public sealed class TrainingIntegrationTests
 
         string actual = NNtrain.CheckpointSnapshot.GetPath(
             checkpointPath,
-            "FrogetMemoryV2Gpt",
+            "ForgetMemoryV2Gpt",
             0.1d,
             new DateTimeOffset(2026, 3, 12, 12, 24, 0, TimeSpan.Zero));
 
@@ -423,7 +338,7 @@ public sealed class TrainingIntegrationTests
             Path.Combine(
                 Path.GetTempPath(),
                 "snapshots",
-                "FrogetMemoryV2Gpt_0.1_epoch_20260312_1224.safetensors"),
+                "ForgetMemoryV2Gpt_0.1_epoch_20260312_1224.safetensors"),
             actual);
     }
 

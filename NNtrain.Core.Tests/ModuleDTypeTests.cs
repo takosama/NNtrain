@@ -104,10 +104,38 @@ public sealed class ModuleDTypeTests
             });
     }
 
-    [Fact]
-    public void FrogetMemoryV2DefaultsToFloat16ThroughoutModelAndForward()
+    [Theory]
+    [InlineData(TensorDType.Float16)]
+    [InlineData(TensorDType.BFloat16)]
+    public void TransformerLanguageModelSupports16BitDTypes(
+        TensorDType dtype)
     {
-        FrogetMemoryV2Gpt model = CreateModel();
+        var model = new GptRinWikiJp(
+            vocabularySize: 7,
+            contextLength: 3,
+            dModel: 4,
+            numHeads: 1,
+            dHidden: 8,
+            numLayers: 1,
+            rng: new Random(53),
+            dtype: dtype);
+
+        Assert.Equal(dtype, model.DType);
+        Assert.All(
+            model.Parameters(),
+            parameter => Assert.Equal(dtype, parameter.T.DType));
+
+        Tensor logits = model.Forward([1, 2, 3], 1, 3);
+
+        Assert.Equal(dtype, logits.DType);
+        Assert.Equal(21, logits.Numel);
+        Assert.All(logits.Data, value => Assert.True(float.IsFinite(value)));
+    }
+
+    [Fact]
+    public void ForgetMemoryV2DefaultsToFloat16ThroughoutModelAndForward()
+    {
+        ForgetMemoryV2Gpt model = CreateModel();
 
         Assert.Equal(TensorDType.Float16, model.DType);
         Assert.All(
@@ -124,9 +152,9 @@ public sealed class ModuleDTypeTests
     }
 
     [Fact]
-    public void FrogetMemoryV2ExplicitFloat32UsesLegacyStoragePath()
+    public void ForgetMemoryV2ExplicitFloat32UsesLegacyStoragePath()
     {
-        FrogetMemoryV2Gpt model = CreateModel(TensorDType.Float32);
+        ForgetMemoryV2Gpt model = CreateModel(TensorDType.Float32);
 
         Assert.Equal(TensorDType.Float32, model.DType);
         Assert.All(
@@ -146,7 +174,7 @@ public sealed class ModuleDTypeTests
     [Fact]
     public void TorchFactoryDefaultsToFloat16AndAllowsFloat32Override()
     {
-        FrogetMemoryV2Gpt defaultModel = nn.forget_memory_v2_lm(
+        ForgetMemoryV2Gpt defaultModel = nn.forget_memory_v2_lm(
             vocab_size: 7,
             context_length: 3,
             d_model: 4,
@@ -155,7 +183,7 @@ public sealed class ModuleDTypeTests
             key_width: 2,
             value_width: 2,
             generator: new Random(31));
-        FrogetMemoryV2Gpt float32Model = nn.forget_memory_v2_lm(
+        ForgetMemoryV2Gpt float32Model = nn.forget_memory_v2_lm(
             vocab_size: 7,
             context_length: 3,
             d_model: 4,
@@ -178,7 +206,7 @@ public sealed class ModuleDTypeTests
                 Assert.Equal(TensorDType.Float32, parameter.T.DType));
     }
 
-    private static FrogetMemoryV2Gpt CreateModel(
+    private static ForgetMemoryV2Gpt CreateModel(
         TensorDType dtype = TensorDType.Float16)
         => new(
             vocabularySize: 7,
@@ -191,7 +219,7 @@ public sealed class ModuleDTypeTests
             random: new Random(29),
             dtype: dtype);
 
-    private static void AssertFloat16Layer(FrogetMemoryV2Layer layer)
+    private static void AssertFloat16Layer(ForgetMemoryV2Layer layer)
     {
         Assert.Equal(TensorDType.Float16, layer.DType);
         Assert.Equal(TensorDType.Float16, layer.Ln1.DType);

@@ -26,7 +26,10 @@ internal static class TensorFloat16OperationManifest
             Factory("From2D(Single[,],String,TensorDType)"),
 
             Conversion("To(TensorDType)"),
+            Conversion("To(TensorDevice)"),
             Conversion("to(TensorDType)"),
+            Conversion("to(TensorDevice)"),
+            Conversion("to(TorchDevice)"),
             Conversion("Half()"),
             Conversion("half()"),
             Conversion("ToFloat32()"),
@@ -142,16 +145,34 @@ internal static class TensorFloat16OperationManifest
                 "FusedForgetScan()",
                 "TensorFloat16FusedOperationTests.ForgetScanKeepsRecurrenceAndBackwardAccumulationInFloat32"),
             Preserve(
-                "FrogetMemoryV2(Int32,Int32,Single)",
-                "TensorFloat16FusedOperationTests.FrogetMemoryV2KeepsMatrixStateAndGradientsInFloat32"),
+                "ForgetMemoryV2(Int32,Int32,Single)",
+                "TensorFloat16FusedOperationTests.ForgetMemoryV2KeepsMatrixStateAndGradientsInFloat32"),
+            Preserve(
+                "ForgetMemoryV3(Int32,Int32,Single)",
+                "ForgetMemoryV3Tests.IntegratedTensorBackwardMatchesFiniteDifferences"),
+            Preserve(
+                "ForgetMemoryDRN(Int32,Int32,Single)",
+                "ForgetMemoryDRNTests.IntegratedBackwardMatchesFiniteDifferences"),
         ];
 
     internal static IReadOnlyList<TensorFloat16OperationManifestEntry>
         InternalTensorReturningMembers { get; } =
         [
             Preserve(
+                "ForgetMemoryV2Continue(Int32,Int32,Single,Single[])",
+                "ForgetMemoryV2Tests.GptSchedulesShortToLongMemoryAndTrains"),
+            Preserve(
+                "ForgetMemoryV3Continue(Int32,Int32,Single,Single[])",
+                "ForgetMemoryV3Tests.GptUsesV3InEveryLayer"),
+            Preserve(
+                "ForgetMemoryDRNContinue(Int32,Int32,Single,Single[])",
+                "ForgetMemoryDRNTests.GptUsesDrnInEveryLayerAndTrains"),
+            Preserve(
                 "LinearLastDim(Tensor,Tensor,Boolean)",
                 "LinearLastDimTests.Float16ProjectionMatchesFormerFloat16Graph"),
+            Preserve(
+                "SelectLastSequenceToken()",
+                "GptRinWikiJpTests.GreedyGenerationReturnsValidTokensAndRestoresTrainingMode"),
         ];
 
     /// <summary>

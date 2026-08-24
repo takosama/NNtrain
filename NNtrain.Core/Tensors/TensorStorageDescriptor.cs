@@ -7,7 +7,8 @@ namespace NNtrain;
 /// <para>
 /// This is a description and validation boundary, not a codec. The current
 /// runtime implements only raw <see cref="TensorDType.Float32"/> and
-/// <see cref="TensorDType.Float16"/> storage. The remaining dtypes can be
+/// <see cref="TensorDType.Float16"/> and <see cref="TensorDType.BFloat16"/>
+/// storage. The remaining dtypes can be
 /// described here before their codecs, kernels, and serialization are added.
 /// </para>
 /// <para>
@@ -52,6 +53,7 @@ public sealed record TensorStorageDescriptor(
         {
             case TensorDType.Float32:
             case TensorDType.Float16:
+            case TensorDType.BFloat16:
                 RequireNative(DType, metadata);
                 return;
 
@@ -95,6 +97,7 @@ public sealed record TensorStorageDescriptor(
         {
             TensorDType.Float32 => sizeof(float),
             TensorDType.Float16 => sizeof(ushort),
+            TensorDType.BFloat16 => sizeof(ushort),
             TensorDType.Float8E4M3Fn or TensorDType.Float8E5M2 => sizeof(byte),
             _ => throw new InvalidOperationException(
                 $"Tensor dtype '{DType}' requires packing metadata."),

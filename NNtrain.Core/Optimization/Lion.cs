@@ -70,13 +70,15 @@ public sealed class Lion : IOptimizer, ILearningRateAdjustable
         _state = CloneState(state);
     }
 
-    public void ZeroGrad()
+    internal void ZeroGrad()
     {
         foreach (Parameter parameter in _parameters)
             parameter.ZeroGrad();
     }
 
-    public void Step()
+    public void zero_grad() => ZeroGrad();
+
+    internal void Step()
     {
         if (_state.Step == int.MaxValue)
         {
@@ -190,6 +192,17 @@ public sealed class Lion : IOptimizer, ILearningRateAdjustable
         else
             for (int index = 0; index < _parameters.Count; index++)
                 UpdateParameter(index);
+    }
+
+    public void step() => Step();
+
+    public OptimizerStateDictionary state_dict()
+        => OptimizerStateDictionary.Create("Lion", CaptureState());
+
+    public void load_state_dict(OptimizerStateDictionary state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        RestoreState(state.Read<LionState>("Lion"));
     }
 
     private static LionState CreateInitialState(

@@ -3,7 +3,7 @@ namespace NNtrain;
 internal static partial class WikiLanguageModelCommand
 {
     internal static IOptimizer CreateOptimizer(
-        IWikiLanguageModel model,
+        LanguageModel model,
         WikiTrainingConfiguration config)
     {
         ArgumentNullException.ThrowIfNull(model);
@@ -29,6 +29,31 @@ internal static partial class WikiLanguageModelCommand
             return optim.Composite(nekoMuon, auxiliaryAdamW);
         }
 
+        if (config.IsOptimizer(
+            WikiTrainingConfiguration.GainShareAdamWOptimizer))
+        {
+            return optim.GainShareAdamW(
+                model.make_gainshare_parameter_groups(
+                    config.GainShareBlockDepth),
+                lr: config.LearningRate,
+                beta1: config.GainShareBeta1,
+                beta2: config.GainShareBeta2,
+                eps: config.GainShareEpsilon,
+                rho: config.GainShareRho,
+                gamma: config.GainShareGamma,
+                min_scale: config.GainShareMinScale,
+                max_scale: config.GainShareMaxScale,
+                weight_decay: config.WeightDecay);
+        }
+
+        if (config.IsOptimizer(WikiTrainingConfiguration.LionOptimizer))
+        {
+            return optim.Lion(
+                model.parameters(),
+                lr: config.LearningRate,
+                weight_decay: config.WeightDecay);
+        }
+
         return optim.AdamW(
             model.parameters(),
             lr: config.LearningRate,
@@ -37,61 +62,8 @@ internal static partial class WikiLanguageModelCommand
             bf16_second_moment: config.AdamWUseBFloat16SecondMoment);
     }
 
-    internal static float CalculateLearningRateFactor(
-        double overallProgress,
-        float warmupPercent)
-    {
-        return WarmupCosineProgressLRScheduler.CalculateFactor(
-            overallProgress,
-            warmupPercent);
-    }
-
-    internal static float SetScheduledLearningRates(
-        IOptimizer optimizer,
-        WikiTrainingConfiguration config,
-        double overallProgress)
-    {
-        ArgumentNullException.ThrowIfNull(optimizer);
-        ArgumentNullException.ThrowIfNull(config);
-        float factor = CalculateLearningRateFactor(
-            overallProgress,
-            config.WarmupPercent);
-
-        if (config.IsOptimizer(WikiTrainingConfiguration.NekoMuonOptimizer))
-        {
-            if (optimizer is not CompositeOptimizer composite
-                || composite.Optimizers.Count != 2
-                || composite.Optimizers[0]
-                    is not ILearningRateAdjustable primary
-                || composite.Optimizers[1]
-                    is not ILearningRateAdjustable auxiliary)
-            {
-                throw new InvalidOperationException(
-                    "NekoMuon scheduling requires adjustable primary and " +
-                    "auxiliary optimizers.");
-            }
-
-            primary.SetLearningRate(
-                MathF.Max(float.Epsilon, config.LearningRate * factor));
-            auxiliary.SetLearningRate(
-                MathF.Max(
-                    float.Epsilon,
-                    config.AuxiliaryLearningRate * factor));
-            return factor;
-        }
-
-        if (optimizer is not ILearningRateAdjustable adjustable)
-        {
-            throw new InvalidOperationException(
-                "Learning-rate scheduling requires an adjustable optimizer.");
-        }
-        adjustable.SetLearningRate(
-            MathF.Max(float.Epsilon, config.LearningRate * factor));
-        return factor;
-    }
-
     private static void WriteOptimizerSummary(
-        IWikiLanguageModel model,
+        LanguageModel model,
         WikiTrainingConfiguration config,
         TextWriter output)
     {
@@ -105,6 +77,28 @@ internal static partial class WikiLanguageModelCommand
                 $"({model.AuxiliaryParameters.Count} auxiliary parameters, " +
                 $"lr {config.AuxiliaryLearningRate:G}, moments " +
                 $"{GetAdamWMomentStorage(config)})");
+        }
+        else if (config.IsOptimizer(
+            WikiTrainingConfiguration.GainShareAdamWOptimizer))
+        {
+            IReadOnlyList<IReadOnlyList<Parameter>> groups =
+                model.make_gainshare_parameter_groups(
+                    config.GainShareBlockDepth);
+            output.WriteLine(
+                $"optimizer = GainShareAdamW " +
+                $"({groups.Sum(group => group.Count)} parameters in " +
+                $"{groups.Count} blocks at depth " +
+                $"{config.GainShareBlockDepth}, lr {config.LearningRate:G}, " +
+                $"rho {config.GainShareRho:G}, gamma " +
+                $"{config.GainShareGamma:G}, scale " +
+                $"{config.GainShareMinScale:G}-{config.GainShareMaxScale:G})");
+        }
+        else if (config.IsOptimizer(WikiTrainingConfiguration.LionOptimizer))
+        {
+            output.WriteLine(
+                $"optimizer = Lion ({model.parameters().Count()} " +
+                $"parameters, lr {config.LearningRate:G}, weight decay " +
+                $"{config.WeightDecay:G})");
         }
         else
         {

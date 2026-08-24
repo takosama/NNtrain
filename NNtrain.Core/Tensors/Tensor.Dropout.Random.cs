@@ -4,7 +4,9 @@ partial class Tensor
 {
     private static uint NextDropoutSeed(Random random)
     {
-        long value = random.NextInt64();
+        long value;
+        lock (random)
+            value = random.NextInt64();
         return unchecked((uint)value ^ (uint)((ulong)value >> 32));
     }
 

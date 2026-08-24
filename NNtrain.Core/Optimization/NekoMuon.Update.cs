@@ -8,11 +8,24 @@ public sealed partial class NekoMuon
         float finalScale,
         NekoMuonOptions options)
     {
-        using Tensor.DataMutation mutation = parameter.BeginUpdate();
-        Span<float> data = mutation.Values;
         bool applyWeightDecay =
             parameter.WeightDecay == WeightDecayPolicy.Apply
             || (options.Decay1D && parameter.T.Rank == 1);
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            CudaOptimizerKernels.NekoMuonApplyUpdate(
+                parameter.DataBuffer,
+                update,
+                options.LearningRate,
+                finalScale,
+                options.WeightDecay,
+                applyWeightDecay);
+            parameter.CompleteUpdate();
+            return;
+        }
+
+        using Tensor.DataMutation mutation = parameter.BeginUpdate();
+        Span<float> data = mutation.Values;
         int index = 0;
 
         if (Tensor.SimdEnabled

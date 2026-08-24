@@ -13,6 +13,7 @@ public static class torch
     public const TensorDType float32 = TensorDType.Float32;
     public const TensorDType float16 = TensorDType.Float16;
     public const TensorDType half = TensorDType.Float16;
+    public const TensorDType bfloat16 = TensorDType.BFloat16;
 
     public static class utils
     {
@@ -73,19 +74,42 @@ public static class torch
         }
     }
 
+    public static TorchDevice device(string value) => TorchDevice.Parse(value);
+
+    public static IDisposable use_device(TorchDevice device)
+        => TensorExecutionContext.Push(device);
+
+    public static class cuda
+    {
+        public static bool is_available(int device_index = 0)
+            => TensorBackends
+                .Get(TensorDevice.Cuda)
+                .IsAvailable(device_index);
+
+        public static int device_count() => Tensor.CudaDeviceCount;
+    }
+
     public static Tensor tensor(
         float[] data,
         int[] shape,
         string name = "",
-        TensorDType dtype = TensorDType.Float32)
-        => new(data, shape, name, dtype);
+        TensorDType dtype = TensorDType.Float32,
+        TorchDevice? device = null)
+    {
+        var result = new Tensor(data, shape, name, dtype);
+        return device is TorchDevice target ? result.to(target) : result;
+    }
 
     public static Tensor zeros(params int[] shape) => Tensor.Zeros(shape);
 
     public static Tensor zeros(
         int[] shape,
-        TensorDType dtype)
-        => Tensor.Zeros(dtype, shape);
+        TensorDType dtype,
+        TorchDevice? device = null)
+    {
+        Tensor result = Tensor.Zeros(dtype, shape);
+        return device is TorchDevice target ? result.to(target) : result;
+    }
 
     public static Tensor scalar(
         float value,
@@ -103,19 +127,35 @@ public static class torch
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
 
+        // Serialize straight into the file. Going through a string would
+        // materialize the whole checkpoint twice - once as UTF-16 and once as
+        // UTF-8 - which for a multi-hundred-megabyte checkpoint is gigabytes of
+        // transient allocation.
         string temporaryPath = fullPath + ".tmp";
-        File.WriteAllText(
+        using (var stream = new FileStream(
             temporaryPath,
-            JsonSerializer.Serialize(value, SerializationOptions));
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            bufferSize: 1024 * 1024,
+            FileOptions.SequentialScan))
+        {
+            JsonSerializer.Serialize(stream, value, SerializationOptions);
+        }
         File.Move(temporaryPath, fullPath, overwrite: true);
     }
 
     public static T load<T>(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        return JsonSerializer.Deserialize<T>(
-            File.ReadAllText(path),
-            SerializationOptions)
+        using var stream = new FileStream(
+            Path.GetFullPath(path),
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 1024 * 1024,
+            FileOptions.SequentialScan);
+        return JsonSerializer.Deserialize<T>(stream, SerializationOptions)
             ?? throw new InvalidDataException(
                 $"Serialized torch object '{path}' was JSON null.");
     }

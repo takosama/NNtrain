@@ -17,7 +17,6 @@ partial class Tensor
         if (probability == 0f)
             return this;
 
-        var output = new float[Numel];
         random ??= Random.Shared;
         uint seed = NextDropoutSeed(random);
         float scale = 1f / (1f - probability);
@@ -25,6 +24,83 @@ partial class Tensor
         int columns = _shape[^1];
         int rows = Numel / columns;
 
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            if (DType == TensorDType.BFloat16)
+            {
+                var bfloat16Buffer = CudaOperationProfiler.IsEnabled
+                    ? CudaOperationProfiler.Measure(
+                        "forward.dropout",
+                        () => TensorCudaKernels.DropoutForwardBFloat16Resident(
+                            this, seed, dropThreshold, scale))
+                    : TensorCudaKernels.DropoutForwardBFloat16Resident(
+                        this, seed, dropThreshold, scale);
+                Tensor bfloat16Result = FromCudaResult(
+                    bfloat16Buffer,
+                    CudaDeviceIndex,
+                    _shape,
+                    [this],
+                    TensorDType.BFloat16);
+                if (AutogradContext.IsRecordingEnabled)
+                {
+                    bfloat16Result.Node.BackwardAction = () =>
+                        TensorCudaKernels.DropoutBackwardResident(
+                            bfloat16Result,
+                            this,
+                            seed,
+                            dropThreshold,
+                            scale);
+                }
+                return bfloat16Result;
+            }
+            var cudaBuffer = CudaOperationProfiler.IsEnabled
+                ? CudaOperationProfiler.Measure(
+                    "forward.dropout",
+                    () => TensorCudaKernels.DropoutForwardResident(
+                        this,
+                        seed,
+                        dropThreshold,
+                        scale))
+                : TensorCudaKernels.DropoutForwardResident(
+                    this,
+                    seed,
+                    dropThreshold,
+                    scale);
+            Tensor cudaResult = FromCudaResult(
+                cudaBuffer,
+                CudaDeviceIndex,
+                _shape,
+                [this]);
+            if (AutogradContext.IsRecordingEnabled)
+            {
+                cudaResult.Node.BackwardAction = () =>
+                {
+                    if (CudaOperationProfiler.IsEnabled)
+                    {
+                        CudaOperationProfiler.Measure(
+                            "backward.dropout",
+                            () => TensorCudaKernels.DropoutBackwardResident(
+                                cudaResult,
+                                this,
+                                seed,
+                                dropThreshold,
+                                scale));
+                    }
+                    else
+                    {
+                        TensorCudaKernels.DropoutBackwardResident(
+                            cudaResult,
+                            this,
+                            seed,
+                            dropThreshold,
+                            scale);
+                    }
+                };
+            }
+            return cudaResult;
+        }
+
+        var output = new float[Numel];
         void ForwardRow(int row)
         {
             int offset = row * columns;
@@ -93,7 +169,6 @@ partial class Tensor
         if (probability == 0f)
             return this + branch;
 
-        var output = new float[Numel];
         random ??= Random.Shared;
         uint seed = NextDropoutSeed(random);
         float scale = 1f / (1f - probability);
@@ -101,6 +176,92 @@ partial class Tensor
         int columns = _shape[^1];
         int rows = Numel / columns;
 
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            if (DType == TensorDType.BFloat16
+                && branch.DType == TensorDType.BFloat16)
+            {
+                var bfloat16Buffer = CudaOperationProfiler.IsEnabled
+                    ? CudaOperationProfiler.Measure(
+                        "forward.residual_dropout",
+                        () => TensorCudaKernels.AddDropoutForwardBFloat16Resident(
+                            this, branch, seed, dropThreshold, scale))
+                    : TensorCudaKernels.AddDropoutForwardBFloat16Resident(
+                        this, branch, seed, dropThreshold, scale);
+                Tensor bfloat16Result = FromCudaResult(
+                    bfloat16Buffer,
+                    CudaDeviceIndex,
+                    _shape,
+                    [this, branch],
+                    TensorDType.BFloat16);
+                if (AutogradContext.IsRecordingEnabled)
+                {
+                    bfloat16Result.Node.BackwardAction = () =>
+                        TensorCudaKernels.AddDropoutBackwardResident(
+                            bfloat16Result,
+                            this,
+                            branch,
+                            ReferenceEquals(this, branch),
+                            seed,
+                            dropThreshold,
+                            scale);
+                }
+                return bfloat16Result;
+            }
+            var cudaBuffer = CudaOperationProfiler.IsEnabled
+                ? CudaOperationProfiler.Measure(
+                    "forward.residual_dropout",
+                    () => TensorCudaKernels.AddDropoutForwardResident(
+                        this,
+                        branch,
+                        seed,
+                        dropThreshold,
+                        scale))
+                : TensorCudaKernels.AddDropoutForwardResident(
+                    this,
+                    branch,
+                    seed,
+                    dropThreshold,
+                    scale);
+            Tensor cudaResult = FromCudaResult(
+                cudaBuffer,
+                CudaDeviceIndex,
+                _shape,
+                [this, branch]);
+            if (AutogradContext.IsRecordingEnabled)
+            {
+                cudaResult.Node.BackwardAction = () =>
+                {
+                    if (CudaOperationProfiler.IsEnabled)
+                    {
+                        CudaOperationProfiler.Measure(
+                            "backward.residual_dropout",
+                            () => TensorCudaKernels.AddDropoutBackwardResident(
+                                cudaResult,
+                                this,
+                                branch,
+                                ReferenceEquals(this, branch),
+                                seed,
+                                dropThreshold,
+                                scale));
+                    }
+                    else
+                    {
+                        TensorCudaKernels.AddDropoutBackwardResident(
+                            cudaResult,
+                            this,
+                            branch,
+                            ReferenceEquals(this, branch),
+                            seed,
+                            dropThreshold,
+                            scale);
+                    }
+                };
+            }
+            return cudaResult;
+        }
+
+        var output = new float[Numel];
         void ForwardRow(int row)
         {
             int offset = row * columns;

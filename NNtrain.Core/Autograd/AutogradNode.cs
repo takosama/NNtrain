@@ -7,35 +7,36 @@ internal sealed class AutogradNode
 {
     private static readonly Action NoBackward = static () => { };
 
-    private readonly Tensor[] _parents;
-    private readonly long[] _parentDataVersions;
+    private Tensor[] _parents;
+    private long[] _parentDataVersions;
     private readonly bool _isDetached;
     private Action _backwardAction = NoBackward;
     private bool _hasBackwardAction;
+    private List<IDisposable>? _resources;
 
-    internal AutogradNode(IEnumerable<Tensor>? parents = null)
+    internal AutogradNode(Tensor[]? parents = null)
         : this(parents, isDetached: false)
     {
     }
 
-    private AutogradNode(IEnumerable<Tensor>? parents, bool isDetached)
+    private AutogradNode(Tensor[]? parents, bool isDetached)
     {
-        _parents = parents?.ToArray() ?? [];
-        if (_parents.Any(static parent => parent is null))
+        _parents = parents is null ? [] : (Tensor[])parents.Clone();
+        if (Array.Exists(_parents, static parent => parent is null))
         {
             throw new ArgumentException(
                 "An autograd node cannot contain a null parent.",
                 nameof(parents));
         }
 
-        _parentDataVersions = _parents
-            .Select(static parent => parent.DataVersion)
-            .ToArray();
+        _parentDataVersions = new long[_parents.Length];
+        for (int index = 0; index < _parents.Length; index++)
+            _parentDataVersions[index] = _parents[index].DataVersion;
         _isDetached = isDetached;
         Parents = Array.AsReadOnly(_parents);
     }
 
-    internal IReadOnlyList<Tensor> Parents { get; }
+    internal IReadOnlyList<Tensor> Parents { get; private set; }
     internal bool IsLeaf => _parents.Length == 0;
     internal bool IsDetached => _isDetached;
 
@@ -62,6 +63,26 @@ internal sealed class AutogradNode
     }
 
     internal void RunBackward() => _backwardAction();
+
+    internal void RegisterResource(IDisposable resource)
+    {
+        ArgumentNullException.ThrowIfNull(resource);
+        (_resources ??= []).Add(resource);
+    }
+
+    internal void ReleaseGraph()
+    {
+        if (_resources is not null)
+        {
+            foreach (IDisposable resource in _resources)
+                resource.Dispose();
+            _resources = null;
+        }
+        _backwardAction = NoBackward;
+        _parents = [];
+        _parentDataVersions = [];
+        Parents = Array.Empty<Tensor>();
+    }
 
     internal void ValidateParentVersions()
     {

@@ -3,7 +3,7 @@ namespace NNtrain;
 /// <summary>
 /// A compact decoder-only Transformer for Japanese Wikipedia text.
 /// </summary>
-public sealed class GptRinWikiJp : Module, IWikiLanguageModel
+public sealed class GptRinWikiJp : LanguageModel
 {
     private readonly Parameter _tokenEmbedding;
     private readonly Parameter _positionEmbedding;
@@ -23,7 +23,10 @@ public sealed class GptRinWikiJp : Module, IWikiLanguageModel
         int numLayers,
         Random? rng = null,
         float initializationScale = 0.02f,
-        float dropout = 0f)
+        float dropout = 0f,
+        TensorDType dtype = TensorDType.Float32,
+        bool tieWordEmbeddings = false)
+        : base(dtype)
     {
         if (vocabularySize <= 0)
             throw new ArgumentOutOfRangeException(nameof(vocabularySize));
@@ -59,15 +62,17 @@ public sealed class GptRinWikiJp : Module, IWikiLanguageModel
                 dModel,
                 "TokenEmbedding",
                 rng,
-                initializationScale));
+                initializationScale,
+                dtype));
         _positionEmbedding = RegisterParameter(
             CreateEmbedding(
                 contextLength,
                 dModel,
                 "PositionEmbedding",
                 rng,
-                initializationScale));
-        _embeddingDropout = RegisterModule(new Dropout(dropout, rng));
+                initializationScale,
+                dtype));
+        _embeddingDropout = RegisterModule(new Dropout(dropout, rng, dtype));
         _blocks = new TransformerBlock[numLayers];
         for (int layer = 0; layer < numLayers; layer++)
         {
@@ -79,11 +84,15 @@ public sealed class GptRinWikiJp : Module, IWikiLanguageModel
                     causal: true,
                     rng,
                     initializationScale,
-                    dropout));
+                    dropout,
+                    dtype));
         }
-        _finalNorm = RegisterModule(new LayerNorm(dModel));
+        _finalNorm = RegisterModule(new LayerNorm(dModel, dtype: dtype));
         _languageModelHead = RegisterModule(
-            new Linear(dModel, vocabularySize, rng, initializationScale));
+            tieWordEmbeddings
+                ? new Linear(_tokenEmbedding, dModel, vocabularySize)
+                : new Linear(
+                    dModel, vocabularySize, rng, initializationScale, dtype));
 
         _hiddenWeightParameters = _blocks
             .SelectMany(block => block.Parameters())
@@ -97,30 +106,40 @@ public sealed class GptRinWikiJp : Module, IWikiLanguageModel
             .ToArray();
     }
 
-    public int VocabularySize { get; }
+    public override int VocabularySize { get; }
 
-    public int ContextLength { get; }
+    public override int ContextLength { get; }
 
-    public int ModelWidth { get; }
+    public override int ModelWidth { get; }
 
     /// <summary>
     /// Transformer matrix weights updated by NekoMuon.
     /// </summary>
-    public IReadOnlyList<Parameter> HiddenWeightParameters
+    public override IReadOnlyList<Parameter> HiddenWeightParameters
         => Array.AsReadOnly(_hiddenWeightParameters);
 
     /// <summary>
     /// Embeddings, normalization parameters, biases, and language-model head
     /// updated by the auxiliary AdamW optimizer.
     /// </summary>
-    public IReadOnlyList<Parameter> AuxiliaryParameters
+    public override IReadOnlyList<Parameter> AuxiliaryParameters
         => Array.AsReadOnly(_auxiliaryParameters);
 
     /// <summary>
     /// Returns flattened next-token logits with shape
     /// [batchSize * sequenceLength, vocabularySize].
     /// </summary>
-    public Tensor Forward(
+    internal override Tensor Forward(
+        int[] tokenIds,
+        int batchSize,
+        int sequenceLength)
+    {
+        Tensor hidden = ForwardHidden(tokenIds, batchSize, sequenceLength);
+        return _languageModelHead.ForwardBatch(
+            hidden.Reshape(batchSize * sequenceLength, ModelWidth));
+    }
+
+    private Tensor ForwardHidden(
         int[] tokenIds,
         int batchSize,
         int sequenceLength)
@@ -151,15 +170,14 @@ public sealed class GptRinWikiJp : Module, IWikiLanguageModel
             hidden = block.Forward(hidden);
         hidden = _finalNorm.Forward(hidden);
 
-        return _languageModelHead.ForwardBatch(
-            hidden.Reshape(batchSize * sequenceLength, ModelWidth));
+        return hidden;
     }
 
     /// <summary>
     /// Autoregressively samples token ids and returns the prompt plus generated
     /// continuation.
     /// </summary>
-    public int[] GenerateTokenIds(
+    internal override int[] GenerateTokenIds(
         IEnumerable<int> promptTokenIds,
         int maxNewTokens,
         float temperature = 0.8f,
@@ -194,15 +212,22 @@ public sealed class GptRinWikiJp : Module, IWikiLanguageModel
         try
         {
             using (AutogradContext.NoGrad())
+            using (CudaInferenceScope cacheSession = CudaInferenceScope.Begin(
+                resetPool: true,
+                clearPoolOnDispose: true))
             {
                 for (int generated = 0; generated < maxNewTokens; generated++)
                 {
+                    using CudaInferenceScope inferenceScope =
+                        CudaInferenceScope.Begin();
                     int sequenceLength = Math.Min(ContextLength, result.Count);
                     int[] context = result
                         .Skip(result.Count - sequenceLength)
                         .ToArray();
-                    Tensor logits = Forward(context, 1, sequenceLength);
-                    int offset = (sequenceLength - 1) * VocabularySize;
+                    Tensor hidden = ForwardHidden(context, 1, sequenceLength);
+                    Tensor logits = _languageModelHead.ForwardBatch(
+                        hidden.SelectLastSequenceToken());
+                    const int offset = 0;
                     int nextToken = Sample(
                         logits.Data,
                         offset,
@@ -228,7 +253,7 @@ public sealed class GptRinWikiJp : Module, IWikiLanguageModel
     /// <summary>
     /// Encodes a prompt, generates a continuation, and decodes it to text.
     /// </summary>
-    public string Generate(
+    internal override string Generate(
         string prompt,
         BpeTokenizer tokenizer,
         int maxNewTokens,
@@ -261,7 +286,8 @@ public sealed class GptRinWikiJp : Module, IWikiLanguageModel
         int width,
         string name,
         Random random,
-        float scale)
+        float scale,
+        TensorDType dtype)
     {
         var values = new float[checked(rows * width)];
         for (int index = 0; index < values.Length; index++)
@@ -270,7 +296,8 @@ public sealed class GptRinWikiJp : Module, IWikiLanguageModel
             values,
             [rows, width],
             name,
-            WeightDecayPolicy.Apply);
+            WeightDecayPolicy.Apply,
+            dtype);
     }
 
     private static int Sample(

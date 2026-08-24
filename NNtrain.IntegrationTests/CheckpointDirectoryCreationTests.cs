@@ -1,3 +1,4 @@
+using System.Text.Json;
 using NNtrain;
 using Xunit;
 
@@ -30,7 +31,7 @@ public sealed class CheckpointDirectoryCreationTests
                 Optimizer = WikiTrainingConfiguration.AdamWOptimizer,
                 Dropout = 0f,
             };
-            IWikiLanguageModel model = WikiLanguageModelCommand.CreateModel(
+            LanguageModel model = WikiLanguageModelCommand.CreateModel(
                 configuration,
                 configuration.VocabularySize);
             IOptimizer optimizer = WikiLanguageModelCommand.CreateOptimizer(
@@ -93,7 +94,10 @@ public sealed class CheckpointDirectoryCreationTests
                 ClassificationTrainingCheckpoint.CurrentFormatVersion,
                 CompletedEpoch: 0,
                 modelState,
-                new OptimizerStateDictionary("AdamW", "{}", []),
+                new OptimizerStateDictionary(
+                    "AdamW",
+                    JsonSerializer.SerializeToElement(new { }),
+                    []),
                 new LRSchedulerStateDictionary("CosineAnnealingLR", 0),
                 BestModel: null,
                 BestEpoch: 0,

@@ -82,7 +82,7 @@ public class AdamWJsonBenchmarks
 
     private static Parameter[] CreateParameters(JsonElement root)
     {
-        var model = new FrogetMemoryV2Gpt(
+        var model = new ForgetMemoryV2Gpt(
             vocabularySize: ReadInt(root, "vocabularySize"),
             contextLength: ReadInt(root, "contextLength"),
             modelWidth: ReadInt(root, "modelWidth"),

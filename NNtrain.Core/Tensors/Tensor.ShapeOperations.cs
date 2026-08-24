@@ -2,6 +2,57 @@
 
 partial class Tensor
 {
+    internal Tensor SelectLastSequenceToken()
+    {
+        if (Rank is not 2 and not 3)
+        {
+            throw new InvalidOperationException(
+                "SelectLastSequenceToken requires rank 2 or rank 3.");
+        }
+        if (Rank == 3 && _shape[0] != 1)
+        {
+            throw new InvalidOperationException(
+                "Rank-3 last-token selection currently requires batch 1.");
+        }
+        int sequence = Rank == 3 ? _shape[1] : _shape[0];
+        int width = _shape[^1];
+        int sourceOffset = checked((sequence - 1) * width);
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            if (DType == TensorDType.BFloat16)
+            {
+                var bfloat16Buffer =
+                    TensorCudaKernels.CopyRangeForwardBFloat16Resident(
+                        this, sourceOffset, width);
+                Tensor bfloat16Result = FromCudaResult(
+                    bfloat16Buffer,
+                    CudaDeviceIndex,
+                    [1, width],
+                    [this],
+                    TensorDType.BFloat16);
+                bfloat16Result.Node.BackwardAction = () =>
+                    TensorCudaKernels.AccumulateGradientRangeResident(
+                        bfloat16Result, this, sourceOffset);
+                return bfloat16Result;
+            }
+            var buffer = TensorCudaKernels.CopyRangeForwardResident(
+                this, sourceOffset, width);
+            Tensor result = FromCudaResult(
+                buffer, CudaDeviceIndex, [1, width], [this], DType);
+            result.Node.BackwardAction = () =>
+                TensorCudaKernels.AccumulateGradientRangeResident(
+                    result, this, sourceOffset);
+            return result;
+        }
+
+        TensorStorage values = TensorStorage.CreateUninitialized(width, DType);
+        _data.CopyRangeTo(sourceOffset, values, 0, width);
+        Tensor cpuResult = FromStorageResult(values, [1, width], [this]);
+        cpuResult.Node.BackwardAction = () => AddScaledValues(
+            _grad, sourceOffset, cpuResult._grad, 0, 1f, width);
+        return cpuResult;
+    }
+
     public Tensor Reshape(params int[] newShape)
     {
         if (NumelOf(newShape) != Numel)
@@ -10,6 +61,38 @@ partial class Tensor
                 $"Cannot reshape {ShapeText(this)} with {Numel} elements to " +
                 $"[{string.Join(", ", newShape)}].",
                 nameof(newShape));
+        }
+
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            if (DType == TensorDType.BFloat16)
+            {
+                var bfloat16Buffer =
+                    TensorCudaKernels.CopyForwardBFloat16Resident(this);
+                Tensor bfloat16Result = FromCudaResult(
+                    bfloat16Buffer,
+                    CudaDeviceIndex,
+                    newShape,
+                    [this],
+                    TensorDType.BFloat16);
+                bfloat16Result.Node.BackwardAction = () =>
+                    TensorCudaKernels.AccumulateGradientResident(
+                        bfloat16Result,
+                        this);
+                return bfloat16Result;
+            }
+            var cudaBuffer = TensorCudaKernels.CopyForwardResident(this);
+            Tensor cudaResult = FromCudaResult(
+                cudaBuffer,
+                CudaDeviceIndex,
+                newShape,
+                [this],
+                DType);
+            cudaResult.Node.BackwardAction = () =>
+                TensorCudaKernels.AccumulateGradientResident(
+                    cudaResult,
+                    this);
+            return cudaResult;
         }
 
         var t = new Tensor(_data, newShape, new[] { this });

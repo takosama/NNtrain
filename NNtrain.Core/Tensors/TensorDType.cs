@@ -13,6 +13,7 @@ public enum TensorDType
 {
     Float32 = 0,
     Float16 = 1,
+    BFloat16 = 7,
     Float8E4M3Fn = 2,
     Float8E5M2 = 3,
     Float4 = 4,
@@ -23,7 +24,9 @@ public enum TensorDType
 internal static class TensorDTypeContract
 {
     internal static bool IsImplemented(TensorDType dtype)
-        => dtype is TensorDType.Float32 or TensorDType.Float16;
+        => dtype is TensorDType.Float32
+            or TensorDType.Float16
+            or TensorDType.BFloat16;
 
     internal static void ValidateImplemented(
         TensorDType dtype,
@@ -53,7 +56,7 @@ internal static class TensorDTypeContract
         if (tensors.Count == 0)
             return result;
 
-        result = TensorDType.Float16;
+        result = tensors[0].DType;
         for (int index = 0; index < tensors.Count; index++)
         {
             Tensor tensor = tensors[index]
@@ -62,13 +65,10 @@ internal static class TensorDTypeContract
                     nameof(tensors));
             if (tensor.DType == TensorDType.Float32)
                 return TensorDType.Float32;
-            if (tensor.DType != TensorDType.Float16)
+            if (tensor.DType != result)
             {
-                throw new NotSupportedException(
-                    $"Tensor dtype '{tensor.DType}' does not have a " +
-                    "promotion rule yet.");
+                return TensorDType.Float32;
             }
-            result = tensor.DType;
         }
         return result;
     }

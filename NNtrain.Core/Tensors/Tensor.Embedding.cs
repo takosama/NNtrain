@@ -48,7 +48,6 @@ partial class Tensor
         var resultShape = new int[outputShape.Length + 1];
         outputShape.CopyTo(resultShape, 0);
         resultShape[^1] = width;
-        var resultData = new float[checked(indices.Length * width)];
         for (int position = 0; position < retainedIndices.Length; position++)
         {
             int row = retainedIndices[position];
@@ -60,6 +59,106 @@ partial class Tensor
                     $"Embedding index at position {position} must be " +
                     $"between 0 and {rows - 1}.");
             }
+        }
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            if (DType == TensorDType.BFloat16)
+            {
+                var bfloat16Context = CudaOperationProfiler.IsEnabled
+                    ? CudaOperationProfiler.Measure(
+                        "forward.embedding",
+                        () => TensorCudaKernels.EmbeddingForwardBFloat16Resident(
+                            this,
+                            retainedIndices,
+                            width))
+                    : TensorCudaKernels.EmbeddingForwardBFloat16Resident(
+                        this,
+                        retainedIndices,
+                        width);
+                Tensor bfloat16Result = FromCudaResult(
+                    bfloat16Context.Output,
+                    CudaDeviceIndex,
+                    resultShape,
+                    [this],
+                    TensorDType.BFloat16);
+                if (AutogradContext.IsRecordingEnabled)
+                {
+                    bfloat16Result.Node.RegisterResource(bfloat16Context);
+                    bfloat16Result.Node.BackwardAction = () =>
+                    {
+                        if (CudaOperationProfiler.IsEnabled)
+                        {
+                            CudaOperationProfiler.Measure(
+                                "backward.embedding",
+                                () => TensorCudaKernels
+                                    .EmbeddingBackwardBFloat16Resident(
+                                        bfloat16Result,
+                                        this,
+                                        bfloat16Context,
+                                        width));
+                        }
+                        else
+                        {
+                            TensorCudaKernels.EmbeddingBackwardBFloat16Resident(
+                                bfloat16Result,
+                                this,
+                                bfloat16Context,
+                                width);
+                        }
+                    };
+                }
+                else if (!CudaInferenceScope.TrackResource(bfloat16Context))
+                {
+                    bfloat16Context.Dispose();
+                }
+                return bfloat16Result;
+            }
+            var cudaBuffer = CudaOperationProfiler.IsEnabled
+                ? CudaOperationProfiler.Measure(
+                    "forward.embedding",
+                    () => TensorCudaKernels.EmbeddingForwardResident(
+                        this,
+                        retainedIndices,
+                        width))
+                : TensorCudaKernels.EmbeddingForwardResident(
+                    this,
+                    retainedIndices,
+                    width);
+            Tensor cudaResult = FromCudaResult(
+                cudaBuffer,
+                CudaDeviceIndex,
+                resultShape,
+                [this]);
+            if (AutogradContext.IsRecordingEnabled)
+            {
+                cudaResult.Node.BackwardAction = () =>
+                {
+                    if (CudaOperationProfiler.IsEnabled)
+                    {
+                        CudaOperationProfiler.Measure(
+                            "backward.embedding",
+                            () => TensorCudaKernels.EmbeddingBackwardResident(
+                                cudaResult,
+                                this,
+                                retainedIndices,
+                                width));
+                    }
+                    else
+                    {
+                        TensorCudaKernels.EmbeddingBackwardResident(
+                            cudaResult,
+                            this,
+                            retainedIndices,
+                            width);
+                    }
+                };
+            }
+            return cudaResult;
+        }
+        var resultData = new float[checked(indices.Length * width)];
+        for (int position = 0; position < retainedIndices.Length; position++)
+        {
+            int row = retainedIndices[position];
             _data.CopyRangeTo(
                 row * width,
                 resultData.AsSpan(position * width, width));
@@ -139,6 +238,128 @@ partial class Tensor
                     $"Token at position {position} must be between 0 and " +
                     $"{tokenRows - 1}.");
             }
+        }
+
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            if (DType == TensorDType.BFloat16
+                && positionTable.DType == TensorDType.BFloat16)
+            {
+                var bfloat16Context = CudaOperationProfiler.IsEnabled
+                    ? CudaOperationProfiler.Measure(
+                        "forward.embedding_position",
+                        () => TensorCudaKernels
+                            .EmbeddingWithPositionsForwardBFloat16Resident(
+                                this,
+                                positionTable,
+                                retainedIndices,
+                                sequenceLength,
+                                width))
+                    : TensorCudaKernels
+                        .EmbeddingWithPositionsForwardBFloat16Resident(
+                            this,
+                            positionTable,
+                            retainedIndices,
+                            sequenceLength,
+                            width);
+                Tensor bfloat16Result = FromCudaResult(
+                    bfloat16Context.Output,
+                    CudaDeviceIndex,
+                    [batchSize, sequenceLength, width],
+                    [this, positionTable],
+                    TensorDType.BFloat16);
+                if (AutogradContext.IsRecordingEnabled)
+                {
+                    bfloat16Result.Node.RegisterResource(bfloat16Context);
+                    bfloat16Result.Node.BackwardAction = () =>
+                    {
+                        if (CudaOperationProfiler.IsEnabled)
+                        {
+                            CudaOperationProfiler.Measure(
+                                "backward.embedding_position",
+                                () => TensorCudaKernels
+                                    .EmbeddingWithPositionsBackwardBFloat16Resident(
+                                        bfloat16Result,
+                                        this,
+                                        positionTable,
+                                        bfloat16Context,
+                                        sequenceLength,
+                                        width));
+                        }
+                        else
+                        {
+                            TensorCudaKernels
+                                .EmbeddingWithPositionsBackwardBFloat16Resident(
+                                    bfloat16Result,
+                                    this,
+                                    positionTable,
+                                    bfloat16Context,
+                                    sequenceLength,
+                                    width);
+                        }
+                    };
+                }
+                else if (!CudaInferenceScope.TrackResource(bfloat16Context))
+                {
+                    bfloat16Context.Dispose();
+                }
+                return bfloat16Result;
+            }
+            var context = CudaOperationProfiler.IsEnabled
+                ? CudaOperationProfiler.Measure(
+                    "forward.embedding_position",
+                    () => TensorCudaKernels.EmbeddingWithPositionsForwardResident(
+                        this,
+                        positionTable,
+                        retainedIndices,
+                        sequenceLength,
+                        width))
+                : TensorCudaKernels.EmbeddingWithPositionsForwardResident(
+                    this,
+                    positionTable,
+                    retainedIndices,
+                    sequenceLength,
+                    width);
+            Tensor cudaResult = FromCudaResult(
+                context.Output,
+                CudaDeviceIndex,
+                [batchSize, sequenceLength, width],
+                [this, positionTable]);
+            if (AutogradContext.IsRecordingEnabled)
+            {
+                cudaResult.Node.RegisterResource(context);
+                cudaResult.Node.BackwardAction = () =>
+                {
+                    if (CudaOperationProfiler.IsEnabled)
+                    {
+                        CudaOperationProfiler.Measure(
+                            "backward.embedding_position",
+                            () => TensorCudaKernels.EmbeddingWithPositionsBackwardResident(
+                                cudaResult,
+                                this,
+                                positionTable,
+                                context,
+                                sequenceLength,
+                                width));
+                    }
+                    else
+                    {
+                        TensorCudaKernels.EmbeddingWithPositionsBackwardResident(
+                            cudaResult,
+                            this,
+                            positionTable,
+                            context,
+                            sequenceLength,
+                            width);
+                    }
+                };
+            }
+            else
+            {
+                if (!CudaInferenceScope.TrackResource(context))
+                    context.Dispose();
+            }
+            return cudaResult;
         }
 
         var output = new float[checked(retainedIndices.Length * width)];

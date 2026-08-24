@@ -372,6 +372,146 @@ partial class Tensor
         gamma.CheckRank(1);
         beta.CheckRank(1);
 
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            int columns = _shape[^1];
+            if (gamma._shape[0] != columns || beta._shape[0] != columns)
+            {
+                throw new ArgumentException(
+                    $"LayerNorm parameters must have shape [{columns}], " +
+                    $"but gamma is {ShapeText(gamma)} and beta is " +
+                    $"{ShapeText(beta)}.");
+            }
+            int rows = Numel / columns;
+            if (DType == TensorDType.BFloat16
+                && gamma.DType == TensorDType.BFloat16
+                && beta.DType == TensorDType.BFloat16)
+            {
+                TensorCudaKernels.BFloat16LayerNormResidentContext
+                    bfloat16Context = CudaOperationProfiler.IsEnabled
+                        ? CudaOperationProfiler.Measure(
+                            "forward.layer_norm",
+                            () => TensorCudaKernels
+                                .LayerNormForwardBFloat16Resident(
+                                    this,
+                                    gamma,
+                                    beta,
+                                    rows,
+                                    columns,
+                                    eps))
+                        : TensorCudaKernels.LayerNormForwardBFloat16Resident(
+                            this,
+                            gamma,
+                            beta,
+                            rows,
+                            columns,
+                            eps);
+                Tensor bfloat16Result = FromCudaResult(
+                    bfloat16Context.Output,
+                    CudaDeviceIndex,
+                    _shape,
+                    [this, gamma, beta],
+                    TensorDType.BFloat16);
+                if (AutogradContext.IsRecordingEnabled)
+                {
+                    bfloat16Result.Node.RegisterResource(bfloat16Context);
+                    bfloat16Result.Node.BackwardAction = () =>
+                    {
+                        if (CudaOperationProfiler.IsEnabled)
+                        {
+                            CudaOperationProfiler.Measure(
+                                "backward.layer_norm",
+                                () => TensorCudaKernels
+                                    .LayerNormBackwardBFloat16Resident(
+                                        this,
+                                        gamma,
+                                        beta,
+                                        bfloat16Result,
+                                        bfloat16Context,
+                                        rows,
+                                        columns));
+                        }
+                        else
+                        {
+                            TensorCudaKernels.LayerNormBackwardBFloat16Resident(
+                                this,
+                                gamma,
+                                beta,
+                                bfloat16Result,
+                                bfloat16Context,
+                                rows,
+                                columns);
+                        }
+                    };
+                }
+                else if (!CudaInferenceScope.TrackResource(bfloat16Context))
+                {
+                    bfloat16Context.Dispose();
+                }
+                return bfloat16Result;
+            }
+            TensorCudaKernels.LayerNormResidentContext context =
+                CudaOperationProfiler.IsEnabled
+                ? CudaOperationProfiler.Measure(
+                    "forward.layer_norm",
+                    () => TensorCudaKernels.LayerNormForwardResident(
+                        this,
+                        gamma,
+                        beta,
+                        rows,
+                        columns,
+                        eps))
+                : TensorCudaKernels.LayerNormForwardResident(
+                    this,
+                    gamma,
+                    beta,
+                    rows,
+                    columns,
+                    eps);
+            Tensor cudaResult = FromCudaResult(
+                context.Output,
+                CudaDeviceIndex,
+                _shape,
+                [this, gamma, beta]);
+            if (AutogradContext.IsRecordingEnabled)
+            {
+                cudaResult.Node.RegisterResource(context);
+                cudaResult.Node.BackwardAction = () =>
+                {
+                    if (CudaOperationProfiler.IsEnabled)
+                    {
+                        CudaOperationProfiler.Measure(
+                            "backward.layer_norm",
+                            () => TensorCudaKernels.LayerNormBackwardResident(
+                                this,
+                                gamma,
+                                beta,
+                                cudaResult,
+                                context,
+                                rows,
+                                columns));
+                    }
+                    else
+                    {
+                        TensorCudaKernels.LayerNormBackwardResident(
+                            this,
+                            gamma,
+                            beta,
+                            cudaResult,
+                            context,
+                            rows,
+                            columns);
+                    }
+                };
+            }
+            else
+            {
+                if (!CudaInferenceScope.TrackResource(context))
+                    context.Dispose();
+            }
+            return cudaResult;
+        }
+
         if (Rank == 1)
         {
             int n = _shape[0];

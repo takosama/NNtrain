@@ -1,25 +1,11 @@
 # Project architecture
 
-Phase 7 separates the runtime, data adapters, application entry point, and
-tests into five projects. The projects keep the existing `NNtrain` namespace;
-the assembly boundary, rather than the namespace, defines ownership.
+NNtrain separates numerical runtime, datasets, CLI composition, tests, and
+benchmarks at the assembly boundary. Public library usage follows the
+PyTorch-style `torch`, `nn`, `optim`, `lr_scheduler`, `datasets`,
+`tokenizers`, and `safetensors` facades.
 
-## Projects
-
-| Project | Responsibility |
-| --- | --- |
-| `NNtrain.Core` | Tensor operations, autograd, modules, optimizers, training contracts, and `Trainer` |
-| `NNtrain.Data` | Concrete dataset adapters such as the MNIST IDX reader |
-| `NNtrain.Cli` | JSON configuration, object composition, console reporting, and process exit codes |
-| `NNtrain.Core.Tests` | Pure Core unit and characterization tests |
-| `NNtrain.IntegrationTests` | Dataset parsing, CLI configuration, and end-to-end training-flow tests |
-
-`IImageClassificationDataset` belongs to Core because `Trainer` consumes the
-contract. `Mnist` belongs to Data because it implements that contract using the
-file system and IDX format. This keeps the training engine independent of the
-concrete dataset package.
-
-## Allowed dependencies
+## Project dependencies
 
 ```text
 NNtrain.Cli ───────→ NNtrain.Data ───────→ NNtrain.Core
@@ -27,36 +13,77 @@ NNtrain.Cli ───────→ NNtrain.Data ───────→ NNtra
 
 NNtrain.Core.Tests ─────────────────────→ NNtrain.Core
 NNtrain.IntegrationTests ───────────────→ Core, Data, Cli
+NNtrain.Benchmarks ─────────────────────→ Core, Data, Cli
 ```
 
-`NNtrain.Core` has no project references. `NNtrain.Data` references only Core.
-`NNtrain.Cli` references Core and Data. Test projects reference only the
-projects they exercise. Core must never add a reference to Data or Cli.
+Core never references Data or Cli. Concrete file-format datasets remain in
+Data. Configuration, checkpoint placement, progress reporting, run markers,
+and process exit codes remain in Cli.
 
-## Public boundary
-
-Only cross-assembly contracts and composition types are public. These include
-`Tensor`, `Module`, `Parameter`, `TransformerClassifier`, the optimizer and
-dataset interfaces, `AdamW`, `GainShareAdamW`, `Lion`, and `Trainer` with their
-options/results. `NekoMuon` is also public; every stateful optimizer exposes
-versioned state records.
-Internal layer implementations and autograd graph details remain internal and
-are made visible only to `NNtrain.Core.Tests`. Integration tests use Core's
-public API;
-only the CLI grants them access to its process-level test seam. Production
-projects do not use friend-assembly access to cross a boundary.
-
-## Commands
-
-Build and test the complete solution:
+## Core layers
 
 ```text
+PyTorch-style facade and Module API
+                ↓
+Tensor operations and autograd
+                ↓
+internal backend registry and execution context
+                ↓
+CPU scalar/SIMD or CUDA kernels
+```
+
+`TorchDevice` identifies `cpu` or an indexed `cuda:N` adapter. Execution
+defaults are stored in an async-local `TensorExecutionContext`, while a Tensor
+moved with `tensor.to(torch.device("cuda:N"))` retains its adapter identity.
+CUDA data-parallel workers temporarily select their own adapter; shared
+parameters therefore resolve buffers from the worker context during a kernel
+and from Tensor identity during host synchronization.
+
+CPU and CUDA implementations stay in `NNtrain.Core` but are reached through
+the internal backend boundary. ILGPU types and resident-buffer caches must not
+leak into the public Tensor or Module contracts.
+
+## Model and optimizer contracts
+
+`Module` owns parameter registration, mode, dtype conversion, and state
+dictionaries. `LanguageModel` extends Module only with token forward and
+generation behavior; it does not duplicate Module lifecycle methods.
+
+`IOptimizer` uses the canonical PyTorch-style lifecycle:
+
+```csharp
+optimizer.zero_grad();
+optimizer.step();
+OptimizerStateDictionary state = optimizer.state_dict();
+optimizer.load_state_dict(state);
+```
+
+Every optimizer owns its serialization. Checkpoint code does not switch on
+concrete optimizer types.
+
+## CLI training lifecycle
+
+Configuration schema version 2 has an explicit `task.type` and common
+`data`, `model`, `training`, `runtime`, `optimization`, `checkpoint`, and
+`reporting` sections. The loader normalizes those sections into task-specific
+validated records before composition.
+
+`TrainingRunner` owns deterministic epoch/resume iteration, progress-unit
+rounding, shuffling, and fractional checkpoint boundaries. Classification,
+finite-corpus language modelling, and streaming language modelling retain
+their task-specific batch and numerical code while sharing those lifecycle
+rules.
+
+JSON checkpoints are written atomically and SafeTensors sidecars carry model
+weights. Legacy checkpoint versions remain readable; the next save always
+writes the current format.
+
+## Verification
+
+```powershell
 dotnet build NNtrain.slnx --configuration Release
 dotnet test NNtrain.slnx --configuration Release --no-build
 ```
 
-Run the application with a JSON configuration:
-
-```text
-dotnet run --project NNtrain.Cli -- --config training.example.json
-```
+CPU, one-GPU, and two-GPU characterization tests protect forward results,
+gradients, optimizer updates, device-buffer ownership, and checkpoint resume.

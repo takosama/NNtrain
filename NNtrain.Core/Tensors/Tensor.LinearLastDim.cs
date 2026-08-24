@@ -35,6 +35,148 @@ partial class Tensor
 
         int rows = Numel / inputWidth;
         int outputLength = checked(rows * outputWidth);
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            bool bfloat16Compute = DType == TensorDType.BFloat16
+                && weight.DType == TensorDType.BFloat16
+                && bias.DType == TensorDType.BFloat16;
+            string forwardOperation = CudaOperationProfiler.IsEnabled
+                ? $"forward.{(applyRelu ? "linear_relu" : "linear")}" +
+                    $"[{inputWidth}->{outputWidth}]"
+                : applyRelu ? "forward.linear_relu" : "forward.linear";
+            int[] cudaOutputShape = (int[])_shape.Clone();
+            cudaOutputShape[^1] = outputWidth;
+            if (bfloat16Compute)
+            {
+                var bfloat16Output = CudaOperationProfiler.IsEnabled
+                    ? CudaOperationProfiler.Measure(
+                        forwardOperation,
+                        () => TensorCudaKernels.LinearForwardBFloat16Resident(
+                            this,
+                            weight,
+                            bias,
+                            rows,
+                            inputWidth,
+                            outputWidth,
+                            applyRelu))
+                    : TensorCudaKernels.LinearForwardBFloat16Resident(
+                        this,
+                        weight,
+                        bias,
+                        rows,
+                        inputWidth,
+                        outputWidth,
+                        applyRelu);
+                Tensor bfloat16Result = FromCudaResult(
+                    bfloat16Output,
+                    CudaDeviceIndex,
+                    cudaOutputShape,
+                    [this, weight, bias],
+                    TensorDType.BFloat16);
+                if (AutogradContext.IsRecordingEnabled)
+                {
+                    string backwardOperation = CudaOperationProfiler.IsEnabled
+                        ? $"backward.{(applyRelu ? "linear_relu" : "linear")}" +
+                            $"[{inputWidth}->{outputWidth}]"
+                        : applyRelu ? "backward.linear_relu" : "backward.linear";
+                    bfloat16Result.Node.BackwardAction = () =>
+                    {
+                        if (CudaOperationProfiler.IsEnabled)
+                        {
+                            CudaOperationProfiler.Measure(
+                                backwardOperation,
+                                () => TensorCudaKernels.LinearBackwardBFloat16Resident(
+                                    this,
+                                    weight,
+                                    bias,
+                                    bfloat16Result,
+                                    rows,
+                                    inputWidth,
+                                    outputWidth,
+                                    applyRelu));
+                        }
+                        else
+                        {
+                            TensorCudaKernels.LinearBackwardBFloat16Resident(
+                                this,
+                                weight,
+                                bias,
+                                bfloat16Result,
+                                rows,
+                                inputWidth,
+                                outputWidth,
+                                applyRelu);
+                        }
+                    };
+                }
+                return bfloat16Result;
+            }
+            var outputBuffer = CudaOperationProfiler.IsEnabled
+                ? CudaOperationProfiler.Measure(
+                    forwardOperation,
+                    () => TensorCudaKernels.LinearForwardResident(
+                        this,
+                        weight,
+                        bias,
+                        rows,
+                        inputWidth,
+                        outputWidth,
+                        applyRelu,
+                        bfloat16Compute))
+                : TensorCudaKernels.LinearForwardResident(
+                    this,
+                    weight,
+                    bias,
+                    rows,
+                    inputWidth,
+                    outputWidth,
+                    applyRelu,
+                    bfloat16Compute);
+            Tensor cudaResult = FromCudaResult(
+                outputBuffer,
+                CudaDeviceIndex,
+                cudaOutputShape,
+                [this, weight, bias]);
+            if (AutogradContext.IsRecordingEnabled)
+            {
+                string backwardOperation = CudaOperationProfiler.IsEnabled
+                    ? $"backward.{(applyRelu ? "linear_relu" : "linear")}" +
+                        $"[{inputWidth}->{outputWidth}]"
+                    : applyRelu ? "backward.linear_relu" : "backward.linear";
+                cudaResult.Node.BackwardAction = () =>
+                {
+                    if (CudaOperationProfiler.IsEnabled)
+                    {
+                        CudaOperationProfiler.Measure(
+                            backwardOperation,
+                            () => TensorCudaKernels.LinearBackwardResident(
+                                this,
+                                weight,
+                                bias,
+                                cudaResult,
+                                rows,
+                                inputWidth,
+                                outputWidth,
+                                applyRelu,
+                                bfloat16Compute));
+                    }
+                    else
+                    {
+                        TensorCudaKernels.LinearBackwardResident(
+                            this,
+                            weight,
+                            bias,
+                            cudaResult,
+                            rows,
+                            inputWidth,
+                            outputWidth,
+                            applyRelu,
+                            bfloat16Compute);
+                    }
+                };
+            }
+            return cudaResult;
+        }
         // The managed Float16 fallback widens each activation only once for
         // this node. The native F16C path below instead keeps the physical
         // Half payload in cache and widens eight values per instruction.
@@ -132,6 +274,22 @@ partial class Tensor
         {
             int inputOffset = row * inputWidth;
             int outputOffset = row * outputWidth;
+            if (DType == TensorDType.BFloat16
+                && weight.DType == TensorDType.BFloat16
+                && bias.DType == TensorDType.BFloat16)
+            {
+                for (int column = 0; column < outputWidth; column++)
+                {
+                    float value = bias._data[column];
+                    int weightOffset = column * inputWidth;
+                    for (int inner = 0; inner < inputWidth; inner++)
+                        value += _data[inputOffset + inner]
+                            * weight._data[weightOffset + inner];
+                    output![outputOffset + column] =
+                        applyRelu && value <= 0f ? 0f : value;
+                }
+                return;
+            }
             if (transposedWeight is not null)
             {
                 bias._data.CopyRangeTo(

@@ -10,6 +10,58 @@ namespace NNtrain;
 /// </remarks>
 public partial class Tensor
 {
+    /// <summary>
+    /// Gets or selects the execution device for kernels with a GPU backend.
+    /// Kernels not yet ported continue to use their CPU implementation.
+    /// </summary>
+    public static TensorDevice ExecutionDevice
+    {
+        get => TensorExecutionContext.Device.Type;
+        set
+        {
+            if (!Enum.IsDefined(value))
+                throw new ArgumentOutOfRangeException(nameof(value));
+            TorchDevice current = TensorExecutionContext.Device;
+            TensorExecutionContext.Device = new TorchDevice(
+                value,
+                value == TensorDevice.Cuda ? current.Index : 0);
+        }
+    }
+
+    /// <summary>Gets or selects the zero-based CUDA adapter index.</summary>
+    public static int CudaDeviceIndex
+    {
+        get => TensorExecutionContext.Device.IsCuda
+            ? TensorExecutionContext.Device.Index
+            : TensorExecutionContext.CudaDevices[0];
+        set
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(value);
+            TensorExecutionContext.CudaDevices = [value];
+        }
+    }
+
+    /// <summary>
+    /// Gets or selects the CUDA adapters used by data-parallel kernels.
+    /// The first adapter is used by kernels that cannot be partitioned.
+    /// </summary>
+    public static IReadOnlyList<int> CudaDeviceIndices
+    {
+        get => TensorExecutionContext.CudaDevices;
+        set => TensorExecutionContext.CudaDevices = value;
+    }
+
+    /// <summary>Gets the active adapter name and initializes CUDA on demand.</summary>
+    public static string ExecutionDeviceName
+        => TensorBackends.Get(ExecutionDevice).GetName(CudaDeviceIndex);
+
+    /// <summary>Reports whether the requested CUDA adapter can be initialized.</summary>
+    public static bool IsCudaAvailable(int deviceIndex = 0)
+        => TensorBackends.Get(TensorDevice.Cuda).IsAvailable(deviceIndex);
+
+    /// <summary>Gets the number of CUDA adapters visible to the runtime.</summary>
+    public static int CudaDeviceCount => NNtrain.ForgetMemoryV2Cuda.DeviceCount;
+
     private readonly TensorStorage _data;
     private float[]? _masterData;
     private float[]? _physicalFloat32Cache;
@@ -23,7 +75,14 @@ public partial class Tensor
 
     internal AutogradNode Node { get; }
 
-    public IReadOnlyList<float> Data { get; }
+    public IReadOnlyList<float> Data
+    {
+        get
+        {
+            EnsureHostDataCurrent();
+            return _data;
+        }
+    }
     public IReadOnlyList<float> Grad { get; }
     public IReadOnlyList<int> Shape { get; }
     public string Name { get; }
@@ -31,13 +90,17 @@ public partial class Tensor
     /// <summary>Gets the physical storage dtype.</summary>
     public TensorDType DType => _data.DType;
 
-    /// <summary>
-    /// Gets the dtype used by arithmetic after values are loaded from storage.
-    /// </summary>
-    public TensorDType ComputeDType => TensorDType.Float32;
+    /// <summary>Gets the dtype used for tensor operation results.</summary>
+    public TensorDType ComputeDType
+        => DType == TensorDType.BFloat16
+            ? TensorDType.BFloat16
+            : TensorDType.Float32;
 
     /// <summary>Gets the dtype used by reductions and gradient accumulation.</summary>
-    public TensorDType AccumulationDType => TensorDType.Float32;
+    public TensorDType AccumulationDType
+        => DType == TensorDType.BFloat16
+            ? TensorDType.BFloat16
+            : TensorDType.Float32;
 
     public int Rank => _shape.Length;
     public int Numel => _data.Count;
@@ -55,13 +118,22 @@ public partial class Tensor
             throw new InvalidOperationException(
                 "item() requires a tensor containing exactly one value.");
         }
+        EnsureHostDataCurrent();
         return _data[0];
     }
 
     internal Span<float> MutableGrad => EnsureGradientBuffer();
-    internal float[] GradientBuffer => _grad;
+    internal float[] GradientBuffer
+    {
+        get
+        {
+            EnsureHostGradientCurrent();
+            return _grad;
+        }
+    }
     internal long DataVersion => _dataVersion;
-    internal bool HasGradientBuffer => _grad.Length != 0;
+    internal bool HasGradientBuffer
+        => _grad.Length != 0 || _cudaGradientBuffers.Count != 0;
 
     public Tensor(
         float[] data,
@@ -78,7 +150,6 @@ public partial class Tensor
         _shape = (int[])shape.Clone();
         Name = name ?? throw new ArgumentNullException(nameof(name));
 
-        Data = _data;
         Grad = new GradientView(this);
         Shape = Array.AsReadOnly(_shape);
 
@@ -116,7 +187,6 @@ public partial class Tensor
         _shape = (int[])shape.Clone();
         Name = name ?? throw new ArgumentNullException(nameof(name));
 
-        Data = _data;
         Grad = new GradientView(this);
         Shape = Array.AsReadOnly(_shape);
         Node = new AutogradNode();
@@ -142,18 +212,23 @@ public partial class Tensor
             ? TensorStorage.FromOwnedFloat32(data)
             : TensorStorage.Create(data, resultDType);
         bool isRecording = AutogradContext.IsRecordingEnabled;
-        _grad = isRecording ? new float[data.Length] : [];
+        _grad = isRecording && ExecutionDevice != TensorDevice.Cuda
+            ? new float[data.Length]
+            : [];
         _shape = (int[])shape.Clone();
         Name = name ?? throw new ArgumentNullException(nameof(name));
 
-        Data = _data;
         Grad = new GradientView(this);
         Shape = Array.AsReadOnly(_shape);
 
         if (isRecording)
         {
             foreach (Tensor parent in prev)
-                parent.EnsureGradientBuffer();
+            {
+                if (ExecutionDevice != TensorDevice.Cuda
+                    || parent.Device != TensorDevice.Cuda)
+                    parent.EnsureGradientBuffer();
+            }
             Node = new AutogradNode(prev);
         }
         else
@@ -174,18 +249,23 @@ public partial class Tensor
 
         _data = data;
         bool isRecording = AutogradContext.IsRecordingEnabled;
-        _grad = isRecording ? new float[data.Count] : [];
+        _grad = isRecording && ExecutionDevice != TensorDevice.Cuda
+            ? new float[data.Count]
+            : [];
         _shape = (int[])shape.Clone();
         Name = name ?? throw new ArgumentNullException(nameof(name));
 
-        Data = _data;
         Grad = new GradientView(this);
         Shape = Array.AsReadOnly(_shape);
 
         if (isRecording)
         {
             foreach (Tensor parent in prev)
-                parent.EnsureGradientBuffer();
+            {
+                if (ExecutionDevice != TensorDevice.Cuda
+                    || parent.Device != TensorDevice.Cuda)
+                    parent.EnsureGradientBuffer();
+            }
             Node = new AutogradNode(prev);
         }
         else
@@ -262,10 +342,7 @@ public partial class Tensor
         return new Tensor(data, [rows, columns], name, dtype);
     }
 
-    /// <summary>
-    /// Converts physical storage while keeping arithmetic, reductions,
-    /// gradients, and optimizer master values in Float32.
-    /// </summary>
+    /// <summary>Converts physical storage and operation result dtype.</summary>
     public Tensor To(TensorDType dtype)
     {
         TensorDTypeContract.ValidateImplemented(dtype, nameof(dtype));
@@ -320,7 +397,11 @@ public partial class Tensor
 
     public void zero_grad() => ZeroGrad();
 
-    internal void ClearGradient() => _grad.AsSpan().Clear();
+    internal void ClearGradient()
+    {
+        _grad.AsSpan().Clear();
+        ClearCudaGradients();
+    }
 
     internal void ClearGradientRange(int start, int length)
     {
@@ -330,8 +411,10 @@ public partial class Tensor
 
     private float[] EnsureGradientBuffer()
     {
+        EnsureHostGradientCurrent();
         if (_grad.Length == 0)
             _grad = new float[Numel];
+        MarkHostGradientMutable();
         return _grad;
     }
 
@@ -351,9 +434,12 @@ public partial class Tensor
     }
 
     internal float[] CaptureData(bool preferMaster)
-        => preferMaster && _masterData is not null
+    {
+        EnsureHostDataCurrent();
+        return preferMaster && _masterData is not null
             ? (float[])_masterData.Clone()
             : _data.ToFloat32Array();
+    }
 
     /// <summary>
     /// Gets a versioned Float32 decoding of a physical Float16 payload.
@@ -362,6 +448,7 @@ public partial class Tensor
     /// </summary>
     internal float[] GetPhysicalFloat32ComputeCache()
     {
+        EnsureHostDataCurrent();
         if (DType == TensorDType.Float32)
             return _data.GetMutableFloat32Buffer();
 
@@ -398,6 +485,13 @@ public partial class Tensor
 
     internal void MarkDataMutated()
     {
+        InvalidateCudaBuffers();
+        CudaResidentArrayCache.Invalidate(_physicalFloat32Cache);
+        if (DType == TensorDType.Float32
+            && _data.TryGetFloat32Buffer(out float[] values))
+        {
+            CudaResidentArrayCache.Invalidate(values);
+        }
         unchecked
         {
             _dataVersion++;
@@ -492,6 +586,7 @@ public partial class Tensor
                 ArgumentOutOfRangeException.ThrowIfNegative(index);
                 if (index >= Count)
                     throw new ArgumentOutOfRangeException(nameof(index));
+                owner.EnsureHostGradientCurrent();
                 return owner._grad.Length == 0 ? 0f : owner._grad[index];
             }
             set => throw new NotSupportedException();

@@ -1,29 +1,52 @@
 {
-  "trainingData": {
-    "type": "cifar100",
-    "dataPath": "data/cifar-100-binary/train.bin",
-    "patchSize": 4,
-    "normalize": true,
-    "augmentation": {
-      "randomCropPadding": 4,
-      "horizontalFlip": true,
-      "verticalFlip": false
+  "schemaVersion": 2,
+  "task": {
+    "type": "image-classification"
+  },
+  "data": {
+    "trainingData": {
+      "type": "cifar100",
+      "dataPath": "data/cifar-100-binary/train.bin",
+      "patchSize": 4,
+      "normalize": true,
+      "augmentation": {
+        "randomCropPadding": 4,
+        "horizontalFlip": true,
+        "verticalFlip": false
+      }
+    },
+    "evaluationData": {
+      "type": "cifar100",
+      "dataPath": "data/cifar-100-binary/test.bin",
+      "patchSize": 4,
+      "normalize": true,
+      "augmentation": {
+        "randomCropPadding": 0,
+        "horizontalFlip": false,
+        "verticalFlip": false
+      }
     }
   },
-  "evaluationData": {
-    "type": "cifar100",
-    "dataPath": "data/cifar-100-binary/test.bin",
-    "patchSize": 4,
-    "normalize": true,
-    "augmentation": {
-      "randomCropPadding": 0,
-      "horizontalFlip": false,
-      "verticalFlip": false
-    }
+  "model": {
+    "heads": 16,
+    "hiddenSize": 512,
+    "layers": 16,
+    "seed": 43,
+    "initializationScale": 0.02,
+    "dropout": 0.1
   },
-  "epochs": 200,
-  "microBatchSize": 256,
-  "microBatchCount":1,
+  "training": {
+    "epochs": 200,
+    "microBatchSize": 256,
+    "microBatchCount": 1,
+    "labelSmoothing": 0.1,
+    "earlyStoppingPatience": 15,
+    "earlyStoppingMinimumDelta": 0.0001
+  },
+  "runtime": {
+    "seed": 1234,
+    "useSimd": true
+  },
   "optimization": {
     "optimizer": {
       "type": "gainshareadamw",
@@ -32,7 +55,7 @@
       "gainShareBlockDepth": 1,
       "gainShareBeta1": 0.9,
       "gainShareBeta2": 0.999,
-      "gainShareEpsilon": 1e-8,
+      "gainShareEpsilon": 1E-08,
       "gainShareRho": 0.95,
       "gainShareGamma": 1.0,
       "gainShareMinScale": 0.5,
@@ -44,23 +67,12 @@
       "minimumLearningRateRatio": 0.01
     }
   },
-  "labelSmoothing": 0.1,
-  "earlyStoppingPatience": 15,
-  "earlyStoppingMinimumDelta": 0.0001,
-  "useSimd": true,
-  "showLossGraph": true,
   "checkpoint": {
     "directory": "checkpoints/cifar100",
     "resume": false,
     "autoResume": true
   },
-  "seed": 1234,
-  "model": {
-    "heads":16,
-    "hiddenSize": 512,
-    "layers": 16,
-    "seed": 43,
-    "initializationScale": 0.02,
-    "dropout": 0.1
+  "reporting": {
+    "showLossGraph": true
   }
 }

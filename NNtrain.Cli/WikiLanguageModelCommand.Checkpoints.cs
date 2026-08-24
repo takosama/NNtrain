@@ -110,7 +110,7 @@ internal static partial class WikiLanguageModelCommand
 
     internal static WikiResumePosition RestoreTrainingCheckpoint(
         WikiTrainingConfiguration config,
-        IWikiLanguageModel model,
+        LanguageModel model,
         IOptimizer optimizer,
         WarmupCosineProgressLRScheduler scheduler,
         ref ModuleState? bestState,
@@ -193,7 +193,7 @@ internal static partial class WikiLanguageModelCommand
         ModuleState bestState,
         float bestLoss,
         int bestEpoch,
-        IWikiLanguageModel model,
+        LanguageModel model,
         IOptimizer optimizer,
         WarmupCosineProgressLRScheduler scheduler,
         long globalStep,
@@ -238,7 +238,8 @@ internal static partial class WikiLanguageModelCommand
                 currentTokenBuffer,
                 model is Module module
                     ? module.DType
-                    : config.GetModelDType()));
+                    : config.GetModelDType(),
+                config.TieWordEmbeddings));
     }
 
     internal static string GetSafeTensorsPath(string checkpointPath)
@@ -277,9 +278,14 @@ internal static partial class WikiLanguageModelCommand
                 valueIndex < first.Values.Length;
                 valueIndex++)
             {
-                float expected = second.DType == TensorDType.Float16
-                    ? (float)(Half)second.Values[valueIndex]
-                    : second.Values[valueIndex];
+                float expected = second.DType switch
+                {
+                    TensorDType.Float16 =>
+                        (float)(Half)second.Values[valueIndex],
+                    TensorDType.BFloat16 =>
+                        QuantizeBFloat16(second.Values[valueIndex]),
+                    _ => second.Values[valueIndex],
+                };
                 if (BitConverter.SingleToInt32Bits(first.Values[valueIndex])
                     != BitConverter.SingleToInt32Bits(expected))
                 {
@@ -288,6 +294,16 @@ internal static partial class WikiLanguageModelCommand
             }
         }
         return true;
+    }
+
+    private static float QuantizeBFloat16(float value)
+    {
+        uint bits = BitConverter.SingleToUInt32Bits(value);
+        uint absolute = bits & 0x7FFFFFFFu;
+        if (absolute > 0x7F800000u)
+            return BitConverter.UInt32BitsToSingle((bits >> 16 | 0x40u) << 16);
+        uint rounded = bits + 0x7FFFu + ((bits >> 16) & 1u);
+        return BitConverter.UInt32BitsToSingle((rounded >> 16) << 16);
     }
 
     private static void ValidateCheckpoint(WikiModelCheckpoint checkpoint)
@@ -345,9 +361,12 @@ internal static partial class WikiLanguageModelCommand
     }
 
     private static string FormatModelDType(TensorDType dtype)
-        => dtype == TensorDType.Float16
-            ? WikiTrainingConfiguration.Float16ModelDType
-            : WikiTrainingConfiguration.Float32ModelDType;
+        => dtype switch
+        {
+            TensorDType.Float16 => WikiTrainingConfiguration.Float16ModelDType,
+            TensorDType.BFloat16 => WikiTrainingConfiguration.BFloat16ModelDType,
+            _ => WikiTrainingConfiguration.Float32ModelDType,
+        };
 
     internal sealed record WikiResumePosition(
         int Epoch,
@@ -387,5 +406,6 @@ internal static partial class WikiLanguageModelCommand
         long CurrentTargetCount = 0,
         long CompletedDocumentsInEpoch = 0,
         int[]? CurrentTokenBuffer = null,
-        TensorDType? ModelDType = null);
+        TensorDType? ModelDType = null,
+        bool TieWordEmbeddings = false);
 }

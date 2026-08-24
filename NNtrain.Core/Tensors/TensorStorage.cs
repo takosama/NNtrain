@@ -16,8 +16,9 @@ namespace NNtrain;
 /// </remarks>
 internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
 {
-    private readonly float[]? _float32;
-    private readonly Half[]? _float16;
+    private float[]? _float32;
+    private Half[]? _float16;
+    private ushort[]? _bfloat16;
 
     private TensorStorage(float[] values)
     {
@@ -33,6 +34,19 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
         Count = values.Length;
     }
 
+    private TensorStorage(ushort[] values)
+    {
+        _bfloat16 = values;
+        DType = TensorDType.BFloat16;
+        Count = values.Length;
+    }
+
+    private TensorStorage(int count, TensorDType dtype)
+    {
+        Count = count;
+        DType = dtype;
+    }
+
     internal TensorDType DType { get; }
 
     public int Count { get; }
@@ -45,6 +59,7 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
     {
         TensorDType.Float32 => checked(Count * sizeof(float)),
         TensorDType.Float16 => checked(Count * sizeof(ushort)),
+        TensorDType.BFloat16 => checked(Count * sizeof(ushort)),
         _ => throw UnsupportedDType(),
     };
 
@@ -52,6 +67,7 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
     {
         get
         {
+            EnsureBacking();
             ArgumentOutOfRangeException.ThrowIfNegative(index);
             if (index >= Count)
                 throw new ArgumentOutOfRangeException(nameof(index));
@@ -60,6 +76,8 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
             {
                 TensorDType.Float32 => _float32![index],
                 TensorDType.Float16 => (float)_float16![index],
+                TensorDType.BFloat16 =>
+                    TensorStorageCodec.DecodeBFloat16(_bfloat16![index]),
                 _ => throw UnsupportedDType(),
             };
         }
@@ -75,9 +93,16 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
         if (dtype == TensorDType.Float32)
             return new TensorStorage(values.ToArray());
 
-        var half = new Half[values.Length];
-        TensorStorageCodec.EncodeFloat16(values, half);
-        return new TensorStorage(half);
+        if (dtype == TensorDType.Float16)
+        {
+            var half = new Half[values.Length];
+            TensorStorageCodec.EncodeFloat16(values, half);
+            return new TensorStorage(half);
+        }
+
+        var bfloat16 = new ushort[values.Length];
+        TensorStorageCodec.EncodeBFloat16(values, bfloat16);
+        return new TensorStorage(bfloat16);
     }
 
     internal static TensorStorage FromOwnedFloat32(float[] values)
@@ -102,33 +127,65 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
         {
             TensorDType.Float32 => new TensorStorage(new float[length]),
             TensorDType.Float16 => new TensorStorage(new Half[length]),
+            TensorDType.BFloat16 => new TensorStorage(new ushort[length]),
             _ => throw new NotSupportedException(
                 $"Tensor storage dtype '{dtype}' is not implemented."),
         };
     }
 
+    internal static TensorStorage CreateDevicePlaceholder(
+        int length,
+        TensorDType dtype)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        TensorDTypeContract.ValidateImplemented(dtype, nameof(dtype));
+        return new TensorStorage(length, dtype);
+    }
+
+    private void EnsureBacking()
+    {
+        if (_float32 is not null || _float16 is not null || _bfloat16 is not null)
+            return;
+        if (DType == TensorDType.Float32)
+            _float32 = new float[Count];
+        else if (DType == TensorDType.Float16)
+            _float16 = new Half[Count];
+        else
+            _bfloat16 = new ushort[Count];
+    }
+
     internal TensorStorage Clone()
-        => DType switch
+    {
+        EnsureBacking();
+        return DType switch
         {
             TensorDType.Float32 => new TensorStorage(
                 (float[])_float32!.Clone()),
             TensorDType.Float16 => new TensorStorage(
                 (Half[])_float16!.Clone()),
+            TensorDType.BFloat16 => new TensorStorage(
+                (ushort[])_bfloat16!.Clone()),
             _ => throw UnsupportedDType(),
         };
+    }
 
     internal float[] ToFloat32Array()
     {
+        EnsureBacking();
         if (_float32 is not null)
             return (float[])_float32.Clone();
 
         var result = new float[Count];
-        TensorStorageCodec.DecodeFloat16(_float16!, result);
+        if (_float16 is not null)
+            TensorStorageCodec.DecodeFloat16(_float16, result);
+        else
+            TensorStorageCodec.DecodeBFloat16(_bfloat16!, result);
         return result;
     }
 
     internal void CopyTo(Span<float> destination)
     {
+        EnsureBacking();
         if (destination.Length < Count)
         {
             throw new ArgumentException(
@@ -142,13 +199,17 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
             return;
         }
 
-        TensorStorageCodec.DecodeFloat16(_float16!, destination);
+        if (_float16 is not null)
+            TensorStorageCodec.DecodeFloat16(_float16, destination);
+        else
+            TensorStorageCodec.DecodeBFloat16(_bfloat16!, destination);
     }
 
     internal void CopyRangeTo(
         int sourceOffset,
         Span<float> destination)
     {
+        EnsureBacking();
         if ((uint)sourceOffset > (uint)Count
             || destination.Length > Count - sourceOffset)
         {
@@ -162,9 +223,18 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
             return;
         }
 
-        TensorStorageCodec.DecodeFloat16(
-            _float16!.AsSpan(sourceOffset, destination.Length),
-            destination);
+        if (_float16 is not null)
+        {
+            TensorStorageCodec.DecodeFloat16(
+                _float16.AsSpan(sourceOffset, destination.Length),
+                destination);
+        }
+        else
+        {
+            TensorStorageCodec.DecodeBFloat16(
+                _bfloat16!.AsSpan(sourceOffset, destination.Length),
+                destination);
+        }
     }
 
     internal void CopyRangeTo(
@@ -174,6 +244,8 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
         int length)
     {
         ArgumentNullException.ThrowIfNull(destination);
+        EnsureBacking();
+        destination.EnsureBacking();
         if ((uint)sourceOffset > (uint)Count
             || length < 0
             || length > Count - sourceOffset)
@@ -213,7 +285,19 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
             return;
         }
 
-        throw UnsupportedDType();
+        if (_bfloat16 is not null && destination._bfloat16 is not null)
+        {
+            _bfloat16.AsSpan(sourceOffset, length).CopyTo(
+                destination._bfloat16.AsSpan(destinationOffset, length));
+            return;
+        }
+
+        var temporary = new float[length];
+        CopyRangeTo(sourceOffset, temporary);
+        destination.CopyRangeFromFloat32(
+            temporary,
+            destinationOffset);
+        return;
     }
 
     internal void Transpose2DTo(
@@ -222,6 +306,8 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
         int columns)
     {
         ArgumentNullException.ThrowIfNull(destination);
+        EnsureBacking();
+        destination.EnsureBacking();
         if (rows <= 0 || columns <= 0 || checked(rows * columns) != Count)
             throw new ArgumentException("Transpose dimensions are invalid.");
         if (destination.Count != Count || destination.DType != DType)
@@ -261,6 +347,19 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
             return;
         }
 
+        if (_float16 is null)
+        {
+            ushort[] bfloatOutput = destination._bfloat16!;
+            for (int row = 0; row < rows; row++)
+            {
+                int sourceRow = row * columns;
+                for (int column = 0; column < columns; column++)
+                    bfloatOutput[column * rows + row] =
+                        _bfloat16![sourceRow + column];
+            }
+            return;
+        }
+
         Half[] halfOutput = destination._float16!;
         for (int rowBlock = 0; rowBlock < rows; rowBlock += BlockSize)
         {
@@ -287,6 +386,7 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
 
     internal void CopyFrom(ReadOnlySpan<float> source)
     {
+        EnsureBacking();
         if (source.Length != Count)
         {
             throw new ArgumentException(
@@ -300,44 +400,75 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
             return;
         }
 
-        TensorStorageCodec.EncodeFloat16(source, _float16!);
+        if (_float16 is not null)
+            TensorStorageCodec.EncodeFloat16(source, _float16);
+        else
+            TensorStorageCodec.EncodeBFloat16(source, _bfloat16!);
+    }
+
+    private void CopyRangeFromFloat32(
+        ReadOnlySpan<float> source,
+        int destinationOffset)
+    {
+        EnsureBacking();
+        if (_float32 is not null)
+            source.CopyTo(_float32.AsSpan(destinationOffset));
+        else if (_float16 is not null)
+            TensorStorageCodec.EncodeFloat16(
+                source,
+                _float16.AsSpan(destinationOffset));
+        else
+            TensorStorageCodec.EncodeBFloat16(
+                source,
+                _bfloat16!.AsSpan(destinationOffset));
     }
 
     internal float[] GetMutableFloat32Buffer()
-        => _float32
+    {
+        EnsureBacking();
+        return _float32
             ?? throw new InvalidOperationException(
                 "Only Float32 storage exposes a mutable Float32 buffer.");
+    }
 
     internal bool TryGetFloat32Buffer(out float[] values)
     {
+        EnsureBacking();
         values = _float32!;
         return _float32 is not null;
     }
 
     internal bool TryGetFloat16Buffer(out Half[] values)
     {
+        EnsureBacking();
         values = _float16!;
         return _float16 is not null;
     }
 
     internal Vector256<float> LoadVector256(int offset)
     {
+        EnsureBacking();
         if ((uint)offset > (uint)(Count - Vector256<float>.Count))
             throw new ArgumentOutOfRangeException(nameof(offset));
 
-        return _float32 is not null
-            ? Vector256.LoadUnsafe(ref _float32[offset])
-            : TensorStorageCodec.LoadFloat16Vector256(_float16!, offset);
+        if (_float32 is not null)
+            return Vector256.LoadUnsafe(ref _float32[offset]);
+        if (_float16 is not null)
+            return TensorStorageCodec.LoadFloat16Vector256(_float16, offset);
+        return TensorStorageCodec.LoadBFloat16Vector256(_bfloat16!, offset);
     }
 
     internal Vector128<float> LoadVector128(int offset)
     {
+        EnsureBacking();
         if ((uint)offset > (uint)(Count - Vector128<float>.Count))
             throw new ArgumentOutOfRangeException(nameof(offset));
 
-        return _float32 is not null
-            ? Vector128.LoadUnsafe(ref _float32[offset])
-            : TensorStorageCodec.LoadFloat16Vector128(_float16!, offset);
+        if (_float32 is not null)
+            return Vector128.LoadUnsafe(ref _float32[offset]);
+        if (_float16 is not null)
+            return TensorStorageCodec.LoadFloat16Vector128(_float16, offset);
+        return TensorStorageCodec.LoadBFloat16Vector128(_bfloat16!, offset);
     }
 
     public IEnumerator<float> GetEnumerator()
@@ -389,6 +520,78 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
 /// </summary>
 internal static class TensorStorageCodec
 {
+    internal static void EncodeBFloat16(
+        ReadOnlySpan<float> source,
+        Span<ushort> destination)
+    {
+        if (source.Length != destination.Length)
+            throw new ArgumentException("BFloat16 codec lengths must match.");
+
+        for (int index = 0; index < source.Length; index++)
+            destination[index] = EncodeBFloat16(source[index]);
+    }
+
+    internal static void DecodeBFloat16(
+        ReadOnlySpan<ushort> source,
+        Span<float> destination)
+    {
+        if (source.Length != destination.Length)
+            throw new ArgumentException("BFloat16 codec lengths must match.");
+
+        for (int index = 0; index < source.Length; index++)
+            destination[index] = DecodeBFloat16(source[index]);
+    }
+
+    internal static ushort EncodeBFloat16(float value)
+    {
+        uint bits = BitConverter.SingleToUInt32Bits(value);
+        uint absolute = bits & 0x7FFFFFFFu;
+        if (absolute > 0x7F800000u)
+            return (ushort)((bits >> 16) | 0x0040u);
+
+        uint rounded = bits + 0x7FFFu + ((bits >> 16) & 1u);
+        return (ushort)(rounded >> 16);
+    }
+
+    internal static float DecodeBFloat16(ushort value)
+        => BitConverter.UInt32BitsToSingle((uint)value << 16);
+
+    internal static float RoundToBFloat16(float value)
+        => DecodeBFloat16(EncodeBFloat16(value));
+
+    internal static float RoundToBFloat16Compute(float value)
+    {
+        if (value == 0f || float.IsNaN(value) || float.IsInfinity(value))
+            return value;
+        float sign = value < 0f ? -1f : 1f;
+        float absolute = MathF.Abs(value);
+        float exponent = MathF.Floor(MathF.Log2(absolute));
+        float step = MathF.Pow(2f, exponent - 7f);
+        return sign * MathF.Floor(absolute / step + 0.5f) * step;
+    }
+
+    internal static Vector256<float> LoadBFloat16Vector256(
+        ushort[] source,
+        int offset)
+        => Vector256.Create(
+            DecodeBFloat16(source[offset]),
+            DecodeBFloat16(source[offset + 1]),
+            DecodeBFloat16(source[offset + 2]),
+            DecodeBFloat16(source[offset + 3]),
+            DecodeBFloat16(source[offset + 4]),
+            DecodeBFloat16(source[offset + 5]),
+            DecodeBFloat16(source[offset + 6]),
+            DecodeBFloat16(source[offset + 7]));
+
+    internal static Vector128<float> LoadBFloat16Vector128(
+        ushort[] source,
+        int offset)
+        => Vector128.Create(
+            DecodeBFloat16(source[offset]),
+            DecodeBFloat16(source[offset + 1]),
+            DecodeBFloat16(source[offset + 2]),
+            DecodeBFloat16(source[offset + 3]));
+
     internal static void EncodeFloat16(
         ReadOnlySpan<float> source,
         Span<Half> destination)

@@ -6,7 +6,7 @@ optimizers, dataset boundaries, and training orchestration in C#/.NET 10.
 
 ## Float16 and native F16C dense kernels
 
-`FrogetMemoryV2Gpt` uses `TensorDType.Float16` by default. Tensor values and
+`ForgetMemoryV2Gpt` and `ForgetMemoryV3Gpt` use `TensorDType.Float16` by default. Tensor values and
 activations are physically stored as IEEE binary16; gradients, reductions,
 and optimizer master weights remain Float32. Existing models can opt into
 Float32 explicitly with `dtype: TensorDType.Float32` or
@@ -37,13 +37,15 @@ dotnet run --project NNtrain.Benchmarks -c Release -- `
 ## PyTorch-style API
 
 User-facing training code follows PyTorch's vocabulary while remaining native
-C#. The existing PascalCase API is kept for source compatibility, and both
-surfaces call the same Tensor, autograd, SIMD, module and optimizer kernels.
+C#. The `torch`, `nn`, `optim`, `lr_scheduler`, `datasets`, `tokenizers`, and
+`safetensors` facades are the canonical entry points and call the same Tensor,
+autograd, SIMD, module, and optimizer kernels.
 
 ```csharp
 using NNtrain;
 
 torch.manual_seed(1234);
+TorchDevice device = torch.device("cuda:0");
 
 IImageClassificationDataset trainSet = datasets.mnist(
     images: "data/train-images.idx3-ubyte",
@@ -69,6 +71,7 @@ TransformerClassifier model = nn.transformer_classifier(
     num_classes: trainSet.ClassCount,
     dropout: 0.1f,
     generator: torch.generator());
+model.to(device);
 
 IOptimizer optimizer = optim.AdamW(
     model.parameters(),
@@ -168,7 +171,7 @@ order before entering the training loop. Wikipedia training uses the same
 
 ## Projects
 
-- `NNtrain.Core`: Tensor, autograd, modules, optimizers, and Trainer
+- `NNtrain.Core`: Tensor, autograd, modules, optimizers, and CPU/CUDA backends
 - `NNtrain.Data`: dataset implementations such as MNIST IDX
 - `NNtrain.Cli`: JSON configuration and the command-line application
 - `NNtrain.Core.Tests`: Core unit and characterization tests
@@ -224,8 +227,26 @@ JSON profiles enable it.
 
 Each 0.1-epoch save also keeps a timestamped SafeTensors history file named
 `<ModelName>_<epoch>_epoch_<yyyyMMdd_HHmm>.safetensors`, for example
-`FrogetMemoryV2Gpt_0.1_epoch_20260312_1224.safetensors`. The fixed checkpoint
+`ForgetMemoryV2Gpt_0.1_epoch_20260312_1224.safetensors`. The fixed checkpoint
 name remains the latest resumable state.
+
+Every checked-in profile uses configuration schema version 2. The task is
+explicit rather than inferred from unrelated properties, and common concerns
+occupy the same sections for classification and language modelling:
+
+```json
+{
+  "schemaVersion": 2,
+  "task": { "type": "wiki-language-model" },
+  "data": { "dataPath": "data/wiki", "textColumn": "text" },
+  "model": { "modelArchitecture": "forgetmemoryv2" },
+  "training": { "epochs": 1, "batchSize": 2 },
+  "runtime": { "device": "cuda", "deviceIndices": [0, 1] },
+  "optimization": {},
+  "checkpoint": {},
+  "reporting": {}
+}
+```
 
 Checkpoint placement and restart behavior are grouped in one section. Paths
 are resolved relative to the training JSON, and the directory is created when
@@ -244,9 +265,8 @@ training starts or the first checkpoint is saved:
 `<config>.checkpoint.json`, while Wikipedia defaults to
 `<config>.wiki-model.json`. The fixed JSON file retains the model, optimizer,
 scheduler, and exact restart position; its SafeTensors sidecars and timestamped
-snapshots are written to the same directory. Legacy root-level
-`checkpointPath`, `resumeFromCheckpoint`, and `autoResume` settings are still
-accepted, but must not be mixed with the grouped section.
+snapshots are written to the same directory. Legacy checkpoint files remain
+readable and are written in the current format on the next save.
 
 With no arguments the CLI selects `training.wiki-jp.json` when it is present,
 then falls back to `training.example.json`. The selected absolute path and the
@@ -257,7 +277,7 @@ sample continuation. Image-classification examples remain available in the
 separate CIFAR-100 configuration.
 `TransformerClassifier` is used only by the image-classification command. The
 default Wikipedia configurations select `modelArchitecture:
-"forgetmemoryv2"`, which constructs the custom `FrogetMemoryV2Gpt`; startup
+"forgetmemoryv3"`, which constructs the custom `ForgetMemoryV3Gpt`; startup
 prints the concrete model type so this selection is visible before training.
 The CIFAR-100 configuration normalizes RGB channels using the training-set
 statistics. Each 32x32 RGB image is emitted directly as 64 row-major 4x4 patch
@@ -282,9 +302,7 @@ Optimizer and scheduler settings now live together in the same training JSON:
 ```
 
 Wikipedia training uses scheduler type `warmupCosineProgress` and its
-`warmupPercent` setting. Legacy flat optimizer and scheduler keys remain
-readable for existing configurations, but grouped and legacy forms cannot be
-mixed in one JSON.
+`warmupPercent` setting.
 
 GainShareAdamW is the default optimizer. It groups parameters at the configured
 module depth, measures each block's gradient/update alignment through an EMA,
@@ -332,8 +350,36 @@ dotnet run --configuration Release --project NNtrain.Cli -- `
   --config training.forgetmemoryv2-wiki-jp.json
 ```
 
-ForgetMemoryV2 is the default model. Set `modelArchitecture` to
-`"forgetmemoryv2"`, `"forgetscan"`, `"hyena"`, or `"transformer"` when an
+To compare the independent ForgetMemory DRN variant under the same model
+dimensions and training pipeline:
+
+```powershell
+dotnet run --configuration Release --project NNtrain.Cli -- `
+  --config training.forgetmemorydrn-wiki-jp.json
+```
+
+The supplied ForgetMemoryV2 profile selects `device: "cuda"`,
+`deviceIndices: [0, 1]`, and `modelDType: "bfloat16"`. Dense rows and the batch
+dimension of the stateful ForgetMemoryV2 recurrence are sharded across every
+listed GPU; their backward parameter gradients are reduced before the
+optimizer step.
+Use a single-element array such as `[1]` to select only one adapter.
+ForgetMemoryV2 recurrence,
+dense projections, layer normalization, embeddings, dropout/residual,
+cross-entropy, AdamW updates, and the compute-heavy NekoMuon phases run through
+CUDA (ILGPU, so a separate CUDA Toolkit installation is not required).
+Parameters and activations use two-byte BF16 storage while arithmetic and
+gradient accumulation use Float32. Immutable tensor compute views are cached
+on each adapter and invalidated only when their tensor is updated. In
+particular, ForgetMemory's projected input and full time-state stay resident
+from forward through backward instead of being copied back between the two.
+Host BF16 backing is retained for the public tensor API and checkpoints, so
+CPU-only graph boundaries still synchronize. Set `device` back to `"cpu"` for
+the portable path.
+
+ForgetMemoryV3 is the default model. Set `modelArchitecture` to
+`"forgetmemoryv3"`, `"forgetmemorydrn"`, `"forgetmemoryv2"`, `"forgetscan"`,
+`"hyena"`, or `"transformer"` when an
 explicit architecture is required. `forgetMemoryKeyWidth` and
 `forgetMemoryValueWidth` control the associative matrix shape. The retention
 floor increases from `forgetMemoryRetentionMinimum` in the shallow layer to
@@ -359,7 +405,7 @@ apply the gates and recurrence in each tile. Training saves gate values for a
 SIMD reverse scan, while inference omits those buffers. Both paths remain
 causal without storing attention keys or values.
 
-`FrogetMemoryV2Layer` packs q, k, v, retention-gate, and beta projections into
+`ForgetMemoryV2Layer` packs q, k, v, retention-gate, and beta projections into
 one Tensor and evaluates a differentiable matrix memory recurrence:
 `g = lambda + (1-lambda)sigmoid(gate)`,
 `write = (1-g)sigmoid(beta)`,
@@ -369,16 +415,30 @@ term would increase the prediction error. Time remains a direct causal
 recurrence, while AVX2/FMA handles state dot products, state updates, recall,
 and all major backward vectors. Independent batches use `Parallel.For`.
 
+ForgetMemoryV3 keeps the same layer and residual/FFN structure but normalizes
+`k = tanh(k_raw) / sqrt(sum(tanh(k_raw)^2) + 1e-6)`, then evaluates
+`M_bar = g*M[t-1]`, `error = v-M_bar*k`,
+`M[t] = M_bar + beta*error*k^T`, and `r[t] = M[t]q`. Retention and write
+strength are therefore independent. `forgetmemoryv2` remains available for
+loading and comparing existing V2 checkpoints.
+
+ForgetMemory DRN is selected with `modelArchitecture: "forgetmemorydrn"`.
+It L2-normalizes both query and key with epsilon `1e-8`, reads from the old
+memory before writing, predicts `pred = M[t-1]k`, and updates
+`M[t] = sigmoid(gate)*M[t-1] + beta*(v-pred)*k^T`. The configured retention
+floor schedule is retained in checkpoint/config metadata for structural
+compatibility but is intentionally not applied by DRN.
+
 On a Ryzen 7 5700X, the reproducible two-layer training benchmark
 (`batch=2`, `width=64`, `hidden=128`, key/value width 32) measured:
 
-| Sequence | Attention | FrogetMemoryV2 SIMD |
+| Sequence | Attention | ForgetMemoryV2 SIMD |
 |---:|---:|---:|
 | 64 | 2.184 ms | 2.453 ms |
 | 128 | 4.908 ms | 4.805 ms |
 | 256 | 11.198 ms | 9.218 ms |
 
-Run it with `--filter *FrogetMemoryV2AttentionBenchmarks*`. These compare the
+Run it with `--filter *ForgetMemoryV2AttentionBenchmarks*`. These compare the
 same GPT macro dimensions; parameter counts are close but not exactly equal.
 
 The reproducible ForgetScan microbenchmarks can be run with:
@@ -486,3 +546,16 @@ prompt without retraining:
 dotnet run --configuration Release --project NNtrain.Cli -- `
   --config training.wiki-jp.json --generate "日本の歴史は"
 ```
+
+Generation can also be fully configured in `generate.json`, including an
+explicit SafeTensors file. Output is flushed as each decoded piece becomes
+available:
+
+```powershell
+dotnet run --configuration Release --project NNtrain.Cli -- `
+  --generate-config generate.json
+```
+
+Set `sampling` to `"topK"` and provide `topK`/`temperature`, or set it to
+`"greedy"`. `templator` is accepted as a backwards-compatible alias for
+`temperature`.

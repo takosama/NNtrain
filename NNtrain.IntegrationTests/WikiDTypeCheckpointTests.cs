@@ -11,7 +11,7 @@ public sealed class WikiDTypeCheckpointTests
             modelDType: null,
             resume: false);
 
-        IWikiLanguageModel defaultModel =
+        LanguageModel defaultModel =
             WikiLanguageModelCommand.CreateModel(
                 defaultConfig,
                 defaultConfig.VocabularySize);
@@ -27,7 +27,7 @@ public sealed class WikiDTypeCheckpointTests
         {
             ModelDType = WikiTrainingConfiguration.Float32ModelDType,
         };
-        IWikiLanguageModel float32Model =
+        LanguageModel float32Model =
             WikiLanguageModelCommand.CreateModel(
                 float32Config,
                 float32Config.VocabularySize);
@@ -50,7 +50,7 @@ public sealed class WikiDTypeCheckpointTests
                 checkpointPath,
                 modelDType: null,
                 resume: true);
-            IWikiLanguageModel source = WikiLanguageModelCommand.CreateModel(
+            LanguageModel source = WikiLanguageModelCommand.CreateModel(
                 config,
                 config.VocabularySize,
                 TensorDType.Float32);
@@ -71,7 +71,7 @@ public sealed class WikiDTypeCheckpointTests
             WikiLanguageModelCommand.WikiModelCheckpoint loaded =
                 torch.load<WikiLanguageModelCommand.WikiModelCheckpoint>(
                     checkpointPath);
-            IWikiLanguageModel generationModel =
+            LanguageModel generationModel =
                 WikiLanguageModelCommand.CreateModel(loaded, config.Seed);
             Module module = Assert.IsAssignableFrom<Module>(generationModel);
             Assert.Equal(TensorDType.Float32, module.DType);
@@ -97,7 +97,7 @@ public sealed class WikiDTypeCheckpointTests
                 checkpointPath,
                 WikiTrainingConfiguration.Float16ModelDType,
                 resume: false);
-            IWikiLanguageModel source = WikiLanguageModelCommand.CreateModel(
+            LanguageModel source = WikiLanguageModelCommand.CreateModel(
                 sourceConfig,
                 sourceConfig.VocabularySize,
                 TensorDType.Float16);
@@ -177,7 +177,7 @@ public sealed class WikiDTypeCheckpointTests
                 WikiLanguageModelCommand.ResolveModelDTypeForTraining(
                     resumeConfig);
             Assert.Equal(TensorDType.Float16, resumeDType);
-            IWikiLanguageModel restored =
+            LanguageModel restored =
                 WikiLanguageModelCommand.CreateModel(
                     resumeConfig,
                     resumeConfig.VocabularySize,
@@ -255,7 +255,7 @@ public sealed class WikiDTypeCheckpointTests
                 checkpointPath,
                 WikiTrainingConfiguration.Float16ModelDType,
                 resume: false);
-            IWikiLanguageModel source = WikiLanguageModelCommand.CreateModel(
+            LanguageModel source = WikiLanguageModelCommand.CreateModel(
                 sourceConfig,
                 sourceConfig.VocabularySize);
             WikiLanguageModelCommand.WikiModelCheckpoint checkpoint =
@@ -296,7 +296,7 @@ public sealed class WikiDTypeCheckpointTests
                 checkpointPath,
                 WikiTrainingConfiguration.Float16ModelDType,
                 resume: true);
-            IWikiLanguageModel source = WikiLanguageModelCommand.CreateModel(
+            LanguageModel source = WikiLanguageModelCommand.CreateModel(
                 config,
                 config.VocabularySize);
             ModuleState valid = source.state_dict();
@@ -340,7 +340,7 @@ public sealed class WikiDTypeCheckpointTests
                 checkpointPath,
                 WikiTrainingConfiguration.Float16ModelDType,
                 resume: true);
-            IWikiLanguageModel source = WikiLanguageModelCommand.CreateModel(
+            LanguageModel source = WikiLanguageModelCommand.CreateModel(
                 config,
                 config.VocabularySize);
             ModuleState expected = source.state_dict();
@@ -412,7 +412,7 @@ public sealed class WikiDTypeCheckpointTests
                     ? WikiTrainingConfiguration.Float16ModelDType
                     : WikiTrainingConfiguration.Float32ModelDType,
                 resume: false);
-            IWikiLanguageModel source = WikiLanguageModelCommand.CreateModel(
+            LanguageModel source = WikiLanguageModelCommand.CreateModel(
                 sourceConfig,
                 tokenizer.VocabularySize,
                 physicalDType);
@@ -541,7 +541,7 @@ public sealed class WikiDTypeCheckpointTests
             ModelDType: modelDType);
 
     private static void TrainOneStep(
-        IWikiLanguageModel model,
+        LanguageModel model,
         IOptimizer optimizer,
         WarmupCosineProgressLRScheduler scheduler,
         double progress)
@@ -621,7 +621,7 @@ public sealed class WikiDTypeCheckpointTests
         OptimizerStateDictionary actual)
     {
         Assert.Equal(expected.OptimizerType, actual.OptimizerType);
-        Assert.Equal(expected.StateJson, actual.StateJson);
+        Assert.Equal(expected.StateJsonText, actual.StateJsonText);
         Assert.Equal(expected.Children.Length, actual.Children.Length);
         for (int index = 0; index < expected.Children.Length; index++)
         {

@@ -38,6 +38,22 @@ sealed record WikiOptimizerConfiguration
 
     public int NekoMuonNewtonSchulzInterval { get; init; } = 5;
 
+    public int GainShareBlockDepth { get; init; } = 1;
+
+    public float GainShareBeta1 { get; init; } = 0.9f;
+
+    public float GainShareBeta2 { get; init; } = 0.999f;
+
+    public float GainShareEpsilon { get; init; } = 1e-8f;
+
+    public float GainShareRho { get; init; } = 0.95f;
+
+    public float GainShareGamma { get; init; } = 1f;
+
+    public float GainShareMinScale { get; init; } = 0.5f;
+
+    public float GainShareMaxScale { get; init; } = 2f;
+
     public bool AdamWUseBFloat16FirstMoment { get; init; }
 
     public bool AdamWUseBFloat16SecondMoment { get; init; }

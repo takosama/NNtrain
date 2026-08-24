@@ -5,7 +5,7 @@
   "tokenizerPath": "wiki-jp-bpe.json",
   "checkpoint": {
     "directory": "checkpoints",
-    "fileName": "training.forgetmemoryv2-wiki-jp.model.json",
+    "fileName": "training.forgetmemorydrn-wiki-jp.model.json",
     "resume": false,
     "autoResume": true
   },
@@ -16,18 +16,21 @@
 
   "maxTrainingDocuments": 0,
   "maxTrainingTokens": 0,
-  "maxDocumentTokens": 512,
+  "maxDocumentTokens": 1024,
   "validationFraction": 0.0,
   "epochs": 1,
-  "batchSize":16,
+  "batchSize": 16,
 
-  "contextLength": 512,
-  "modelWidth": 384,
+  "contextLength": 1024,
+  "modelWidth": 512,
   "heads": 8,
-  "hiddenSize": 1152,
-  "layers":8,
-  "modelArchitecture": "forgetmemoryv2",
-  "modelDType": "float16",
+  "hiddenSize": 1024,
+  "layers": 16,
+  "modelArchitecture": "forgetmemorydrn",
+  "device": "cuda",
+  "deviceIndex": 0,
+  "deviceIndices": [0, 1],
+  "modelDType": "bfloat16",
   "forgetMemoryKeyWidth": 16,
   "forgetMemoryValueWidth": 16,
   "forgetMemoryRetentionMinimum": 0.5,
@@ -42,8 +45,8 @@
       "auxiliaryLearningRate": 0.0003,
       "nekoMuonNewtonSchulzInterval": 5,
       "weightDecay": 0.01,
-      "adamWUseBFloat16FirstMoment": true,
-      "adamWUseBFloat16SecondMoment": true
+      "adamWUseBFloat16FirstMoment": false,
+      "adamWUseBFloat16SecondMoment": false
     },
     "scheduler": {
       "type": "warmupCosineProgress",
