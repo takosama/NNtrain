@@ -5,7 +5,41 @@ internal static partial class WikiLanguageModelCommand
     internal static LanguageModel CreateModel(
         WikiTrainingConfiguration config,
         int vocabularySize)
-        => CreateModel(config, vocabularySize, config.GetModelDType());
+        => CreateModel(config, vocabularySize, config.GetPrecisionMode());
+
+    internal static LanguageModel CreateModel(
+        WikiTrainingConfiguration config,
+        int vocabularySize,
+        TensorPrecisionMode precisionMode)
+        => CreateModel(
+            config,
+            vocabularySize,
+            precisionMode,
+            precisionMode.ToStorageDType());
+
+    internal static LanguageModel CreateModel(
+        WikiTrainingConfiguration config,
+        int vocabularySize,
+        TensorPrecisionMode precisionMode,
+        TensorDType storageDType)
+    {
+        bool validStorage = storageDType == precisionMode.ToStorageDType()
+            || precisionMode == TensorPrecisionMode.Mix16_32
+                && storageDType == TensorDType.Float16;
+        if (!validStorage)
+        {
+            throw new ArgumentException(
+                $"Precision mode '{TensorPrecisionModeNames.Format(precisionMode)}' " +
+                $"cannot use storage dtype '{storageDType}'.",
+                nameof(storageDType));
+        }
+        LanguageModel model = CreateModel(
+            config,
+            vocabularySize,
+            storageDType);
+        model.SetPrecisionMode(precisionMode);
+        return model;
+    }
 
     internal static LanguageModel CreateModel(
         WikiTrainingConfiguration config,
@@ -194,6 +228,17 @@ internal static partial class WikiLanguageModelCommand
         WikiModelCheckpoint checkpoint,
         int seed)
     {
+        TensorPrecisionMode precisionMode =
+            GetCheckpointPrecisionMode(checkpoint);
+        LanguageModel model = CreateModelStorage(checkpoint, seed);
+        model.SetPrecisionMode(precisionMode);
+        return model;
+    }
+
+    private static LanguageModel CreateModelStorage(
+        WikiModelCheckpoint checkpoint,
+        int seed)
+    {
         TensorDType modelDType = GetCheckpointModelDType(checkpoint);
         if (IsCheckpointForgetMemoryDrn(checkpoint))
         {
@@ -305,7 +350,7 @@ internal static partial class WikiLanguageModelCommand
         if (modelDType != TensorDType.Float32)
         {
             throw new InvalidOperationException(
-                $"Model dtype '{modelDType}' is not supported for " +
+                $"Precision mode '{FormatPrecisionMode(modelDType)}' is not supported for " +
                 $"architecture '{architecture}'.");
         }
     }
@@ -317,7 +362,8 @@ internal static partial class WikiLanguageModelCommand
         if (modelDType != TensorDType.Float32)
         {
             throw new InvalidDataException(
-                $"Checkpoint model dtype '{modelDType}' is not supported " +
+                $"Checkpoint precision mode " +
+                $"'{FormatPrecisionMode(modelDType)}' is not supported " +
                 $"for architecture '{GetCheckpointArchitecture(checkpoint)}'.");
         }
     }
@@ -341,5 +387,31 @@ internal static partial class WikiLanguageModelCommand
                 $"'{dtype}'.");
         }
         return dtype;
+    }
+
+    internal static TensorPrecisionMode GetCheckpointPrecisionMode(
+        WikiModelCheckpoint checkpoint)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        TensorDType dtype = GetCheckpointModelDType(checkpoint);
+        if (checkpoint.FormatVersion < PrecisionModeCheckpointFormatVersion)
+            return dtype.ToPrecisionMode();
+
+        TensorPrecisionMode mode = checkpoint.PrecisionMode
+            ?? throw new InvalidDataException(
+                "Wiki model checkpoint does not declare its precision mode.");
+        if (!Enum.IsDefined(mode))
+        {
+            throw new InvalidDataException(
+                $"Wiki model checkpoint declares unsupported precision " +
+                $"mode '{mode}'.");
+        }
+        if (mode.ToStorageDType() != dtype)
+        {
+            throw new InvalidDataException(
+                "Wiki model checkpoint precision mode does not match its " +
+                "physical model dtype.");
+        }
+        return mode;
     }
 }

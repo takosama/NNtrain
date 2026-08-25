@@ -2,8 +2,9 @@ namespace NNtrain;
 
 internal static partial class WikiLanguageModelCommand
 {
-    private const int CheckpointFormatVersion = 5;
+    private const int CheckpointFormatVersion = 6;
     private const int DTypeCheckpointFormatVersion = 5;
+    private const int PrecisionModeCheckpointFormatVersion = 6;
 
     private static void SaveCheckpoint(
         string path,
@@ -75,10 +76,23 @@ internal static partial class WikiLanguageModelCommand
 
     internal static TensorDType ResolveModelDTypeForTraining(
         WikiTrainingConfiguration config)
+        => ResolvePrecisionForTraining(config).StorageDType;
+
+    internal static TensorPrecisionMode ResolvePrecisionModeForTraining(
+        WikiTrainingConfiguration config)
+        => ResolvePrecisionForTraining(config).Mode;
+
+    internal static WikiPrecisionSelection ResolvePrecisionForTraining(
+        WikiTrainingConfiguration config)
     {
         ArgumentNullException.ThrowIfNull(config);
         if (!config.ResumeFromCheckpoint)
-            return config.GetModelDType();
+        {
+            TensorPrecisionMode newRunMode = config.GetPrecisionMode();
+            return new WikiPrecisionSelection(
+                newRunMode,
+                newRunMode.ToStorageDType());
+        }
         if (!File.Exists(config.CheckpointPath))
         {
             throw new FileNotFoundException(
@@ -94,18 +108,21 @@ internal static partial class WikiLanguageModelCommand
                 "Wiki training configuration.");
         }
 
-        TensorDType checkpointDType = GetCheckpointModelDType(checkpoint);
-        TensorDType? configuredDType = config.GetExplicitModelDType();
-        if (configuredDType is not null
-            && configuredDType.Value != checkpointDType)
+        TensorPrecisionMode checkpointMode =
+            GetCheckpointPrecisionMode(checkpoint);
+        TensorPrecisionMode? configuredMode = config.GetExplicitPrecisionMode();
+        if (configuredMode is not null
+            && configuredMode.Value != checkpointMode)
         {
             throw new InvalidDataException(
-                $"Configured modelDType '{FormatModelDType(configuredDType.Value)}' " +
-                $"does not match checkpoint model dtype " +
-                $"'{FormatModelDType(checkpointDType)}'. Remove modelDType " +
-                "to inherit the checkpoint dtype, or use a matching value.");
+                $"Configured precisionMode '{FormatPrecisionMode(configuredMode.Value)}' " +
+                $"does not match checkpoint precision mode " +
+                $"'{FormatPrecisionMode(checkpointMode)}'. Remove precisionMode " +
+                "to inherit the checkpoint mode, or use a matching value.");
         }
-        return checkpointDType;
+        return new WikiPrecisionSelection(
+            checkpointMode,
+            GetCheckpointModelDType(checkpoint));
     }
 
     internal static WikiResumePosition RestoreTrainingCheckpoint(
@@ -135,13 +152,14 @@ internal static partial class WikiLanguageModelCommand
                 "Checkpoint model architecture does not match the current " +
                 "Wiki training configuration.");
         }
-        TensorDType checkpointDType = GetCheckpointModelDType(checkpoint);
-        if (model is Module module && module.DType != checkpointDType)
+        TensorPrecisionMode checkpointMode =
+            GetCheckpointPrecisionMode(checkpoint);
+        if (model is Module module && module.PrecisionMode != checkpointMode)
         {
             throw new InvalidDataException(
-                $"Checkpoint model dtype '{FormatModelDType(checkpointDType)}' " +
-                $"does not match the constructed model dtype " +
-                $"'{FormatModelDType(module.DType)}'.");
+                $"Checkpoint precision mode '{FormatPrecisionMode(checkpointMode)}' " +
+                $"does not match the constructed model precision mode " +
+                $"'{FormatPrecisionMode(module.PrecisionMode)}'.");
         }
 
         int completedEpoch = checkpoint.CompletedEpoch == 0
@@ -239,7 +257,10 @@ internal static partial class WikiLanguageModelCommand
                 model is Module module
                     ? module.DType
                     : config.GetModelDType(),
-                config.TieWordEmbeddings));
+                config.TieWordEmbeddings,
+                model is Module precisionModule
+                    ? precisionModule.PrecisionMode
+                    : config.GetPrecisionMode()));
     }
 
     internal static string GetSafeTensorsPath(string checkpointPath)
@@ -317,6 +338,7 @@ internal static partial class WikiLanguageModelCommand
         }
 
         TensorDType modelDType = GetCheckpointModelDType(checkpoint);
+        _ = GetCheckpointPrecisionMode(checkpoint);
         ValidateCheckpointModelState(
             checkpoint.Model,
             modelDType,
@@ -355,17 +377,24 @@ internal static partial class WikiLanguageModelCommand
                 throw new InvalidDataException(
                     $"Wiki checkpoint {stateName} parameter {index} does " +
                     $"not match model dtype " +
-                    $"'{FormatModelDType(modelDType)}'.");
+                    $"'{FormatPrecisionMode(modelDType)}'.");
             }
         }
     }
 
-    private static string FormatModelDType(TensorDType dtype)
-        => dtype switch
+    private static string FormatPrecisionMode(TensorDType dtype)
+        => FormatPrecisionMode(dtype.ToPrecisionMode());
+
+    private static string FormatPrecisionMode(TensorPrecisionMode mode)
+        => mode switch
         {
-            TensorDType.Float16 => WikiTrainingConfiguration.Float16ModelDType,
-            TensorDType.BFloat16 => WikiTrainingConfiguration.BFloat16ModelDType,
-            _ => WikiTrainingConfiguration.Float32ModelDType,
+            TensorPrecisionMode.Mix16_32 =>
+                WikiTrainingConfiguration.Mix16_32PrecisionMode,
+            TensorPrecisionMode.BFloat16 =>
+                WikiTrainingConfiguration.BFloat16PrecisionMode,
+            TensorPrecisionMode.Float32 =>
+                WikiTrainingConfiguration.Float32PrecisionMode,
+            _ => throw new ArgumentOutOfRangeException(nameof(mode)),
         };
 
     internal sealed record WikiResumePosition(
@@ -375,6 +404,10 @@ internal static partial class WikiLanguageModelCommand
         long TargetCount,
         long CompletedDocuments,
         int[] TokenBuffer);
+
+    internal readonly record struct WikiPrecisionSelection(
+        TensorPrecisionMode Mode,
+        TensorDType StorageDType);
 
     internal sealed record WikiModelCheckpoint(
         int FormatVersion,
@@ -407,5 +440,6 @@ internal static partial class WikiLanguageModelCommand
         long CompletedDocumentsInEpoch = 0,
         int[]? CurrentTokenBuffer = null,
         TensorDType? ModelDType = null,
-        bool TieWordEmbeddings = false);
+        bool TieWordEmbeddings = false,
+        TensorPrecisionMode? PrecisionMode = null);
 }

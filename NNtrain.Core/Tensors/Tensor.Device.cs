@@ -1,6 +1,3 @@
-using ILGPU;
-using ILGPU.Runtime;
-using ILGPU.Runtime.Cuda;
 
 namespace NNtrain;
 
@@ -13,6 +10,8 @@ public partial class Tensor
     private readonly Dictionary<int, BFloat16DeviceBuffer> _cudaBFloat16Buffers = [];
     private readonly Dictionary<int, DeviceBuffer> _cudaMasterBuffers = [];
     private readonly Dictionary<int, GradientDeviceBuffer> _cudaGradientBuffers = [];
+    private readonly Dictionary<int, BFloat16GradientDeviceBuffer>
+        _cudaBFloat16GradientBuffers = [];
     private readonly Dictionary<int, DeviceBuffer> _cudaStagingBuffers = [];
     private long _cudaBufferDataVersion = -1;
     private bool _hostDataCurrent = true;
@@ -61,7 +60,7 @@ public partial class Tensor
             : _cudaDeviceIndex;
     }
 
-    internal MemoryBuffer1D<float, Stride1D.Dense> EnsureCudaFloat32Buffer(
+    internal NativeCudaBuffer<float> EnsureCudaFloat32Buffer(
         int deviceIndex = -1)
     {
         if (DType == TensorDType.BFloat16)
@@ -71,7 +70,7 @@ public partial class Tensor
                 "implicit expansion to a float32 device buffer is forbidden.");
         }
         int resolvedDeviceIndex = ResolveCudaDeviceIndex(deviceIndex);
-        CudaAccelerator accelerator =
+        NativeCudaDevice accelerator =
             NNtrain.ForgetMemoryV2Cuda.GetAccelerator(resolvedDeviceIndex);
         if (!_hostDataCurrent
             && !_cudaBuffers.ContainsKey(resolvedDeviceIndex))
@@ -103,13 +102,13 @@ public partial class Tensor
         }
     }
 
-    internal MemoryBuffer1D<float, Stride1D.Dense> EnsureCudaMasterFloat32Buffer(
+    internal NativeCudaBuffer<float> EnsureCudaMasterFloat32Buffer(
         int deviceIndex = -1)
     {
         int resolvedDeviceIndex = ResolveCudaDeviceIndex(deviceIndex);
         if (DType == TensorDType.Float32)
             return EnsureCudaFloat32Buffer(resolvedDeviceIndex);
-        CudaAccelerator accelerator =
+        NativeCudaDevice accelerator =
             NNtrain.ForgetMemoryV2Cuda.GetAccelerator(resolvedDeviceIndex);
         if (!_hostDataCurrent
             && !_cudaMasterBuffers.ContainsKey(resolvedDeviceIndex))
@@ -133,14 +132,13 @@ public partial class Tensor
         }
     }
 
-    internal MemoryBuffer1D<float, Stride1D.Dense> EnsureCudaGradientBuffer(
+    internal NativeCudaBuffer<float> EnsureCudaGradientBuffer(
         int deviceIndex = -1)
     {
         int resolvedDeviceIndex = ResolveCudaDeviceIndex(deviceIndex);
-        CudaAccelerator accelerator =
-            NNtrain.ForgetMemoryV2Cuda.GetAccelerator(resolvedDeviceIndex);
         if (!_hostGradientCurrent
-            && !_cudaGradientBuffers.ContainsKey(resolvedDeviceIndex))
+            && !_cudaGradientBuffers.ContainsKey(resolvedDeviceIndex)
+            && !_cudaBFloat16GradientBuffers.ContainsKey(resolvedDeviceIndex))
         {
             SynchronizeHostGradientFromCuda();
         }
@@ -152,15 +150,31 @@ public partial class Tensor
                 || buffer.Buffer.Length != Numel)
             {
                 buffer?.Dispose();
-                MemoryBuffer1D<float, Stride1D.Dense> gradientBuffer;
-                if (_grad.Length == 0)
+                NativeCudaBuffer<float> gradientBuffer;
+                if (_cudaBFloat16GradientBuffers.TryGetValue(
+                        resolvedDeviceIndex,
+                        out BFloat16GradientDeviceBuffer? encoded)
+                    && encoded.Version == _gradientVersion)
                 {
-                    gradientBuffer = accelerator.Allocate1D<float>(Numel);
+                    gradientBuffer = CudaFloatBufferPool.Rent(
+                        resolvedDeviceIndex, Numel);
+                    CudaTensorNative.DecodeBFloat16(
+                        resolvedDeviceIndex,
+                        encoded.Buffer.NativePtr,
+                        gradientBuffer.NativePtr,
+                        Numel);
+                }
+                else if (_grad.Length == 0)
+                {
+                    gradientBuffer = CudaFloatBufferPool.Rent(
+                        resolvedDeviceIndex, Numel);
                     gradientBuffer.MemSetToZero();
                 }
                 else
                 {
-                    gradientBuffer = accelerator.Allocate1D(_grad);
+                    gradientBuffer = CudaFloatBufferPool.Rent(
+                        resolvedDeviceIndex, Numel);
+                    gradientBuffer.CopyFromCPU(_grad);
                 }
                 buffer = new GradientDeviceBuffer(
                     gradientBuffer,
@@ -184,10 +198,71 @@ public partial class Tensor
         }
     }
 
-    internal MemoryBuffer1D<float, Stride1D.Dense> EnsureCudaStagingBuffer(
+    internal void BindCudaGradientArena(
+        int deviceIndex,
+        NativeCudaBuffer<float> slice)
+    {
+        ArgumentNullException.ThrowIfNull(slice);
+        if (slice.Device.Index != deviceIndex || slice.Length != Numel
+            || slice.Arena is null)
+        {
+            throw new ArgumentException(
+                "Gradient arena slice must match the tensor and CUDA device.",
+                nameof(slice));
+        }
+        lock (_deviceSync)
+        {
+            if (_cudaGradientBuffers.TryGetValue(
+                deviceIndex, out GradientDeviceBuffer? current))
+            {
+                if (ReferenceEquals(current.Buffer.Arena, slice.Arena)
+                    && current.Buffer.NativePtr == slice.NativePtr)
+                {
+                    slice.Dispose();
+                    return;
+                }
+                current.Dispose();
+            }
+            _cudaGradientBuffers[deviceIndex] = new GradientDeviceBuffer(
+                slice, _gradientVersion, deviceIndex);
+            _hostGradientCurrent = true;
+        }
+    }
+
+    internal void UnbindCudaGradientArena(
+        int deviceIndex,
+        NativeCudaArena<float> arena)
+    {
+        lock (_deviceSync)
+        {
+            if (!_cudaGradientBuffers.TryGetValue(
+                    deviceIndex, out GradientDeviceBuffer? current)
+                || !ReferenceEquals(current.Buffer.Arena, arena))
+            {
+                return;
+            }
+            _cudaGradientBuffers.Remove(deviceIndex);
+            current.Dispose();
+            _hostGradientCurrent = true;
+        }
+    }
+
+    internal NativeCudaArena<float>? GetCudaGradientArena(
         int deviceIndex)
     {
-        CudaAccelerator accelerator =
+        lock (_deviceSync)
+        {
+            return _cudaGradientBuffers.TryGetValue(
+                deviceIndex, out GradientDeviceBuffer? buffer)
+                ? buffer.Buffer.Arena
+                : null;
+        }
+    }
+
+    internal NativeCudaBuffer<float> EnsureCudaStagingBuffer(
+        int deviceIndex)
+    {
+        NativeCudaDevice accelerator =
             NNtrain.ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
         lock (_deviceSync)
         {
@@ -218,10 +293,17 @@ public partial class Tensor
                 throw new InvalidOperationException(
                     "Cannot mark a CUDA gradient modified before allocating it.");
             }
+            if (_cudaBFloat16GradientBuffers.Remove(
+                resolvedDeviceIndex,
+                out BFloat16GradientDeviceBuffer? encoded))
+            {
+                encoded.ReturnToPool();
+            }
             unchecked
             {
                 _gradientVersion++;
             }
+            buffer.Buffer.MarkGradientStorageDirty();
             buffer.Version = _gradientVersion;
             _hostGradientCurrent = false;
         }
@@ -261,14 +343,14 @@ public partial class Tensor
         if (values.Length != Numel)
             throw new ArgumentException("Gradient length must match the tensor.", nameof(values));
         int resolvedDeviceIndex = ResolveCudaDeviceIndex(deviceIndex);
-        MemoryBuffer1D<float, Stride1D.Dense> buffer =
+        NativeCudaBuffer<float> buffer =
             EnsureCudaGradientBuffer(resolvedDeviceIndex);
         buffer.CopyFromCPU(values);
         MarkCudaGradientMutated(resolvedDeviceIndex);
     }
 
     internal void AdoptCudaFloat32Buffer(
-        MemoryBuffer1D<float, Stride1D.Dense> buffer,
+        NativeCudaBuffer<float> buffer,
         int deviceIndex)
     {
         ArgumentNullException.ThrowIfNull(buffer);
@@ -286,35 +368,35 @@ public partial class Tensor
         }
     }
 
-    internal static MemoryBuffer1D<float, Stride1D.Dense> RentCudaFloatBuffer(
+    internal static NativeCudaBuffer<float> RentCudaFloatBuffer(
         int deviceIndex,
         int length)
         => CudaFloatBufferPool.Rent(deviceIndex, length);
 
     internal static void ReturnCudaFloatBuffer(
-        CudaAccelerator accelerator,
-        MemoryBuffer1D<float, Stride1D.Dense> buffer)
+        NativeCudaDevice accelerator,
+        NativeCudaBuffer<float> buffer)
         => CudaFloatBufferPool.Return(accelerator, buffer);
 
-    internal static MemoryBuffer1D<int, Stride1D.Dense> RentCudaIntBuffer(
+    internal static NativeCudaBuffer<int> RentCudaIntBuffer(
         int deviceIndex,
         int[] values)
     {
         ArgumentNullException.ThrowIfNull(values);
-        MemoryBuffer1D<int, Stride1D.Dense> buffer =
+        NativeCudaBuffer<int> buffer =
             CudaIntBufferPool.Rent(deviceIndex, values.Length);
-        buffer.CopyFromCPU(values);
+        CudaIntBufferPool.Upload(deviceIndex, buffer, values);
         return buffer;
     }
 
     internal static void ReturnCudaIntBuffer(
-        CudaAccelerator accelerator,
-        MemoryBuffer1D<int, Stride1D.Dense> buffer)
+        NativeCudaDevice accelerator,
+        NativeCudaBuffer<int> buffer)
         => CudaIntBufferPool.Return(accelerator, buffer);
 
     internal static void ClearCudaFloatBufferPool(int deviceIndex)
     {
-        CudaAccelerator accelerator =
+        NativeCudaDevice accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
         CudaFloatBufferPool.Clear(accelerator);
         CudaBFloat16BufferPool.Clear(accelerator);
@@ -322,7 +404,7 @@ public partial class Tensor
     }
 
     private static Tensor FromCudaResult(
-        MemoryBuffer1D<float, Stride1D.Dense> buffer,
+        NativeCudaBuffer<float> buffer,
         int deviceIndex,
         int[] shape,
         Tensor[] parents,
@@ -342,7 +424,7 @@ public partial class Tensor
     }
 
     private static Tensor FromCudaResult(
-        MemoryBuffer1D<ushort, Stride1D.Dense> buffer,
+        NativeCudaBuffer<ushort> buffer,
         int deviceIndex,
         int[] shape,
         Tensor[] parents,
@@ -470,11 +552,27 @@ public partial class Tensor
             buffer = _cudaGradientBuffers.Values.FirstOrDefault(
                 candidate => candidate.Version == _gradientVersion);
         }
-        if (buffer is null)
-            return;
         if (_grad.Length == 0)
             _grad = new float[Numel];
-        buffer.Buffer.CopyToCPU(_grad);
+        if (buffer is not null)
+        {
+            buffer.Buffer.CopyToCPU(_grad);
+        }
+        else
+        {
+            if (!_cudaBFloat16GradientBuffers.TryGetValue(
+                    resolvedDeviceIndex,
+                    out BFloat16GradientDeviceBuffer? encoded))
+            {
+                encoded = _cudaBFloat16GradientBuffers.Values.FirstOrDefault(
+                    candidate => candidate.Version == _gradientVersion);
+            }
+            if (encoded is null)
+                return;
+            var encodedHost = new ushort[Numel];
+            encoded.Buffer.CopyToCPU(encodedHost);
+            TensorStorageCodec.DecodeBFloat16(encodedHost, _grad);
+        }
         _hostGradientCurrent = true;
     }
 
@@ -497,6 +595,12 @@ public partial class Tensor
             }
             foreach (GradientDeviceBuffer buffer in _cudaGradientBuffers.Values)
             {
+                buffer.Buffer.ClearGradientStorage();
+                buffer.Version = _gradientVersion;
+            }
+            foreach (BFloat16GradientDeviceBuffer buffer
+                in _cudaBFloat16GradientBuffers.Values)
+            {
                 buffer.Buffer.MemSetToZero();
                 buffer.Version = _gradientVersion;
             }
@@ -516,12 +620,18 @@ public partial class Tensor
                 buffer.Dispose();
             foreach (GradientDeviceBuffer buffer in _cudaGradientBuffers.Values)
                 buffer.Dispose();
+            foreach (BFloat16GradientDeviceBuffer buffer
+                in _cudaBFloat16GradientBuffers.Values)
+            {
+                buffer.Dispose();
+            }
             foreach (DeviceBuffer buffer in _cudaStagingBuffers.Values)
                 buffer.Dispose();
             _cudaBuffers.Clear();
             _cudaBFloat16Buffers.Clear();
             _cudaMasterBuffers.Clear();
             _cudaGradientBuffers.Clear();
+            _cudaBFloat16GradientBuffers.Clear();
             _cudaStagingBuffers.Clear();
             _cudaBufferDataVersion = -1;
             _hostDataCurrent = true;
@@ -541,12 +651,18 @@ public partial class Tensor
                 buffer.ReturnToPool();
             foreach (GradientDeviceBuffer buffer in _cudaGradientBuffers.Values)
                 buffer.ReturnToPool();
+            foreach (BFloat16GradientDeviceBuffer buffer
+                in _cudaBFloat16GradientBuffers.Values)
+            {
+                buffer.ReturnToPool();
+            }
             foreach (DeviceBuffer buffer in _cudaStagingBuffers.Values)
                 buffer.ReturnToPool();
             _cudaBuffers.Clear();
             _cudaBFloat16Buffers.Clear();
             _cudaMasterBuffers.Clear();
             _cudaGradientBuffers.Clear();
+            _cudaBFloat16GradientBuffers.Clear();
             _cudaStagingBuffers.Clear();
             _hostDataCurrent = true;
             _hostGradientCurrent = true;
@@ -566,12 +682,18 @@ public partial class Tensor
                 buffer.ReturnToPool();
             foreach (GradientDeviceBuffer buffer in _cudaGradientBuffers.Values)
                 buffer.Dispose();
+            foreach (BFloat16GradientDeviceBuffer buffer
+                in _cudaBFloat16GradientBuffers.Values)
+            {
+                buffer.ReturnToPool();
+            }
             foreach (DeviceBuffer buffer in _cudaStagingBuffers.Values)
                 buffer.ReturnToPool();
             _cudaBuffers.Clear();
             _cudaBFloat16Buffers.Clear();
             _cudaMasterBuffers.Clear();
             _cudaGradientBuffers.Clear();
+            _cudaBFloat16GradientBuffers.Clear();
             _cudaStagingBuffers.Clear();
             _hostDataCurrent = true;
             _hostGradientCurrent = true;
@@ -582,17 +704,17 @@ public partial class Tensor
     private sealed class DeviceBuffer : IDisposable
     {
         private int _disposed;
-        private readonly CudaAccelerator _accelerator;
+        private readonly NativeCudaDevice _accelerator;
 
         internal DeviceBuffer(
-            MemoryBuffer1D<float, Stride1D.Dense> buffer,
+            NativeCudaBuffer<float> buffer,
             int deviceIndex)
         {
             Buffer = buffer;
             _accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
         }
 
-        internal MemoryBuffer1D<float, Stride1D.Dense> Buffer { get; }
+        internal NativeCudaBuffer<float> Buffer { get; }
 
         public void Dispose()
         {
@@ -610,14 +732,14 @@ public partial class Tensor
     }
 
     private sealed class GradientDeviceBuffer(
-        MemoryBuffer1D<float, Stride1D.Dense> buffer,
+        NativeCudaBuffer<float> buffer,
         long version,
         int deviceIndex) : IDisposable
     {
         private int _disposed;
-        private readonly CudaAccelerator _accelerator =
+        private readonly NativeCudaDevice _accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
-        internal MemoryBuffer1D<float, Stride1D.Dense> Buffer { get; } = buffer;
+        internal NativeCudaBuffer<float> Buffer { get; } = buffer;
         internal long Version { get; set; } = version;
 
         public void Dispose()
@@ -642,72 +764,46 @@ public partial class Tensor
     /// </summary>
     private static class CudaFloatBufferPool
     {
-        // Training graphs routinely need several GiB of transient activation
-        // storage. Keep a bounded high-water set resident so the next
-        // fixed-shape batch can reuse it, while reserving most VRAM for live
-        // activations, gradients, parameters, and optimizer state.
-        // A miss evicts stale shape buckets before allocating a new shape.
-        private const long MinimumCachedBytesPerDevice = 512L * 1024 * 1024;
-        private const int CacheMemoryPercent = 25;
-        private const long MinimumReservedFreeBytes = 1536L * 1024 * 1024;
-        private const int ReservedFreeMemoryPercent = 25;
         private const int MaximumBuffersPerSize = 64;
-        private static readonly object Sync = new();
-        private static readonly Dictionary<
-            (CudaAccelerator Accelerator, int Length),
-            Stack<MemoryBuffer1D<float, Stride1D.Dense>>> Buffers = [];
-        private static readonly HashSet<
-            MemoryBuffer1D<float, Stride1D.Dense>> PooledBuffers = [];
-        private static readonly Dictionary<CudaAccelerator, long>
-            CachedBytes = [];
+        private static readonly System.Collections.Concurrent
+            .ConcurrentDictionary<NativeCudaDevice, PoolState> Pools = new();
 
-        internal static MemoryBuffer1D<float, Stride1D.Dense> Rent(
+        private sealed class PoolState
+        {
+            internal object Sync { get; } = new();
+            internal Dictionary<int, Stack<NativeCudaBuffer<float>>> Buffers
+                { get; } = [];
+            internal HashSet<NativeCudaBuffer<float>> PooledBuffers
+                { get; } = [];
+        }
+
+        internal static NativeCudaBuffer<float> Rent(
             int deviceIndex,
             int length)
         {
-            CudaAccelerator accelerator =
+            NativeCudaDevice accelerator =
                 NNtrain.ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
-            var dispose = new List<MemoryBuffer1D<float, Stride1D.Dense>>();
-            lock (Sync)
+            PoolState state = Pools.GetOrAdd(
+                accelerator, static _ => new PoolState());
+            lock (state.Sync)
             {
-                var key = (accelerator, length);
-                if (Buffers.TryGetValue(key, out var bucket)
+                if (state.Buffers.TryGetValue(length, out var bucket)
                     && bucket.Count > 0)
                 {
-                    CachedBytes[accelerator] = CachedBytes.GetValueOrDefault(
-                        accelerator) - checked((long)length * sizeof(float));
-                    MemoryBuffer1D<float, Stride1D.Dense> buffer = bucket.Pop();
-                    PooledBuffers.Remove(buffer);
+                    NativeCudaBuffer<float> buffer = bucket.Pop();
+                    state.PooledBuffers.Remove(buffer);
+                    CudaTransientBufferBudget.Release(
+                        accelerator,
+                        checked((long)length * sizeof(float)));
                     return buffer;
                 }
-
-                long requestedBytes = checked((long)length * sizeof(float));
-                long cachedBytes = CachedBytes.GetValueOrDefault(accelerator);
-                long capacityTargetBytes = Math.Max(
-                    0L,
-                    GetCacheBudget(accelerator) - requestedBytes);
-                long freeBytes = accelerator.GetFreeMemory();
-                long bytesNeededForReserve = Math.Max(
-                    0L,
-                    checked(GetReservedFreeBytes(accelerator)
-                        + requestedBytes - freeBytes));
-                long reserveTargetBytes = Math.Max(
-                    0L,
-                    cachedBytes - bytesNeededForReserve);
-                long targetCachedBytes = Math.Min(
-                    capacityTargetBytes,
-                    reserveTargetBytes);
-                TrimToBytes(accelerator, targetCachedBytes, dispose);
             }
-
-            foreach (MemoryBuffer1D<float, Stride1D.Dense> buffer in dispose)
-                buffer.Dispose();
 
             try
             {
                 return accelerator.Allocate1D<float>(length);
             }
-            catch (CudaException exception) when (IsOutOfMemory(exception))
+            catch (NativeCudaException exception) when (IsOutOfMemory(exception))
             {
                 // A shape change can leave an otherwise valid but unusable
                 // set of cached blocks. Flush only transient storage on this
@@ -715,200 +811,257 @@ public partial class Tensor
                 // propagates from the second allocation.
                 accelerator.Synchronize();
                 Clear(accelerator);
+                CudaBFloat16BufferPool.Clear(accelerator);
+                CudaIntBufferPool.Clear(accelerator);
                 return accelerator.Allocate1D<float>(length);
             }
         }
 
         internal static void Return(
-            CudaAccelerator accelerator,
-            MemoryBuffer1D<float, Stride1D.Dense> buffer)
+            NativeCudaDevice accelerator,
+            NativeCudaBuffer<float> buffer)
         {
             int length = checked((int)buffer.Length);
             long bytes = checked((long)length * sizeof(float));
-            lock (Sync)
+            PoolState state = Pools.GetOrAdd(
+                accelerator, static _ => new PoolState());
+            lock (state.Sync)
             {
                 // A context and its adopted result tensor can share storage.
                 // Never place the same native allocation in a bucket twice.
-                if (!PooledBuffers.Add(buffer))
+                if (!state.PooledBuffers.Add(buffer))
                     return;
-                var key = (accelerator, length);
-                if (!Buffers.TryGetValue(key, out var bucket))
+                if (!state.Buffers.TryGetValue(length, out var bucket))
                 {
                     bucket = [];
-                    Buffers[key] = bucket;
+                    state.Buffers[length] = bucket;
                 }
 
                 if (bucket.Count < MaximumBuffersPerSize
-                    && CachedBytes.GetValueOrDefault(accelerator) + bytes
-                        <= GetCacheBudget(accelerator))
+                    && CudaTransientBufferBudget.TryReserve(
+                        accelerator, bytes))
                 {
                     bucket.Push(buffer);
-                    CachedBytes[accelerator] =
-                        CachedBytes.GetValueOrDefault(accelerator) + bytes;
                     return;
                 }
-                PooledBuffers.Remove(buffer);
+                state.PooledBuffers.Remove(buffer);
             }
 
             buffer.Dispose();
         }
 
-        private static long GetCacheBudget(CudaAccelerator accelerator)
-            => Math.Max(
-                MinimumCachedBytesPerDevice,
-                checked(accelerator.MemorySize * CacheMemoryPercent / 100));
-
-        private static long GetReservedFreeBytes(CudaAccelerator accelerator)
-            => Math.Min(
-                accelerator.MemorySize / 3,
-                Math.Max(
-                    MinimumReservedFreeBytes,
-                    checked(accelerator.MemorySize
-                        * ReservedFreeMemoryPercent / 100)));
-
-        private static bool IsOutOfMemory(CudaException exception)
-            => string.Equals(
-                    exception.Error,
-                    nameof(CudaError.CUDA_ERROR_OUT_OF_MEMORY),
-                    StringComparison.Ordinal)
+        private static bool IsOutOfMemory(NativeCudaException exception)
+            => exception.Status == 2
                 || exception.Message.Contains(
                     "out of memory",
                     StringComparison.OrdinalIgnoreCase);
 
-        private static void TrimToBytes(
-            CudaAccelerator accelerator,
-            long targetBytes,
-            List<MemoryBuffer1D<float, Stride1D.Dense>> dispose)
+        internal static void Clear(NativeCudaDevice accelerator)
         {
-            long cached = CachedBytes.GetValueOrDefault(accelerator);
-            if (cached <= targetBytes)
+            var dispose = new List<NativeCudaBuffer<float>>();
+            if (!Pools.TryGetValue(accelerator, out PoolState? state))
                 return;
-            var keys = Buffers.Keys
-                .Where(key => ReferenceEquals(key.Accelerator, accelerator))
-                .ToArray();
-            foreach (var key in keys)
+            long releasedBytes = 0;
+            lock (state.Sync)
             {
-                Stack<MemoryBuffer1D<float, Stride1D.Dense>> bucket =
-                    Buffers[key];
-                while (bucket.Count > 0 && cached > targetBytes)
+                foreach ((int length, Stack<NativeCudaBuffer<float>> bucket)
+                    in state.Buffers)
                 {
-                    MemoryBuffer1D<float, Stride1D.Dense> buffer = bucket.Pop();
-                    PooledBuffers.Remove(buffer);
-                    cached -= checked((long)key.Length * sizeof(float));
-                    dispose.Add(buffer);
-                }
-                if (bucket.Count == 0)
-                    Buffers.Remove(key);
-                if (cached <= targetBytes)
-                    break;
-            }
-            CachedBytes[accelerator] = cached;
-        }
-
-        internal static void Clear(CudaAccelerator accelerator)
-        {
-            var dispose = new List<MemoryBuffer1D<float, Stride1D.Dense>>();
-            lock (Sync)
-            {
-                var keys = Buffers.Keys
-                    .Where(key => ReferenceEquals(key.Accelerator, accelerator))
-                    .ToArray();
-                foreach (var key in keys)
-                {
-                    Stack<MemoryBuffer1D<float, Stride1D.Dense>> bucket =
-                        Buffers[key];
                     while (bucket.Count > 0)
                     {
                         var buffer = bucket.Pop();
-                        PooledBuffers.Remove(buffer);
-                        CachedBytes[accelerator] =
-                            CachedBytes.GetValueOrDefault(accelerator)
-                            - checked((long)key.Length * sizeof(float));
+                        state.PooledBuffers.Remove(buffer);
+                        releasedBytes += checked((long)length * sizeof(float));
                         dispose.Add(buffer);
                     }
-                    Buffers.Remove(key);
                 }
-                CachedBytes.Remove(accelerator);
+                state.Buffers.Clear();
             }
+            CudaTransientBufferBudget.Release(accelerator, releasedBytes);
             foreach (var buffer in dispose)
                 buffer.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// One high-water budget shared by all transient element types. Fixed
+    /// training shapes stay resident after warmup; a real OOM flushes the
+    /// cache and retries. Accounting and locks are per device, so two CUDA
+    /// dispatch threads never serialize on allocator bookkeeping.
+    /// </summary>
+    private static class CudaTransientBufferBudget
+    {
+        // Leave room for resident weights, master weights, gradient arenas,
+        // optimizer moments/workspaces, and the Windows display allocation.
+        // This budget counts only idle transient buffers, so 45% still keeps
+        // the full activation working set reusable without crowding out the
+        // next step's persistent allocations.
+        private const int CacheMemoryPercent = 45;
+        private static readonly System.Collections.Concurrent
+            .ConcurrentDictionary<NativeCudaDevice, BudgetState> States = new();
+
+        private sealed class BudgetState(long maximumBytes)
+        {
+            internal object Sync { get; } = new();
+            internal long MaximumBytes { get; } = maximumBytes;
+            internal long CachedBytes;
+        }
+
+        internal static bool TryReserve(
+            NativeCudaDevice accelerator,
+            long bytes)
+        {
+            BudgetState state = States.GetOrAdd(
+                accelerator,
+                static device => new BudgetState(checked(
+                    device.MemorySize * CacheMemoryPercent / 100)));
+            lock (state.Sync)
+            {
+                if (bytes > state.MaximumBytes - state.CachedBytes)
+                    return false;
+                state.CachedBytes += bytes;
+                return true;
+            }
+        }
+
+        internal static void Release(
+            NativeCudaDevice accelerator,
+            long bytes)
+        {
+            if (bytes <= 0
+                || !States.TryGetValue(accelerator, out BudgetState? state))
+            {
+                return;
+            }
+            lock (state.Sync)
+                state.CachedBytes = Math.Max(0, state.CachedBytes - bytes);
         }
     }
 
     private static class CudaIntBufferPool
     {
         private const int MaximumBuffersPerSize = 64;
-        private static readonly object Sync = new();
-        private static readonly Dictionary<
-            (CudaAccelerator Accelerator, int Length),
-            Stack<MemoryBuffer1D<int, Stride1D.Dense>>> Buffers = [];
-        private static readonly HashSet<
-            MemoryBuffer1D<int, Stride1D.Dense>> PooledBuffers = [];
+        private static readonly System.Collections.Concurrent
+            .ConcurrentDictionary<NativeCudaDevice, PoolState> Pools = new();
 
-        internal static MemoryBuffer1D<int, Stride1D.Dense> Rent(
+        private sealed class PoolState
+        {
+            internal object Sync { get; } = new();
+            internal Dictionary<int, Stack<NativeCudaBuffer<int>>> Buffers
+                { get; } = [];
+            internal HashSet<NativeCudaBuffer<int>> PooledBuffers
+                { get; } = [];
+            internal Dictionary<NativeCudaBuffer<int>,
+                NativeCudaPinnedUpload<int>> Staging { get; } = [];
+        }
+
+        internal static NativeCudaBuffer<int> Rent(
             int deviceIndex,
             int length)
         {
-            CudaAccelerator accelerator =
+            NativeCudaDevice accelerator =
                 ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
-            lock (Sync)
+            PoolState state = Pools.GetOrAdd(
+                accelerator, static _ => new PoolState());
+            lock (state.Sync)
             {
-                var key = (accelerator, length);
-                if (Buffers.TryGetValue(key, out var bucket)
+                if (state.Buffers.TryGetValue(length, out var bucket)
                     && bucket.Count > 0)
                 {
-                    MemoryBuffer1D<int, Stride1D.Dense> buffer = bucket.Pop();
-                    PooledBuffers.Remove(buffer);
+                    NativeCudaBuffer<int> buffer = bucket.Pop();
+                    state.PooledBuffers.Remove(buffer);
+                    CudaTransientBufferBudget.Release(
+                        accelerator,
+                        checked((long)length * sizeof(int)));
                     return buffer;
                 }
             }
             return accelerator.Allocate1D<int>(length);
         }
 
-        internal static void Return(
-            CudaAccelerator accelerator,
-            MemoryBuffer1D<int, Stride1D.Dense> buffer)
+        internal static void Upload(
+            int deviceIndex,
+            NativeCudaBuffer<int> buffer,
+            ReadOnlySpan<int> values)
         {
-            lock (Sync)
+            NativeCudaDevice accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+            PoolState state = Pools.GetOrAdd(
+                accelerator, static _ => new PoolState());
+            NativeCudaPinnedUpload<int> staging;
+            lock (state.Sync)
             {
-                if (!PooledBuffers.Add(buffer))
+                if (!state.Staging.TryGetValue(buffer, out staging!))
+                {
+                    staging = new NativeCudaPinnedUpload<int>(
+                        deviceIndex, values.Length);
+                    state.Staging.Add(buffer, staging);
+                }
+            }
+            staging.Upload(values, buffer, accelerator.DefaultStream);
+        }
+
+        internal static void Return(
+            NativeCudaDevice accelerator,
+            NativeCudaBuffer<int> buffer)
+        {
+            int length = checked((int)buffer.Length);
+            long bytes = checked((long)length * sizeof(int));
+            PoolState state = Pools.GetOrAdd(
+                accelerator, static _ => new PoolState());
+            NativeCudaPinnedUpload<int>? releaseStaging = null;
+            lock (state.Sync)
+            {
+                if (!state.PooledBuffers.Add(buffer))
                     return;
-                var key = (accelerator, checked((int)buffer.Length));
-                if (!Buffers.TryGetValue(key, out var bucket))
+                if (!state.Buffers.TryGetValue(length, out var bucket))
                 {
                     bucket = [];
-                    Buffers[key] = bucket;
+                    state.Buffers[length] = bucket;
                 }
-                if (bucket.Count < MaximumBuffersPerSize)
+                if (bucket.Count < MaximumBuffersPerSize
+                    && CudaTransientBufferBudget.TryReserve(
+                        accelerator, bytes))
                 {
                     bucket.Push(buffer);
                     return;
                 }
-                PooledBuffers.Remove(buffer);
+                state.PooledBuffers.Remove(buffer);
+                if (state.Staging.Remove(buffer, out var staging))
+                    releaseStaging = staging;
             }
+            releaseStaging?.Dispose();
             buffer.Dispose();
         }
 
-        internal static void Clear(CudaAccelerator accelerator)
+        internal static void Clear(NativeCudaDevice accelerator)
         {
-            var dispose = new List<MemoryBuffer1D<int, Stride1D.Dense>>();
-            lock (Sync)
+            var dispose = new List<NativeCudaBuffer<int>>();
+            var stagingToDispose = new List<NativeCudaPinnedUpload<int>>();
+            if (!Pools.TryGetValue(accelerator, out PoolState? state))
+                return;
+            long releasedBytes = 0;
+            lock (state.Sync)
             {
-                var keys = Buffers.Keys
-                    .Where(key => ReferenceEquals(key.Accelerator, accelerator))
-                    .ToArray();
-                foreach (var key in keys)
+                foreach ((int length, Stack<NativeCudaBuffer<int>> bucket)
+                    in state.Buffers)
                 {
-                    foreach (MemoryBuffer1D<int, Stride1D.Dense> buffer
-                        in Buffers[key])
+                    while (bucket.Count > 0)
                     {
-                        PooledBuffers.Remove(buffer);
+                        NativeCudaBuffer<int> buffer = bucket.Pop();
+                        state.PooledBuffers.Remove(buffer);
+                        if (state.Staging.Remove(buffer, out var staging))
+                            stagingToDispose.Add(staging);
+                        releasedBytes += checked((long)length * sizeof(int));
                         dispose.Add(buffer);
                     }
-                    Buffers.Remove(key);
                 }
+                state.Buffers.Clear();
             }
-            foreach (MemoryBuffer1D<int, Stride1D.Dense> buffer in dispose)
+            CudaTransientBufferBudget.Release(accelerator, releasedBytes);
+            foreach (NativeCudaPinnedUpload<int> staging in stagingToDispose)
+                staging.Dispose();
+            foreach (NativeCudaBuffer<int> buffer in dispose)
                 buffer.Dispose();
         }
     }

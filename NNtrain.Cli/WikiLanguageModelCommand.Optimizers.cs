@@ -8,6 +8,8 @@ internal static partial class WikiLanguageModelCommand
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(config);
+        bool useBFloat16Moments =
+            model.PrecisionMode == TensorPrecisionMode.BFloat16;
 
         if (config.IsOptimizer(WikiTrainingConfiguration.NekoMuonOptimizer))
         {
@@ -24,8 +26,8 @@ internal static partial class WikiLanguageModelCommand
                 beta2: 0.95f,
                 eps: 1e-8f,
                 weight_decay: config.WeightDecay,
-                bf16_first_moment: config.AdamWUseBFloat16FirstMoment,
-                bf16_second_moment: config.AdamWUseBFloat16SecondMoment);
+                bf16_first_moment: useBFloat16Moments,
+                bf16_second_moment: useBFloat16Moments);
             return optim.Composite(nekoMuon, auxiliaryAdamW);
         }
 
@@ -58,8 +60,8 @@ internal static partial class WikiLanguageModelCommand
             model.parameters(),
             lr: config.LearningRate,
             weight_decay: config.WeightDecay,
-            bf16_first_moment: config.AdamWUseBFloat16FirstMoment,
-            bf16_second_moment: config.AdamWUseBFloat16SecondMoment);
+            bf16_first_moment: useBFloat16Moments,
+            bf16_second_moment: useBFloat16Moments);
     }
 
     private static void WriteOptimizerSummary(
@@ -76,7 +78,7 @@ internal static partial class WikiLanguageModelCommand
                 $"{config.NekoMuonNewtonSchulzInterval} steps) + AdamW " +
                 $"({model.AuxiliaryParameters.Count} auxiliary parameters, " +
                 $"lr {config.AuxiliaryLearningRate:G}, moments " +
-                $"{GetAdamWMomentStorage(config)})");
+                $"{GetAdamWMomentStorage(model)})");
         }
         else if (config.IsOptimizer(
             WikiTrainingConfiguration.GainShareAdamWOptimizer))
@@ -105,7 +107,7 @@ internal static partial class WikiLanguageModelCommand
             output.WriteLine(
                 $"optimizer = AdamW ({model.parameters().Count()} " +
                 $"parameters, lr {config.LearningRate:G}, moments " +
-                $"{GetAdamWMomentStorage(config)})");
+                $"{GetAdamWMomentStorage(model)})");
         }
         output.WriteLine(
             $"learning-rate schedule = linear warmup " +
@@ -114,7 +116,8 @@ internal static partial class WikiLanguageModelCommand
     }
 
     private static string GetAdamWMomentStorage(
-        WikiTrainingConfiguration config)
-        => $"{(config.AdamWUseBFloat16FirstMoment ? "bf16" : "f32")}/" +
-            $"{(config.AdamWUseBFloat16SecondMoment ? "bf16" : "f32")}";
+        LanguageModel model)
+        => model.PrecisionMode == TensorPrecisionMode.BFloat16
+            ? "bf16/bf16"
+            : "f32/f32";
 }

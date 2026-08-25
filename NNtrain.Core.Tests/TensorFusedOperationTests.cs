@@ -40,6 +40,117 @@ public sealed class TensorFusedOperationTests
     }
 
     [Fact]
+    public void CudaBFloat16TiledAttentionMatchesCpuForwardBackward()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+        const int batch = 2;
+        const int sequence = 9;
+        const int modelWidth = 24;
+        const int heads = 1;
+        float[] values = Pattern(
+            batch * sequence * 3 * modelWidth,
+            47,
+            0.009f);
+        float[] seed = Pattern(
+            batch * sequence * modelWidth,
+            29,
+            0.011f);
+        TensorDevice previous = Tensor.ExecutionDevice;
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cpu;
+            var cpuInput = new Tensor(
+                values,
+                [batch, sequence, 3 * modelWidth],
+                dtype: TensorDType.BFloat16);
+            Tensor cpu = cpuInput.FusedMultiHeadAttention(heads, causal: true);
+            cpu.Backward(seed);
+
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            Tensor.CudaDeviceIndex = 0;
+            var cudaInput = new Tensor(
+                values,
+                [batch, sequence, 3 * modelWidth],
+                dtype: TensorDType.BFloat16);
+            Tensor cuda = cudaInput.FusedMultiHeadAttention(heads, causal: true);
+            float[] cudaOutput = cuda.Data.ToArray();
+            cuda.BackwardAndRelease(seed);
+
+            // Tensor Core attention rounds the 16x16 probability tile to
+            // BF16 before the P*V MMA. Allow two BF16 output ULPs while the
+            // softmax statistics and accumulators remain Float32.
+            AssertClose(cpu.Data, cudaOutput, 5e-4f);
+            AssertClose(cpuInput.Grad, cudaInput.Grad, 8e-4f);
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previous;
+        }
+    }
+
+    [Theory]
+    [InlineData(8)]
+    [InlineData(16)]
+    [InlineData(24)]
+    [InlineData(40)]
+    [InlineData(64)]
+    [InlineData(96)]
+    [InlineData(128)]
+    public void CudaBFloat16TensorCoreAttentionSupportsGeneralHeadWidths(
+        int headWidth)
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+        const int batch = 1;
+        const int sequence = 7;
+        const int heads = 2;
+        int modelWidth = checked(headWidth * heads);
+        float[] values = Pattern(
+            batch * sequence * 3 * modelWidth,
+            61 + headWidth,
+            0.006f);
+        float[] seed = Pattern(
+            batch * sequence * modelWidth,
+            43 + headWidth,
+            0.008f);
+        TensorDevice previous = Tensor.ExecutionDevice;
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cpu;
+            var cpuInput = new Tensor(
+                values,
+                [batch, sequence, 3 * modelWidth],
+                dtype: TensorDType.BFloat16);
+            Tensor cpu = cpuInput.FusedMultiHeadAttention(
+                heads,
+                causal: true);
+            cpu.Backward(seed);
+
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            Tensor.CudaDeviceIndex = 0;
+            var cudaInput = new Tensor(
+                values,
+                [batch, sequence, 3 * modelWidth],
+                dtype: TensorDType.BFloat16);
+            Tensor cuda = cudaInput.FusedMultiHeadAttention(
+                heads,
+                causal: true);
+            float[] cudaOutput = cuda.Data.ToArray();
+            cuda.BackwardAndRelease(seed);
+
+            // Absolute BF16 ULP size grows with magnitude. The widest heads
+            // in this pattern can differ by one output ULP (0.001953125).
+            AssertClose(cpu.Data, cudaOutput, 4e-3f);
+            AssertClose(cpuInput.Grad, cudaInput.Grad, 5e-3f);
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previous;
+        }
+    }
+
+    [Fact]
     public void FusedMultiHeadAttentionMatchesComposedRankTwoAttention()
     {
         const int sequence = 4;

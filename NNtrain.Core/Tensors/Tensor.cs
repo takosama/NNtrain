@@ -97,10 +97,12 @@ public partial class Tensor
             : TensorDType.Float32;
 
     /// <summary>Gets the dtype used by reductions and gradient accumulation.</summary>
-    public TensorDType AccumulationDType
-        => DType == TensorDType.BFloat16
-            ? TensorDType.BFloat16
-            : TensorDType.Float32;
+    /// <remarks>
+    /// All implemented storage modes accumulate reductions, GEMMs, optimizer
+    /// statistics, and gradients in Float32. BFloat16 is a physical storage and
+    /// operand format; it is never the accumulation format.
+    /// </remarks>
+    public TensorDType AccumulationDType => TensorDType.Float32;
 
     public int Rank => _shape.Length;
     public int Numel => _data.Count;

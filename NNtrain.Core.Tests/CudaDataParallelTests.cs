@@ -66,14 +66,18 @@ public sealed class CudaDataParallelTests
                 rng: new Random(13),
                 dtype: TensorDType.BFloat16);
 
-            float loss = CudaDataParallel.ForwardBackward(
-                model,
-                [1, 2, 3, 4, 5, 6, 7, 8],
-                [2, 3, 4, 5, 6, 7, 8, 9],
-                batchSize: 2,
-                sequenceLength: 4);
+            for (int iteration = 0; iteration < 3; iteration++)
+            {
+                model.ZeroGrad();
+                float loss = CudaDataParallel.ForwardBackward(
+                    model,
+                    [1, 2, 3, 4, 5, 6, 7, 8],
+                    [2, 3, 4, 5, 6, 7, 8, 9],
+                    batchSize: 2,
+                    sequenceLength: 4);
 
-            Assert.True(float.IsFinite(loss));
+                Assert.True(float.IsFinite(loss));
+            }
         }
         finally
         {

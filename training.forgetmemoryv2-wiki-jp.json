@@ -30,7 +30,7 @@
   "device": "cuda",
   "deviceIndex": 0,
   "deviceIndices": [0, 1],
-  "modelDType": "bfloat16",
+  "precisionMode": "bfloat16",
   "forgetMemoryKeyWidth": 16,
   "forgetMemoryValueWidth": 16,
   "forgetMemoryRetentionMinimum": 0.5,
@@ -44,9 +44,7 @@
       "learningRate": 0.03,
       "auxiliaryLearningRate": 0.03,
       "nekoMuonNewtonSchulzInterval": 1,
-      "weightDecay": 0.01,
-      "adamWUseBFloat16FirstMoment": false,
-      "adamWUseBFloat16SecondMoment": false
+      "weightDecay": 0.01
     },
     "scheduler": {
       "type": "warmupCosineProgress",

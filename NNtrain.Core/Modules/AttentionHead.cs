@@ -9,13 +9,20 @@ class AttentionHead : Module
     private readonly float _scale;
     private readonly bool _causal;
 
-    public AttentionHead(int dModel, int dHead, bool causal = false, Random? rng = null, float initScale = 0.02f)
+    public AttentionHead(
+        int dModel,
+        int dHead,
+        bool causal = false,
+        Random? rng = null,
+        float initScale = 0.02f,
+        TensorDType dtype = TensorDType.Float32)
+        : base(dtype)
     {
         rng ??= new Random(1);
 
-        Wq = RegisterModule(new Linear(dModel, dHead, rng, initScale));
-        Wk = RegisterModule(new Linear(dModel, dHead, rng, initScale));
-        Wv = RegisterModule(new Linear(dModel, dHead, rng, initScale));
+        Wq = RegisterModule(new Linear(dModel, dHead, rng, initScale, dtype));
+        Wk = RegisterModule(new Linear(dModel, dHead, rng, initScale, dtype));
+        Wv = RegisterModule(new Linear(dModel, dHead, rng, initScale, dtype));
 
         _scale = 1f / MathF.Sqrt(dHead);
         _causal = causal;
@@ -27,7 +34,8 @@ class AttentionHead : Module
         Tensor k = Wk.ForwardBatch(x); // (T, Dh)
         Tensor v = Wv.ForwardBatch(x); // (T, Dh)
 
-        Tensor scores = q.MatMulTransposedRight(k) * Tensor.Scalar(_scale); // (T, T)
+        Tensor scores = q.MatMulTransposedRight(k)
+            * Tensor.Scalar(_scale, dtype: DType); // (T, T)
         if (_causal)
             scores = scores.CausalMask();
 

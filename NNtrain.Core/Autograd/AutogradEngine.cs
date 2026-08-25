@@ -39,6 +39,8 @@ internal static class AutogradEngine
             {
                 Tensor tensor = topologicalOrder[index];
                 tensor.Node.RunBackward();
+                if (tensor.Node.IsLeaf)
+                    CudaGradientReductionContext.NotifyLeaf(tensor);
                 if (releaseGraph && !tensor.Node.IsLeaf)
                 {
                     // Work is ordered on the device stream. The allocation can

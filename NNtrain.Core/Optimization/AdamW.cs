@@ -6,6 +6,8 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
     private readonly long _totalElements;
     private readonly AdamWParameterRuntime[] _parameterRuntime;
     private readonly AdamWWorkItem[] _workItems;
+    private readonly Dictionary<int, CudaOptimizerKernels.AdamWMultiTensorPlan>
+        _cudaMultiTensorPlans = [];
     private AdamWOptions _options;
     private AdamWParameterState[] _parameterStates;
     private readonly Action<int> _updateWorkItemAction;
@@ -72,7 +74,10 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         {
             int primaryDevice = Tensor.CudaDeviceIndex;
             foreach (AdamWParameterRuntime runtime in _parameterRuntime)
+            {
                 runtime.CudaState?.SynchronizeHost(primaryDevice);
+                runtime.CudaBFloat16State?.SynchronizeHost(primaryDevice);
+            }
         }
         if (_options.UseBFloat16FirstMoment
             || _options.UseBFloat16SecondMoment)
@@ -139,6 +144,8 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         {
             _parameterRuntime[index].CudaState?.Dispose();
             _parameterRuntime[index].CudaState = null;
+            _parameterRuntime[index].CudaBFloat16State?.Dispose();
+            _parameterRuntime[index].CudaBFloat16State = null;
             if (_options.UseBFloat16FirstMoment)
             {
                 _parameterRuntime[index].FirstMoment = [];
@@ -172,6 +179,12 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                 _parameterRuntime[index].SecondMomentBFloat16 = null;
             }
         }
+        foreach (CudaOptimizerKernels.AdamWMultiTensorPlan plan
+            in _cudaMultiTensorPlans.Values)
+        {
+            plan.Dispose();
+        }
+        _cudaMultiTensorPlans.Clear();
         RefreshWeightDecayFlags();
     }
 
@@ -228,57 +241,55 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
 
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
         {
+            int[] devices = Tensor.CudaDeviceIndices.ToArray();
             for (int parameterIndex = 0;
                 parameterIndex < _parameterRuntime.Length;
                 parameterIndex++)
             {
                 AdamWParameterRuntime runtime =
                     _parameterRuntime[parameterIndex];
+                if (runtime.FirstMomentBFloat16 is null
+                    && runtime.SecondMomentBFloat16 is null)
+                {
+                    runtime.CudaState ??=
+                        new CudaOptimizerKernels.AdamWResidentState(
+                            runtime.FirstMoment,
+                            runtime.SecondMoment);
+                    foreach (int deviceIndex in devices)
+                        runtime.CudaState.GetOrCreate(deviceIndex);
+                    continue;
+                }
+
+                if (runtime.FirstMomentBFloat16 is not null
+                    && runtime.SecondMomentBFloat16 is not null)
+                {
+                    runtime.CudaBFloat16State ??=
+                        new CudaOptimizerKernels.AdamWBFloat16ResidentState(
+                            runtime.FirstMomentBFloat16,
+                            runtime.SecondMomentBFloat16);
+                    foreach (int deviceIndex in devices)
+                        runtime.CudaBFloat16State.GetOrCreate(deviceIndex);
+                    continue;
+                }
+
                 float[] first = runtime.FirstMomentBFloat16 is null
                     ? runtime.FirstMoment
                     : DecodeBFloat16(runtime.FirstMomentBFloat16);
                 float[] second = runtime.SecondMomentBFloat16 is null
                     ? runtime.SecondMoment
                     : DecodeBFloat16(runtime.SecondMomentBFloat16);
-                if (runtime.FirstMomentBFloat16 is null
-                    && runtime.SecondMomentBFloat16 is null)
-                {
-                    runtime.CudaState ??=
-                        new CudaOptimizerKernels.AdamWResidentState(
-                            first,
-                            second);
-                    foreach (int deviceIndex in Tensor.CudaDeviceIndices)
-                    {
-                        CudaOptimizerKernels.AdamWUpdateResident(
-                            runtime.Parameter.T,
-                            deviceIndex,
-                            runtime.CudaState,
-                            options.Beta1,
-                            options.Beta2,
-                            options.LearningRate,
-                            options.WeightDecay,
-                            _stepUpdateScale,
-                            _stepScaledEpsilon,
-                            runtime.ApplyWeightDecay);
-                    }
-                    runtime.Parameter.T.MarkCudaDataMutated(
-                        Tensor.CudaDeviceIndex);
-                }
-                else
-                {
-                    CudaOptimizerKernels.AdamWUpdate(
-                        runtime.Data,
-                        runtime.Parameter.T.GradientBuffer,
-                        first,
-                        second,
-                        options.Beta1,
-                        options.Beta2,
-                        options.LearningRate,
-                        options.WeightDecay,
-                        _stepUpdateScale,
-                        _stepScaledEpsilon,
-                        runtime.ApplyWeightDecay);
-                }
+                CudaOptimizerKernels.AdamWUpdate(
+                    runtime.Data,
+                    runtime.Parameter.T.GradientBuffer,
+                    first,
+                    second,
+                    options.Beta1,
+                    options.Beta2,
+                    options.LearningRate,
+                    options.WeightDecay,
+                    _stepUpdateScale,
+                    _stepScaledEpsilon,
+                    runtime.ApplyWeightDecay);
                 if (runtime.FirstMomentBFloat16 is not null)
                     runtime.FirstMomentBFloat16 = EncodeBFloat16(first);
                 if (runtime.SecondMomentBFloat16 is not null)
@@ -289,7 +300,60 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                     runtime.Parameter.CompleteUpdate();
                 }
             }
-            CudaOptimizerKernels.SynchronizeDevices(Tensor.CudaDeviceIndices);
+
+            CudaOptimizerKernels.AdamWMultiTensorItem[] multiTensorItems =
+                _parameterRuntime
+                    .Where(runtime => runtime.CudaState is not null
+                        || runtime.CudaBFloat16State is not null)
+                    .Select(runtime => new CudaOptimizerKernels
+                        .AdamWMultiTensorItem(
+                            runtime.Parameter.T,
+                            runtime.CudaState,
+                            runtime.CudaBFloat16State,
+                            runtime.ApplyWeightDecay))
+                    .ToArray();
+            if (multiTensorItems.Length > 0)
+            {
+                var plans = new CudaOptimizerKernels
+                    .AdamWMultiTensorPlan[devices.Length];
+                for (int deviceSlot = 0;
+                    deviceSlot < devices.Length;
+                    ++deviceSlot)
+                {
+                    int deviceIndex = devices[deviceSlot];
+                    if (!_cudaMultiTensorPlans.TryGetValue(
+                        deviceIndex,
+                        out CudaOptimizerKernels.AdamWMultiTensorPlan? plan))
+                    {
+                        plan = new CudaOptimizerKernels.AdamWMultiTensorPlan(
+                            deviceIndex, multiTensorItems);
+                        _cudaMultiTensorPlans.Add(deviceIndex, plan);
+                    }
+                    plans[deviceSlot] = plan;
+                }
+
+                // One launch per GPU updates all AdamW tensors. Each worker
+                // stays bound to one device, so both GPUs advance
+                // concurrently. A checkpoint may contain a legacy mixed
+                // moment representation; in that case the loop above has
+                // already updated it and this array is intentionally empty.
+                Parallel.For(0, devices.Length, deviceSlot =>
+                {
+                    plans[deviceSlot].Execute(
+                        options.Beta1,
+                        options.Beta2,
+                        options.LearningRate,
+                        options.WeightDecay,
+                        _stepUpdateScale,
+                        _stepScaledEpsilon);
+                });
+            }
+            foreach (AdamWParameterRuntime runtime in _parameterRuntime)
+            {
+                runtime.Parameter.T.MarkCudaDataMutated(
+                    Tensor.CudaDeviceIndex);
+            }
+            CudaOptimizerKernels.SynchronizeDevices(devices);
             return;
         }
 

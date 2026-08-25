@@ -116,6 +116,9 @@ internal static class TensorFloat16OperationManifest
                 "AddLayerNormLastDim(Tensor,Tensor,Tensor,Single)",
                 "TensorFloat16FusedOperationTests.FusedLinearReluAndResidualLayerNormUseFloat16Storage"),
             Preserve(
+                "AddDropoutLayerNormLastDim(Tensor,Tensor,Tensor,Single,Random,Single)",
+                "TensorFloat16FusedOperationTests.ResidualDropoutLayerNormUsesFloat16Storage"),
+            Preserve(
                 "CausalMask(Single)",
                 "TensorFloat16ActivationAndLossTests.ElementwiseAndMaskedActivationsPreserveFloat16"),
             Preserve(
@@ -167,6 +170,9 @@ internal static class TensorFloat16OperationManifest
             Preserve(
                 "ForgetMemoryDRNContinue(Int32,Int32,Single,Single[])",
                 "ForgetMemoryDRNTests.GptUsesDrnInEveryLayerAndTrains"),
+            Preserve(
+                "FusedMultiHeadAttentionIncremental(NativeCudaBuffer`1,NativeCudaBuffer`1,Int32,Int32,Int32,Int32)",
+                "CudaDataParallelTests.TransformerCudaGenerationReusesInferenceArenaSafely"),
             Preserve(
                 "LinearLastDim(Tensor,Tensor,Boolean)",
                 "LinearLastDimTests.Float16ProjectionMatchesFormerFloat16Graph"),

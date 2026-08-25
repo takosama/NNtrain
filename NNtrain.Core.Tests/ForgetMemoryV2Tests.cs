@@ -286,6 +286,56 @@ public sealed class ForgetMemoryV2Tests
     }
 
     [Fact]
+    public void CudaBFloat16TensorCoreForwardBackwardMatchesCpu()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int previousDeviceIndex = Tensor.CudaDeviceIndex;
+        try
+        {
+            const int batch = 2;
+            const int sequence = 5;
+            const int keyWidth = 16;
+            const int valueWidth = 16;
+            const int projectionWidth = 2 * keyWidth + 3 * valueWidth;
+            float[] values = Enumerable.Range(
+                    0, batch * sequence * projectionWidth)
+                .Select(i => MathF.Sin(i * 0.071f) * 0.4f)
+                .ToArray();
+            float[] upstream = Enumerable.Range(
+                    0, batch * sequence * valueWidth)
+                .Select(i => MathF.Cos(i * 0.113f) * 0.25f)
+                .ToArray();
+
+            (float[] Output, float[] Gradient) Run(TensorDevice device)
+            {
+                Tensor.ExecutionDevice = device;
+                Tensor.CudaDeviceIndex = 0;
+                var input = new Tensor(
+                    values,
+                    [batch, sequence, projectionWidth],
+                    dtype: TensorDType.BFloat16);
+                Tensor output = input.ForgetMemoryV2(
+                    keyWidth, valueWidth, retentionFloor: 0.35f);
+                output.Backward(upstream);
+                return (output.Data.ToArray(), input.Grad.ToArray());
+            }
+
+            var cpu = Run(TensorDevice.Cpu);
+            var cuda = Run(TensorDevice.Cuda);
+            AssertClose(cpu.Output, cuda.Output, 3e-3f);
+            AssertClose(cpu.Gradient, cuda.Gradient, 4e-3f);
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndex = previousDeviceIndex;
+        }
+    }
+
+    [Fact]
     public void GptSchedulesShortToLongMemoryAndTrains()
     {
         var model = new ForgetMemoryV2Gpt(

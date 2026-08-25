@@ -18,12 +18,21 @@ $compiler = Get-ChildItem -LiteralPath $toolsRoot -Directory |
     Sort-Object Name |
     Select-Object -Last 1
 $ccbin = Join-Path $compiler.FullName 'bin\Hostx64\x64'
-$source = Join-Path $PSScriptRoot 'NNtrain.Core\native\flash_attention.cu'
+$sources = @(
+    (Join-Path $PSScriptRoot 'NNtrain.Core\native\flash_attention.cu'),
+    (Join-Path $PSScriptRoot 'NNtrain.Core\native\cuda_runtime_bridge.cu'),
+    (Join-Path $PSScriptRoot 'NNtrain.Core\native\tensor_kernels.cu')
+)
 $output = Join-Path $PSScriptRoot `
     'NNtrain.Core\runtimes\win-x64\native\NNtrain.CudaKernels.dll'
 
-& $nvcc -O3 --use_fast_math -lineinfo -arch=sm_86 `
-    -allow-unsupported-compiler -ccbin $ccbin -shared $source -o $output
+& $nvcc -O3 --use_fast_math -lineinfo `
+    -gencode 'arch=compute_80,code=sm_80' `
+    -gencode 'arch=compute_86,code=sm_86' `
+    -gencode 'arch=compute_89,code=sm_89' `
+    -gencode 'arch=compute_90,code=sm_90' `
+    -gencode 'arch=compute_90,code=compute_90' `
+    -allow-unsupported-compiler -ccbin $ccbin -shared $sources -o $output
 if ($LASTEXITCODE -ne 0) {
     throw "nvcc failed with exit code $LASTEXITCODE"
 }

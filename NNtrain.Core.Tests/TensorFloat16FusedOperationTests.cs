@@ -112,6 +112,44 @@ public sealed class TensorFloat16FusedOperationTests
     }
 
     [Fact]
+    public void ResidualDropoutLayerNormUsesFloat16Storage()
+    {
+        const int rows = 3;
+        const int columns = 8;
+        Tensor halfResidual = HalfTensor(
+            Pattern(rows * columns, 0.019f), [rows, columns]);
+        Tensor halfBranch = HalfTensor(
+            Pattern(rows * columns, 0.015f, offset: 0.07f),
+            [rows, columns]);
+        Tensor halfGamma = HalfTensor(
+            Enumerable.Range(0, columns)
+                .Select(index => 0.8f + index * 0.025f)
+                .ToArray(),
+            [columns]);
+        Tensor halfBeta = HalfTensor(Pattern(columns, 0.009f), [columns]);
+        Tensor referenceResidual = FloatReference(halfResidual);
+        Tensor referenceBranch = FloatReference(halfBranch);
+        Tensor referenceGamma = FloatReference(halfGamma);
+        Tensor referenceBeta = FloatReference(halfBeta);
+        float[] seed = Pattern(rows * columns, 0.013f);
+
+        Tensor actual = halfResidual.AddDropoutLayerNormLastDim(
+            halfBranch, halfGamma, halfBeta, 0.25f, new Random(83));
+        Tensor expected = referenceResidual.AddDropoutLayerNormLastDim(
+            referenceBranch, referenceGamma, referenceBeta,
+            0.25f, new Random(83));
+        actual.Backward(seed);
+        expected.Backward(seed);
+
+        Assert.Equal(TensorDType.Float16, actual.DType);
+        AssertCloseQuantized(expected.Data, actual.Data, 2e-4f);
+        AssertClose(referenceResidual.Grad, halfResidual.Grad, 8e-4f);
+        AssertClose(referenceBranch.Grad, halfBranch.Grad, 8e-4f);
+        AssertClose(referenceGamma.Grad, halfGamma.Grad, 8e-4f);
+        AssertClose(referenceBeta.Grad, halfBeta.Grad, 3e-5f);
+    }
+
+    [Fact]
     public void ForgetScanKeepsRecurrenceAndBackwardAccumulationInFloat32()
     {
         const int batch = 2;

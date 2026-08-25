@@ -8,22 +8,18 @@ internal static class TransformerCudaProfiler
     internal static void RunDetailedFromConfiguration(
         string configurationPath,
         int warmupSteps,
-        int measuredSteps)
+        int measuredSteps,
+        string? precisionModeOverride = null)
     {
         string path = Path.GetFullPath(configurationPath);
         using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
         JsonElement root = document.RootElement;
         JsonElement optimizer = root.GetProperty("optimization")
             .GetProperty("optimizer");
-        string dtypeName = root.GetProperty("modelDType").GetString()
-            ?? string.Empty;
-        TensorDType dtype = dtypeName.ToLowerInvariant() switch
-        {
-            "bfloat16" or "bf16" => TensorDType.BFloat16,
-            "float16" or "half" => TensorDType.Float16,
-            "float32" => TensorDType.Float32,
-            _ => throw new InvalidDataException($"Unsupported modelDType '{dtypeName}'."),
-        };
+        TensorPrecisionMode precisionMode = precisionModeOverride is null
+            ? PrecisionModeConfiguration.Read(root)
+            : TensorPrecisionModeNames.Parse(precisionModeOverride);
+        TensorDType dtype = precisionMode.ToStorageDType();
         RunDetailedCore(
             warmupSteps,
             measuredSteps,
@@ -41,14 +37,13 @@ internal static class TransformerCudaProfiler
             root.GetProperty("initializationScale").GetSingle(),
             root.GetProperty("tieWordEmbeddings").GetBoolean(),
             dtype,
+            precisionMode,
             optimizer.GetProperty("learningRate").GetSingle(),
             optimizer.GetProperty("auxiliaryLearningRate").GetSingle(),
             optimizer.GetProperty("weightDecay").GetSingle(),
             optimizer.GetProperty("nekoMuonNewtonSchulzInterval").GetInt32(),
-            optimizer.TryGetProperty("adamWUseBFloat16FirstMoment", out JsonElement first)
-                && first.GetBoolean(),
-            optimizer.TryGetProperty("adamWUseBFloat16SecondMoment", out JsonElement second)
-                && second.GetBoolean(),
+            precisionMode == TensorPrecisionMode.BFloat16,
+            precisionMode == TensorPrecisionMode.BFloat16,
             path);
     }
 
@@ -57,7 +52,8 @@ internal static class TransformerCudaProfiler
         int warmupSteps,
         int measuredSteps,
         int generationEverySteps = 0,
-        int generatedTokens = 0)
+        int generatedTokens = 0,
+        string? precisionModeOverride = null)
     {
         string path = Path.GetFullPath(configurationPath);
         using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
@@ -69,15 +65,10 @@ internal static class TransformerCudaProfiler
             throw new InvalidDataException(
                 $"Expected transformer architecture, got '{architecture}'.");
         }
-        string dtypeName = root.GetProperty("modelDType").GetString()
-            ?? string.Empty;
-        TensorDType dtype = dtypeName.ToLowerInvariant() switch
-        {
-            "bfloat16" or "bf16" => TensorDType.BFloat16,
-            "float16" or "half" => TensorDType.Float16,
-            "float32" => TensorDType.Float32,
-            _ => throw new InvalidDataException($"Unsupported modelDType '{dtypeName}'."),
-        };
+        TensorPrecisionMode precisionMode = precisionModeOverride is null
+            ? PrecisionModeConfiguration.Read(root)
+            : TensorPrecisionModeNames.Parse(precisionModeOverride);
+        TensorDType dtype = precisionMode.ToStorageDType();
         int[] devices = root.GetProperty("deviceIndices")
             .EnumerateArray()
             .Select(element => element.GetInt32())
@@ -107,6 +98,7 @@ internal static class TransformerCudaProfiler
             root.GetProperty("initializationScale").GetSingle(),
             root.GetProperty("tieWordEmbeddings").GetBoolean(),
             dtype,
+            precisionMode,
             optimizer.GetProperty("learningRate").GetSingle(),
             optimizer.GetProperty("auxiliaryLearningRate").GetSingle(),
             optimizer.GetProperty("weightDecay").GetSingle(),
@@ -122,17 +114,23 @@ internal static class TransformerCudaProfiler
         int batch = 8,
         int sequence = 128,
         int requestedDeviceCount = 2,
-        bool useNekoMuon = false)
+        bool useNekoMuon = false,
+        string? precisionMode = null)
     {
         if (Tensor.CudaDeviceCount == 0)
             throw new InvalidOperationException("CUDA is unavailable.");
         int[] devices = Enumerable.Range(
             0, Math.Min(requestedDeviceCount, Tensor.CudaDeviceCount)).ToArray();
+        TensorPrecisionMode resolvedPrecisionMode = precisionMode is null
+            ? TensorPrecisionMode.BFloat16
+            : TensorPrecisionModeNames.Parse(precisionMode);
+        TensorDType dtype = resolvedPrecisionMode.ToStorageDType();
         RunCore(
             warmupSteps, measuredSteps, batch, sequence, devices,
             vocabulary: 4096, width: 128, heads: 4, hidden: 256, layers: 2,
             seed: 1234, dropout: 0.1f, initializationScale: 0.02f,
-            tieWordEmbeddings: false, dtype: TensorDType.BFloat16,
+            tieWordEmbeddings: false, dtype,
+            resolvedPrecisionMode,
             learningRate: 3e-4f, auxiliaryLearningRate: 3e-4f,
             weightDecay: 0.01f, newtonSchulzInterval: 1,
             configurationDescription: "built-in CUDA profile",
@@ -155,6 +153,7 @@ internal static class TransformerCudaProfiler
         float initializationScale,
         bool tieWordEmbeddings,
         TensorDType dtype,
+        TensorPrecisionMode precisionMode,
         float learningRate,
         float auxiliaryLearningRate,
         float weightDecay,
@@ -171,6 +170,7 @@ internal static class TransformerCudaProfiler
             vocabulary, sequence, width, heads, hidden, layers,
             new Random(seed), initializationScale, dropout,
             dtype, tieWordEmbeddings);
+        model.SetPrecisionMode(precisionMode);
         IOptimizer optimizer = useNekoMuon
             ? new CompositeOptimizer(
                 new NekoMuon(
@@ -188,6 +188,10 @@ internal static class TransformerCudaProfiler
                     {
                         LearningRate = auxiliaryLearningRate,
                         WeightDecay = weightDecay,
+                        UseBFloat16FirstMoment =
+                            precisionMode == TensorPrecisionMode.BFloat16,
+                        UseBFloat16SecondMoment =
+                            precisionMode == TensorPrecisionMode.BFloat16,
                     }))
             : new AdamW(
                 model.Parameters(),
@@ -195,6 +199,10 @@ internal static class TransformerCudaProfiler
                 {
                     LearningRate = learningRate,
                     WeightDecay = weightDecay,
+                    UseBFloat16FirstMoment =
+                        precisionMode == TensorPrecisionMode.BFloat16,
+                    UseBFloat16SecondMoment =
+                        precisionMode == TensorPrecisionMode.BFloat16,
                 });
         var random = new Random(seed ^ 0x5A17);
         int[] input = Enumerable.Range(0, batch * sequence)
@@ -304,7 +312,9 @@ internal static class TransformerCudaProfiler
         Console.WriteLine(
             $"configuration = {configurationDescription}");
         Console.WriteLine(
-            $"transformer CUDA ({devices.Length} GPU, {dtype}): mean {mean:F2} ms, " +
+            $"transformer CUDA ({devices.Length} GPU, " +
+            $"{TensorPrecisionModeNames.Format(precisionMode)}): " +
+            $"mean {mean:F2} ms, " +
             $"median {median:F2} ms, {tokensPerSecond:N0} tokens/s");
         Console.WriteLine(
             $"GC-free median {cleanMedian:F2} ms, " +
@@ -338,6 +348,7 @@ internal static class TransformerCudaProfiler
         float initializationScale,
         bool tieWordEmbeddings,
         TensorDType dtype,
+        TensorPrecisionMode precisionMode,
         float learningRate,
         float auxiliaryLearningRate,
         float weightDecay,
@@ -355,6 +366,7 @@ internal static class TransformerCudaProfiler
             vocabulary, sequence, width, heads, hidden, layers,
             new Random(seed), initializationScale, dropout,
             dtype, tieWordEmbeddings);
+        model.SetPrecisionMode(precisionMode);
         var nekoMuon = new NekoMuon(
             model.HiddenWeightParameters,
             new NekoMuonOptions
@@ -390,7 +402,9 @@ internal static class TransformerCudaProfiler
         Console.WriteLine(
             $"shape batch={batch}, sequence={sequence}, width={width}, " +
             $"heads={heads}, hidden={hidden}, layers={layers}, " +
-            $"vocabulary={vocabulary}; dtype={dtype}; GPUs=[{string.Join(',', devices)}]");
+            $"vocabulary={vocabulary}; precision=" +
+            $"{TensorPrecisionModeNames.Format(precisionMode)}; " +
+            $"GPUs=[{string.Join(',', devices)}]");
         Console.WriteLine(
             $"optimizer=NekoMuon(interval={newtonSchulzInterval})+AdamW " +
             $"(moments={(adamFirstMomentBFloat16 ? "bf16" : "fp32")}/" +
@@ -473,7 +487,15 @@ internal static class TransformerCudaProfiler
             $"total {results.Average(value => value.Total):F2} ms");
         Console.WriteLine(
             $"attention backend = " +
-            $"{(CudaFlashAttention.NativeBackendActive ? "native CUDA flash" : "ILGPU fallback")}");
+            $"{(CudaFlashAttention.TensorCoreBackendActive
+                ? "native CUDA BF16 Tensor Core flash"
+                : CudaFlashAttention.NativeBackendActive
+                    ? "native CUDA scalar flash"
+                : "native CUDA backend unavailable")}");
+        Console.WriteLine(
+            $"linear backend = {(CudaBlasLt.BackendActive
+                ? "cuBLASLt BF16 Tensor Core fused epilogue"
+                : "cuBLAS GEMM + separate epilogue")}");
         Console.WriteLine("=== mean CUDA operation critical time (max of GPUs) ===");
         foreach ((string operation, double total) in operationTotals
             .OrderByDescending(pair => pair.Value))

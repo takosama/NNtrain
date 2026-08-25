@@ -19,9 +19,10 @@ sealed record WikiTrainingConfiguration
     internal const string ForgetMemoryV2ArchitectureAlias = "frogetmemoryv2";
     internal const string ForgetMemoryV3Architecture = "forgetmemoryv3";
     internal const string ForgetMemoryDrnArchitecture = "forgetmemorydrn";
-    internal const string Float16ModelDType = "float16";
-    internal const string BFloat16ModelDType = "bfloat16";
-    internal const string Float32ModelDType = "float32";
+    internal const string Float32PrecisionMode = TensorPrecisionModeNames.Float32;
+    internal const string BFloat16PrecisionMode = TensorPrecisionModeNames.BFloat16;
+    internal const string Mix16_32PrecisionMode = TensorPrecisionModeNames.Mix16_32;
+    internal const string LegacyFloat16ModelDType = "float16";
     internal const string CpuDevice = "cpu";
     internal const string CudaDevice = "cuda";
     internal const string AutoHyenaConvolution = "auto";
@@ -93,6 +94,12 @@ sealed record WikiTrainingConfiguration
     public string ModelArchitecture { get; init; } =
         ForgetMemoryV3Architecture;
 
+    /// <summary>
+    /// Numeric execution contract: float32, bfloat16, or mix16_32.
+    /// </summary>
+    public string? PrecisionMode { get; init; }
+
+    /// <summary>Legacy physical-storage setting. Use precisionMode.</summary>
     public string? ModelDType { get; init; }
 
     public bool TieWordEmbeddings { get; init; }
@@ -147,10 +154,6 @@ sealed record WikiTrainingConfiguration
     public float WarmupPercent { get; init; } = 20f;
 
     public float WeightDecay { get; init; } = 0.01f;
-
-    public bool AdamWUseBFloat16FirstMoment { get; init; }
-
-    public bool AdamWUseBFloat16SecondMoment { get; init; }
 
     public WikiOptimizationConfiguration? Optimization { get; init; }
 
@@ -349,10 +352,6 @@ sealed record WikiTrainingConfiguration
             GainShareGamma = optimizer.GainShareGamma,
             GainShareMinScale = optimizer.GainShareMinScale,
             GainShareMaxScale = optimizer.GainShareMaxScale,
-            AdamWUseBFloat16FirstMoment =
-                optimizer.AdamWUseBFloat16FirstMoment,
-            AdamWUseBFloat16SecondMoment =
-                optimizer.AdamWUseBFloat16SecondMoment,
             WarmupPercent = scheduler.WarmupPercent,
         };
     }
@@ -486,9 +485,13 @@ sealed record WikiTrainingConfiguration
         ValidatePositive(HyenaFilterWidth, nameof(HyenaFilterWidth));
         ValidatePositive(LogEveryBatches, nameof(LogEveryBatches));
         ValidatePositive(GraphUpdateSteps, nameof(GraphUpdateSteps));
-        ValidatePositive(
-            DatasetSampleEverySteps,
-            nameof(DatasetSampleEverySteps));
+        if (DatasetSampleEverySteps < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(DatasetSampleEverySteps),
+                DatasetSampleEverySteps,
+                "Dataset sample interval must be zero (disabled) or positive.");
+        }
         ValidatePositive(DatasetSamplePoolSize, nameof(DatasetSamplePoolSize));
         ValidatePositive(MaxNewTokens, nameof(MaxNewTokens));
 
@@ -527,9 +530,9 @@ sealed record WikiTrainingConfiguration
             && !IsArchitecture(TransformerArchitecture))
         {
             throw new ArgumentException(
-                "16-bit model dtypes are currently supported only for the " +
+                "16-bit precision modes are currently supported only for the " +
                 "Transformer and ForgetMemory architectures.",
-                nameof(ModelDType));
+                nameof(PrecisionMode));
         }
         _ = GetExecutionDevice();
         if (!float.IsFinite(ForgetMemoryRetentionMinimum)
@@ -730,45 +733,68 @@ sealed record WikiTrainingConfiguration
             || IsForgetMemoryV3Architecture()
             || IsForgetMemoryDrnArchitecture();
 
-    internal TensorDType? GetExplicitModelDType()
+    internal TensorPrecisionMode? GetExplicitPrecisionMode()
     {
-        if (ModelDType is null)
+        if (PrecisionMode is not null && ModelDType is not null)
+        {
+            throw new ArgumentException(
+                "precisionMode cannot be combined with the legacy " +
+                "modelDType setting.",
+                nameof(PrecisionMode));
+        }
+
+        string? configured = PrecisionMode ?? ModelDType;
+        if (configured is null)
             return null;
 
         if (string.Equals(
-            ModelDType,
-            Float16ModelDType,
+            configured,
+            Mix16_32PrecisionMode,
             StringComparison.OrdinalIgnoreCase))
         {
-            return TensorDType.Float16;
+            return TensorPrecisionMode.Mix16_32;
         }
         if (string.Equals(
-            ModelDType,
-            BFloat16ModelDType,
+            configured,
+            BFloat16PrecisionMode,
             StringComparison.OrdinalIgnoreCase))
         {
-            return TensorDType.BFloat16;
+            return TensorPrecisionMode.BFloat16;
         }
         if (string.Equals(
-            ModelDType,
-            Float32ModelDType,
+            configured,
+            Float32PrecisionMode,
             StringComparison.OrdinalIgnoreCase))
         {
-            return TensorDType.Float32;
+            return TensorPrecisionMode.Float32;
+        }
+        if (PrecisionMode is null
+            && string.Equals(
+                configured,
+                LegacyFloat16ModelDType,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return TensorPrecisionMode.Mix16_32;
         }
 
         throw new ArgumentException(
-            $"Unsupported modelDType '{ModelDType}'. Supported values are " +
-            $"'{BFloat16ModelDType}', '{Float16ModelDType}', and " +
-            $"'{Float32ModelDType}'.",
-            nameof(ModelDType));
+            $"Unsupported precision mode '{configured}'. Supported values " +
+            $"are '{Float32PrecisionMode}', '{BFloat16PrecisionMode}', and " +
+            $"'{Mix16_32PrecisionMode}'.",
+            PrecisionMode is null ? nameof(ModelDType) : nameof(PrecisionMode));
     }
 
-    internal TensorDType GetModelDType()
-        => GetExplicitModelDType()
+    internal TensorDType? GetExplicitModelDType()
+        => GetExplicitPrecisionMode()?.ToStorageDType();
+
+    internal TensorPrecisionMode GetPrecisionMode()
+        => GetExplicitPrecisionMode()
             ?? (IsForgetMemoryArchitecture()
-                ? TensorDType.Float16
-                : TensorDType.Float32);
+                ? TensorPrecisionMode.Mix16_32
+                : TensorPrecisionMode.Float32);
+
+    internal TensorDType GetModelDType()
+        => GetPrecisionMode().ToStorageDType();
 
     internal TensorDevice GetExecutionDevice()
     {

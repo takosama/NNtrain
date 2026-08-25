@@ -6,6 +6,8 @@ public sealed class WikiTrainingConfigurationTests
     [Theory]
     [InlineData("training.example.json")]
     [InlineData("training.transformer.json")]
+    [InlineData("training.forgetmemoryv2-wiki-jp.json")]
+    [InlineData("training.forgetmemorydrn-wiki-jp.json")]
     [InlineData("training.hyena-wiki-jp.json")]
     [InlineData("training.forgetscan-wiki-jp.json")]
     public void CheckedInWikiProfilesUseVersionTwoSchema(string fileName)
@@ -91,7 +93,7 @@ public sealed class WikiTrainingConfigurationTests
               "hiddenSize": 16,
               "layers": 1,
               "modelArchitecture": "hyena",
-              "modelDType": "float32",
+              "precisionMode": "float32",
               "forgetMemoryKeyWidth": 6,
               "forgetMemoryValueWidth": 7,
               "forgetMemoryRetentionMinimum": 0.25,
@@ -106,8 +108,6 @@ public sealed class WikiTrainingConfigurationTests
               "nekoMuonNewtonSchulzInterval": 7,
               "warmupPercent": 20,
               "weightDecay": 0.02,
-              "adamWUseBFloat16FirstMoment": true,
-              "adamWUseBFloat16SecondMoment": true,
               "seed": 9,
               "logEveryBatches": 2,
               "showLossGraph": true,
@@ -146,7 +146,7 @@ public sealed class WikiTrainingConfigurationTests
         Assert.Equal(16, configuration.HiddenSize);
         Assert.Equal(1, configuration.Layers);
         Assert.Equal("hyena", configuration.ModelArchitecture);
-        Assert.Equal("float32", configuration.ModelDType);
+        Assert.Equal("float32", configuration.PrecisionMode);
         Assert.Equal(TensorDType.Float32, configuration.GetModelDType());
         Assert.Equal(6, configuration.ForgetMemoryKeyWidth);
         Assert.Equal(7, configuration.ForgetMemoryValueWidth);
@@ -162,8 +162,6 @@ public sealed class WikiTrainingConfigurationTests
         Assert.Equal(0.002f, configuration.AuxiliaryLearningRate);
         Assert.Equal(7, configuration.NekoMuonNewtonSchulzInterval);
         Assert.Equal(20f, configuration.WarmupPercent);
-        Assert.True(configuration.AdamWUseBFloat16FirstMoment);
-        Assert.True(configuration.AdamWUseBFloat16SecondMoment);
         Assert.True(configuration.ShowLossGraph);
         Assert.Equal(100, configuration.GraphUpdateSteps);
         Assert.Equal(1000, configuration.DatasetSampleEverySteps);
@@ -180,6 +178,7 @@ public sealed class WikiTrainingConfigurationTests
             """
             {
               "task": "gpt_rin_wiki_jp",
+              "precisionMode": "bfloat16",
               "checkpoint": {
                 "directory": "artifacts/checkpoints",
                 "fileName": "latest.json",
@@ -192,9 +191,7 @@ public sealed class WikiTrainingConfigurationTests
                   "learningRate": 0.001,
                   "auxiliaryLearningRate": 0.002,
                   "weightDecay": 0.02,
-                  "nekoMuonNewtonSchulzInterval": 7,
-                  "adamWUseBFloat16FirstMoment": true,
-                  "adamWUseBFloat16SecondMoment": true
+                  "nekoMuonNewtonSchulzInterval": 7
                 },
                 "scheduler": {
                   "type": "warmupCosineProgress",
@@ -221,8 +218,9 @@ public sealed class WikiTrainingConfigurationTests
         Assert.Equal(0.002f, configuration.AuxiliaryLearningRate);
         Assert.Equal(0.02f, configuration.WeightDecay);
         Assert.Equal(7, configuration.NekoMuonNewtonSchulzInterval);
-        Assert.True(configuration.AdamWUseBFloat16FirstMoment);
-        Assert.True(configuration.AdamWUseBFloat16SecondMoment);
+        Assert.Equal(
+            TensorPrecisionMode.BFloat16,
+            configuration.GetPrecisionMode());
         Assert.Equal(25f, configuration.WarmupPercent);
     }
 
@@ -365,7 +363,10 @@ public sealed class WikiTrainingConfigurationTests
         configuration.Validate();
         Assert.Equal("forgetmemoryv3", configuration.ModelArchitecture);
         Assert.True(configuration.IsForgetMemoryV3Architecture());
-        Assert.Equal(TensorDType.Float16, configuration.GetModelDType());
+        Assert.Equal(TensorDType.BFloat16, configuration.GetModelDType());
+        Assert.Equal(
+            TensorPrecisionMode.Mix16_32,
+            configuration.GetPrecisionMode());
         Assert.Equal(
             HyenaConvolutionAlgorithm.Auto,
             configuration.GetHyenaConvolutionAlgorithm());
@@ -429,53 +430,72 @@ public sealed class WikiTrainingConfigurationTests
     }
 
     [Fact]
-    public void RejectsUnknownModelDType()
+    public void RejectsUnknownPrecisionMode()
     {
         var configuration = new WikiTrainingConfiguration
         {
-            ModelDType = "float8",
+            PrecisionMode = "float8",
         };
 
         ArgumentException exception = Assert.Throws<ArgumentException>(
             configuration.Validate);
 
-        Assert.Equal("ModelDType", exception.ParamName);
-        Assert.Contains("float16", exception.Message);
+        Assert.Equal("PrecisionMode", exception.ParamName);
+        Assert.Contains("mix16_32", exception.Message);
+        Assert.Contains("bfloat16", exception.Message);
         Assert.Contains("float32", exception.Message);
     }
 
     [Fact]
-    public void RejectsFloat16ForArchitectureWithoutFloat16Parameters()
+    public void RejectsMix16_32ForArchitectureWithout16BitParameters()
     {
         var configuration = new WikiTrainingConfiguration
         {
             ModelArchitecture = WikiTrainingConfiguration.HyenaArchitecture,
-            ModelDType = WikiTrainingConfiguration.Float16ModelDType,
+            PrecisionMode = WikiTrainingConfiguration.Mix16_32PrecisionMode,
         };
 
         ArgumentException exception = Assert.Throws<ArgumentException>(
             configuration.Validate);
 
-        Assert.Equal("ModelDType", exception.ParamName);
+        Assert.Equal("PrecisionMode", exception.ParamName);
     }
 
     [Theory]
-    [InlineData("float16", TensorDType.Float16)]
+    [InlineData("mix16_32", TensorDType.BFloat16)]
     [InlineData("bfloat16", TensorDType.BFloat16)]
-    public void Allows16BitTransformerModelDType(
-        string configuredDType,
+    [InlineData("float32", TensorDType.Float32)]
+    public void AllowsTransformerPrecisionModes(
+        string configuredMode,
         TensorDType expectedDType)
     {
         var configuration = new WikiTrainingConfiguration
         {
             ModelArchitecture =
                 WikiTrainingConfiguration.TransformerArchitecture,
-            ModelDType = configuredDType,
+            PrecisionMode = configuredMode,
         };
 
         configuration.Validate();
 
         Assert.Equal(expectedDType, configuration.GetModelDType());
+    }
+
+    [Fact]
+    public void LegacyFloat16ModelDTypeMapsToMix16_32()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            ModelArchitecture =
+                WikiTrainingConfiguration.TransformerArchitecture,
+            ModelDType = WikiTrainingConfiguration.LegacyFloat16ModelDType,
+        };
+
+        configuration.Validate();
+
+        Assert.Equal(
+            TensorPrecisionMode.Mix16_32,
+            configuration.GetPrecisionMode());
     }
 
     [Fact]
@@ -551,7 +571,10 @@ public sealed class WikiTrainingConfigurationTests
 
         Assert.True(configuration.IsForgetMemoryDrnArchitecture());
         Assert.True(configuration.IsForgetMemoryArchitecture());
-        Assert.Equal(TensorDType.Float16, configuration.GetModelDType());
+        Assert.Equal(TensorDType.BFloat16, configuration.GetModelDType());
+        Assert.Equal(
+            TensorPrecisionMode.Mix16_32,
+            configuration.GetPrecisionMode());
     }
 
     [Fact]

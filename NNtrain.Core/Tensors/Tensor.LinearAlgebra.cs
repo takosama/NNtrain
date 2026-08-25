@@ -87,6 +87,14 @@ partial class Tensor
                 throw ShapeMismatch(this, other, "MatMul");
             int n = other._shape[1];
 
+            if (ExecutionDevice == TensorDevice.Cuda
+                && DType == other.DType
+                && (DType == TensorDType.Float32
+                    || DType == TensorDType.BFloat16))
+            {
+                return MatMulCuda(other, batch: 1, m, k, n, [m, n]);
+            }
+
             float[] y = new float[m * n];
 
             void ForwardRow(int r)
@@ -168,6 +176,58 @@ partial class Tensor
         }
 
         throw new NotSupportedException("MatMul supports rank1@rank1, rank2@rank1, rank2@rank2");
+    }
+
+    private Tensor MatMulCuda(
+        Tensor other,
+        int batch,
+        int m,
+        int k,
+        int n,
+        int[] outputShape)
+    {
+        bool bfloat16 = DType == TensorDType.BFloat16;
+        Tensor result;
+        if (bfloat16)
+        {
+            var output = TensorCudaKernels.MatMulForwardBFloat16Resident(
+                this, other, batch, m, k, n);
+            result = FromCudaResult(
+                output,
+                CudaDeviceIndex,
+                outputShape,
+                [this, other],
+                TensorDType.BFloat16);
+        }
+        else
+        {
+            var output = TensorCudaKernels.MatMulForwardResident(
+                this, other, batch, m, k, n);
+            result = FromCudaResult(
+                output,
+                CudaDeviceIndex,
+                outputShape,
+                [this, other],
+                TensorDType.Float32);
+        }
+
+        if (AutogradContext.IsRecordingEnabled)
+        {
+            result.Node.BackwardAction = () =>
+            {
+                if (bfloat16)
+                {
+                    TensorCudaKernels.MatMulBackwardBFloat16Resident(
+                        this, other, result, batch, m, k, n);
+                }
+                else
+                {
+                    TensorCudaKernels.MatMulBackwardResident(
+                        this, other, result, batch, m, k, n);
+                }
+            };
+        }
+        return result;
     }
 
     /// <summary>

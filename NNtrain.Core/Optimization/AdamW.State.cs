@@ -272,5 +272,11 @@ public partial class AdamW
             get;
             set;
         }
+        internal CudaOptimizerKernels.AdamWBFloat16ResidentState?
+            CudaBFloat16State
+        {
+            get;
+            set;
+        }
     }
 }

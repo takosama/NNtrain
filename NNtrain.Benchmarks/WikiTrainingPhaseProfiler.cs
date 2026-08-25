@@ -8,7 +8,7 @@ internal static class WikiTrainingPhaseProfiler
 {
     internal static void Run(
         string configurationPath,
-        TensorDType? dtypeOverride = null,
+        TensorPrecisionMode? precisionModeOverride = null,
         bool? nativeFloat16Override = null,
         int? warmupStepsOverride = null,
         int? measuredStepsOverride = null)
@@ -32,16 +32,24 @@ internal static class WikiTrainingPhaseProfiler
             "forgetMemoryRetentionMaximum");
         float dropout = ReadSingle(root, "dropout");
         float initializationScale = ReadSingle(root, "initializationScale");
-        float learningRate = ReadSingle(root, "learningRate");
+        JsonElement optimizerConfiguration =
+            root.TryGetProperty("optimization", out JsonElement optimization)
+                ? optimization.GetProperty("optimizer")
+                : root;
+        float learningRate = ReadSingle(
+            optimizerConfiguration, "learningRate");
         float auxiliaryLearningRate = ReadSingle(
-            root,
+            optimizerConfiguration,
             "auxiliaryLearningRate");
         int newtonSchulzInterval = ReadInt(
-            root,
+            optimizerConfiguration,
             "nekoMuonNewtonSchulzInterval");
-        float weightDecay = ReadSingle(root, "weightDecay");
+        float weightDecay = ReadSingle(
+            optimizerConfiguration, "weightDecay");
         int seed = ReadInt(root, "seed");
-        TensorDType dtype = dtypeOverride ?? ReadDType(root);
+        TensorPrecisionMode precisionMode =
+            precisionModeOverride ?? PrecisionModeConfiguration.Read(root);
+        TensorDType dtype = precisionMode.ToStorageDType();
 
         Tensor.SimdEnabled = root.GetProperty("useSimd").GetBoolean();
         if (nativeFloat16Override.HasValue)
@@ -63,6 +71,7 @@ internal static class WikiTrainingPhaseProfiler
             initializationScale,
             dropout,
             dtype);
+        model.SetPrecisionMode(precisionMode);
         var neko = new NekoMuon(
             model.HiddenWeightParameters,
             new NekoMuonOptions
@@ -79,6 +88,10 @@ internal static class WikiTrainingPhaseProfiler
                 Beta1 = 0.9f,
                 Beta2 = 0.95f,
                 WeightDecay = weightDecay,
+                UseBFloat16FirstMoment =
+                    precisionMode == TensorPrecisionMode.BFloat16,
+                UseBFloat16SecondMoment =
+                    precisionMode == TensorPrecisionMode.BFloat16,
             });
         var random = new Random(seed ^ 0x5A17);
         int[] tokens = Enumerable.Range(0, checked(batch * sequence))
@@ -92,7 +105,8 @@ internal static class WikiTrainingPhaseProfiler
         Console.WriteLine(
             $"model = batch {batch}, sequence {sequence}, width {width}, " +
             $"hidden {hidden}, layers {layers}, vocabulary {vocabulary}, " +
-            $"key/value {keyWidth}/{valueWidth}, dtype {dtype}, " +
+            $"key/value {keyWidth}/{valueWidth}, precision " +
+            $"{TensorPrecisionModeNames.Format(precisionMode)}, " +
             $"native-f16c {Tensor.IsFloat16NativeAccelerated}");
         Console.WriteLine(
             $"parameters = {model.Parameters().Sum(parameter => (long)parameter.T.Numel):N0}, " +
@@ -275,25 +289,6 @@ internal static class WikiTrainingPhaseProfiler
 
     private static float ReadSingle(JsonElement root, string name)
         => root.GetProperty(name).GetSingle();
-
-    private static TensorDType ReadDType(JsonElement root)
-    {
-        if (!root.TryGetProperty("modelDType", out JsonElement element)
-            || element.ValueKind == JsonValueKind.Null)
-        {
-            return TensorDType.Float16;
-        }
-
-        return element.GetString()?.ToLowerInvariant() switch
-        {
-            "float16" or "half" => TensorDType.Float16,
-            "float32" => TensorDType.Float32,
-            string value => throw new InvalidDataException(
-                $"Unsupported modelDType '{value}'."),
-            _ => throw new InvalidDataException(
-                "modelDType must be a string."),
-        };
-    }
 
     private readonly record struct PhaseTimes(
         double ZeroGrad,

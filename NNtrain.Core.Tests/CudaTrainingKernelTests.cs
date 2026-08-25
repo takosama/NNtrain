@@ -100,7 +100,77 @@ public sealed class CudaTrainingKernelTests
             var cpuLoss = Loss(TensorDevice.Cpu);
             var cudaLoss = Loss(TensorDevice.Cuda);
             Assert.InRange(MathF.Abs(cpuLoss.Loss - cudaLoss.Loss), 0f, 2e-5f);
-            AssertClose(cpuLoss.Gradient, cudaLoss.Gradient, 2e-5f);
+            // BF16 mode stores dLogits physically as BF16 so the 11.5k-wide
+            // language-model head does not retain a second FP32 logits-sized
+            // buffer. Validate BF16 quantization error, not FP32 identity.
+            AssertClose(cpuLoss.Gradient, cudaLoss.Gradient, 1e-3f);
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previous;
+            Tensor.CudaDeviceIndices = previousIndices;
+        }
+    }
+
+    [Fact]
+    public void FusedBFloat16ResidualDropoutLayerNormMatchesCpu()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        const int rows = 1031;
+        const int columns = 384;
+        float[] residualValues = Enumerable.Range(0, rows * columns)
+            .Select(index => (index % 53 - 26) * 0.007f)
+            .ToArray();
+        float[] branchValues = Enumerable.Range(0, rows * columns)
+            .Select(index => (index % 41 - 20) * 0.009f)
+            .ToArray();
+        float[] gammaValues = Enumerable.Range(0, columns)
+            .Select(index => 0.8f + (index % 17) * 0.02f)
+            .ToArray();
+        float[] betaValues = Enumerable.Range(0, columns)
+            .Select(index => (index % 13 - 6) * 0.01f)
+            .ToArray();
+        float[] seedGradient = Enumerable.Range(0, rows * columns)
+            .Select(index => (index % 37 - 18) * 0.005f)
+            .ToArray();
+
+        TensorDevice previous = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            (float[] Output, float[] Residual, float[] Branch,
+                float[] Gamma, float[] Beta) Run(TensorDevice device)
+            {
+                Tensor.ExecutionDevice = device;
+                Tensor.CudaDeviceIndices = [0];
+                var residual = new Tensor(
+                    residualValues, [rows, columns],
+                    dtype: TensorDType.BFloat16);
+                var branch = new Tensor(
+                    branchValues, [rows, columns],
+                    dtype: TensorDType.BFloat16);
+                var gamma = new Tensor(
+                    gammaValues, [columns], dtype: TensorDType.BFloat16);
+                var beta = new Tensor(
+                    betaValues, [columns], dtype: TensorDType.BFloat16);
+                Tensor output = residual.AddDropoutLayerNormLastDim(
+                    branch, gamma, beta, 0.25f, new Random(71));
+                output.Backward(seedGradient);
+                return (
+                    output.Data.ToArray(), residual.Grad.ToArray(),
+                    branch.Grad.ToArray(), gamma.Grad.ToArray(),
+                    beta.Grad.ToArray());
+            }
+
+            var cpu = Run(TensorDevice.Cpu);
+            var cuda = Run(TensorDevice.Cuda);
+            AssertClose(cpu.Output, cuda.Output, 2e-4f);
+            AssertClose(cpu.Residual, cuda.Residual, 2e-4f);
+            AssertClose(cpu.Branch, cuda.Branch, 3e-4f);
+            AssertClose(cpu.Gamma, cuda.Gamma, 8e-4f);
+            AssertClose(cpu.Beta, cuda.Beta, 8e-4f);
         }
         finally
         {
@@ -166,6 +236,72 @@ public sealed class CudaTrainingKernelTests
             }
 
             AssertClose(Neko(TensorDevice.Cpu), Neko(TensorDevice.Cuda), 2e-4f);
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previous;
+            Tensor.CudaDeviceIndices = previousIndices;
+        }
+    }
+
+    [Fact]
+    public void NekoMuonBlockReducedFp32StatisticsMatchCpuForLargeTensor()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        const int rows = 256;
+        const int columns = 256;
+        float[] values = Enumerable.Range(0, rows * columns)
+            .Select(index => (index % 47 - 23) * 0.001f)
+            .ToArray();
+        float[] firstGradient = Enumerable.Range(0, rows * columns)
+            .Select(index => (index % 31 - 15) * 0.002f)
+            .ToArray();
+        float[] secondGradient = Enumerable.Range(0, rows * columns)
+            .Select(index => (index % 43 - 21) * 0.0015f)
+            .ToArray();
+        TensorDevice previous = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            (float[] Data, float Confidence) Run(TensorDevice device)
+            {
+                Tensor.ExecutionDevice = device;
+                Tensor.CudaDeviceIndices = [0];
+                var parameter = new Parameter(
+                    values,
+                    [rows, columns],
+                    "large_hidden",
+                    WeightDecayPolicy.Exclude,
+                    TensorDType.BFloat16);
+                var optimizer = new NekoMuon(
+                    [parameter],
+                    new NekoMuonOptions
+                    {
+                        LearningRate = 0.01f,
+                        WeightDecay = 0f,
+                        NewtonSchulzInterval = 100,
+                        MaxNewtonSchulzSteps = 2,
+                    });
+                parameter.T.Backward(firstGradient);
+                optimizer.step();
+                optimizer.zero_grad();
+                parameter.T.Backward(secondGradient);
+                optimizer.step();
+                NekoMuonState state = optimizer.CaptureState();
+                return (
+                    parameter.T.Data.ToArray(),
+                    state.ParameterStates[0].Confidence);
+            }
+
+            var cpu = Run(TensorDevice.Cpu);
+            var cuda = Run(TensorDevice.Cuda);
+            AssertClose(cpu.Data, cuda.Data, 2e-4f);
+            Assert.InRange(
+                MathF.Abs(cpu.Confidence - cuda.Confidence),
+                0f,
+                2e-5f);
         }
         finally
         {

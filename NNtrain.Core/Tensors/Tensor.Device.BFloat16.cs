@@ -1,12 +1,9 @@
-using ILGPU;
-using ILGPU.Runtime;
-using ILGPU.Runtime.Cuda;
 
 namespace NNtrain;
 
 public partial class Tensor
 {
-    internal MemoryBuffer1D<ushort, Stride1D.Dense> EnsureCudaBFloat16Buffer(
+    internal NativeCudaBuffer<ushort> EnsureCudaBFloat16Buffer(
         int deviceIndex = -1)
     {
         if (DType != TensorDType.BFloat16)
@@ -15,7 +12,7 @@ public partial class Tensor
                 "A physical CUDA bfloat16 buffer requires BFloat16 dtype.");
         }
         int resolvedDeviceIndex = ResolveCudaDeviceIndex(deviceIndex);
-        CudaAccelerator accelerator =
+        NativeCudaDevice accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(resolvedDeviceIndex);
         if (!_hostDataCurrent
             && !_cudaBFloat16Buffers.ContainsKey(resolvedDeviceIndex))
@@ -52,7 +49,7 @@ public partial class Tensor
     }
 
     internal void AdoptCudaBFloat16Buffer(
-        MemoryBuffer1D<ushort, Stride1D.Dense> buffer,
+        NativeCudaBuffer<ushort> buffer,
         int deviceIndex)
     {
         ArgumentNullException.ThrowIfNull(buffer);
@@ -77,29 +74,109 @@ public partial class Tensor
         }
     }
 
-    internal static MemoryBuffer1D<ushort, Stride1D.Dense>
+    internal void AdoptCudaBFloat16GradientBuffer(
+        NativeCudaBuffer<ushort> buffer,
+        int deviceIndex)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+        if (buffer.Device.Index != deviceIndex || buffer.Length != Numel)
+        {
+            throw new ArgumentException(
+                "CUDA BF16 gradient must match the tensor and device.",
+                nameof(buffer));
+        }
+        lock (_deviceSync)
+        {
+            if (_cudaGradientBuffers.Remove(
+                deviceIndex, out GradientDeviceBuffer? previousFloat))
+            {
+                previousFloat.Dispose();
+            }
+            if (_cudaBFloat16GradientBuffers.Remove(
+                deviceIndex,
+                out BFloat16GradientDeviceBuffer? previousBFloat16))
+            {
+                previousBFloat16.ReturnToPool();
+            }
+            unchecked
+            {
+                _gradientVersion++;
+            }
+            _cudaBFloat16GradientBuffers[deviceIndex] =
+                new BFloat16GradientDeviceBuffer(
+                    buffer, _gradientVersion, deviceIndex);
+            _hostGradientCurrent = false;
+            _device = TensorDevice.Cuda;
+            _cudaDeviceIndex = deviceIndex;
+        }
+    }
+
+    internal bool TryGetCudaBFloat16GradientBuffer(
+        int deviceIndex,
+        out NativeCudaBuffer<ushort>? buffer)
+    {
+        lock (_deviceSync)
+        {
+            if (_cudaBFloat16GradientBuffers.TryGetValue(
+                    deviceIndex,
+                    out BFloat16GradientDeviceBuffer? encoded)
+                && encoded.Version == _gradientVersion)
+            {
+                buffer = encoded.Buffer;
+                return true;
+            }
+            buffer = null;
+            return false;
+        }
+    }
+
+    internal static NativeCudaBuffer<ushort>
         RentCudaBFloat16Buffer(int deviceIndex, int length)
         => CudaBFloat16BufferPool.Rent(deviceIndex, length);
 
     internal static void ReturnCudaBFloat16Buffer(
-        CudaAccelerator accelerator,
-        MemoryBuffer1D<ushort, Stride1D.Dense> buffer)
+        NativeCudaDevice accelerator,
+        NativeCudaBuffer<ushort> buffer)
         => CudaBFloat16BufferPool.Return(accelerator, buffer);
 
     private sealed class BFloat16DeviceBuffer : IDisposable
     {
         private int _disposed;
-        private readonly CudaAccelerator _accelerator;
+        private readonly NativeCudaDevice _accelerator;
 
         internal BFloat16DeviceBuffer(
-            MemoryBuffer1D<ushort, Stride1D.Dense> buffer,
+            NativeCudaBuffer<ushort> buffer,
             int deviceIndex)
         {
             Buffer = buffer;
             _accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
         }
 
-        internal MemoryBuffer1D<ushort, Stride1D.Dense> Buffer { get; }
+        internal NativeCudaBuffer<ushort> Buffer { get; }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                Buffer.Dispose();
+        }
+
+        internal void ReturnToPool()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                CudaBFloat16BufferPool.Return(_accelerator, Buffer);
+        }
+    }
+
+    private sealed class BFloat16GradientDeviceBuffer(
+        NativeCudaBuffer<ushort> buffer,
+        long version,
+        int deviceIndex) : IDisposable
+    {
+        private int _disposed;
+        private readonly NativeCudaDevice _accelerator =
+            ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+        internal NativeCudaBuffer<ushort> Buffer { get; } = buffer;
+        internal long Version { get; set; } = version;
 
         public void Dispose()
         {
@@ -116,66 +193,46 @@ public partial class Tensor
 
     private static class CudaBFloat16BufferPool
     {
-        private const long MinimumCachedBytesPerDevice = 256L * 1024 * 1024;
-        private const int CacheMemoryPercent = 12;
-        private const long MinimumReservedFreeBytes = 1536L * 1024 * 1024;
-        private const int ReservedFreeMemoryPercent = 25;
         private const int MaximumBuffersPerSize = 64;
-        private static readonly object Sync = new();
-        private static readonly Dictionary<
-            (CudaAccelerator Accelerator, int Length),
-            Stack<MemoryBuffer1D<ushort, Stride1D.Dense>>> Buffers = [];
-        private static readonly HashSet<MemoryBuffer1D<ushort, Stride1D.Dense>>
-            PooledBuffers = [];
-        private static readonly Dictionary<CudaAccelerator, long> CachedBytes = [];
+        private static readonly System.Collections.Concurrent
+            .ConcurrentDictionary<NativeCudaDevice, PoolState> Pools = new();
 
-        internal static MemoryBuffer1D<ushort, Stride1D.Dense> Rent(
+        private sealed class PoolState
+        {
+            internal object Sync { get; } = new();
+            internal Dictionary<int, Stack<NativeCudaBuffer<ushort>>> Buffers
+                { get; } = [];
+            internal HashSet<NativeCudaBuffer<ushort>> PooledBuffers
+                { get; } = [];
+        }
+
+        internal static NativeCudaBuffer<ushort> Rent(
             int deviceIndex,
             int length)
         {
-            CudaAccelerator accelerator =
+            NativeCudaDevice accelerator =
                 ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
-            var dispose = new List<MemoryBuffer1D<ushort, Stride1D.Dense>>();
-            lock (Sync)
+            PoolState state = Pools.GetOrAdd(
+                accelerator, static _ => new PoolState());
+            lock (state.Sync)
             {
-                var key = (accelerator, length);
-                if (Buffers.TryGetValue(key, out var bucket)
+                if (state.Buffers.TryGetValue(length, out var bucket)
                     && bucket.Count > 0)
                 {
-                    MemoryBuffer1D<ushort, Stride1D.Dense> buffer = bucket.Pop();
-                    PooledBuffers.Remove(buffer);
-                    CachedBytes[accelerator] = CachedBytes.GetValueOrDefault(accelerator)
-                        - checked((long)length * sizeof(ushort));
+                    NativeCudaBuffer<ushort> buffer = bucket.Pop();
+                    state.PooledBuffers.Remove(buffer);
+                    CudaTransientBufferBudget.Release(
+                        accelerator,
+                        checked((long)length * sizeof(ushort)));
                     return buffer;
                 }
-
-                long requestedBytes = checked((long)length * sizeof(ushort));
-                long cachedBytes = CachedBytes.GetValueOrDefault(accelerator);
-                long capacityTargetBytes = Math.Max(
-                    0L,
-                    GetCacheBudget(accelerator) - requestedBytes);
-                long freeBytes = accelerator.GetFreeMemory();
-                long bytesNeededForReserve = Math.Max(
-                    0L,
-                    checked(GetReservedFreeBytes(accelerator)
-                        + requestedBytes - freeBytes));
-                long reserveTargetBytes = Math.Max(
-                    0L,
-                    cachedBytes - bytesNeededForReserve);
-                TrimToBytes(
-                    accelerator,
-                    Math.Min(capacityTargetBytes, reserveTargetBytes),
-                    dispose);
             }
-
-            foreach (MemoryBuffer1D<ushort, Stride1D.Dense> buffer in dispose)
-                buffer.Dispose();
 
             try
             {
                 return accelerator.Allocate1D<ushort>(length);
             }
-            catch (CudaException exception) when (IsOutOfMemory(exception))
+            catch (NativeCudaException exception) when (IsOutOfMemory(exception))
             {
                 accelerator.Synchronize();
                 CudaFloatBufferPool.Clear(accelerator);
@@ -186,107 +243,63 @@ public partial class Tensor
         }
 
         internal static void Return(
-            CudaAccelerator accelerator,
-            MemoryBuffer1D<ushort, Stride1D.Dense> buffer)
+            NativeCudaDevice accelerator,
+            NativeCudaBuffer<ushort> buffer)
         {
             int length = checked((int)buffer.Length);
             long bytes = checked((long)length * sizeof(ushort));
-            lock (Sync)
+            PoolState state = Pools.GetOrAdd(
+                accelerator, static _ => new PoolState());
+            lock (state.Sync)
             {
-                if (!PooledBuffers.Add(buffer))
+                if (!state.PooledBuffers.Add(buffer))
                     return;
-                var key = (accelerator, length);
-                if (!Buffers.TryGetValue(key, out var bucket))
+                if (!state.Buffers.TryGetValue(length, out var bucket))
                 {
                     bucket = [];
-                    Buffers[key] = bucket;
+                    state.Buffers[length] = bucket;
                 }
                 if (bucket.Count < MaximumBuffersPerSize
-                    && CachedBytes.GetValueOrDefault(accelerator) + bytes
-                        <= GetCacheBudget(accelerator))
+                    && CudaTransientBufferBudget.TryReserve(
+                        accelerator, bytes))
                 {
                     bucket.Push(buffer);
-                    CachedBytes[accelerator] =
-                        CachedBytes.GetValueOrDefault(accelerator) + bytes;
                     return;
                 }
-                PooledBuffers.Remove(buffer);
+                state.PooledBuffers.Remove(buffer);
             }
             buffer.Dispose();
         }
 
-        private static long GetCacheBudget(CudaAccelerator accelerator)
-            => Math.Max(
-                MinimumCachedBytesPerDevice,
-                checked(accelerator.MemorySize * CacheMemoryPercent / 100));
-
-        private static long GetReservedFreeBytes(CudaAccelerator accelerator)
-            => Math.Min(
-                accelerator.MemorySize / 3,
-                Math.Max(
-                    MinimumReservedFreeBytes,
-                    checked(accelerator.MemorySize
-                        * ReservedFreeMemoryPercent / 100)));
-
-        private static bool IsOutOfMemory(CudaException exception)
-            => string.Equals(
-                    exception.Error,
-                    nameof(CudaError.CUDA_ERROR_OUT_OF_MEMORY),
-                    StringComparison.Ordinal)
+        private static bool IsOutOfMemory(NativeCudaException exception)
+            => exception.Status == 2
                 || exception.Message.Contains(
                     "out of memory",
                     StringComparison.OrdinalIgnoreCase);
 
-        private static void TrimToBytes(
-            CudaAccelerator accelerator,
-            long targetBytes,
-            List<MemoryBuffer1D<ushort, Stride1D.Dense>> dispose)
+        internal static void Clear(NativeCudaDevice accelerator)
         {
-            long cached = CachedBytes.GetValueOrDefault(accelerator);
-            if (cached <= targetBytes)
+            var dispose = new List<NativeCudaBuffer<ushort>>();
+            if (!Pools.TryGetValue(accelerator, out PoolState? state))
                 return;
-            var keys = Buffers.Keys
-                .Where(key => ReferenceEquals(key.Accelerator, accelerator))
-                .ToArray();
-            foreach (var key in keys)
+            long releasedBytes = 0;
+            lock (state.Sync)
             {
-                Stack<MemoryBuffer1D<ushort, Stride1D.Dense>> bucket =
-                    Buffers[key];
-                while (bucket.Count > 0 && cached > targetBytes)
+                foreach ((int length, Stack<NativeCudaBuffer<ushort>> bucket)
+                    in state.Buffers)
                 {
-                    MemoryBuffer1D<ushort, Stride1D.Dense> buffer = bucket.Pop();
-                    PooledBuffers.Remove(buffer);
-                    cached -= checked((long)key.Length * sizeof(ushort));
-                    dispose.Add(buffer);
-                }
-                if (bucket.Count == 0)
-                    Buffers.Remove(key);
-                if (cached <= targetBytes)
-                    break;
-            }
-            CachedBytes[accelerator] = cached;
-        }
-
-        internal static void Clear(CudaAccelerator accelerator)
-        {
-            var dispose = new List<MemoryBuffer1D<ushort, Stride1D.Dense>>();
-            lock (Sync)
-            {
-                var keys = Buffers.Keys
-                    .Where(key => ReferenceEquals(key.Accelerator, accelerator))
-                    .ToArray();
-                foreach (var key in keys)
-                {
-                    while (Buffers[key].Count > 0)
+                    while (bucket.Count > 0)
                     {
-                        var buffer = Buffers[key].Pop();
-                        PooledBuffers.Remove(buffer);
+                        var buffer = bucket.Pop();
+                        state.PooledBuffers.Remove(buffer);
+                        releasedBytes += checked(
+                            (long)length * sizeof(ushort));
                         dispose.Add(buffer);
                     }
-                    Buffers.Remove(key);
                 }
-                CachedBytes.Remove(accelerator);
+                state.Buffers.Clear();
             }
+            CudaTransientBufferBudget.Release(accelerator, releasedBytes);
             foreach (var buffer in dispose)
                 buffer.Dispose();
         }

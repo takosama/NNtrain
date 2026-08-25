@@ -23,8 +23,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ILGPU" Version="1.5.3" />
-    <PackageReference Include="ILGPU.Algorithms" Version="1.5.3" />
     <PackageReference Include="NtvLibs.cuda12.cublas64_12.runtime.win-x64" Version="12.8.1" />
     <PackageReference Include="NtvLibs.cuda12.cublasLt64_12.runtime.win-x64" Version="12.8.1" />
   </ItemGroup>

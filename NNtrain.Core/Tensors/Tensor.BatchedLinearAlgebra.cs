@@ -18,6 +18,14 @@ partial class Tensor
             throw ShapeMismatch(this, other, "BatchedMatMul");
         int n = other._shape[2];
 
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType == other.DType
+            && (DType == TensorDType.Float32
+                || DType == TensorDType.BFloat16))
+        {
+            return MatMulCuda(other, batch, m, k, n, [batch, m, n]);
+        }
+
         float[] output = new float[checked(batch * m * n)];
 
         void ForwardBatch(int batchIndex)

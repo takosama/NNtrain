@@ -46,4 +46,18 @@ class LayerNorm : Module
             _eps);
     }
 
+    public Tensor ForwardResidualDropout(
+        Tensor residual,
+        Tensor branch,
+        Dropout dropout)
+    {
+        ArgumentNullException.ThrowIfNull(dropout);
+        return dropout.AddResidualLayerNorm(
+            residual,
+            branch,
+            Gamma.T,
+            Beta.T,
+            _eps);
+    }
+
 }

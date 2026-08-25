@@ -40,8 +40,8 @@ parameters therefore resolve buffers from the worker context during a kernel
 and from Tensor identity during host synchronization.
 
 CPU and CUDA implementations stay in `NNtrain.Core` but are reached through
-the internal backend boundary. ILGPU types and resident-buffer caches must not
-leak into the public Tensor or Module contracts.
+the internal backend boundary. Native CUDA handles and resident-buffer caches
+must not leak into the public Tensor or Module contracts.
 
 ## Model and optimizer contracts
 

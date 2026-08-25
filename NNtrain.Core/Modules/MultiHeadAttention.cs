@@ -64,4 +64,66 @@ class MultiHeadAttention : Module
         return Wo.ForwardBatch(attended);
     }
 
+    internal CudaAttentionKvCache CreateIncrementalCache(int capacity)
+        => new(capacity, DModel);
+
+    internal Tensor ForwardIncremental(
+        Tensor x,
+        CudaAttentionKvCache cache,
+        int position)
+    {
+        ArgumentNullException.ThrowIfNull(x);
+        ArgumentNullException.ThrowIfNull(cache);
+        Tensor projected = Qkv.ForwardBatch(x);
+        Tensor attended = projected.FusedMultiHeadAttentionIncremental(
+            cache.Key,
+            cache.Value,
+            position,
+            cache.Capacity,
+            DModel,
+            NumHeads);
+        return Wo.ForwardBatch(attended);
+    }
+
+    internal Tensor ForwardPrefill(
+        Tensor x,
+        CudaAttentionKvCache cache,
+        int sequence)
+    {
+        ArgumentNullException.ThrowIfNull(x);
+        ArgumentNullException.ThrowIfNull(cache);
+        Tensor projected = Qkv.ForwardBatch(x);
+        projected.PrefillMultiHeadAttentionCache(
+            cache.Key,
+            cache.Value,
+            sequence,
+            cache.Capacity,
+            DModel);
+        return Wo.ForwardBatch(
+            projected.FusedMultiHeadAttention(NumHeads, _causal));
+    }
+
+}
+
+internal sealed class CudaAttentionKvCache : IDisposable
+{
+    internal CudaAttentionKvCache(int capacity, int modelWidth)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(modelWidth);
+        Capacity = capacity;
+        NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+        Key = accelerator.Allocate1D<ushort>(checked(capacity * modelWidth));
+        Value = accelerator.Allocate1D<ushort>(checked(capacity * modelWidth));
+    }
+
+    internal int Capacity { get; }
+    internal NativeCudaBuffer<ushort> Key { get; }
+    internal NativeCudaBuffer<ushort> Value { get; }
+
+    public void Dispose()
+    {
+        Key.Dispose();
+        Value.Dispose();
+    }
 }

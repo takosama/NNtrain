@@ -4,13 +4,17 @@ NNtrain is a small neural-network training implementation for studying Tensor
 operations, reverse-mode automatic differentiation, Transformer modules,
 optimizers, dataset boundaries, and training orchestration in C#/.NET 10.
 
-## Float16 and native F16C dense kernels
+## Precision modes and native F16C dense kernels
 
-`ForgetMemoryV2Gpt` and `ForgetMemoryV3Gpt` use `TensorDType.Float16` by default. Tensor values and
-activations are physically stored as IEEE binary16; gradients, reductions,
-and optimizer master weights remain Float32. Existing models can opt into
-Float32 explicitly with `dtype: TensorDType.Float32` or
-`"modelDType": "float32"`.
+Training configurations expose exactly three precision modes through
+`precisionMode`: `float32`, `bfloat16`, and `mix16_32`. Both 16-bit modes keep
+parameters and activations in physical BF16 storage. `bfloat16` also keeps the
+AdamW moments in BF16. `mix16_32` keeps GEMM accumulation, reductions,
+normalization statistics, losses, gradients, optimizer state, and master
+weights in Float32. `ForgetMemoryV2Gpt` and `ForgetMemoryV3Gpt` use this mixed
+contract by default. The lower-level `TensorDType.Float16` remains available
+for legacy/raw IEEE binary16 tensor operations, but is not a configuration
+mode.
 
 On Windows x64 CPUs with AVX2 and F16C, the optional native dense-kernel
 payload accelerates Float16 `Linear.ForwardBatch` forward and backward while
@@ -268,8 +272,8 @@ scheduler, and exact restart position; its SafeTensors sidecars and timestamped
 snapshots are written to the same directory. Legacy checkpoint files remain
 readable and are written in the current format on the next save.
 
-With no arguments the CLI selects `training.wiki-jp.json` when it is present,
-then falls back to `training.example.json`. The selected absolute path and the
+With no arguments the CLI selects a legacy `training.wiki-jp.json` when it is
+present, then falls back to `training.example.json`. The selected absolute path and the
 effective batch/model settings are printed before training. The GPT run
 trains or loads the BPE tokenizer, reads bounded Wikipedia data, trains the
 causal language model, writes the loss graph and checkpoint, and generates a
@@ -319,14 +323,14 @@ and saved beside the configuration as `*.best-model.json`.
 
 ## Train Japanese Wikipedia GPT
 
-`training.wiki-jp.json` reads the sharded Parquet files under `data/wiki`,
+`training.example.json` reads the sharded Parquet files under `data/wiki`,
 trains a reversible UTF-8 byte-level BPE tokenizer when one does not already
 exist, streams the corpus, and trains the decoder-only
 `GptRinWikiJp` model:
 
 ```powershell
 dotnet run --configuration Release --project NNtrain.Cli -- `
-  --config training.wiki-jp.json
+  --config training.example.json
 ```
 
 To train the attention-free Hyena variant with the same Wikipedia pipeline:
@@ -359,7 +363,7 @@ dotnet run --configuration Release --project NNtrain.Cli -- `
 ```
 
 The supplied ForgetMemoryV2 profile selects `device: "cuda"`,
-`deviceIndices: [0, 1]`, and `modelDType: "bfloat16"`. Dense rows and the batch
+`deviceIndices: [0, 1]`, and `precisionMode: "bfloat16"`. Dense rows and the batch
 dimension of the stateful ForgetMemoryV2 recurrence are sharded across every
 listed GPU; their backward parameter gradients are reduced before the
 optimizer step.
@@ -367,7 +371,9 @@ Use a single-element array such as `[1]` to select only one adapter.
 ForgetMemoryV2 recurrence,
 dense projections, layer normalization, embeddings, dropout/residual,
 cross-entropy, AdamW updates, and the compute-heavy NekoMuon phases run through
-CUDA (ILGPU, so a separate CUDA Toolkit installation is not required).
+the native CUDA/cuBLASLt backend. Tensor Core eligible GEMMs and FlashAttention
+use BF16 Tensor Core kernels; the checked-in native runtime payload is loaded
+directly rather than through a managed GPU compiler.
 Parameters and activations use two-byte BF16 storage while arithmetic and
 gradient accumulation use Float32. Immutable tensor compute views are cached
 on each adapter and invalidated only when their tensor is updated. In
@@ -451,29 +457,26 @@ To profile one complete training step with the dimensions and optimizer read
 directly from a training JSON file, run:
 
 ```powershell
-dotnet run -c Release --project NNtrain.Benchmarks -- --profile-wiki training.wiki-jp.json
+dotnet run -c Release --project NNtrain.Benchmarks -- --profile-wiki training.forgetmemoryv2-wiki-jp.json
 ```
 
 To isolate AdamW with the exact model shape and optimizer settings from the
 same JSON, run:
 
 ```powershell
-dotnet run -c Release --project NNtrain.Benchmarks -- --profile-adamw training.wiki-jp.json
+dotnet run -c Release --project NNtrain.Benchmarks -- --profile-adamw training.forgetmemoryv2-wiki-jp.json
 dotnet run -c Release --project NNtrain.Benchmarks -- --filter *AdamWJsonBenchmarks*
 ```
 
-`adamWUseBFloat16FirstMoment` and
-`adamWUseBFloat16SecondMoment` independently store AdamW moment buffers as
-bfloat16 between steps. The update is expanded to float32 in the AVX2/FMA
-kernel and checkpoints are still serialized as float32, so saved-state format
-and restore behavior remain portable. These options are off by default because
-they trade moment precision for lower memory traffic. The Wikipedia JSON turns
-both on: for its 10,551,680 parameter elements this reduces moment storage from
-84,413,440 to 42,206,720 bytes.
+The low-level `AdamWOptions.UseBFloat16FirstMoment` and
+`UseBFloat16SecondMoment` switches remain available to library callers. Wiki
+training JSON no longer exposes competing moment flags: `bfloat16` selects
+BF16 moments, while `float32` and `mix16_32` select FP32 moments. Checkpoints
+still serialize moment arrays as Float32, so restore remains portable.
 
 The profiler reports forward, loss, backward, NekoMuon, and AdamW wall time,
 plus allocation/GC counts and a separate summed worker-CPU breakdown inside
-NekoMuon. With the current 17.2M-parameter `training.wiki-jp.json` profile on a
+NekoMuon. With the corresponding ForgetMemoryV2 profile on a
 Ryzen 7 5700X and `nekoMuonNewtonSchulzInterval: 5`, a ten-step run averaged
 589.89 ms per training step and 147.78 ms in NekoMuon. Non-refresh optimizer
 steps took about 36--40 ms, while the fifth-step orthogonalization took about
@@ -544,7 +547,7 @@ prompt without retraining:
 
 ```powershell
 dotnet run --configuration Release --project NNtrain.Cli -- `
-  --config training.wiki-jp.json --generate "日本の歴史は"
+  --config training.example.json --generate "日本の歴史は"
 ```
 
 Generation can also be fully configured in `generate.json`, including an

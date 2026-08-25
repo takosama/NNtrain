@@ -6,6 +6,9 @@ public static class CudaDataParallel
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
         LanguageModel,
         FlatGradientPlanCache> FlatGradientPlans = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        LanguageModel,
+        BFloat16GradientPlanCache> BFloat16GradientPlans = new();
 
     public static float ForwardBackward(
         LanguageModel model,
@@ -35,14 +38,30 @@ public static class CudaDataParallel
                 new TorchDevice(TensorDevice.Cuda, devices[0]));
             Tensor logits = model.Forward(input, batchSize, sequenceLength);
             Tensor loss = logits.CrossEntropyWithLogits(target, ignoreIndex: ignoreIndex);
-            float value = loss.item();
+            NativeCudaDevice accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(devices[0]);
+            NativeCudaScalarReadback readback =
+                NativeCudaScalarReadback.Rent(devices[0]);
+            readback.Begin(
+                loss.EnsureCudaFloat32Buffer(devices[0]).NativePtr,
+                accelerator.DefaultStream);
             loss.BackwardAndRelease();
-            return value;
+            return readback.CompleteAndReturn();
         }
 
         Parameter[] parameters = model.Parameters().ToArray();
-        foreach (Parameter parameter in parameters)
-            parameter.T.PrepareCudaGradientBuffers(devices);
+        CudaBFloat16GradientAllReducePlan? bfloat16Plan = UseBFloat16GradientBuckets(
+            devices, model.PrecisionMode)
+            ? BFloat16GradientPlans.GetValue(
+                model, _ => new BFloat16GradientPlanCache())
+                .Get(parameters, devices)
+            : null;
+        if (bfloat16Plan is null)
+        {
+            foreach (Parameter parameter in parameters)
+                parameter.T.PrepareCudaGradientBuffers(devices);
+        }
+        bfloat16Plan?.BeginStep();
 
         int totalValid = target.Count(value => value != ignoreIndex);
         if (totalValid == 0)
@@ -61,6 +80,10 @@ public static class CudaDataParallel
 
             using IDisposable scope = TensorExecutionContext.Push(
                 new TorchDevice(TensorDevice.Cuda, devices[shard]));
+            using IDisposable? reductionScope = bfloat16Plan is null
+                ? null
+                : CudaGradientReductionContext.Push(
+                    bfloat16Plan, devices[shard]);
             Tensor logits = model.Forward(
                 shardInput,
                 shardBatch,
@@ -69,14 +92,29 @@ public static class CudaDataParallel
                 shardTarget,
                 ignoreIndex: ignoreIndex);
             float weight = (float)shardValid / totalValid;
-            weightedLosses[shard] = loss.item() * shardValid;
+            NativeCudaDevice accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(devices[shard]);
+            NativeCudaScalarReadback readback =
+                NativeCudaScalarReadback.Rent(devices[shard]);
+            readback.Begin(
+                loss.EnsureCudaFloat32Buffer(devices[shard]).NativePtr,
+                accelerator.DefaultStream);
             loss.BackwardAndRelease([weight]);
+            weightedLosses[shard] =
+                readback.CompleteAndReturn() * shardValid;
         });
 
-        FlatGradientPlanCache cache = FlatGradientPlans.GetValue(
-            model, _ => new FlatGradientPlanCache());
-        TensorCudaKernels.FlatGradientPlan plan = cache.Get(parameters, devices);
-        TensorCudaKernels.AllReduceGradientsResident(parameters, devices, plan);
+        if (bfloat16Plan is not null)
+        {
+            bfloat16Plan.Complete();
+        }
+        else
+        {
+            FlatGradientPlanCache cache = FlatGradientPlans.GetValue(
+                model, _ => new FlatGradientPlanCache());
+            TensorCudaKernels.FlatGradientPlan plan = cache.Get(parameters, devices);
+            TensorCudaKernels.AllReduceGradientsResident(parameters, devices, plan);
+        }
         return (float)(weightedLosses.Sum() / totalValid);
     }
 
@@ -116,8 +154,18 @@ public static class CudaDataParallel
         var totalTimer = System.Diagnostics.Stopwatch.StartNew();
         var prepareTimer = System.Diagnostics.Stopwatch.StartNew();
         Parameter[] parameters = model.Parameters().ToArray();
-        foreach (Parameter parameter in parameters)
-            parameter.T.PrepareCudaGradientBuffers(devices);
+        CudaBFloat16GradientAllReducePlan? bfloat16Plan = UseBFloat16GradientBuckets(
+            devices, model.PrecisionMode)
+            ? BFloat16GradientPlans.GetValue(
+                model, _ => new BFloat16GradientPlanCache())
+                .Get(parameters, devices)
+            : null;
+        if (bfloat16Plan is null)
+        {
+            foreach (Parameter parameter in parameters)
+                parameter.T.PrepareCudaGradientBuffers(devices);
+        }
+        bfloat16Plan?.BeginStep();
         SynchronizeAll();
         prepareTimer.Stop();
 
@@ -142,6 +190,10 @@ public static class CudaDataParallel
 
             using IDisposable scope = TensorExecutionContext.Push(
                 new TorchDevice(TensorDevice.Cuda, devices[shard]));
+            using IDisposable? reductionScope = bfloat16Plan is null
+                ? null
+                : CudaGradientReductionContext.Push(
+                    bfloat16Plan, devices[shard]);
             var accelerator = ForgetMemoryV2Cuda.GetAccelerator(devices[shard]);
 
             var phaseTimer = System.Diagnostics.Stopwatch.StartNew();
@@ -172,10 +224,17 @@ public static class CudaDataParallel
         });
 
         var allReduceTimer = System.Diagnostics.Stopwatch.StartNew();
-        FlatGradientPlanCache cache = FlatGradientPlans.GetValue(
-            model, _ => new FlatGradientPlanCache());
-        TensorCudaKernels.FlatGradientPlan plan = cache.Get(parameters, devices);
-        TensorCudaKernels.AllReduceGradientsResident(parameters, devices, plan);
+        if (bfloat16Plan is not null)
+        {
+            bfloat16Plan.Complete();
+        }
+        else
+        {
+            FlatGradientPlanCache cache = FlatGradientPlans.GetValue(
+                model, _ => new FlatGradientPlanCache());
+            TensorCudaKernels.FlatGradientPlan plan = cache.Get(parameters, devices);
+            TensorCudaKernels.AllReduceGradientsResident(parameters, devices, plan);
+        }
         SynchronizeAll();
         allReduceTimer.Stop();
         totalTimer.Stop();
@@ -202,6 +261,39 @@ public static class CudaDataParallel
                 {
                     _plan?.Dispose();
                     _plan = new TensorCudaKernels.FlatGradientPlan(
+                        parameters, devices);
+                }
+                return _plan;
+            }
+        }
+    }
+
+    private static bool UseBFloat16GradientBuckets(
+        IReadOnlyList<int> devices,
+        TensorPrecisionMode precisionMode)
+        => devices.Count == 2
+            && precisionMode != TensorPrecisionMode.Float32
+            && !string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "NNTRAIN_DISABLE_BF16_GRADIENT_BUCKETS"),
+                "1",
+                StringComparison.Ordinal);
+
+    private sealed class BFloat16GradientPlanCache
+    {
+        private readonly object _sync = new();
+        private CudaBFloat16GradientAllReducePlan? _plan;
+
+        internal CudaBFloat16GradientAllReducePlan Get(
+            IReadOnlyList<Parameter> parameters,
+            IReadOnlyList<int> devices)
+        {
+            lock (_sync)
+            {
+                if (_plan is null || !_plan.Matches(parameters, devices))
+                {
+                    _plan?.Dispose();
+                    _plan = new CudaBFloat16GradientAllReducePlan(
                         parameters, devices);
                 }
                 return _plan;

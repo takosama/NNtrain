@@ -12,6 +12,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
     private readonly long _totalElements;
     private readonly NekoMuonWorkspace[] _workspaces;
     private readonly CudaOptimizerKernels.NekoMuonResidentState?[] _cudaStates;
+    private readonly Dictionary<int, CudaOptimizerKernels.NekoMuonStatsBatch>
+        _cudaStatsBatches = [];
     private NekoMuonState _state;
 
     internal IReadOnlyList<Parameter> Parameters => _parameters;
@@ -104,6 +106,12 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         {
             cudaState?.Dispose();
         }
+        foreach (CudaOptimizerKernels.NekoMuonStatsBatch batch
+            in _cudaStatsBatches.Values)
+        {
+            batch.Dispose();
+        }
+        _cudaStatsBatches.Clear();
         Array.Clear(_cudaStates);
         _state = CloneState(state);
     }
@@ -388,8 +396,6 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                         slowCorrection);
                 }
             }
-            foreach (int deviceIndex in devices)
-                ForgetMemoryV2Cuda.GetAccelerator(deviceIndex).Synchronize();
         }
         if (CudaOperationProfiler.IsEnabled)
         {
@@ -405,16 +411,27 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
 
         void ReadStatistics()
         {
-            for (int index = 0; index < _parameters.Count; index++)
+            Parallel.For(0, devices.Length, deviceSlot =>
             {
-                CudaOptimizerKernels.NekoMuonResidentState cudaState =
-                    GetCudaState(index);
-                foreach (int deviceIndex in devices)
+                int deviceIndex = devices[deviceSlot];
+                CudaOptimizerKernels.NekoMuonStatsBatch batch;
+                lock (_cudaStatsBatches)
                 {
-                    CudaOptimizerKernels.NekoMuonReadStatsResident(
-                        deviceIndex, cudaState);
+                    if (!_cudaStatsBatches.TryGetValue(
+                        deviceIndex,
+                        out batch!))
+                    {
+                        var states = new CudaOptimizerKernels
+                            .NekoMuonResidentState[_parameters.Count];
+                        for (int index = 0; index < states.Length; ++index)
+                            states[index] = GetCudaState(index);
+                        batch = new CudaOptimizerKernels.NekoMuonStatsBatch(
+                            deviceIndex, states);
+                        _cudaStatsBatches[deviceIndex] = batch;
+                    }
                 }
-            }
+                batch.GatherAndRead();
+            });
         }
         if (CudaOperationProfiler.IsEnabled)
         {
@@ -457,6 +474,10 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         {
             FinishUpdates();
         }
+        // Native CUDA optimizer kernels are enqueued on the accelerator
+        // stream. Complete the parameter publication before zero_grad can
+        // reuse the same gradient allocation on the caller thread.
+        CudaOptimizerKernels.SynchronizeDevices(devices);
 
         int primarySlot = Array.IndexOf(devices, Tensor.CudaDeviceIndex);
         if (primarySlot < 0)

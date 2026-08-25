@@ -69,11 +69,12 @@ public sealed class WikiLanguageModelCommandTests
             BpeTokenizer.BaseVocabularySize);
 
         ForgetMemoryV3Gpt model = Assert.IsType<ForgetMemoryV3Gpt>(created);
-        Assert.Equal(TensorDType.Float16, model.DType);
+        Assert.Equal(TensorDType.BFloat16, model.DType);
+        Assert.Equal(TensorPrecisionMode.Mix16_32, model.PrecisionMode);
         Assert.All(
             model.parameters(),
             parameter => Assert.Equal(
-                TensorDType.Float16,
+                TensorDType.BFloat16,
                 parameter.T.DType));
         Assert.Equal(5, model.KeyWidth);
         Assert.Equal(7, model.ValueWidth);
@@ -92,7 +93,8 @@ public sealed class WikiLanguageModelCommandTests
 
         Assert.True(config.IsForgetMemoryV3Architecture());
         ForgetMemoryV3Gpt typed = Assert.IsType<ForgetMemoryV3Gpt>(model);
-        Assert.Equal(TensorDType.Float16, typed.DType);
+        Assert.Equal(TensorDType.BFloat16, typed.DType);
+        Assert.Equal(TensorPrecisionMode.Mix16_32, typed.PrecisionMode);
     }
 
     [Fact]
@@ -116,7 +118,8 @@ public sealed class WikiLanguageModelCommandTests
 
         ForgetMemoryDRNGpt model = Assert.IsType<ForgetMemoryDRNGpt>(created);
         Assert.True(model.UseDrn);
-        Assert.Equal(TensorDType.Float16, model.DType);
+        Assert.Equal(TensorDType.BFloat16, model.DType);
+        Assert.Equal(TensorPrecisionMode.Mix16_32, model.PrecisionMode);
         Assert.Equal(5, model.KeyWidth);
         Assert.Equal(7, model.ValueWidth);
     }
@@ -254,9 +257,15 @@ public sealed class WikiLanguageModelCommandTests
         Assert.Equal(expected, actual, precision: 5);
     }
 
-    [Fact]
-    public void WikiScheduleUpdatesSingleAdamW()
+    [Theory]
+    [InlineData(TensorPrecisionMode.BFloat16, true)]
+    [InlineData(TensorPrecisionMode.Mix16_32, false)]
+    [InlineData(TensorPrecisionMode.Float32, false)]
+    public void PrecisionModeControlsAdamWMomentStorage(
+        TensorPrecisionMode precisionMode,
+        bool expectedBFloat16Moments)
     {
+        TensorDType storageDType = precisionMode.ToStorageDType();
         var model = new GptRinWikiJp(
             BpeTokenizer.BaseVocabularySize,
             contextLength: 2,
@@ -264,22 +273,27 @@ public sealed class WikiLanguageModelCommandTests
             numHeads: 1,
             dHidden: 8,
             numLayers: 1,
-            rng: new Random(29));
+            rng: new Random(29),
+            dtype: storageDType);
+        model.SetPrecisionMode(precisionMode);
         var config = new WikiTrainingConfiguration
         {
             Optimizer = "adamw",
             LearningRate = 0.01f,
             WarmupPercent = 20f,
-            AdamWUseBFloat16FirstMoment = true,
-            AdamWUseBFloat16SecondMoment = true,
+            PrecisionMode = TensorPrecisionModeNames.Format(precisionMode),
         };
         IOptimizer optimizer = WikiLanguageModelCommand.CreateOptimizer(
             model,
             config);
 
         AdamWState state = Assert.IsType<AdamW>(optimizer).CaptureState();
-        Assert.True(state.Options.UseBFloat16FirstMoment);
-        Assert.True(state.Options.UseBFloat16SecondMoment);
+        Assert.Equal(
+            expectedBFloat16Moments,
+            state.Options.UseBFloat16FirstMoment);
+        Assert.Equal(
+            expectedBFloat16Moments,
+            state.Options.UseBFloat16SecondMoment);
 
         WarmupCosineProgressLRScheduler scheduler =
             lr_scheduler.WarmupCosineProgressLR(

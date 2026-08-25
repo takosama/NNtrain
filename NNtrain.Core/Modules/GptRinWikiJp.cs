@@ -173,6 +173,45 @@ public sealed class GptRinWikiJp : LanguageModel
         return hidden;
     }
 
+    private Tensor ForwardHiddenIncremental(
+        int tokenId,
+        int position,
+        IReadOnlyList<CudaAttentionKvCache> caches)
+    {
+        Tensor token = _tokenEmbedding.T
+            .EmbeddingLookup([tokenId], 1)
+            .Reshape(1, 1, ModelWidth);
+        Tensor positional = _positionEmbedding.T
+            .EmbeddingLookup([position], 1)
+            .Reshape(1, 1, ModelWidth);
+        Tensor hidden = _embeddingDropout.Forward(token + positional);
+        for (int layer = 0; layer < _blocks.Length; ++layer)
+        {
+            hidden = _blocks[layer].ForwardIncremental(
+                hidden, caches[layer], position);
+        }
+        return _finalNorm.Forward(hidden);
+    }
+
+    private Tensor ForwardHiddenPrefill(
+        int[] tokenIds,
+        IReadOnlyList<CudaAttentionKvCache> caches)
+    {
+        int sequence = tokenIds.Length;
+        Tensor hidden = _embeddingDropout.Forward(
+            _tokenEmbedding.T.EmbeddingLookupWithPositions(
+                _positionEmbedding.T,
+                tokenIds,
+                1,
+                sequence));
+        for (int layer = 0; layer < _blocks.Length; ++layer)
+        {
+            hidden = _blocks[layer].ForwardPrefill(
+                hidden, caches[layer], sequence);
+        }
+        return _finalNorm.Forward(hidden);
+    }
+
     /// <summary>
     /// Autoregressively samples token ids and returns the prompt plus generated
     /// continuation.
@@ -216,7 +255,90 @@ public sealed class GptRinWikiJp : LanguageModel
                 resetPool: true,
                 clearPoolOnDispose: true))
             {
-                for (int generated = 0; generated < maxNewTokens; generated++)
+                int generated = 0;
+                bool stopped = false;
+                if (Tensor.ExecutionDevice == TensorDevice.Cuda
+                    && DType == TensorDType.BFloat16
+                    && result.Count <= ContextLength
+                    && maxNewTokens > 0
+                    && !string.Equals(
+                        Environment.GetEnvironmentVariable(
+                            "NNTRAIN_DISABLE_KV_CACHE"),
+                        "1",
+                        StringComparison.Ordinal))
+                {
+                    CudaAttentionKvCache[] caches = _blocks
+                        .Select(block => block.Attn.CreateIncrementalCache(
+                            ContextLength))
+                        .ToArray();
+                    try
+                    {
+                        // Prefill the prompt with the normal tiled Tensor Core
+                        // path, copying each layer's projected K/V into its
+                        // persistent cache. Only generated tokens use the
+                        // one-token path.
+                        using (CudaInferenceScope prefillScope =
+                            CudaInferenceScope.Begin())
+                        {
+                            Tensor hidden = ForwardHiddenPrefill(
+                                result.ToArray(), caches);
+                            Tensor logits = _languageModelHead.ForwardBatch(
+                                hidden.SelectLastSequenceToken());
+                            int nextToken = Sample(
+                                logits.Data,
+                                0,
+                                VocabularySize,
+                                temperature,
+                                topK,
+                                random);
+                            result.Add(nextToken);
+                            ++generated;
+                            if (stopTokenId.HasValue
+                                && nextToken == stopTokenId.Value)
+                            {
+                                stopped = true;
+                            }
+                        }
+
+                        int position = result.Count - 1;
+                        while (!stopped && generated < maxNewTokens
+                            && position < ContextLength)
+                        {
+                            using CudaInferenceScope inferenceScope =
+                                CudaInferenceScope.Begin();
+                            Tensor hidden = ForwardHiddenIncremental(
+                                result[^1], position, caches);
+                            Tensor logits = _languageModelHead.ForwardBatch(
+                                hidden.SelectLastSequenceToken());
+                            int nextToken = Sample(
+                                logits.Data,
+                                0,
+                                VocabularySize,
+                                temperature,
+                                topK,
+                                random);
+                            result.Add(nextToken);
+                            ++generated;
+                            ++position;
+                            if (stopTokenId.HasValue
+                                && nextToken == stopTokenId.Value)
+                            {
+                                stopped = true;
+                                break;
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        foreach (CudaAttentionKvCache cache in caches)
+                            cache.Dispose();
+                    }
+                }
+
+                // Once a sliding window has filled, absolute positional
+                // embeddings change for every retained token. Fall back to a
+                // correct full-window pass for only that remaining suffix.
+                for (; !stopped && generated < maxNewTokens; ++generated)
                 {
                     using CudaInferenceScope inferenceScope =
                         CudaInferenceScope.Begin();

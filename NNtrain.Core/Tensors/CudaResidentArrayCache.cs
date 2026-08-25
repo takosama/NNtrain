@@ -1,7 +1,4 @@
 using System.Runtime.CompilerServices;
-using ILGPU;
-using ILGPU.Runtime;
-using ILGPU.Runtime.Cuda;
 
 namespace NNtrain;
 
@@ -14,8 +11,8 @@ internal static class CudaResidentArrayCache
 {
     private static readonly ConditionalWeakTable<float[], Entry> Entries = new();
 
-    internal static MemoryBuffer1D<float, Stride1D.Dense> GetOrUpload(
-        CudaAccelerator accelerator,
+    internal static NativeCudaBuffer<float> GetOrUpload(
+        NativeCudaDevice accelerator,
         float[] values)
     {
         Entry entry = Entries.GetValue(values, static _ => new Entry());
@@ -34,13 +31,13 @@ internal static class CudaResidentArrayCache
     private sealed class Entry : IDisposable
     {
         private readonly object _sync = new();
-        private readonly Dictionary<CudaAccelerator,
-            MemoryBuffer1D<float, Stride1D.Dense>> _buffers =
+        private readonly Dictionary<NativeCudaDevice,
+            NativeCudaBuffer<float>> _buffers =
             new(ReferenceEqualityComparer.Instance);
         private bool _disposed;
 
-        internal MemoryBuffer1D<float, Stride1D.Dense> GetOrUpload(
-            CudaAccelerator accelerator,
+        internal NativeCudaBuffer<float> GetOrUpload(
+            NativeCudaDevice accelerator,
             float[] values)
         {
             lock (_sync)

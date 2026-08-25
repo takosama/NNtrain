@@ -23,7 +23,9 @@ public class TransformerClassifier : Module
         int numClasses,
         Random? rng = null,
         float initScale = 0.02f,
-        float dropout = 0f)
+        float dropout = 0f,
+        TensorDType dtype = TensorDType.Float32)
+        : base(dtype)
     {
         rng ??= new Random(1);
 
@@ -49,7 +51,8 @@ public class TransformerClassifier : Module
                 false,
                 rng,
                 initScale,
-                dropout);
+                dropout,
+                dtype);
         }
 
         float[] pos = new float[seqLen * dModel];
@@ -61,13 +64,19 @@ public class TransformerClassifier : Module
                 pos,
                 new[] { seqLen, dModel },
                 "Pos",
-                WeightDecayPolicy.Apply));
+                WeightDecayPolicy.Apply,
+                dtype));
 
         for (int i = 0; i < _blocks.Length; i++)
             RegisterModule(_blocks[i]);
 
         Head = RegisterModule(
-            new Linear(seqLen * dModel, numClasses, rng, initScale));
+            new Linear(
+                seqLen * dModel,
+                numClasses,
+                rng,
+                initScale,
+                dtype));
         Blocks = Array.AsReadOnly(_blocks);
 
         _hiddenWeightParameters = _blocks

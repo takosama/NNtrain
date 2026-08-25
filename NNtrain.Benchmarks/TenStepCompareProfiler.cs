@@ -26,7 +26,7 @@ internal static class TenStepCompareProfiler
             $"conditions: steps={steps}, batch={Batch}, sequence={Sequence}, "
             + $"vocab={Vocabulary}, width={Width}, hidden={Hidden}, "
             + $"layers={Layers}, key/value={KeyWidth}/{ValueWidth}, "
-            + $"dtype=bfloat16, dropout={Dropout}, lr={LearningRate}, "
+            + $"precision=mix16_32, dropout={Dropout}, lr={LearningRate}, "
             + $"weight_decay={WeightDecay}, "
             + "optimizer=Composite(NekoMuon+AdamW), "
             + "adamw_moments=f32/f32, seed=" + Seed);
@@ -94,10 +94,11 @@ internal static class TenStepCompareProfiler
         }
         Console.WriteLine(
             "note: CUDA step 1 includes kernel/library initialization; "
-            + "Linear uses cuBLAS CUBLAS_COMPUTE_32F_FAST_16BF "
-            + "(FP32 buffers with BF16-fast compute, FP32 accumulation); "
-            + "AdamW/NekoMuon FP32 "
-            + "master weights, moments, and workspaces remain GPU-resident.");
+            + "mix16_32 keeps eligible operands and published gradients in "
+            + "resident BF16 buffers while Tensor Core GEMMs accumulate in "
+            + "FP32; reductions, optimizer master weights, moments, and "
+            + "workspaces remain resident FP32 where numerical range is "
+            + "required.");
     }
 
     private static Result RunDevice(
@@ -124,6 +125,7 @@ internal static class TenStepCompareProfiler
             initializationScale: 0.02f,
             dropout: Dropout,
             dtype: TensorDType.BFloat16);
+        model.SetPrecisionMode(TensorPrecisionMode.Mix16_32);
         NekoMuon neko = (NekoMuon)optim.NekoMuon(
                 model.HiddenWeightParameters,
                 lr: LearningRate,

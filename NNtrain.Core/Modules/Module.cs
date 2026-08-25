@@ -12,6 +12,7 @@ public abstract class Module
     {
         TensorDTypeContract.ValidateImplemented(dtype, nameof(dtype));
         DType = dtype;
+        PrecisionMode = dtype.ToPrecisionMode();
     }
 
     public bool IsTraining { get; private set; } = true;
@@ -21,6 +22,33 @@ public abstract class Module
     /// Stateless modules propagate this contract to their inputs and children.
     /// </summary>
     public TensorDType DType { get; }
+
+    /// <summary>Gets the model-level numeric contract for this module.</summary>
+    public TensorPrecisionMode PrecisionMode { get; private set; }
+
+    /// <summary>
+    /// Applies a model-level numeric contract to this module and all of its
+    /// registered children. The selected mode must use the module's physical
+    /// parameter storage dtype.
+    /// </summary>
+    public void SetPrecisionMode(TensorPrecisionMode precisionMode)
+    {
+        TensorDType expectedStorage = precisionMode.ToStorageDType();
+        bool legacyMixedStorage = precisionMode == TensorPrecisionMode.Mix16_32
+            && DType == TensorDType.Float16;
+        if (DType != expectedStorage
+            && !legacyMixedStorage
+            && _directParameters.Count != 0)
+        {
+            throw new InvalidOperationException(
+                $"Precision mode '{TensorPrecisionModeNames.Format(precisionMode)}' " +
+                $"requires storage dtype '{expectedStorage}', but module " +
+                $"'{GetType().Name}' uses '{DType}'.");
+        }
+        PrecisionMode = precisionMode;
+        foreach (Module module in _directModules)
+            module.SetPrecisionMode(precisionMode);
+    }
 
     protected Parameter RegisterParameter(Parameter parameter)
     {

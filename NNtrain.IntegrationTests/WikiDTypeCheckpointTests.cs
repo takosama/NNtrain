@@ -4,11 +4,11 @@ using Xunit;
 public sealed class WikiDTypeCheckpointTests
 {
     [Fact]
-    public void V2FactorySupportsFloat16DefaultAndExplicitFloat32()
+    public void V2FactorySupportsMixedDefaultAndExplicitFloat32()
     {
         WikiTrainingConfiguration defaultConfig = CreateConfiguration(
             checkpointPath: "unused.json",
-            modelDType: null,
+            precisionMode: null,
             resume: false);
 
         LanguageModel defaultModel =
@@ -16,16 +16,19 @@ public sealed class WikiDTypeCheckpointTests
                 defaultConfig,
                 defaultConfig.VocabularySize);
         Module defaultModule = Assert.IsAssignableFrom<Module>(defaultModel);
-        Assert.Equal(TensorDType.Float16, defaultModule.DType);
+        Assert.Equal(TensorDType.BFloat16, defaultModule.DType);
+        Assert.Equal(
+            TensorPrecisionMode.Mix16_32,
+            defaultModule.PrecisionMode);
         Assert.All(
             defaultModel.parameters(),
             parameter => Assert.Equal(
-                TensorDType.Float16,
+                TensorDType.BFloat16,
                 parameter.T.DType));
 
         WikiTrainingConfiguration float32Config = defaultConfig with
         {
-            ModelDType = WikiTrainingConfiguration.Float32ModelDType,
+            PrecisionMode = WikiTrainingConfiguration.Float32PrecisionMode,
         };
         LanguageModel float32Model =
             WikiLanguageModelCommand.CreateModel(
@@ -48,7 +51,7 @@ public sealed class WikiDTypeCheckpointTests
         {
             WikiTrainingConfiguration config = CreateConfiguration(
                 checkpointPath,
-                modelDType: null,
+                precisionMode: null,
                 resume: true);
             LanguageModel source = WikiLanguageModelCommand.CreateModel(
                 config,
@@ -88,19 +91,18 @@ public sealed class WikiDTypeCheckpointTests
     }
 
     [Fact]
-    public void AutoResumeV5Float16PreservesExactMastersAndOptimizerContinuity()
+    public void AutoResumeV6MixedPreservesExactMastersAndOptimizerContinuity()
     {
         string checkpointPath = CreateCheckpointPath("f16-exact");
         try
         {
             WikiTrainingConfiguration sourceConfig = CreateConfiguration(
                 checkpointPath,
-                WikiTrainingConfiguration.Float16ModelDType,
+                WikiTrainingConfiguration.Mix16_32PrecisionMode,
                 resume: false);
             LanguageModel source = WikiLanguageModelCommand.CreateModel(
                 sourceConfig,
-                sourceConfig.VocabularySize,
-                TensorDType.Float16);
+                sourceConfig.VocabularySize);
             IOptimizer sourceOptimizer =
                 WikiLanguageModelCommand.CreateOptimizer(
                     source,
@@ -121,7 +123,7 @@ public sealed class WikiDTypeCheckpointTests
                 parameter => parameter.Values.Any(
                     value => BitConverter.SingleToInt32Bits(value)
                         != BitConverter.SingleToInt32Bits(
-                            (float)(Half)value)));
+                            QuantizeBFloat16(value))));
 
             WikiLanguageModelCommand.SaveTrainingCheckpoint(
                 sourceConfig,
@@ -138,8 +140,11 @@ public sealed class WikiDTypeCheckpointTests
             WikiLanguageModelCommand.WikiModelCheckpoint serialized =
                 torch.load<WikiLanguageModelCommand.WikiModelCheckpoint>(
                     checkpointPath);
-            Assert.Equal(5, serialized.FormatVersion);
-            Assert.Equal(TensorDType.Float16, serialized.ModelDType);
+            Assert.Equal(6, serialized.FormatVersion);
+            Assert.Equal(TensorDType.BFloat16, serialized.ModelDType);
+            Assert.Equal(
+                TensorPrecisionMode.Mix16_32,
+                serialized.PrecisionMode);
             Assert.NotNull(serialized.CurrentModel);
             AssertStatesBitwiseEqual(
                 exactSourceState,
@@ -173,15 +178,15 @@ public sealed class WikiDTypeCheckpointTests
                 ResumeFromCheckpoint = autoResume,
             };
 
-            TensorDType resumeDType =
-                WikiLanguageModelCommand.ResolveModelDTypeForTraining(
+            TensorPrecisionMode resumeMode =
+                WikiLanguageModelCommand.ResolvePrecisionModeForTraining(
                     resumeConfig);
-            Assert.Equal(TensorDType.Float16, resumeDType);
+            Assert.Equal(TensorPrecisionMode.Mix16_32, resumeMode);
             LanguageModel restored =
                 WikiLanguageModelCommand.CreateModel(
                     resumeConfig,
                     resumeConfig.VocabularySize,
-                    resumeDType);
+                    resumeMode);
             IOptimizer restoredOptimizer =
                 WikiLanguageModelCommand.CreateOptimizer(
                     restored,
@@ -253,11 +258,12 @@ public sealed class WikiDTypeCheckpointTests
         {
             WikiTrainingConfiguration sourceConfig = CreateConfiguration(
                 checkpointPath,
-                WikiTrainingConfiguration.Float16ModelDType,
+                WikiTrainingConfiguration.Mix16_32PrecisionMode,
                 resume: false);
             LanguageModel source = WikiLanguageModelCommand.CreateModel(
                 sourceConfig,
-                sourceConfig.VocabularySize);
+                sourceConfig.VocabularySize,
+                TensorDType.Float16);
             WikiLanguageModelCommand.WikiModelCheckpoint checkpoint =
                 CreateCheckpoint(
                     sourceConfig,
@@ -266,10 +272,32 @@ public sealed class WikiDTypeCheckpointTests
                     modelDType: TensorDType.Float16);
             torch.save(checkpoint, checkpointPath);
 
+            WikiTrainingConfiguration compatibleResume = sourceConfig with
+            {
+                ResumeFromCheckpoint = true,
+            };
+            WikiLanguageModelCommand.WikiPrecisionSelection selection =
+                WikiLanguageModelCommand.ResolvePrecisionForTraining(
+                    compatibleResume);
+            Assert.Equal(TensorPrecisionMode.Mix16_32, selection.Mode);
+            Assert.Equal(TensorDType.Float16, selection.StorageDType);
+            LanguageModel legacyStorageModel =
+                WikiLanguageModelCommand.CreateModel(
+                    compatibleResume,
+                    compatibleResume.VocabularySize,
+                    selection.Mode,
+                    selection.StorageDType);
+            Module legacyStorageModule =
+                Assert.IsAssignableFrom<Module>(legacyStorageModel);
+            Assert.Equal(TensorDType.Float16, legacyStorageModule.DType);
+            Assert.Equal(
+                TensorPrecisionMode.Mix16_32,
+                legacyStorageModule.PrecisionMode);
+
             WikiTrainingConfiguration resumeConfig = sourceConfig with
             {
                 ResumeFromCheckpoint = true,
-                ModelDType = WikiTrainingConfiguration.Float32ModelDType,
+                PrecisionMode = WikiTrainingConfiguration.Float32PrecisionMode,
             };
             InvalidDataException exception =
                 Assert.Throws<InvalidDataException>(
@@ -278,7 +306,7 @@ public sealed class WikiDTypeCheckpointTests
 
             Assert.Contains("does not match checkpoint", exception.Message);
             Assert.Contains("float32", exception.Message);
-            Assert.Contains("float16", exception.Message);
+            Assert.Contains("mix16_32", exception.Message);
         }
         finally
         {
@@ -294,11 +322,12 @@ public sealed class WikiDTypeCheckpointTests
         {
             WikiTrainingConfiguration config = CreateConfiguration(
                 checkpointPath,
-                WikiTrainingConfiguration.Float16ModelDType,
+                WikiTrainingConfiguration.Mix16_32PrecisionMode,
                 resume: true);
             LanguageModel source = WikiLanguageModelCommand.CreateModel(
                 config,
-                config.VocabularySize);
+                config.VocabularySize,
+                TensorDType.Float16);
             ModuleState valid = source.state_dict();
             ModuleParameterState[] parameters = valid.Parameters.ToArray();
             parameters[0] = parameters[0] with
@@ -338,11 +367,12 @@ public sealed class WikiDTypeCheckpointTests
         {
             WikiTrainingConfiguration config = CreateConfiguration(
                 checkpointPath,
-                WikiTrainingConfiguration.Float16ModelDType,
+                WikiTrainingConfiguration.Mix16_32PrecisionMode,
                 resume: true);
             LanguageModel source = WikiLanguageModelCommand.CreateModel(
                 config,
-                config.VocabularySize);
+                config.VocabularySize,
+                TensorDType.Float16);
             ModuleState expected = source.state_dict();
             WikiLanguageModelCommand.WikiModelCheckpoint checkpoint =
                 CreateCheckpoint(
@@ -383,9 +413,9 @@ public sealed class WikiDTypeCheckpointTests
     }
 
     [Theory]
-    [InlineData(4, null, "float16", "float32")]
-    [InlineData(5, TensorDType.Float16, "float32", "float16")]
-    public void GenerateUsesCheckpointDTypeForLegacyAndNewCheckpoints(
+    [InlineData(4, null, "mix16_32", "float32")]
+    [InlineData(5, TensorDType.Float16, "float32", "mix16_32")]
+    public void GenerateUsesCheckpointPrecisionForLegacyCheckpoints(
         int formatVersion,
         TensorDType? checkpointDType,
         string configuredDType,
@@ -409,8 +439,8 @@ public sealed class WikiDTypeCheckpointTests
             WikiTrainingConfiguration sourceConfig = CreateConfiguration(
                 checkpointPath,
                 physicalDType == TensorDType.Float16
-                    ? WikiTrainingConfiguration.Float16ModelDType
-                    : WikiTrainingConfiguration.Float32ModelDType,
+                    ? WikiTrainingConfiguration.Mix16_32PrecisionMode
+                    : WikiTrainingConfiguration.Float32PrecisionMode,
                 resume: false);
             LanguageModel source = WikiLanguageModelCommand.CreateModel(
                 sourceConfig,
@@ -438,7 +468,7 @@ public sealed class WikiDTypeCheckpointTests
                   "hiddenSize": {{sourceConfig.HiddenSize}},
                   "layers": {{sourceConfig.Layers}},
                   "modelArchitecture": "forgetmemoryv2",
-                  "modelDType": "{{configuredDType}}",
+                  "precisionMode": "{{configuredDType}}",
                   "forgetMemoryKeyWidth": {{sourceConfig.ForgetMemoryKeyWidth}},
                   "forgetMemoryValueWidth": {{sourceConfig.ForgetMemoryValueWidth}},
                   "forgetMemoryRetentionMinimum": {{sourceConfig.ForgetMemoryRetentionMinimum}},
@@ -461,10 +491,10 @@ public sealed class WikiDTypeCheckpointTests
             Assert.Equal(0, exitCode);
             Assert.Equal(string.Empty, error.ToString());
             Assert.Contains(
-                $"dtype {expectedDType}",
+                $"precision {expectedDType}",
                 output.ToString());
             Assert.Contains(
-                "--generate uses the architecture and dtype stored in the " +
+                "--generate uses the architecture and precision mode stored in the " +
                 "checkpoint",
                 output.ToString());
         }
@@ -480,7 +510,7 @@ public sealed class WikiDTypeCheckpointTests
 
     private static WikiTrainingConfiguration CreateConfiguration(
         string checkpointPath,
-        string? modelDType,
+        string? precisionMode,
         bool resume)
         => new()
         {
@@ -495,7 +525,7 @@ public sealed class WikiDTypeCheckpointTests
             Layers = 1,
             ModelArchitecture =
                 WikiTrainingConfiguration.ForgetMemoryV2Architecture,
-            ModelDType = modelDType,
+            PrecisionMode = precisionMode,
             ForgetMemoryKeyWidth = 2,
             ForgetMemoryValueWidth = 2,
             ForgetMemoryRetentionMinimum = 0.5f,
@@ -598,8 +628,8 @@ public sealed class WikiDTypeCheckpointTests
             ModuleParameterState master =
                 masterState.Parameters[parameterIndex];
             ModuleParameterState safe = safeState.Parameters[parameterIndex];
-            Assert.Equal(TensorDType.Float16, master.DType);
-            Assert.Equal(TensorDType.Float16, safe.DType);
+            Assert.Equal(TensorDType.BFloat16, master.DType);
+            Assert.Equal(TensorDType.BFloat16, safe.DType);
             Assert.Equal(master.Index, safe.Index);
             Assert.Equal(master.Name, safe.Name);
             Assert.Equal(master.Shape, safe.Shape);
@@ -608,12 +638,19 @@ public sealed class WikiDTypeCheckpointTests
                 valueIndex < master.Values.Length;
                 valueIndex++)
             {
-                float expected = (float)(Half)master.Values[valueIndex];
+                float expected = QuantizeBFloat16(master.Values[valueIndex]);
                 Assert.Equal(
                     BitConverter.SingleToInt32Bits(expected),
                     BitConverter.SingleToInt32Bits(safe.Values[valueIndex]));
             }
         }
+    }
+
+    private static float QuantizeBFloat16(float value)
+    {
+        uint bits = BitConverter.SingleToUInt32Bits(value);
+        uint rounded = bits + 0x7FFFu + ((bits >> 16) & 1u);
+        return BitConverter.UInt32BitsToSingle((rounded >> 16) << 16);
     }
 
     private static void AssertOptimizerStatesEqual(

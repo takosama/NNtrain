@@ -54,9 +54,6 @@ sealed record WikiOptimizerConfiguration
 
     public float GainShareMaxScale { get; init; } = 2f;
 
-    public bool AdamWUseBFloat16FirstMoment { get; init; }
-
-    public bool AdamWUseBFloat16SecondMoment { get; init; }
 }
 
 sealed record WikiSchedulerConfiguration

@@ -3,7 +3,9 @@
 `TensorDType.Float16` は値を IEEE 754 binary16 (`Half[]`) として物理保存する。
 演算時の展開、reduction、gradient と optimizer の master value は Float32 のままで
 ある。この組み合わせにより、値の保存帯域を半分にしつつ、backward の蓄積精度を
-保つ。
+保つ。この raw IEEE binary16 経路は低レベル API と旧チェックポイントの互換用で、
+学習設定の正規モードではない。正規の `precisionMode: "mix16_32"` はパラメータと
+activation を BF16 で保持し、要所を Float32 で実行する。
 
 この文書は「Float16 を一部のモデルだけで使える」ではなく、Tensor API 全体で
 どこまで使えるかを監査するための対応表である。実行可能な正本は
@@ -49,6 +51,7 @@ Tensor-returning public/internal member が表にない状態をテスト失敗�
 | member id | Float16 結果 | 実行テスト |
 | --- | --- | --- |
 | `LinearLastDim(Tensor, Tensor, Boolean)` | 保持 | `LinearLastDimTests.Float16ProjectionMatchesFormerFloat16Graph` |
+| `FusedMultiHeadAttentionIncremental(...)` | CUDA BF16 K/V cacheを保持 | `CudaDataParallelTests.TransformerCudaGenerationReusesInferenceArenaSafely` |
 
 これは rank 3 以上の `Linear` が flatten/reshape の graph を作らずに使う内部 node
 である。public API と同様に reflection contract の対象に含める。

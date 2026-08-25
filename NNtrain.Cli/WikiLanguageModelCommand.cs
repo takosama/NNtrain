@@ -83,8 +83,10 @@ internal static partial class WikiLanguageModelCommand
     {
         // Resolve resume metadata before any corpus scan or tokenizer work so
         // an incompatible checkpoint fails before expensive data processing.
-        TensorDType modelDType = ResolveModelDTypeForTraining(config);
-        WriteEffectiveTrainingConfiguration(config, modelDType, output);
+        WikiPrecisionSelection precision =
+            ResolvePrecisionForTraining(config);
+        TensorPrecisionMode precisionMode = precision.Mode;
+        WriteEffectiveTrainingConfiguration(config, precisionMode, output);
         if (!Directory.Exists(config.DataPath))
         {
             throw new DirectoryNotFoundException(
@@ -141,7 +143,7 @@ internal static partial class WikiLanguageModelCommand
                 output,
                 error,
                 openLossGraph,
-                modelDType);
+                precision);
         }
 
         output.WriteLine("loading and tokenizing Wikipedia documents...");
@@ -177,7 +179,8 @@ internal static partial class WikiLanguageModelCommand
         LanguageModel model = CreateModel(
             config,
             tokenizer.VocabularySize,
-            modelDType);
+            precisionMode,
+            precision.StorageDType);
         if (Tensor.ExecutionDevice == TensorDevice.Cuda
             && model is Module modelModule)
         {
@@ -195,7 +198,7 @@ internal static partial class WikiLanguageModelCommand
             $"width {config.ModelWidth}, heads {config.Heads}, " +
             $"hidden {config.HiddenSize}, layers {config.Layers}, " +
             $"context {config.ContextLength}, batch {config.BatchSize}, " +
-            $"dtype {FormatModelDType(modelDType)}");
+            $"precision {FormatPrecisionMode(precisionMode)}");
         WriteOptimizerSummary(model, config, output);
 
         LossGraph? lossGraph = null;
@@ -338,6 +341,7 @@ internal static partial class WikiLanguageModelCommand
                     graphWindowTargets = 0;
                 }
                 if (corpus.SampleDocuments.Length > 0
+                    && config.DatasetSampleEverySteps > 0
                     && globalStep % config.DatasetSampleEverySteps == 0)
                 {
                     StreamDatasetContinuation(
@@ -461,9 +465,11 @@ internal static partial class WikiLanguageModelCommand
                 "Checkpoint and tokenizer vocabulary sizes do not match.");
         }
 
-        TensorDType checkpointDType = GetCheckpointModelDType(checkpoint);
-        bool configuredDTypeDiffers =
-            config.GetModelDType() != checkpointDType;
+        TensorPrecisionMode checkpointMode =
+            GetCheckpointPrecisionMode(checkpoint);
+        TensorDType checkpointDType = checkpointMode.ToStorageDType();
+        bool configuredPrecisionDiffers =
+            config.GetPrecisionMode() != checkpointMode;
 
         LanguageModel model = CreateModel(checkpoint, config.Seed);
         ModuleState generationState = LoadGenerationModelState(
@@ -479,12 +485,12 @@ internal static partial class WikiLanguageModelCommand
             $"width {checkpoint.ModelWidth}, heads {checkpoint.Heads}, " +
             $"hidden {checkpoint.HiddenSize}, layers {checkpoint.Layers}, " +
             $"context {checkpoint.ContextLength}, " +
-            $"dtype {FormatModelDType(checkpointDType)}");
+            $"precision {FormatPrecisionMode(checkpointMode)}");
         if (!CheckpointArchitectureMatchesConfiguration(checkpoint, config)
-            || configuredDTypeDiffers)
+            || configuredPrecisionDiffers)
         {
             output.WriteLine(
-                "note: --generate uses the architecture and dtype stored " +
+                "note: --generate uses the architecture and precision mode stored " +
                 "in the checkpoint. JSON model settings take effect when " +
                 "a new training run starts and its checkpoint is saved.");
         }
@@ -499,8 +505,9 @@ internal static partial class WikiLanguageModelCommand
         TextWriter output,
         TextWriter error,
         bool openLossGraph,
-        TensorDType modelDType)
+        WikiPrecisionSelection precision)
     {
+        TensorPrecisionMode precisionMode = precision.Mode;
         long availableDocuments = WikiParquetCorpus.CountRowsAsync(
             config.DataPath).GetAwaiter().GetResult();
         long documentsPerEpoch = config.MaxTrainingDocuments == 0
@@ -513,7 +520,8 @@ internal static partial class WikiLanguageModelCommand
         LanguageModel model = CreateModel(
             config,
             tokenizer.VocabularySize,
-            modelDType);
+            precisionMode,
+            precision.StorageDType);
         IOptimizer optimizer = CreateOptimizer(model, config);
         WarmupCosineProgressLRScheduler scheduler =
             lr_scheduler.WarmupCosineProgressLR(
@@ -526,7 +534,7 @@ internal static partial class WikiLanguageModelCommand
             $"width {config.ModelWidth}, heads {config.Heads}, " +
             $"hidden {config.HiddenSize}, layers {config.Layers}, " +
             $"context {config.ContextLength}, batch {config.BatchSize}, " +
-            $"dtype {FormatModelDType(modelDType)}");
+            $"precision {FormatPrecisionMode(precisionMode)}");
         WriteOptimizerSummary(model, config, output);
 
         LossGraph? lossGraph = null;
@@ -664,6 +672,7 @@ internal static partial class WikiLanguageModelCommand
                     graphWindowTargets = 0;
                 }
                 if (sampleDocuments.Count > 0
+                    && config.DatasetSampleEverySteps > 0
                     && globalStep % config.DatasetSampleEverySteps == 0)
                 {
                     StreamDatasetContinuation(
@@ -949,7 +958,7 @@ internal static partial class WikiLanguageModelCommand
 
     private static void WriteEffectiveTrainingConfiguration(
         WikiTrainingConfiguration config,
-        TensorDType modelDType,
+        TensorPrecisionMode precisionMode,
         TextWriter output)
     {
         string architectureDetails = config.IsForgetMemoryArchitecture()
@@ -977,11 +986,11 @@ internal static partial class WikiLanguageModelCommand
             $"vocabulary {config.VocabularySize}, " +
             $"width {config.ModelWidth}, heads {config.Heads}, " +
             $"hidden {config.HiddenSize}, layers {config.Layers}, " +
-            $"dropout {config.Dropout:G}, dtype " +
-            $"{FormatModelDType(modelDType)}" +
+            $"dropout {config.Dropout:G}, precision " +
+            $"{FormatPrecisionMode(precisionMode)}" +
             (config.ResumeFromCheckpoint
                 ? " (checkpoint)"
-                : config.ModelDType is null
+                : config.PrecisionMode is null && config.ModelDType is null
                     ? " (default)"
                     : string.Empty) +
             architectureDetails);
