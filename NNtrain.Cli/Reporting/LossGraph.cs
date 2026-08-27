@@ -42,21 +42,21 @@ internal sealed class LossGraph
 
     internal string Path { get; }
 
+    internal int TotalEpochs => _totalEpochs;
+
     internal void RestoreExisting(float resumeEpoch)
     {
-        if (!float.IsFinite(resumeEpoch)
-            || resumeEpoch < 0f
-            || resumeEpoch > _totalEpochs)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(resumeEpoch),
-                resumeEpoch,
-                $"Resume epoch must be from 0 through {_totalEpochs}.");
-        }
-
+        IReadOnlyList<LossPoint> restored = ImportExisting(resumeEpoch);
         _losses.Clear();
+        _losses.AddRange(restored);
+    }
+
+    internal IReadOnlyList<LossPoint> ImportExisting(float resumeEpoch)
+    {
+        ValidateResumeEpoch(resumeEpoch);
+        var losses = new List<LossPoint>();
         if (!File.Exists(Path))
-            return;
+            return losses;
 
         string html = File.ReadAllText(Path);
         MatchCollection matches = PersistedPointPattern.Matches(html);
@@ -74,12 +74,12 @@ internal sealed class LossGraph
                 || epoch <= 0f
                 || epoch > resumeEpoch
                 || epoch > _totalEpochs
-                || (_losses.Count > 0 && epoch < _losses[^1].Epoch))
+                || (losses.Count > 0 && epoch < losses[^1].Epoch))
             {
                 continue;
             }
 
-            _losses.Add(new LossPoint(epoch, loss, null));
+            losses.Add(new LossPoint(epoch, loss, null));
         }
 
         foreach (Match match in matches)
@@ -97,15 +97,17 @@ internal sealed class LossGraph
                 continue;
             }
 
-            for (int index = _losses.Count - 1; index >= 0; index--)
+            for (int index = losses.Count - 1; index >= 0; index--)
             {
-                if (_losses[index].Epoch != epoch)
+                if (losses[index].Epoch != epoch)
                     continue;
 
-                _losses[index] = _losses[index] with { Evaluation = loss };
+                losses[index] = losses[index] with { Evaluation = loss };
                 break;
             }
         }
+
+        return losses;
     }
 
     internal void AddEpoch(int epoch, float trainingLoss, float evaluationLoss)
@@ -441,6 +443,19 @@ internal sealed class LossGraph
         }
     }
 
+    private void ValidateResumeEpoch(float resumeEpoch)
+    {
+        if (!float.IsFinite(resumeEpoch)
+            || resumeEpoch < 0f
+            || resumeEpoch > _totalEpochs)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(resumeEpoch),
+                resumeEpoch,
+                $"Resume epoch must be from 0 through {_totalEpochs}.");
+        }
+    }
+
     private static bool TryReadPersistedPoint(
         Match match,
         out float epoch,
@@ -462,7 +477,7 @@ internal sealed class LossGraph
             && float.IsFinite(loss);
     }
 
-    private readonly record struct LossPoint(
+    internal readonly record struct LossPoint(
         float Epoch,
         float Training,
         float? Evaluation);

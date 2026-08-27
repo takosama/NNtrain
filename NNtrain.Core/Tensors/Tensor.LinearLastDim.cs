@@ -35,17 +35,77 @@ partial class Tensor
 
         int rows = Numel / inputWidth;
         int outputLength = checked(rows * outputWidth);
+        bool bfloat16MatrixOperands = DType == TensorDType.BFloat16
+            && weight.DType == TensorDType.BFloat16
+            && bias.DType == TensorDType.BFloat16;
+        bool bfp8MatrixOperands = DType == TensorDType.Bfp8
+            && weight.DType == TensorDType.Bfp8
+            && bias.DType == TensorDType.Bfp8;
         if (ExecutionDevice == TensorDevice.Cuda)
         {
-            bool bfloat16Compute = DType == TensorDType.BFloat16
-                && weight.DType == TensorDType.BFloat16
-                && bias.DType == TensorDType.BFloat16;
+            bool bfloat16Compute = bfloat16MatrixOperands;
             string forwardOperation = CudaOperationProfiler.IsEnabled
                 ? $"forward.{(applyRelu ? "linear_relu" : "linear")}" +
                     $"[{inputWidth}->{outputWidth}]"
                 : applyRelu ? "forward.linear_relu" : "forward.linear";
             int[] cudaOutputShape = (int[])_shape.Clone();
             cudaOutputShape[^1] = outputWidth;
+            if (bfp8MatrixOperands)
+            {
+                Bfp8QuantizationDescriptor outputDescriptor =
+                    SelectBfp8ResultDescriptor(this, weight, bias);
+                using CudaBfp8OwnedBuffers bfp8Output =
+                    CudaOperationProfiler.IsEnabled
+                        ? CudaOperationProfiler.Measure(
+                            forwardOperation,
+                            () => CudaBfp8Gemm.LinearForward(
+                                this,
+                                weight,
+                                bias,
+                                outputDescriptor,
+                                rows,
+                                inputWidth,
+                                outputWidth,
+                                applyRelu))
+                        : CudaBfp8Gemm.LinearForward(
+                            this,
+                            weight,
+                            bias,
+                            outputDescriptor,
+                            rows,
+                            inputWidth,
+                            outputWidth,
+                            applyRelu);
+                Tensor bfp8Result = FromCudaBfp8Result(
+                    bfp8Output,
+                    CudaDeviceIndex,
+                    cudaOutputShape,
+                    [this, weight, bias]);
+                if (AutogradContext.IsRecordingEnabled)
+                {
+                    string backwardOperation = CudaOperationProfiler.IsEnabled
+                        ? $"backward.{(applyRelu ? "linear_relu" : "linear")}" +
+                            $"[{inputWidth}->{outputWidth}]"
+                        : applyRelu ? "backward.linear_relu" : "backward.linear";
+                    bfp8Result.Node.BackwardAction = () =>
+                    {
+                        void Backward() => CudaBfp8Gemm.LinearBackward(
+                            this,
+                            weight,
+                            bias,
+                            bfp8Result,
+                            rows,
+                            inputWidth,
+                            outputWidth,
+                            applyRelu);
+                        if (CudaOperationProfiler.IsEnabled)
+                            CudaOperationProfiler.Measure(backwardOperation, Backward);
+                        else
+                            Backward();
+                    };
+                }
+                return bfp8Result;
+            }
             if (bfloat16Compute)
             {
                 var bfloat16Output = CudaOperationProfiler.IsEnabled
@@ -400,6 +460,8 @@ partial class Tensor
             {
                 int inputOffset = row * inputWidth;
                 int outputOffset = row * outputWidth;
+                bool roundInputGradient = bfloat16MatrixOperands
+                    && TensorExecutionContext.ActivePrecisionPolicy is null;
                 if (transposedWeight is not null)
                 {
                     for (int inner = 0; inner < inputWidth; inner++)
@@ -421,6 +483,15 @@ partial class Tensor
                                 outputWidth);
                         _grad[inputOffset + inner] += contribution;
                     }
+                    if (roundInputGradient)
+                    {
+                        for (int inner = 0; inner < inputWidth; inner++)
+                        {
+                            _grad[inputOffset + inner] =
+                                TensorStorageCodec.RoundToBFloat16(
+                                    _grad[inputOffset + inner]);
+                        }
+                    }
                     return;
                 }
 
@@ -430,6 +501,11 @@ partial class Tensor
                     if (applyRelu && result._data[outputIndex] <= 0f)
                         continue;
 
+                    float outputGradient = bfloat16MatrixOperands
+                        ? TensorStorageCodec.RoundToBFloat16(
+                            result._grad[outputIndex])
+                        : result._grad[outputIndex];
+
                     if (backwardFloat16WeightCache is not null)
                     {
                         AddScaledValues(
@@ -437,7 +513,7 @@ partial class Tensor
                             inputOffset,
                             backwardFloat16WeightCache,
                             column * inputWidth,
-                            result._grad[outputIndex],
+                            outputGradient,
                             inputWidth);
                     }
                     else
@@ -447,8 +523,17 @@ partial class Tensor
                             inputOffset,
                             weight._data,
                             column * inputWidth,
-                            result._grad[outputIndex],
+                            outputGradient,
                             inputWidth);
+                    }
+                }
+                if (roundInputGradient)
+                {
+                    for (int inner = 0; inner < inputWidth; inner++)
+                    {
+                        _grad[inputOffset + inner] =
+                            TensorStorageCodec.RoundToBFloat16(
+                                _grad[inputOffset + inner]);
                     }
                 }
             }
@@ -496,7 +581,10 @@ partial class Tensor
                     if (applyRelu && result._data[outputIndex] <= 0f)
                         continue;
 
-                    float gradient = result._grad[outputIndex];
+                    float gradient = bfloat16MatrixOperands
+                        ? TensorStorageCodec.RoundToBFloat16(
+                            result._grad[outputIndex])
+                        : result._grad[outputIndex];
                     biasGradient += gradient;
                     if (decodedInput is not null)
                     {

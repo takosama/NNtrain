@@ -520,25 +520,45 @@ partial class Tensor
                     $"LayerNorm parameters must have shape [{n}], but gamma is {ShapeText(gamma)} " +
                     $"and beta is {ShapeText(beta)}.");
 
-            float mean = SumValues(_data, 0, n) / n;
-            float var = SumSquaredDifferences(_data, 0, n, mean) / n;
+            bool bfloat16Normalization = DType == TensorDType.BFloat16;
+            float mean;
+            float var;
+            if (bfloat16Normalization)
+            {
+                ComputeCudaOrderedLayerNormMoments(
+                    _data, 0, n, out mean, out var);
+            }
+            else
+            {
+                mean = SumValues(_data, 0, n) / n;
+                var = SumSquaredDifferences(_data, 0, n, mean) / n;
+            }
 
             float inv = 1f / MathF.Sqrt(var + eps);
             float[] xhat = new float[n];
             float[] y = new float[n];
 
-            NormalizeAffineValues(
-                _data,
-                0,
-                gamma._data,
-                beta._data,
-                mean,
-                inv,
-                xhat,
-                0,
-                y,
-                0,
-                n);
+            if (bfloat16Normalization)
+            {
+                NormalizeAffineBFloat16Reference(
+                    _data, 0, gamma._data, beta._data, mean, inv,
+                    xhat, y, n);
+            }
+            else
+            {
+                NormalizeAffineValues(
+                    _data,
+                    0,
+                    gamma._data,
+                    beta._data,
+                    mean,
+                    inv,
+                    xhat,
+                    0,
+                    y,
+                    0,
+                    n);
+            }
 
             var t = new Tensor(y, _shape, new[] { this, gamma, beta });
 
@@ -555,18 +575,45 @@ partial class Tensor
                     n,
                     out float sumDxhat,
                     out float sumDxhatXhat);
-                AccumulateLayerNormInputGradient(
-                    _grad,
-                    0,
-                    t._grad,
-                    0,
-                    gamma._data,
-                    xhat,
-                    0,
-                    n,
-                    inv,
-                    sumDxhat,
-                    sumDxhatXhat);
+                if (bfloat16Normalization)
+                {
+                    ComputeCudaOrderedLayerNormGradientSums(
+                        t._grad,
+                        0,
+                        gamma._data,
+                        xhat,
+                        0,
+                        n,
+                        out sumDxhat,
+                        out sumDxhatXhat);
+                    AccumulateCudaOrderedLayerNormInputGradient(
+                        _grad,
+                        0,
+                        t._grad,
+                        0,
+                        gamma._data,
+                        xhat,
+                        0,
+                        n,
+                        inv,
+                        sumDxhat,
+                        sumDxhatXhat);
+                }
+                else
+                {
+                    AccumulateLayerNormInputGradient(
+                        _grad,
+                        0,
+                        t._grad,
+                        0,
+                        gamma._data,
+                        xhat,
+                        0,
+                        n,
+                        inv,
+                        sumDxhat,
+                        sumDxhatXhat);
+                }
             };
 
             return t;
@@ -585,32 +632,53 @@ partial class Tensor
             float[] y = new float[Numel];
             float[] xhat = new float[Numel];
             float[] invs = new float[rows];
+            bool bfloat16Normalization = DType == TensorDType.BFloat16;
 
             void ForwardRow(int r)
             {
                 int rowOffset = r * cols;
-                float mean = SumValues(_data, rowOffset, cols) / cols;
-                float var = SumSquaredDifferences(
-                    _data,
-                    rowOffset,
-                    cols,
-                    mean) / cols;
+                float mean;
+                float var;
+                if (bfloat16Normalization)
+                {
+                    ComputeCudaOrderedLayerNormMoments(
+                        _data, rowOffset, cols, out mean, out var);
+                }
+                else
+                {
+                    mean = SumValues(_data, rowOffset, cols) / cols;
+                    var = SumSquaredDifferences(
+                        _data,
+                        rowOffset,
+                        cols,
+                        mean) / cols;
+                }
 
                 float inv = 1f / MathF.Sqrt(var + eps);
                 invs[r] = inv;
 
-                NormalizeAffineValues(
-                    _data,
-                    rowOffset,
-                    gamma._data,
-                    beta._data,
-                    mean,
-                    inv,
-                    xhat,
-                    rowOffset,
-                    y,
-                    rowOffset,
-                    cols);
+                if (bfloat16Normalization)
+                {
+                    NormalizeAffineBFloat16Reference(
+                        _data, rowOffset, gamma._data, beta._data,
+                        mean, inv, xhat.AsSpan(rowOffset, cols),
+                        y.AsSpan(rowOffset, cols), cols);
+                }
+                else
+                {
+                    NormalizeAffineValues(
+                        _data,
+                        rowOffset,
+                        gamma._data,
+                        beta._data,
+                        mean,
+                        inv,
+                        xhat,
+                        rowOffset,
+                        y,
+                        rowOffset,
+                        cols);
+                }
             }
 
             RunBatches(rows, cols, ForwardRow);
@@ -622,27 +690,54 @@ partial class Tensor
                 void BackwardInputRow(int r)
                 {
                     int rowOffset = r * cols;
-                    ComputeLayerNormGradientSums(
-                        t._grad,
-                        rowOffset,
-                        gamma._data,
-                        xhat,
-                        rowOffset,
-                        cols,
-                        out float sumDxhat,
-                        out float sumDxhatXhat);
-                    AccumulateLayerNormInputGradient(
-                        _grad,
-                        rowOffset,
-                        t._grad,
-                        rowOffset,
-                        gamma._data,
-                        xhat,
-                        rowOffset,
-                        cols,
-                        invs[r],
-                        sumDxhat,
-                        sumDxhatXhat);
+                    if (bfloat16Normalization)
+                    {
+                        ComputeCudaOrderedLayerNormGradientSums(
+                            t._grad,
+                            rowOffset,
+                            gamma._data,
+                            xhat,
+                            rowOffset,
+                            cols,
+                            out float sumDxhat,
+                            out float sumDxhatXhat);
+                        AccumulateCudaOrderedLayerNormInputGradient(
+                            _grad,
+                            rowOffset,
+                            t._grad,
+                            rowOffset,
+                            gamma._data,
+                            xhat,
+                            rowOffset,
+                            cols,
+                            invs[r],
+                            sumDxhat,
+                            sumDxhatXhat);
+                    }
+                    else
+                    {
+                        ComputeLayerNormGradientSums(
+                            t._grad,
+                            rowOffset,
+                            gamma._data,
+                            xhat,
+                            rowOffset,
+                            cols,
+                            out float sumDxhat,
+                            out float sumDxhatXhat);
+                        AccumulateLayerNormInputGradient(
+                            _grad,
+                            rowOffset,
+                            t._grad,
+                            rowOffset,
+                            gamma._data,
+                            xhat,
+                            rowOffset,
+                            cols,
+                            invs[r],
+                            sumDxhat,
+                            sumDxhatXhat);
+                    }
                 }
 
                 RunBatches(rows, cols, BackwardInputRow);
@@ -671,6 +766,155 @@ partial class Tensor
 
         throw new NotSupportedException(
             "LayerNormLastDim requires a tensor with at least one dimension.");
+    }
+
+    private static void ComputeCudaOrderedLayerNormMoments(
+        TensorStorage values,
+        int offset,
+        int length,
+        out float mean,
+        out float variance)
+    {
+        const int threads = 256;
+        Span<float> partials = stackalloc float[threads];
+        for (int thread = 0; thread < threads; thread++)
+        {
+            float sum = 0f;
+            for (int column = thread; column < length; column += threads)
+                sum += values[offset + column];
+            partials[thread] = sum;
+        }
+        mean = ReduceCudaLayerNormBlock(partials) / length;
+
+        partials.Clear();
+        for (int thread = 0; thread < threads; thread++)
+        {
+            float sum = 0f;
+            for (int column = thread; column < length; column += threads)
+            {
+                float difference = values[offset + column] - mean;
+                sum = MathF.FusedMultiplyAdd(difference, difference, sum);
+            }
+            partials[thread] = sum;
+        }
+        variance = ReduceCudaLayerNormBlock(partials) / length;
+    }
+
+    private static float ReduceCudaLayerNormBlock(Span<float> partials)
+    {
+        const int warpSize = 32;
+        const int warps = 8;
+        Span<float> warpSums = stackalloc float[warps];
+        for (int warp = 0; warp < warps; warp++)
+        {
+            Span<float> values = partials.Slice(warp * warpSize, warpSize);
+            for (int delta = warpSize / 2; delta > 0; delta >>= 1)
+            {
+                for (int lane = 0; lane < delta; lane++)
+                    values[lane] += values[lane + delta];
+            }
+            warpSums[warp] = values[0];
+        }
+        for (int delta = warpSize / 2; delta > 0; delta >>= 1)
+        {
+            for (int lane = 0; lane < delta; lane++)
+            {
+                float right = lane + delta < warps
+                    ? warpSums[lane + delta]
+                    : 0f;
+                if (lane < warps)
+                    warpSums[lane] += right;
+            }
+        }
+        return warpSums[0];
+    }
+
+    private static void ComputeCudaOrderedLayerNormGradientSums(
+        float[] gradient,
+        int gradientOffset,
+        TensorStorage gamma,
+        float[] normalized,
+        int normalizedOffset,
+        int length,
+        out float sumGradientToNormalized,
+        out float sumGradientToNormalizedTimesNormalized)
+    {
+        // Match layer_norm_backward_input_block: each of the 256 CUDA
+        // threads owns columns thread + item * blockDim.x, then the block
+        // reduces eight warp sums.  BF16 direct gradients can otherwise land
+        // on the adjacent representable value solely because the CPU SIMD
+        // reduction associates the same FP32 operands differently.
+        const int threads = 256;
+        Span<float> firstPartials = stackalloc float[threads];
+        Span<float> secondPartials = stackalloc float[threads];
+        for (int thread = 0; thread < threads; thread++)
+        {
+            float first = 0f;
+            float second = 0f;
+            for (int column = thread; column < length; column += threads)
+            {
+                float dxhat = gradient[gradientOffset + column]
+                    * gamma[column];
+                float xhat = normalized[normalizedOffset + column];
+                first += dxhat;
+                second = MathF.FusedMultiplyAdd(dxhat, xhat, second);
+            }
+            firstPartials[thread] = first;
+            secondPartials[thread] = second;
+        }
+
+        sumGradientToNormalized = ReduceCudaLayerNormBlock(firstPartials);
+        sumGradientToNormalizedTimesNormalized =
+            ReduceCudaLayerNormBlock(secondPartials);
+    }
+
+    private static void AccumulateCudaOrderedLayerNormInputGradient(
+        float[] destination,
+        int destinationOffset,
+        float[] gradient,
+        int gradientOffset,
+        TensorStorage gamma,
+        float[] normalized,
+        int normalizedOffset,
+        int length,
+        float inverseStandardDeviation,
+        float sumGradientToNormalized,
+        float sumGradientToNormalizedTimesNormalized)
+    {
+        float inverseOverColumns = inverseStandardDeviation / length;
+        for (int column = 0; column < length; column++)
+        {
+            float dxhat = gradient[gradientOffset + column] * gamma[column];
+            float xhat = normalized[normalizedOffset + column];
+            float centered = MathF.FusedMultiplyAdd(
+                length, dxhat, -sumGradientToNormalized);
+            centered = MathF.FusedMultiplyAdd(
+                -xhat,
+                sumGradientToNormalizedTimesNormalized,
+                centered);
+            float inputGradient = inverseOverColumns * centered;
+            destination[destinationOffset + column] += inputGradient;
+        }
+    }
+
+    private static void NormalizeAffineBFloat16Reference(
+        TensorStorage values,
+        int offset,
+        TensorStorage gamma,
+        TensorStorage beta,
+        float mean,
+        float inverse,
+        Span<float> normalized,
+        Span<float> output,
+        int length)
+    {
+        for (int column = 0; column < length; column++)
+        {
+            float xhat = (values[offset + column] - mean) * inverse;
+            normalized[column] = xhat;
+            output[column] = MathF.FusedMultiplyAdd(
+                xhat, gamma[column], beta[column]);
+        }
     }
 
     public Tensor CausalMask(float fillValue = -1e9f)

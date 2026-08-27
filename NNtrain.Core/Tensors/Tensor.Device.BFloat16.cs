@@ -14,13 +14,16 @@ public partial class Tensor
         int resolvedDeviceIndex = ResolveCudaDeviceIndex(deviceIndex);
         NativeCudaDevice accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(resolvedDeviceIndex);
-        if (!_hostDataCurrent
-            && !_cudaBFloat16Buffers.ContainsKey(resolvedDeviceIndex))
-        {
-            SynchronizeHostFromCuda();
-        }
         lock (_deviceSync)
         {
+            if (!_hostDataCurrent
+                && (!_cudaBFloat16Buffers.TryGetValue(
+                        resolvedDeviceIndex,
+                        out BFloat16DeviceBuffer? requestedBuffer)
+                    || requestedBuffer.Version != _dataVersion))
+            {
+                SynchronizeHostFromCudaLocked(_cudaDeviceIndex);
+            }
             if (!_cudaBFloat16Buffers.TryGetValue(
                 resolvedDeviceIndex,
                 out BFloat16DeviceBuffer? buffer)
@@ -31,18 +34,18 @@ public partial class Tensor
                 TensorStorageCodec.EncodeBFloat16(DataBuffer, encoded);
                 buffer = new BFloat16DeviceBuffer(
                     accelerator.Allocate1D(encoded),
+                    _dataVersion,
                     resolvedDeviceIndex);
                 _cudaBFloat16Buffers[resolvedDeviceIndex] = buffer;
-                _cudaBufferDataVersion = _dataVersion;
                 return buffer.Buffer;
             }
 
-            if (_cudaBufferDataVersion != _dataVersion)
+            if (buffer.Version != _dataVersion)
             {
                 var encoded = new ushort[Numel];
                 TensorStorageCodec.EncodeBFloat16(DataBuffer, encoded);
                 buffer.Buffer.CopyFromCPU(encoded);
-                _cudaBufferDataVersion = _dataVersion;
+                buffer.Version = _dataVersion;
             }
             return buffer.Buffer;
         }
@@ -66,8 +69,7 @@ public partial class Tensor
                 previous.Dispose();
             }
             _cudaBFloat16Buffers[deviceIndex] =
-                new BFloat16DeviceBuffer(buffer, deviceIndex);
-            _cudaBufferDataVersion = _dataVersion;
+                new BFloat16DeviceBuffer(buffer, _dataVersion, deviceIndex);
             _hostDataCurrent = false;
             _device = TensorDevice.Cuda;
             _cudaDeviceIndex = deviceIndex;
@@ -146,13 +148,16 @@ public partial class Tensor
 
         internal BFloat16DeviceBuffer(
             NativeCudaBuffer<ushort> buffer,
+            long version,
             int deviceIndex)
         {
             Buffer = buffer;
+            Version = version;
             _accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
         }
 
         internal NativeCudaBuffer<ushort> Buffer { get; }
+        internal long Version { get; set; }
 
         public void Dispose()
         {

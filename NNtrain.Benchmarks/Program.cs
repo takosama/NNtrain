@@ -3,6 +3,22 @@ using NNtrain;
 using NNtrain.Benchmarks;
 
 if (args.Length > 0
+    && string.Equals(args[0], "--performance-baseline", StringComparison.Ordinal))
+{
+    Environment.ExitCode = PerformanceBaselineCommand.Run(args[1..]);
+}
+else if (args.Length > 0
+    && string.Equals(
+        args[0], "--performance-baseline-worker", StringComparison.Ordinal))
+{
+    if (args.Length != 3)
+    {
+        throw new ArgumentException(
+            "Baseline worker requires job and result JSON paths.");
+    }
+    Environment.ExitCode = PerformanceBaselineCommand.RunWorker(args[1], args[2]);
+}
+else if (args.Length > 0
     && string.Equals(args[0], "--profile-transformer-convergence-json", StringComparison.Ordinal))
 {
     string configurationPath = args.Length > 1
@@ -41,6 +57,13 @@ else if (args.Length > 0
     int warmup = args.Length > 1 ? int.Parse(args[1]) : 2;
     int iterations = args.Length > 2 ? int.Parse(args[2]) : 5;
     GpuPrimitiveProfiler.Run(warmup, iterations);
+}
+else if (args.Length > 0
+    && string.Equals(args[0], "--benchmark-bfp8-gemm", StringComparison.Ordinal))
+{
+    int warmup = args.Length > 1 ? int.Parse(args[1]) : 3;
+    int iterations = args.Length > 2 ? int.Parse(args[2]) : 10;
+    Bfp8CudaGemmProfiler.Run(warmup, iterations);
 }
 else if (args.Length > 0
     && string.Equals(args[0], "--profile-transformer-detail-json", StringComparison.Ordinal))

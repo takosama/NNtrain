@@ -1047,23 +1047,34 @@ internal static class CudaOptimizerKernels
         float coefficientC,
         bool useBFloat16TensorCores)
     {
-        if (!useBFloat16TensorCores && rows <= DirectNewtonSchulzMaxRows)
+        if (rows <= DirectNewtonSchulzMaxRows)
         {
-            CudaOptimizerNative.SymmetricGram(
-                deviceIndex, source.NativePtr, gram.NativePtr, rows, columns);
-            CudaOptimizerNative.SymmetricGram(
-                deviceIndex, gram.NativePtr, gramSquared.NativePtr, rows, rows);
-            CudaOptimizerNative.NewtonSchulz(
-                deviceIndex,
-                source.NativePtr,
-                gram.NativePtr,
-                gramSquared.NativePtr,
-                destination.NativePtr,
-                rows,
-                columns,
-                coefficientA,
-                coefficientB,
-                coefficientC);
+            if (useBFloat16TensorCores)
+            {
+                CudaOptimizerNative.SymmetricGramBFloat16Operands(
+                    deviceIndex, source.NativePtr, gram.NativePtr,
+                    rows, columns);
+                CudaOptimizerNative.SymmetricGramBFloat16Operands(
+                    deviceIndex, gram.NativePtr, gramSquared.NativePtr,
+                    rows, rows);
+                CudaOptimizerNative.NewtonSchulzBFloat16Operands(
+                    deviceIndex, source.NativePtr, gram.NativePtr,
+                    gramSquared.NativePtr, destination.NativePtr,
+                    rows, columns, coefficientA, coefficientB, coefficientC);
+            }
+            else
+            {
+                CudaOptimizerNative.SymmetricGram(
+                    deviceIndex, source.NativePtr, gram.NativePtr,
+                    rows, columns);
+                CudaOptimizerNative.SymmetricGram(
+                    deviceIndex, gram.NativePtr, gramSquared.NativePtr,
+                    rows, rows);
+                CudaOptimizerNative.NewtonSchulz(
+                    deviceIndex, source.NativePtr, gram.NativePtr,
+                    gramSquared.NativePtr, destination.NativePtr,
+                    rows, columns, coefficientA, coefficientB, coefficientC);
+            }
             return;
         }
 

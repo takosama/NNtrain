@@ -315,6 +315,11 @@ internal static class TransformerCudaProfiler
             .OrderBy(sample => sample.Total)
             .ToArray();
         double median = orderedSamples[orderedSamples.Length / 2].Total;
+        int p95Index = Math.Clamp(
+            (int)Math.Ceiling(orderedSamples.Length * 0.95d) - 1,
+            0,
+            orderedSamples.Length - 1);
+        double p95 = orderedSamples[p95Index].Total;
         double tokensPerSecond = batch * sequence / (mean / 1000d);
         double[] clean = samples
             .Where(sample => sample.Gen0 == 0)
@@ -355,7 +360,8 @@ internal static class TransformerCudaProfiler
             $"transformer CUDA ({devices.Length} GPU, " +
             $"{TensorPrecisionModeNames.Format(precisionMode)}): " +
             $"mean {mean:F2} ms, " +
-            $"median {median:F2} ms, {tokensPerSecond:N0} tokens/s");
+            $"p50 {median:F2} ms, p95 {p95:F2} ms, " +
+            $"{tokensPerSecond:N0} tokens/s");
         Console.WriteLine(
             $"GC-free median {cleanMedian:F2} ms, " +
             $"{cleanTokensPerSecond:N0} tokens/s ({clean.Length} samples)");

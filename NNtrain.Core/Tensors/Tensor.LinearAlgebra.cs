@@ -90,7 +90,8 @@ partial class Tensor
             if (ExecutionDevice == TensorDevice.Cuda
                 && DType == other.DType
                 && (DType == TensorDType.Float32
-                    || DType == TensorDType.BFloat16))
+                    || DType == TensorDType.BFloat16
+                    || DType == TensorDType.Bfp8))
             {
                 return MatMulCuda(other, batch: 1, m, k, n, [m, n]);
             }
@@ -187,8 +188,27 @@ partial class Tensor
         int[] outputShape)
     {
         bool bfloat16 = DType == TensorDType.BFloat16;
+        bool bfp8 = DType == TensorDType.Bfp8;
         Tensor result;
-        if (bfloat16)
+        if (bfp8)
+        {
+            Bfp8QuantizationDescriptor outputDescriptor =
+                SelectBfp8ResultDescriptor(this, other);
+            using CudaBfp8OwnedBuffers output = CudaBfp8Gemm.MatMulForward(
+                this,
+                other,
+                outputDescriptor,
+                batch,
+                m,
+                k,
+                n);
+            result = FromCudaBfp8Result(
+                output,
+                CudaDeviceIndex,
+                outputShape,
+                [this, other]);
+        }
+        else if (bfloat16)
         {
             var output = TensorCudaKernels.MatMulForwardBFloat16Resident(
                 this, other, batch, m, k, n);
@@ -215,7 +235,12 @@ partial class Tensor
         {
             result.Node.BackwardAction = () =>
             {
-                if (bfloat16)
+                if (bfp8)
+                {
+                    CudaBfp8Gemm.MatMulBackward(
+                        this, other, result, batch, m, k, n);
+                }
+                else if (bfloat16)
                 {
                     TensorCudaKernels.MatMulBackwardBFloat16Resident(
                         this, other, result, batch, m, k, n);

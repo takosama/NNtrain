@@ -58,6 +58,15 @@ sealed record TrainingConfiguration
 
     public int MicroBatchCount { get; init; } = 1;
 
+    /// <summary>
+    /// Legacy-root numeric execution setting. Version-two configurations may
+    /// alternatively place this in the model section.
+    /// </summary>
+    public string? Precision { get; init; }
+
+    [JsonPropertyName("bfp8_block_size")]
+    public int? RootBfp8BlockSize { get; init; }
+
     public string Optimizer { get; init; } = GainShareAdamWOptimizer;
 
     public float LearningRate { get; init; } = 3e-4f;
@@ -122,6 +131,17 @@ sealed record TrainingConfiguration
         string json = File.ReadAllText(fullConfigurationPath);
         TrainingConfigurationV2.NormalizedConfiguration normalized =
             TrainingConfigurationV2.Normalize(json);
+        return LoadNormalized(fullConfigurationPath, normalized);
+    }
+
+    internal static TrainingConfiguration LoadNormalized(
+        string configurationPath,
+        TrainingConfigurationV2.NormalizedConfiguration normalized)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(configurationPath);
+        ArgumentNullException.ThrowIfNull(normalized);
+
+        string fullConfigurationPath = Path.GetFullPath(configurationPath);
         if (normalized.IsV2
             && !string.Equals(
                 normalized.TaskType,
@@ -132,7 +152,7 @@ sealed record TrainingConfiguration
                 $"Configuration task '{normalized.TaskType}' is not an " +
                 "image-classification task.");
         }
-        json = normalized.Json;
+        string json = normalized.Json;
         ValidateJsonSectionExclusivity(json);
         TrainingConfiguration configuration =
             JsonSerializer.Deserialize<TrainingConfiguration>(
@@ -568,7 +588,32 @@ sealed record TrainingConfiguration
         }
 
         Model.Validate();
+        _ = GetPrecisionMode();
+        if (RootBfp8BlockSize is <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(RootBfp8BlockSize),
+                RootBfp8BlockSize,
+                "BFP8 block size must be positive.");
+        }
     }
+
+    internal TensorPrecisionMode GetPrecisionMode()
+    {
+        if (Precision is not null && Model.Precision is not null)
+        {
+            throw new ArgumentException(
+                "precision cannot be specified at both the root and model " +
+                "sections.",
+                nameof(Precision));
+        }
+        return Precision is null
+            ? Model.GetPrecisionMode()
+            : TensorPrecisionModeNames.Parse(Precision);
+    }
+
+    internal int GetBfp8BlockSize()
+        => RootBfp8BlockSize ?? Model.Bfp8BlockSize;
 
     private static void ValidateGainShareUnitInterval(
         float value,
@@ -786,6 +831,12 @@ sealed record Cifar100AugmentationConfiguration
 
 sealed record ModelConfiguration
 {
+    public string? Precision { get; init; }
+
+    [JsonPropertyName("bfp8_block_size")]
+    public int Bfp8BlockSize { get; init; } =
+        Bfp8QuantizationDescriptor.DefaultBlockSize;
+
     public int Heads { get; init; } = 1;
 
     public int HiddenSize { get; init; } = 128;
@@ -800,6 +851,14 @@ sealed record ModelConfiguration
 
     internal void Validate()
     {
+        _ = GetPrecisionMode();
+        if (Bfp8BlockSize <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(Bfp8BlockSize),
+                Bfp8BlockSize,
+                "BFP8 block size must be positive.");
+        }
         if (Heads <= 0)
         {
             throw new ArgumentOutOfRangeException(
@@ -841,6 +900,11 @@ sealed record ModelConfiguration
                 "Dropout probability must be finite and in [0, 1).");
         }
     }
+
+    internal TensorPrecisionMode GetPrecisionMode()
+        => Precision is null
+            ? TensorPrecisionMode.Float32
+            : TensorPrecisionModeNames.Parse(Precision);
 
     internal void ValidateForModelWidth(int modelWidth)
     {

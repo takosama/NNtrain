@@ -2,6 +2,109 @@ namespace NNtrain;
 
 internal static partial class WikiLanguageModelCommand
 {
+    internal static bool ShouldGenerateDatasetContinuation(
+        long committedGlobalStep,
+        int everySteps,
+        int retainedDocumentCount)
+        => committedGlobalStep > 0
+            && everySteps > 0
+            && retainedDocumentCount > 0
+            && committedGlobalStep % everySteps == 0;
+
+    private static void RunDatasetContinuationAfterCommittedStep(
+        long committedGlobalStep,
+        LanguageModel model,
+        BpeTokenizer tokenizer,
+        IReadOnlyList<string> documents,
+        WikiTrainingConfiguration config,
+        Random random,
+        TextWriter output,
+        TextWriter warning)
+    {
+        RunDatasetContinuationAfterCommittedStep(
+            committedGlobalStep,
+            config.DatasetSampleEverySteps,
+            documents.Count,
+            () => StreamDatasetContinuation(
+                committedGlobalStep,
+                model,
+                tokenizer,
+                documents,
+                config,
+                random,
+                output),
+            warning);
+    }
+
+    internal static void RunDatasetContinuationAfterCommittedStep(
+        long committedGlobalStep,
+        int everySteps,
+        int retainedDocumentCount,
+        Action generate,
+        TextWriter warning)
+    {
+        ArgumentNullException.ThrowIfNull(generate);
+        ArgumentNullException.ThrowIfNull(warning);
+        if (!ShouldGenerateDatasetContinuation(
+            committedGlobalStep,
+            everySteps,
+            retainedDocumentCount))
+        {
+            return;
+        }
+
+        try
+        {
+            generate();
+        }
+        catch (Exception exception) when (
+            !IsFatalDatasetContinuationFailure(exception))
+        {
+            warning.WriteLine(
+                $"Warning: dataset continuation generation at step " +
+                $"{committedGlobalStep:N0} failed: {exception.Message}");
+        }
+    }
+
+    internal static bool IsFatalDatasetContinuationFailure(
+        Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        for (Exception? current = exception;
+            current is not null;
+            current = current.InnerException)
+        {
+            if (current is OutOfMemoryException
+                or StackOverflowException
+                or OperationCanceledException
+                or AccessViolationException
+                or System.Runtime.InteropServices.SEHException)
+            {
+                return true;
+            }
+
+            if (HasFatalCudaStatus(current.Message))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool HasFatalCudaStatus(string message)
+    {
+        ReadOnlySpan<int> fatalStatuses =
+        [600, 700, 702, 710, 714, 715, 716, 717, 718, 719];
+        foreach (int status in fatalStatuses)
+        {
+            if (message.Contains(
+                $"CUDA error {status}",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     internal static DatasetContinuation CreateDatasetContinuation(
         LanguageModel model,
         BpeTokenizer tokenizer,

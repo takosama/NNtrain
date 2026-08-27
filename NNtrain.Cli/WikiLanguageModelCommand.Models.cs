@@ -33,11 +33,16 @@ internal static partial class WikiLanguageModelCommand
                 $"cannot use storage dtype '{storageDType}'.",
                 nameof(storageDType));
         }
+        bool bfp8Mode = precisionMode is TensorPrecisionMode.Bfp8
+            or TensorPrecisionMode.Mix8_32;
         LanguageModel model = CreateModel(
             config,
             vocabularySize,
-            storageDType);
-        model.SetPrecisionMode(precisionMode);
+            bfp8Mode ? TensorDType.Float32 : storageDType);
+        if (bfp8Mode)
+            model.to(precisionMode, config.Bfp8BlockSize);
+        else
+            model.SetPrecisionMode(precisionMode);
         return model;
     }
 
@@ -226,20 +231,31 @@ internal static partial class WikiLanguageModelCommand
 
     internal static LanguageModel CreateModel(
         WikiModelCheckpoint checkpoint,
-        int seed)
+        int seed,
+        int bfp8BlockSize = Bfp8QuantizationDescriptor.DefaultBlockSize)
     {
         TensorPrecisionMode precisionMode =
             GetCheckpointPrecisionMode(checkpoint);
-        LanguageModel model = CreateModelStorage(checkpoint, seed);
-        model.SetPrecisionMode(precisionMode);
+        bool bfp8Mode = precisionMode is TensorPrecisionMode.Bfp8
+            or TensorPrecisionMode.Mix8_32;
+        LanguageModel model = CreateModelStorage(
+            checkpoint,
+            seed,
+            bfp8Mode
+                ? TensorDType.Float32
+                : GetCheckpointModelDType(checkpoint));
+        if (bfp8Mode)
+            model.to(precisionMode, bfp8BlockSize);
+        else
+            model.SetPrecisionMode(precisionMode);
         return model;
     }
 
     private static LanguageModel CreateModelStorage(
         WikiModelCheckpoint checkpoint,
-        int seed)
+        int seed,
+        TensorDType modelDType)
     {
-        TensorDType modelDType = GetCheckpointModelDType(checkpoint);
         if (IsCheckpointForgetMemoryDrn(checkpoint))
         {
             return new ForgetMemoryDRNGpt(
@@ -380,7 +396,8 @@ internal static partial class WikiLanguageModelCommand
                 "Wiki model checkpoint does not declare its model dtype.");
         if (dtype is not TensorDType.Float32
             and not TensorDType.Float16
-            and not TensorDType.BFloat16)
+            and not TensorDType.BFloat16
+            and not TensorDType.Bfp8)
         {
             throw new InvalidDataException(
                 $"Wiki model checkpoint declares unsupported model dtype " +

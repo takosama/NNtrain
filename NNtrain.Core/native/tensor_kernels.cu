@@ -584,6 +584,11 @@ __global__ void neko_combine_batched_kernel(
         + (row == column ? a : 0.f);
 }
 
+__device__ __forceinline__ float round_bf16_operand(float value) {
+    return __bfloat162float(__float2bfloat16_rn(value));
+}
+
+template <bool BFloat16Operands>
 __global__ void symmetric_gram_kernel(const float* source,
     float* destination, int rows, int columns) {
     int linear = blockIdx.x * blockDim.x + threadIdx.x;
@@ -593,12 +598,19 @@ __global__ void symmetric_gram_kernel(const float* source,
     int row = linear / rows;
     int other = linear - row * rows;
     float sum = 0.f;
-    for (int column = 0; column < columns; ++column)
-        sum += source[row * columns + column]
-            * source[other * columns + column];
+    for (int column = 0; column < columns; ++column) {
+        float left = source[row * columns + column];
+        float right = source[other * columns + column];
+        if constexpr (BFloat16Operands) {
+            left = round_bf16_operand(left);
+            right = round_bf16_operand(right);
+        }
+        sum = fmaf(left, right, sum);
+    }
     destination[linear] = sum;
 }
 
+template <bool BFloat16Operands>
 __global__ void newton_schulz_kernel(const float* source,
     const float* gram, const float* gram_squared, float* destination,
     int rows, int columns, float a, float b, float c) {
@@ -607,6 +619,24 @@ __global__ void newton_schulz_kernel(const float* source,
         return;
     int row = linear / columns;
     int column = linear - row * columns;
+    if constexpr (BFloat16Operands) {
+        float result = 0.f;
+        int coefficient_offset = row * rows;
+        for (int inner = 0; inner < rows; ++inner) {
+            float coefficient = fmaf(
+                c,
+                gram_squared[coefficient_offset + inner],
+                b * gram[coefficient_offset + inner]);
+            if (row == inner)
+                coefficient += a;
+            coefficient = round_bf16_operand(coefficient);
+            const float source_value = round_bf16_operand(
+                source[inner * columns + column]);
+            result = fmaf(coefficient, source_value, result);
+        }
+        destination[linear] = result;
+        return;
+    }
     float result = a * source[linear];
     int coefficient_offset = row * rows;
     for (int inner = 0; inner < rows; ++inner) {
@@ -1399,7 +1429,14 @@ NNTRAIN_EXPORT int nntrain_optimizer_neko_combine_batched(
 NNTRAIN_EXPORT int nntrain_optimizer_symmetric_gram(const float* source,
     float* destination, int rows, int columns) {
     int length = rows * rows;
-    NNTRAIN_LAUNCH_1D(symmetric_gram_kernel, length, source, destination,
+    NNTRAIN_LAUNCH_1D(symmetric_gram_kernel<false>, length, source, destination,
+        rows, columns);
+}
+
+NNTRAIN_EXPORT int nntrain_optimizer_symmetric_gram_bf16_operands(
+    const float* source, float* destination, int rows, int columns) {
+    int length = rows * rows;
+    NNTRAIN_LAUNCH_1D(symmetric_gram_kernel<true>, length, source, destination,
         rows, columns);
 }
 
@@ -1407,7 +1444,15 @@ NNTRAIN_EXPORT int nntrain_optimizer_newton_schulz(const float* source,
     const float* gram, const float* gram_squared, float* destination,
     int rows, int columns, float a, float b, float c) {
     int length = rows * columns;
-    NNTRAIN_LAUNCH_1D(newton_schulz_kernel, length, source, gram,
+    NNTRAIN_LAUNCH_1D(newton_schulz_kernel<false>, length, source, gram,
+        gram_squared, destination, rows, columns, a, b, c);
+}
+
+NNTRAIN_EXPORT int nntrain_optimizer_newton_schulz_bf16_operands(
+    const float* source, const float* gram, const float* gram_squared,
+    float* destination, int rows, int columns, float a, float b, float c) {
+    int length = rows * columns;
+    NNTRAIN_LAUNCH_1D(newton_schulz_kernel<true>, length, source, gram,
         gram_squared, destination, rows, columns, a, b, c);
 }
 

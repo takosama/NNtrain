@@ -16,6 +16,17 @@ public enum TensorPrecisionMode
     /// master weights, losses, normalization, and optimizer state.
     /// </summary>
     Mix16_32 = 2,
+
+    /// <summary>
+    /// Signed Int8 tensor-wide storage. The tensor owns one Float32 scale.
+    /// </summary>
+    Bfp8 = 3,
+
+    /// <summary>
+    /// Signed Int8 block storage with Float32 accumulation, reductions,
+    /// normalization, loss, gradients, master weights, and optimizer state.
+    /// </summary>
+    Mix8_32 = 4,
 }
 
 /// <summary>Canonical configuration names for precision modes.</summary>
@@ -24,6 +35,8 @@ public static class TensorPrecisionModeNames
     public const string Float32 = "float32";
     public const string BFloat16 = "bfloat16";
     public const string Mix16_32 = "mix16_32";
+    public const string Bfp8 = "bfp8";
+    public const string Mix8_32 = "mix8_32";
 
     public static TensorPrecisionMode Parse(string value)
     {
@@ -34,9 +47,14 @@ public static class TensorPrecisionModeNames
             return TensorPrecisionMode.BFloat16;
         if (string.Equals(value, Mix16_32, StringComparison.OrdinalIgnoreCase))
             return TensorPrecisionMode.Mix16_32;
+        if (string.Equals(value, Bfp8, StringComparison.OrdinalIgnoreCase))
+            return TensorPrecisionMode.Bfp8;
+        if (string.Equals(value, Mix8_32, StringComparison.OrdinalIgnoreCase))
+            return TensorPrecisionMode.Mix8_32;
         throw new ArgumentException(
             $"Unsupported precision mode '{value}'. Supported values are " +
-            $"'{Float32}', '{BFloat16}', and '{Mix16_32}'.",
+            $"'{Float32}', '{BFloat16}', '{Mix16_32}', '{Bfp8}', and " +
+            $"'{Mix8_32}'.",
             nameof(value));
     }
 
@@ -46,6 +64,8 @@ public static class TensorPrecisionModeNames
             TensorPrecisionMode.Float32 => Float32,
             TensorPrecisionMode.BFloat16 => BFloat16,
             TensorPrecisionMode.Mix16_32 => Mix16_32,
+            TensorPrecisionMode.Bfp8 => Bfp8,
+            TensorPrecisionMode.Mix8_32 => Mix8_32,
             _ => throw new ArgumentOutOfRangeException(nameof(mode)),
         };
 }
@@ -58,6 +78,8 @@ public static class TensorPrecisionModeExtensions
             TensorPrecisionMode.Float32 => TensorDType.Float32,
             TensorPrecisionMode.BFloat16 => TensorDType.BFloat16,
             TensorPrecisionMode.Mix16_32 => TensorDType.BFloat16,
+            TensorPrecisionMode.Bfp8 => TensorDType.Bfp8,
+            TensorPrecisionMode.Mix8_32 => TensorDType.Bfp8,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(mode), mode, "Unknown tensor precision mode."),
         };
@@ -70,6 +92,7 @@ public static class TensorPrecisionModeExtensions
             // Raw Float16 remains a supported low-level storage format. Its
             // training contract is the legacy form of mixed precision.
             TensorDType.Float16 => TensorPrecisionMode.Mix16_32,
+            TensorDType.Bfp8 => TensorPrecisionMode.Bfp8,
             _ => throw new NotSupportedException(
                 $"Tensor dtype '{dtype}' has no training precision mode."),
         };

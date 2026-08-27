@@ -12,7 +12,7 @@ internal sealed class AutogradNode
     private readonly bool _isDetached;
     private Action _backwardAction = NoBackward;
     private bool _hasBackwardAction;
-    private List<IDisposable>? _resources;
+    private List<IAutogradLease>? _leases;
 
     internal AutogradNode(Tensor[]? parents = null)
         : this(parents, isDetached: false)
@@ -64,24 +64,137 @@ internal sealed class AutogradNode
 
     internal void RunBackward() => _backwardAction();
 
+    /// <summary>
+    /// Atomically associates a typed saved context with the only backward
+    /// action that may consume it. The action captures the lease, never the
+    /// context itself.
+    /// </summary>
+    internal void SetBackward<TContext>(
+        AutogradLease<TContext> lease,
+        Action<TContext> backward)
+        where TContext : class
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        ArgumentNullException.ThrowIfNull(backward);
+
+        if (_isDetached)
+        {
+            lease.Dispose();
+            return;
+        }
+        if (_hasBackwardAction)
+        {
+            DisposeRejectedLease(lease);
+            throw new InvalidOperationException(
+                "The backward action for an autograd node can only be assigned once.");
+        }
+
+        Action leasedBackward = () => lease.Use(backward);
+        try
+        {
+            RegisterLease(lease);
+            _backwardAction = leasedBackward;
+            _hasBackwardAction = true;
+        }
+        catch (Exception registrationFailure)
+        {
+            try
+            {
+                lease.Dispose();
+            }
+            catch (Exception releaseFailure)
+            {
+                throw new AggregateException(
+                    "Registering an autograd lease failed, and rolling it back also failed.",
+                    registrationFailure,
+                    releaseFailure);
+            }
+            throw;
+        }
+    }
+
+    internal void RegisterLease(IAutogradLease lease)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        if (lease.IsReleased)
+            throw new ObjectDisposedException(nameof(lease));
+        (_leases ??= []).Add(lease);
+    }
+
     internal void RegisterResource(IDisposable resource)
     {
         ArgumentNullException.ThrowIfNull(resource);
-        (_resources ??= []).Add(resource);
+        RegisterLease(AutogradLease<IDisposable>.Own(
+            resource,
+            AutogradLeaseMetadata.LegacyOwned,
+            static owned => owned.Dispose()));
     }
+
+    internal bool HasLeases => _leases is { Count: > 0 };
 
     internal void ReleaseGraph()
     {
-        if (_resources is not null)
+        List<Exception>? failures = null;
+        List<IAutogradLease>? leases = Interlocked.Exchange(
+            ref _leases,
+            null);
+        try
         {
-            foreach (IDisposable resource in _resources)
-                resource.Dispose();
-            _resources = null;
+            if (leases is not null)
+            {
+                foreach (IAutogradLease lease in leases)
+                {
+                    try
+                    {
+                        lease.Dispose();
+                    }
+                    catch (Exception exception)
+                    {
+                        AddFailure(ref failures, exception);
+                    }
+                }
+            }
         }
-        _backwardAction = NoBackward;
-        _parents = [];
-        _parentDataVersions = [];
-        Parents = Array.Empty<Tensor>();
+        finally
+        {
+            _backwardAction = NoBackward;
+            _parents = [];
+            _parentDataVersions = [];
+            Parents = Array.Empty<Tensor>();
+        }
+
+        if (failures is not null)
+        {
+            throw new AggregateException(
+                "One or more autograd leases failed to release.",
+                failures);
+        }
+    }
+
+    private static void DisposeRejectedLease(IAutogradLease lease)
+    {
+        try
+        {
+            lease.Dispose();
+        }
+        catch (Exception releaseFailure)
+        {
+            throw new AggregateException(
+                "The autograd node already has a backward action, and the rejected " +
+                "lease failed to release.",
+                releaseFailure);
+        }
+    }
+
+    private static void AddFailure(
+        ref List<Exception>? failures,
+        Exception exception)
+    {
+        failures ??= [];
+        if (exception is AggregateException aggregate)
+            failures.AddRange(aggregate.Flatten().InnerExceptions);
+        else
+            failures.Add(exception);
     }
 
     internal void ValidateParentVersions()

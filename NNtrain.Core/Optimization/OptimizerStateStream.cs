@@ -22,6 +22,8 @@ public static class OptimizerStateStream
     {
         PropertyNameCaseInsensitive = true,
     };
+    private static readonly OptimizerStateCodecRegistry CodecRegistry =
+        CreateCodecRegistry();
 
     public static IReadOnlyList<IOptimizer> GetLeafOptimizers(
         IOptimizer optimizer)
@@ -33,50 +35,22 @@ public static class OptimizerStateStream
     }
 
     public static string GetStateType(IOptimizer optimizer)
-        => optimizer switch
-        {
-            NekoMuon => "NekoMuon",
-            AdamW => "AdamW",
-            Lion => "Lion",
-            GainShareAdamW => "GainShareAdamW",
-            CompositeOptimizer => "CompositeOptimizer",
-            _ => throw new NotSupportedException(
-                $"Optimizer '{optimizer.GetType().Name}' does not support " +
-                "streaming checkpoint state."),
-        };
+        => optimizer is IOptimizerContainer
+            ? "CompositeOptimizer"
+            : ResolveCodec(optimizer).StateType;
 
     public static void LoadStateJson(IOptimizer optimizer, Stream stream)
     {
         ArgumentNullException.ThrowIfNull(optimizer);
         ArgumentNullException.ThrowIfNull(stream);
-        switch (optimizer)
+        if (optimizer is IOptimizerContainer)
         {
-            case NekoMuon nekoMuon:
-                nekoMuon.RestoreStateOwned(
-                    Deserialize<NekoMuonState>(stream));
-                break;
-            case AdamW adamW:
-                adamW.RestoreStateOwned(
-                    Deserialize<AdamWState>(stream));
-                break;
-            case Lion lion:
-                lion.RestoreStateOwned(
-                    Deserialize<LionState>(stream));
-                break;
-            case GainShareAdamW gainShare:
-                gainShare.RestoreStateOwned(
-                    Deserialize<GainShareAdamWState>(stream));
-                break;
-            case CompositeOptimizer:
-                throw new ArgumentException(
-                    "Load each leaf returned by GetLeafOptimizers when " +
-                    "restoring a composite optimizer.",
-                    nameof(optimizer));
-            default:
-                throw new NotSupportedException(
-                    $"Optimizer '{optimizer.GetType().Name}' does not " +
-                    "support streaming checkpoint state.");
+            throw new ArgumentException(
+                "Load each leaf returned by GetLeafOptimizers when " +
+                "restoring a composite optimizer.",
+                nameof(optimizer));
         }
+        ResolveCodec(optimizer).LoadJson(optimizer, stream);
     }
 
     /// <summary>
@@ -117,31 +91,14 @@ public static class OptimizerStateStream
                 $"'{expectedType}' was expected.");
         }
 
-        switch (optimizer)
+        if (optimizer is IOptimizerContainer)
         {
-            case NekoMuon nekoMuon:
-                nekoMuon.RestoreStateOwned(ReadNekoMuonState(reader, stream));
-                break;
-            case AdamW adamW:
-                adamW.RestoreStateOwned(ReadAdamWState(reader, stream));
-                break;
-            case Lion lion:
-                lion.RestoreStateOwned(ReadLionState(reader, stream));
-                break;
-            case GainShareAdamW gainShare:
-                gainShare.RestoreStateOwned(
-                    ReadGainShareAdamWState(reader, stream));
-                break;
-            case CompositeOptimizer:
-                throw new ArgumentException(
-                    "Load each leaf returned by GetLeafOptimizers when " +
-                    "restoring a composite optimizer.",
-                    nameof(optimizer));
-            default:
-                throw new NotSupportedException(
-                    $"Optimizer '{optimizer.GetType().Name}' does not " +
-                    "support streaming checkpoint state.");
+            throw new ArgumentException(
+                "Load each leaf returned by GetLeafOptimizers when " +
+                "restoring a composite optimizer.",
+                nameof(optimizer));
         }
+        ResolveCodec(optimizer).LoadBinary(optimizer, reader, stream);
 
         if (stream.CanSeek && stream.Position != stream.Length)
         {
@@ -154,42 +111,14 @@ public static class OptimizerStateStream
     {
         ArgumentNullException.ThrowIfNull(optimizer);
         ArgumentNullException.ThrowIfNull(stream);
-        switch (optimizer)
+        if (optimizer is IOptimizerContainer)
         {
-            case NekoMuon nekoMuon:
-                JsonSerializer.Serialize(
-                    stream,
-                    nekoMuon.CaptureStateForStreaming(),
-                    JsonOptions);
-                break;
-            case AdamW adamW:
-                JsonSerializer.Serialize(
-                    stream,
-                    adamW.CaptureStateForStreaming(),
-                    JsonOptions);
-                break;
-            case Lion lion:
-                JsonSerializer.Serialize(
-                    stream,
-                    lion.CaptureStateForStreaming(),
-                    JsonOptions);
-                break;
-            case GainShareAdamW gainShare:
-                JsonSerializer.Serialize(
-                    stream,
-                    gainShare.CaptureStateForStreaming(),
-                    JsonOptions);
-                break;
-            case CompositeOptimizer:
-                throw new ArgumentException(
-                    "Save each leaf returned by GetLeafOptimizers when " +
-                    "serializing a composite optimizer.",
-                    nameof(optimizer));
-            default:
-                throw new NotSupportedException(
-                    $"Optimizer '{optimizer.GetType().Name}' does not " +
-                    "support streaming checkpoint state.");
+            throw new ArgumentException(
+                "Save each leaf returned by GetLeafOptimizers when " +
+                "serializing a composite optimizer.",
+                nameof(optimizer));
         }
+        ResolveCodec(optimizer).SaveJson(optimizer, stream);
     }
 
     /// <summary>
@@ -212,40 +141,90 @@ public static class OptimizerStateStream
         writer.Write(BinaryFormatVersion);
         WriteString(writer, GetStateType(optimizer));
 
-        switch (optimizer)
+        if (optimizer is IOptimizerContainer)
         {
-            case NekoMuon nekoMuon:
-                WriteNekoMuonState(
-                    writer,
-                    stream,
-                    nekoMuon.CaptureStateForStreaming());
-                break;
-            case AdamW adamW:
-                WriteAdamWState(writer, stream, adamW);
-                break;
-            case Lion lion:
-                WriteLionState(
-                    writer,
-                    stream,
-                    lion.CaptureStateForStreaming());
-                break;
-            case GainShareAdamW gainShare:
-                WriteGainShareAdamWState(
-                    writer,
-                    stream,
-                    gainShare.CaptureStateForStreaming());
-                break;
-            case CompositeOptimizer:
-                throw new ArgumentException(
-                    "Save each leaf returned by GetLeafOptimizers when " +
-                    "serializing a composite optimizer.",
-                    nameof(optimizer));
-            default:
-                throw new NotSupportedException(
-                    $"Optimizer '{optimizer.GetType().Name}' does not " +
-                    "support streaming checkpoint state.");
+            throw new ArgumentException(
+                "Save each leaf returned by GetLeafOptimizers when " +
+                "serializing a composite optimizer.",
+                nameof(optimizer));
         }
+        ResolveCodec(optimizer).SaveBinary(optimizer, writer, stream);
         writer.Flush();
+    }
+
+    private static OptimizerStateCodecRegistry CreateCodecRegistry()
+    {
+        var registry = new OptimizerStateCodecRegistry();
+        registry.Register(
+            new OptimizerStateCodec<NekoMuon>(
+                "NekoMuon",
+                (optimizer, stream) => optimizer.RestoreStateOwned(
+                    Deserialize<NekoMuonState>(stream)),
+                (optimizer, reader, stream) => optimizer.RestoreStateOwned(
+                    ReadNekoMuonState(reader, stream)),
+                (optimizer, stream) => JsonSerializer.Serialize(
+                    stream,
+                    optimizer.CaptureStateForStreaming(),
+                    JsonOptions),
+                (optimizer, writer, stream) => WriteNekoMuonState(
+                    writer,
+                    stream,
+                    optimizer.CaptureStateForStreaming())));
+        registry.Register(
+            new OptimizerStateCodec<AdamW>(
+                "AdamW",
+                (optimizer, stream) => optimizer.RestoreStateOwned(
+                    Deserialize<AdamWState>(stream)),
+                (optimizer, reader, stream) => optimizer.RestoreStateOwned(
+                    ReadAdamWState(reader, stream)),
+                (optimizer, stream) => JsonSerializer.Serialize(
+                    stream,
+                    optimizer.CaptureStateForStreaming(),
+                    JsonOptions),
+                (optimizer, writer, stream) => WriteAdamWState(
+                    writer,
+                    stream,
+                    optimizer)));
+        registry.Register(
+            new OptimizerStateCodec<Lion>(
+                "Lion",
+                (optimizer, stream) => optimizer.RestoreStateOwned(
+                    Deserialize<LionState>(stream)),
+                (optimizer, reader, stream) => optimizer.RestoreStateOwned(
+                    ReadLionState(reader, stream)),
+                (optimizer, stream) => JsonSerializer.Serialize(
+                    stream,
+                    optimizer.CaptureStateForStreaming(),
+                    JsonOptions),
+                (optimizer, writer, stream) => WriteLionState(
+                    writer,
+                    stream,
+                    optimizer.CaptureStateForStreaming())));
+        registry.Register(
+            new OptimizerStateCodec<GainShareAdamW>(
+                "GainShareAdamW",
+                (optimizer, stream) => optimizer.RestoreStateOwned(
+                    Deserialize<GainShareAdamWState>(stream)),
+                (optimizer, reader, stream) => optimizer.RestoreStateOwned(
+                    ReadGainShareAdamWState(reader, stream)),
+                (optimizer, stream) => JsonSerializer.Serialize(
+                    stream,
+                    optimizer.CaptureStateForStreaming(),
+                    JsonOptions),
+                (optimizer, writer, stream) => WriteGainShareAdamWState(
+                    writer,
+                    stream,
+                    optimizer.CaptureStateForStreaming())));
+        return registry;
+    }
+
+    private static IOptimizerStateCodec ResolveCodec(IOptimizer optimizer)
+    {
+        if (CodecRegistry.TryResolve(optimizer, out IOptimizerStateCodec? codec))
+            return codec!;
+        throw new NotSupportedException(
+            $"Optimizer '{optimizer.GetType().Name}' does not support " +
+            "streaming checkpoint state.");
     }
 
     private static void WriteAdamWState(
@@ -667,9 +646,9 @@ public static class OptimizerStateStream
         IOptimizer optimizer,
         List<IOptimizer> leaves)
     {
-        if (optimizer is CompositeOptimizer composite)
+        if (optimizer is IOptimizerContainer container)
         {
-            foreach (IOptimizer child in composite.Optimizers)
+            foreach (IOptimizer child in container.Optimizers)
                 AddLeaves(child, leaves);
             return;
         }

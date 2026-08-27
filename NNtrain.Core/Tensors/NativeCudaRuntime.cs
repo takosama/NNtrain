@@ -1,5 +1,6 @@
-using System.Runtime.InteropServices;
 using System.Text;
+using NNtrain.Cuda.Execution;
+using NNtrain.Cuda.Interop;
 
 namespace NNtrain;
 
@@ -10,14 +11,16 @@ internal sealed class NativeCudaException : InvalidOperationException
             NativeCudaRuntime.GetErrorString(status))
     {
         Status = status;
+        NativeError = CudaNativeGateway.TakeCapturedFailure(status);
     }
 
     internal int Status { get; }
+
+    internal CudaNativeErrorInfo? NativeError { get; }
 }
 
 internal static class NativeCudaRuntime
 {
-    private const string Library = "NNtrain.CudaKernels.dll";
     // cudaErrorNotReady. CUDA allocation APIs may surface this status from a
     // previously queued asynchronous operation even though allocation itself
     // is valid after the device reaches the synchronization point.
@@ -30,6 +33,10 @@ internal static class NativeCudaRuntime
     private static long _allocationBytes;
     private static long _freeCount;
     private static long _freeBytes;
+    private static long _hostToDeviceCopyCount;
+    private static long _hostToDeviceBytes;
+    private static long _deviceToHostCopyCount;
+    private static long _deviceToHostBytes;
 
     internal static int DeviceCount => CachedDeviceCount.Value;
 
@@ -39,6 +46,13 @@ internal static class NativeCudaRuntime
             Interlocked.Read(ref _allocationBytes),
             Interlocked.Read(ref _freeCount),
             Interlocked.Read(ref _freeBytes));
+
+    internal static NativeCudaTransferTelemetry TransferTelemetry
+        => new(
+            Interlocked.Read(ref _hostToDeviceCopyCount),
+            Interlocked.Read(ref _hostToDeviceBytes),
+            Interlocked.Read(ref _deviceToHostCopyCount),
+            Interlocked.Read(ref _deviceToHostBytes));
 
     internal static void RecordAllocation(nuint bytes)
     {
@@ -74,12 +88,7 @@ internal static class NativeCudaRuntime
     }
 
     internal static string GetErrorString(int status)
-    {
-        nint pointer = ErrorStringNative(status);
-        return pointer == 0
-            ? "unknown CUDA error"
-            : Marshal.PtrToStringAnsi(pointer) ?? "unknown CUDA error";
-    }
+        => CudaNativeGateway.ErrorString(status);
 
     internal static void Check(int status, string operation)
     {
@@ -122,102 +131,183 @@ internal static class NativeCudaRuntime
         return pointer;
     }
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_device_count",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int DeviceCountNative(out int count);
+    private static int DeviceCountNative(out int count)
+        => CudaNativeGateway.DeviceCount(out count);
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_error_string",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern nint ErrorStringNative(int status);
+    internal static int DeviceName(
+        int device,
+        StringBuilder destination,
+        int capacity)
+        => CudaNativeGateway.DeviceName(device, destination, capacity);
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_device_name",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int DeviceName(
-        int device, StringBuilder destination, int capacity);
+    internal static int SetDeviceNative(int device)
+        => CudaNativeGateway.SetDevice(device);
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_set_device",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int SetDeviceNative(int device);
+    internal static int UseExternalStreamNative(nint stream)
+        => CudaNativeGateway.UseExternalStream(stream);
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_use_external_stream",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int UseExternalStreamNative(nint stream);
+    internal static int SynchronizeNative(int device)
+        => CudaNativeGateway.Synchronize(device);
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_synchronize",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int SynchronizeNative(int device);
+    internal static int MemoryInfoNative(
+        int device,
+        out nuint freeBytes,
+        out nuint totalBytes)
+        => CudaNativeGateway.MemoryInfo(
+            device,
+            out freeBytes,
+            out totalBytes);
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_mem_info",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int MemoryInfoNative(
-        int device, out nuint freeBytes, out nuint totalBytes);
+    internal static int AllocateNative(
+        int device,
+        nuint bytes,
+        out nint pointer)
+        => CudaNativeGateway.Allocate(device, bytes, out pointer);
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_malloc",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int AllocateNative(
-        int device, nuint bytes, out nint pointer);
+    internal static int FreeNative(int device, nint pointer)
+        => CudaNativeGateway.Free(device, pointer);
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_free",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int FreeNative(int device, nint pointer);
+    internal static int MemsetNative(
+        int device,
+        nint destination,
+        int value,
+        nuint bytes)
+        => CudaNativeGateway.Memset(
+            device,
+            destination,
+            value,
+            bytes);
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_memset",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int MemsetNative(
-        int device, nint destination, int value, nuint bytes);
+    internal static int CopyHostToDeviceNative(
+        int device,
+        nint destination,
+        nint source,
+        nuint bytes)
+    {
+        int status = CudaNativeGateway.CopyHostToDevice(
+            device,
+            destination,
+            source,
+            bytes);
+        if (status == 0)
+            RecordHostToDevice(bytes);
+        return status;
+    }
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_copy_h2d",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int CopyHostToDeviceNative(
-        int device, nint destination, nint source, nuint bytes);
+    internal static int CopyDeviceToHostNative(
+        int device,
+        nint destination,
+        nint source,
+        nuint bytes)
+    {
+        int status = CudaNativeGateway.CopyDeviceToHost(
+            device,
+            destination,
+            source,
+            bytes);
+        if (status == 0)
+            RecordDeviceToHost(bytes);
+        return status;
+    }
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_copy_d2h",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int CopyDeviceToHostNative(
-        int device, nint destination, nint source, nuint bytes);
+    internal static int HostAllocateNative(nuint bytes, out nint pointer)
+        => CudaNativeGateway.HostAllocate(bytes, out pointer);
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_host_alloc",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int HostAllocateNative(nuint bytes, out nint pointer);
+    internal static int HostFreeNative(nint pointer)
+        => CudaNativeGateway.HostFree(pointer);
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_host_free",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int HostFreeNative(nint pointer);
+    internal static int EventCreateNative(int device, out nint cudaEvent)
+        => CudaNativeGateway.EventCreate(device, out cudaEvent);
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_event_create",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int EventCreateNative(int device, out nint cudaEvent);
+    internal static int EventDestroyNative(int device, nint cudaEvent)
+        => CudaNativeGateway.EventDestroy(device, cudaEvent);
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_event_destroy",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int EventDestroyNative(int device, nint cudaEvent);
+    internal static int CopyDeviceToHostAsyncRecordNative(
+        int device,
+        nint destination,
+        nint source,
+        nuint bytes,
+        nint stream,
+        nint cudaEvent)
+    {
+        int status = CudaNativeGateway.CopyDeviceToHostAsyncRecord(
+            device,
+            destination,
+            source,
+            bytes,
+            stream,
+            cudaEvent);
+        if (status == 0)
+            RecordDeviceToHost(bytes);
+        return status;
+    }
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_copy_d2h_async_record",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int CopyDeviceToHostAsyncRecordNative(
-        int device, nint destination, nint source, nuint bytes,
-        nint stream, nint cudaEvent);
+    internal static int CopyHostToDeviceAsyncRecordNative(
+        int device,
+        nint destination,
+        nint source,
+        nuint bytes,
+        nint stream,
+        nint cudaEvent)
+    {
+        int status = CudaNativeGateway.CopyHostToDeviceAsyncRecord(
+            device,
+            destination,
+            source,
+            bytes,
+            stream,
+            cudaEvent);
+        if (status == 0)
+            RecordHostToDevice(bytes);
+        return status;
+    }
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_copy_h2d_async_record",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int CopyHostToDeviceAsyncRecordNative(
-        int device, nint destination, nint source, nuint bytes,
-        nint stream, nint cudaEvent);
+    private static void RecordHostToDevice(nuint bytes)
+    {
+        Interlocked.Increment(ref _hostToDeviceCopyCount);
+        Interlocked.Add(ref _hostToDeviceBytes, checked((long)bytes));
+    }
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_event_synchronize",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int EventSynchronizeNative(int device, nint cudaEvent);
+    private static void RecordDeviceToHost(nuint bytes)
+    {
+        Interlocked.Increment(ref _deviceToHostCopyCount);
+        Interlocked.Add(ref _deviceToHostBytes, checked((long)bytes));
+    }
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_copy_d2d",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int CopyDeviceToDeviceNative(
-        int destinationDevice, nint destination,
-        int sourceDevice, nint source, nuint bytes);
+    internal static int EventSynchronizeNative(int device, nint cudaEvent)
+        => CudaNativeGateway.EventSynchronize(device, cudaEvent);
 
-    [DllImport(Library, EntryPoint = "nntrain_cuda_can_access_peer",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int CanAccessPeerNative(
-        int device, int peerDevice, out int canAccess);
+    internal static int CopyDeviceToDeviceNative(
+        int destinationDevice,
+        nint destination,
+        int sourceDevice,
+        nint source,
+        nuint bytes)
+        => CudaNativeGateway.CopyDeviceToDevice(
+            destinationDevice,
+            destination,
+            sourceDevice,
+            source,
+            bytes);
+
+    private static int CanAccessPeerNative(
+        int device,
+        int peerDevice,
+        out int canAccess)
+        => CudaNativeGateway.CanAccessPeer(
+            device,
+            peerDevice,
+            out canAccess);
+
+    internal static CudaKernelCapabilities GetKernelCapabilities(int device)
+    {
+        Check(
+            CudaNativeGateway.KernelCapabilities(
+                device,
+                out CudaKernelCapabilities capabilities),
+            "cudaGetDeviceProperties(capabilities)");
+        return capabilities;
+    }
 }
 
 /// <summary>
@@ -512,12 +602,11 @@ internal sealed unsafe class NativeCudaBuffer<T> : IDisposable
             "cudaMemset");
 
     internal void ClearGradientStorage()
-    {
-        if (_arena is null)
-            MemSetToZero();
-        else
-            _arena.ClearIfDirty();
-    }
+        // Tensor.ZeroGrad() is a per-tensor operation.  An arena-backed
+        // buffer is a slice, so clearing its arena would also erase adjacent
+        // parameters.  Bulk gradient plans explicitly call
+        // NativeCudaArena.ClearIfDirty() when an arena-wide clear is wanted.
+        => MemSetToZero();
 
     internal void MarkGradientStorageDirty() => _arena?.MarkDirty();
 
@@ -598,6 +687,22 @@ internal readonly record struct NativeCudaAllocationTelemetry(
             left.AllocationBytes - right.AllocationBytes,
             left.FreeCount - right.FreeCount,
             left.FreeBytes - right.FreeBytes);
+}
+
+internal readonly record struct NativeCudaTransferTelemetry(
+    long HostToDeviceCopyCount,
+    long HostToDeviceBytes,
+    long DeviceToHostCopyCount,
+    long DeviceToHostBytes)
+{
+    public static NativeCudaTransferTelemetry operator -(
+        NativeCudaTransferTelemetry left,
+        NativeCudaTransferTelemetry right)
+        => new(
+            left.HostToDeviceCopyCount - right.HostToDeviceCopyCount,
+            left.HostToDeviceBytes - right.HostToDeviceBytes,
+            left.DeviceToHostCopyCount - right.DeviceToHostCopyCount,
+            left.DeviceToHostBytes - right.DeviceToHostBytes);
 }
 
 /// <summary>

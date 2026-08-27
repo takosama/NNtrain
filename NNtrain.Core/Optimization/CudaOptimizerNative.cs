@@ -177,6 +177,15 @@ internal static class CudaOptimizerNative
             "NekoMuon Gram");
     }
 
+    internal static void SymmetricGramBFloat16Operands(
+        int device, nint source, nint destination, int rows, int columns)
+    {
+        Select(device);
+        Check(SymmetricGramBFloat16OperandsNative(
+            source, destination, rows, columns),
+            "NekoMuon BF16-operand Gram");
+    }
+
     internal static void NewtonSchulz(int device, nint source, nint gram,
         nint gramSquared, nint destination, int rows, int columns, float a,
         float b, float c)
@@ -184,6 +193,16 @@ internal static class CudaOptimizerNative
         Select(device);
         Check(NewtonSchulzNative(source, gram, gramSquared, destination, rows,
             columns, a, b, c), "NekoMuon Newton-Schulz");
+    }
+
+    internal static void NewtonSchulzBFloat16Operands(
+        int device, nint source, nint gram, nint gramSquared,
+        nint destination, int rows, int columns, float a, float b, float c)
+    {
+        Select(device);
+        Check(NewtonSchulzBFloat16OperandsNative(
+            source, gram, gramSquared, destination, rows, columns, a, b, c),
+            "NekoMuon BF16-operand Newton-Schulz");
     }
 
     private static void Select(int device)
@@ -230,6 +249,10 @@ internal static class CudaOptimizerNative
     private static extern int NekoCombineBatchedNative(nint gram, nint gramSquared, int matrixLength, int batch, int rows, float a, float b, float c);
     [DllImport(Library, EntryPoint = "nntrain_optimizer_symmetric_gram", CallingConvention = CallingConvention.Cdecl)]
     private static extern int SymmetricGramNative(nint source, nint destination, int rows, int columns);
+    [DllImport(Library, EntryPoint = "nntrain_optimizer_symmetric_gram_bf16_operands", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int SymmetricGramBFloat16OperandsNative(nint source, nint destination, int rows, int columns);
     [DllImport(Library, EntryPoint = "nntrain_optimizer_newton_schulz", CallingConvention = CallingConvention.Cdecl)]
     private static extern int NewtonSchulzNative(nint source, nint gram, nint gramSquared, nint destination, int rows, int columns, float a, float b, float c);
+    [DllImport(Library, EntryPoint = "nntrain_optimizer_newton_schulz_bf16_operands", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NewtonSchulzBFloat16OperandsNative(nint source, nint gram, nint gramSquared, nint destination, int rows, int columns, float a, float b, float c);
 }

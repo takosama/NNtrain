@@ -22,11 +22,15 @@ internal sealed class CudaBFloat16GradientAllReducePlan : IDisposable
     private readonly DeviceBuffers[] _deviceBuffers;
     private readonly Dictionary<Tensor, SegmentLocation> _locations;
     private readonly int[][] _remaining;
+    private readonly long[][][] _notificationSteps;
     private readonly int[] _readyDeviceCounts;
+    private readonly long[] _deviceBeginSteps;
     private readonly bool _overlapExchange;
     private readonly bool _useHostPipeline;
     private readonly nint[] _hostPipelines;
     private NativeCudaBuffer<double>? _primarySquaredSum;
+    private long _stepSequence;
+    private long _activeStepId;
     private int _disposed;
 
     internal CudaBFloat16GradientAllReducePlan(
@@ -57,13 +61,25 @@ internal sealed class CudaBFloat16GradientAllReducePlan : IDisposable
             ReferenceEqualityComparer.Instance);
         for (int bucket = 0; bucket < _buckets.Length; bucket++)
         {
-            foreach (Segment segment in _buckets[bucket].Segments)
-                _locations.Add(segment.Tensor, new SegmentLocation(bucket, segment));
+            for (int segment = 0;
+                segment < _buckets[bucket].Segments.Length;
+                segment++)
+            {
+                _locations.Add(
+                    _buckets[bucket].Segments[segment].Tensor,
+                    new SegmentLocation(bucket, segment));
+            }
         }
         _remaining = Enumerable.Range(0, _buckets.Length)
             .Select(bucket => new int[_devices.Length])
             .ToArray();
         _readyDeviceCounts = new int[_buckets.Length];
+        _notificationSteps = Enumerable.Range(0, _buckets.Length)
+            .Select(bucket => Enumerable.Range(0, _devices.Length)
+                .Select(_ => new long[_buckets[bucket].Segments.Length])
+                .ToArray())
+            .ToArray();
+        _deviceBeginSteps = new long[_devices.Length];
         _deviceBuffers = new DeviceBuffers[_devices.Length];
         _hostPipelines = new nint[_devices.Length];
         try
@@ -106,35 +122,104 @@ internal sealed class CudaBFloat16GradientAllReducePlan : IDisposable
 
     internal bool DefersExchangeUntilBackward => !_overlapExchange;
 
-    internal void BeginStep()
+    internal long BeginStep()
     {
         ObjectDisposedException.ThrowIf(
             Volatile.Read(ref _disposed) != 0, this);
-        _primarySquaredSum!.MemSetToZero();
+        if (Volatile.Read(ref _activeStepId) != 0)
+        {
+            throw new InvalidOperationException(
+                "The previous BF16 gradient reduction step is still active.");
+        }
+        long stepId = Interlocked.Increment(ref _stepSequence);
+        if (stepId == 0)
+            stepId = Interlocked.Increment(ref _stepSequence);
         for (int bucket = 0; bucket < _buckets.Length; bucket++)
         {
             Volatile.Write(ref _readyDeviceCounts[bucket], 0);
             for (int device = 0; device < _devices.Length; device++)
             {
-                _deviceBuffers[device].Buckets[bucket]
-                    .GradientArena.ClearIfDirty();
                 Volatile.Write(
                     ref _remaining[bucket][device],
                     _buckets[bucket].Segments.Length);
             }
         }
+        Volatile.Write(ref _activeStepId, stepId);
+        return stepId;
     }
 
-    internal void NotifyGradientReady(Tensor tensor, int deviceIndex)
+    internal void BeginDeviceStep(long stepId, int deviceIndex)
     {
+        if (Volatile.Read(ref _activeStepId) != stepId)
+            throw new InvalidOperationException("The gradient step is not active.");
+        int deviceSlot = Array.IndexOf(_devices, deviceIndex);
+        if (deviceSlot < 0)
+            throw new ArgumentOutOfRangeException(nameof(deviceIndex));
+        if (Interlocked.Exchange(
+                ref _deviceBeginSteps[deviceSlot], stepId) == stepId)
+        {
+            throw new InvalidOperationException(
+                $"CUDA device {deviceIndex} was begun twice for step {stepId}.");
+        }
+
+        // CUDA's per-thread default stream is scoped to this worker. Clearing
+        // on the coordinator thread can race the worker's first backward
+        // accumulation and retain gradients from the preceding step. Queue
+        // every reset on the same device/thread that will run the shard.
+        if (deviceSlot == 0)
+            _primarySquaredSum!.MemSetToZero();
+        foreach (BucketBuffers bucket in _deviceBuffers[deviceSlot].Buckets)
+            bucket.GradientArena.Buffer.MemSetToZero();
+    }
+
+    internal void NotifyGradientReady(
+        Tensor tensor,
+        int deviceIndex,
+        long stepId)
+    {
+        if (Volatile.Read(ref _activeStepId) != stepId)
+            return;
         if (!_locations.TryGetValue(tensor, out SegmentLocation location))
             return;
         int deviceSlot = Array.IndexOf(_devices, deviceIndex);
         if (deviceSlot < 0)
             return;
+        if (Volatile.Read(ref _deviceBeginSteps[deviceSlot]) != stepId)
+        {
+            throw new InvalidOperationException(
+                $"CUDA device {deviceIndex} was not begun for step {stepId}.");
+        }
+
+        ref long notification = ref _notificationSteps[location.Bucket]
+            [deviceSlot][location.Segment];
+        while (true)
+        {
+            if (Volatile.Read(ref _activeStepId) != stepId)
+                return;
+            long previous = Volatile.Read(ref notification);
+            if (previous == stepId)
+                return;
+            if (Interlocked.CompareExchange(
+                    ref notification, stepId, previous) == previous)
+            {
+                break;
+            }
+        }
+        if (Volatile.Read(ref _activeStepId) != stepId)
+            return;
+
         DeviceBuffers deviceBuffers = _deviceBuffers[deviceSlot];
         NativeCudaDevice accelerator = deviceBuffers.Accelerator;
         BucketBuffers bucketBuffers = deviceBuffers.Buckets[location.Bucket];
+        NativeCudaArena<float>? boundArena = tensor.GetCudaGradientArena(
+            deviceIndex);
+        if (!ReferenceEquals(boundArena, bucketBuffers.GradientArena))
+        {
+            throw new InvalidOperationException(
+                $"Gradient bucket {location.Bucket}, segment " +
+                $"{location.Segment} lost its CUDA arena binding on device " +
+                $"{deviceIndex} during step {stepId}.");
+        }
 
         if (Interlocked.Decrement(
             ref _remaining[location.Bucket][deviceSlot]) != 0)
@@ -167,12 +252,20 @@ internal sealed class CudaBFloat16GradientAllReducePlan : IDisposable
         }
     }
 
-    internal void Complete()
+    internal void Complete(long stepId)
     {
+        if (Volatile.Read(ref _activeStepId) != stepId)
+            throw new InvalidOperationException("The gradient step is not active.");
         for (int bucket = 0; bucket < _buckets.Length; bucket++)
         {
             for (int device = 0; device < _devices.Length; device++)
             {
+                if (Volatile.Read(ref _deviceBeginSteps[device]) != stepId)
+                {
+                    throw new InvalidOperationException(
+                        $"CUDA device {_devices[device]} was not begun for " +
+                        $"gradient step {stepId}.");
+                }
                 if (Volatile.Read(ref _remaining[bucket][device]) != 0)
                 {
                     throw new InvalidOperationException(
@@ -215,6 +308,7 @@ internal sealed class CudaBFloat16GradientAllReducePlan : IDisposable
             parameter.T.MarkCudaGradientsSynchronized(_devices);
         TensorCudaKernels.PublishGradientSquaredSum(
             _parameters, _devices, squaredSum[0]);
+        Volatile.Write(ref _activeStepId, 0);
     }
 
     private void EnqueueBucketReduction(int bucketIndex)
@@ -360,7 +454,9 @@ internal sealed class CudaBFloat16GradientAllReducePlan : IDisposable
                 NativeCudaArena<float> arena =
                     buffers.Buckets[bucket].GradientArena;
                 foreach (Segment segment in _buckets[bucket].Segments)
+                {
                     segment.Tensor.UnbindCudaGradientArena(deviceIndex, arena);
+                }
             }
         }
     }
@@ -441,7 +537,7 @@ internal sealed class CudaBFloat16GradientAllReducePlan : IDisposable
 
     private sealed record Bucket(Segment[] Segments, int TotalElements);
     private sealed record Segment(Tensor Tensor, int Offset, int Length);
-    private readonly record struct SegmentLocation(int Bucket, Segment Segment);
+    private readonly record struct SegmentLocation(int Bucket, int Segment);
 
     private sealed class BucketBuffers(
         NativeCudaBuffer<ushort> local,
@@ -495,22 +591,25 @@ internal static class CudaGradientReductionContext
 
     internal static IDisposable Push(
         CudaBFloat16GradientAllReducePlan plan,
-        int deviceIndex)
+        int deviceIndex,
+        long stepId)
     {
         Entry? previous = Current.Value;
-        Current.Value = new Entry(plan, deviceIndex);
+        Current.Value = new Entry(plan, deviceIndex, stepId);
         return new Scope(previous);
     }
 
     internal static void NotifyLeaf(Tensor tensor)
     {
         Entry? current = Current.Value;
-        current?.Plan.NotifyGradientReady(tensor, current.DeviceIndex);
+        current?.Plan.NotifyGradientReady(
+            tensor, current.DeviceIndex, current.StepId);
     }
 
     private sealed record Entry(
         CudaBFloat16GradientAllReducePlan Plan,
-        int DeviceIndex);
+        int DeviceIndex,
+        long StepId);
 
     private sealed class Scope(Entry? previous) : IDisposable
     {

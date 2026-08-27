@@ -1,6 +1,6 @@
 namespace NNtrain;
 
-public sealed class CompositeOptimizer : IOptimizer
+public sealed class CompositeOptimizer : IOptimizerContainer
 {
     private readonly IOptimizer[] _optimizers;
 

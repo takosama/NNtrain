@@ -19,6 +19,16 @@ public interface IOptimizer
 }
 
 /// <summary>
+/// An optimizer that owns an ordered collection of child optimizers.
+/// Streaming checkpoints flatten this collection depth-first, preserving the
+/// declared order without depending on concrete optimizer types.
+/// </summary>
+public interface IOptimizerContainer : IOptimizer
+{
+    IReadOnlyList<IOptimizer> Optimizers { get; }
+}
+
+/// <summary>
 /// Serializable optimizer state.
 /// </summary>
 /// <remarks>

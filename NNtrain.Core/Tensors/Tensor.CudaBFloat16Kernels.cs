@@ -1,8 +1,17 @@
 
+using NNtrain.Runtime.Execution;
+
 namespace NNtrain;
 
 internal static partial class TensorCudaKernels
 {
+    private static bool UsesDirectBFloat16Gradients
+        // Direct Tensor calls have no model-level policy and retain the
+        // historical all-BF16 path. Model execution keeps intermediate
+        // backward workspaces in the policy's FP32 accumulation format;
+        // pure BF16 is applied at leaf/bucket storage boundaries instead.
+        => TensorExecutionContext.ActivePrecisionPolicy is null;
+
     internal static BFloat16AttentionResidentContext
         AttentionForwardBFloat16Resident(
             Tensor projected,
@@ -64,7 +73,8 @@ internal static partial class TensorCudaKernels
     {
         int deviceIndex = Tensor.CudaDeviceIndex;
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
-        bool directBFloat16Gradient = context.TensorCore
+        bool directBFloat16Gradient = UsesDirectBFloat16Gradients
+            && context.TensorCore
             && !projected.HasGradientBuffer
             && !string.Equals(
                 Environment.GetEnvironmentVariable(
@@ -507,31 +517,56 @@ internal static partial class TensorCudaKernels
         float labelSmoothing)
     {
         int deviceIndex = Tensor.CudaDeviceIndex;
-        NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
-        NativeCudaBuffer<ushort> encodedGradient =
-            Tensor.RentCudaBFloat16Buffer(deviceIndex, logits.Numel);
-        try
+        if (UsesDirectBFloat16Gradients)
         {
-            CudaTensorNative.CrossEntropyBackwardBFloat16Output(
+            NativeCudaDevice accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+            NativeCudaBuffer<ushort> encodedGradient =
+                Tensor.RentCudaBFloat16Buffer(deviceIndex, logits.Numel);
+            try
+            {
+                CudaTensorNative.CrossEntropyBackwardBFloat16Output(
+                    deviceIndex,
+                    logits.EnsureCudaBFloat16Buffer(deviceIndex).NativePtr,
+                    context.Maxima.NativePtr,
+                    context.InverseSums.NativePtr,
+                    context.Labels.NativePtr,
+                    encodedGradient.NativePtr,
+                    loss.EnsureCudaGradientBuffer(deviceIndex).NativePtr,
+                    logits.Numel,
+                    columns,
+                    ignoreIndex,
+                    validRows,
+                    labelSmoothing);
+                logits.AdoptCudaBFloat16GradientBuffer(
+                    encodedGradient,
+                    deviceIndex);
+            }
+            catch
+            {
+                Tensor.ReturnCudaBFloat16Buffer(accelerator, encodedGradient);
+                throw;
+            }
+        }
+        else
+        {
+            NativeCudaBuffer<float> gradient =
+                logits.EnsureCudaGradientBuffer(deviceIndex);
+            CudaTensorNative.CrossEntropyBackward(
                 deviceIndex,
                 logits.EnsureCudaBFloat16Buffer(deviceIndex).NativePtr,
                 context.Maxima.NativePtr,
                 context.InverseSums.NativePtr,
                 context.Labels.NativePtr,
-                encodedGradient.NativePtr,
+                gradient.NativePtr,
                 loss.EnsureCudaGradientBuffer(deviceIndex).NativePtr,
                 logits.Numel,
                 columns,
                 ignoreIndex,
                 validRows,
-                labelSmoothing);
-            logits.AdoptCudaBFloat16GradientBuffer(
-                encodedGradient, deviceIndex);
-        }
-        catch
-        {
-            Tensor.ReturnCudaBFloat16Buffer(accelerator, encodedGradient);
-            throw;
+                labelSmoothing,
+                bfloat16: true);
+            logits.MarkCudaGradientMutated(deviceIndex);
         }
     }
 
@@ -586,7 +621,8 @@ internal static partial class TensorCudaKernels
     {
         int deviceIndex = Tensor.CudaDeviceIndex;
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
-        bool directBranchGradient = !sameParent
+        bool directBranchGradient = UsesDirectBFloat16Gradients
+            && !sameParent
             && !branch.HasGradientBuffer
             && !string.Equals(
                 Environment.GetEnvironmentVariable(
@@ -809,7 +845,8 @@ internal static partial class TensorCudaKernels
             }
         }
 
-        bool directInputGradient = !input.HasGradientBuffer
+        bool directInputGradient = UsesDirectBFloat16Gradients
+            && !input.HasGradientBuffer
             && !string.Equals(
                 Environment.GetEnvironmentVariable(
                     "NNTRAIN_DISABLE_DIRECT_LINEAR_BF16_GRADIENT"),

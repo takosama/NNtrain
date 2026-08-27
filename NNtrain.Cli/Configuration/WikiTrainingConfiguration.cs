@@ -22,6 +22,8 @@ sealed record WikiTrainingConfiguration
     internal const string Float32PrecisionMode = TensorPrecisionModeNames.Float32;
     internal const string BFloat16PrecisionMode = TensorPrecisionModeNames.BFloat16;
     internal const string Mix16_32PrecisionMode = TensorPrecisionModeNames.Mix16_32;
+    internal const string Bfp8PrecisionMode = TensorPrecisionModeNames.Bfp8;
+    internal const string Mix8_32PrecisionMode = TensorPrecisionModeNames.Mix8_32;
     internal const string LegacyFloat16ModelDType = "float16";
     internal const string CpuDevice = "cpu";
     internal const string CudaDevice = "cuda";
@@ -99,6 +101,13 @@ sealed record WikiTrainingConfiguration
     /// Numeric execution contract: float32, bfloat16, or mix16_32.
     /// </summary>
     public string? PrecisionMode { get; init; }
+
+    /// <summary>Canonical numeric execution setting.</summary>
+    public string? Precision { get; init; }
+
+    [JsonPropertyName("bfp8_block_size")]
+    public int Bfp8BlockSize { get; init; } =
+        Bfp8QuantizationDescriptor.DefaultBlockSize;
 
     /// <summary>Legacy physical-storage setting. Use precisionMode.</summary>
     public string? ModelDType { get; init; }
@@ -178,7 +187,7 @@ sealed record WikiTrainingConfiguration
 
     public int GraphUpdateSteps { get; init; } = 100;
 
-    public int DatasetSampleEverySteps { get; init; } = 1000;
+    public int DatasetSampleEverySteps { get; init; } = 2000;
 
     public int DatasetSamplePoolSize { get; init; } = 32;
 
@@ -238,6 +247,17 @@ sealed record WikiTrainingConfiguration
         string json = File.ReadAllText(fullPath);
         TrainingConfigurationV2.NormalizedConfiguration normalized =
             TrainingConfigurationV2.Normalize(json);
+        return LoadNormalized(fullPath, normalized);
+    }
+
+    internal static WikiTrainingConfiguration LoadNormalized(
+        string path,
+        TrainingConfigurationV2.NormalizedConfiguration normalized)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(normalized);
+
+        string fullPath = Path.GetFullPath(path);
         if (normalized.IsV2
             && !string.Equals(
                 normalized.TaskType,
@@ -248,7 +268,7 @@ sealed record WikiTrainingConfiguration
                 $"Configuration task '{normalized.TaskType}' is not a " +
                 "wiki-language-model task.");
         }
-        json = normalized.Json;
+        string json = normalized.Json;
         using JsonDocument document = JsonDocument.Parse(
             json,
             new JsonDocumentOptions
@@ -561,14 +581,22 @@ sealed record WikiTrainingConfiguration
                 $"'{ForgetMemoryDrnArchitecture}'.",
                 nameof(ModelArchitecture));
         }
+        if (Bfp8BlockSize <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(Bfp8BlockSize),
+                Bfp8BlockSize,
+                "BFP8 block size must be positive.");
+        }
         TensorDType? explicitModelDType = GetExplicitModelDType();
         if (explicitModelDType is TensorDType.Float16
                 or TensorDType.BFloat16
+                or TensorDType.Bfp8
             && !IsForgetMemoryArchitecture()
             && !IsArchitecture(TransformerArchitecture))
         {
             throw new ArgumentException(
-                "16-bit precision modes are currently supported only for the " +
+                "Reduced-precision modes are currently supported only for the " +
                 "Transformer and ForgetMemory architectures.",
                 nameof(PrecisionMode));
         }
@@ -856,17 +884,23 @@ sealed record WikiTrainingConfiguration
 
     internal TensorPrecisionMode? GetExplicitPrecisionMode()
     {
-        if (PrecisionMode is not null && ModelDType is not null)
+        int configuredNames = (Precision is null ? 0 : 1)
+            + (PrecisionMode is null ? 0 : 1)
+            + (ModelDType is null ? 0 : 1);
+        if (configuredNames > 1)
         {
             throw new ArgumentException(
-                "precisionMode cannot be combined with the legacy " +
-                "modelDType setting.",
-                nameof(PrecisionMode));
+                "precision, precisionMode, and the legacy modelDType " +
+                "setting cannot be combined.",
+                nameof(Precision));
         }
 
-        string? configured = PrecisionMode ?? ModelDType;
+        string? configured = Precision ?? PrecisionMode ?? ModelDType;
         if (configured is null)
             return null;
+
+        if (Precision is not null)
+            return TensorPrecisionModeNames.Parse(configured);
 
         if (string.Equals(
             configured,
@@ -889,6 +923,20 @@ sealed record WikiTrainingConfiguration
         {
             return TensorPrecisionMode.Float32;
         }
+        if (string.Equals(
+            configured,
+            Bfp8PrecisionMode,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            return TensorPrecisionMode.Bfp8;
+        }
+        if (string.Equals(
+            configured,
+            Mix8_32PrecisionMode,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            return TensorPrecisionMode.Mix8_32;
+        }
         if (PrecisionMode is null
             && string.Equals(
                 configured,
@@ -900,8 +948,9 @@ sealed record WikiTrainingConfiguration
 
         throw new ArgumentException(
             $"Unsupported precision mode '{configured}'. Supported values " +
-            $"are '{Float32PrecisionMode}', '{BFloat16PrecisionMode}', and " +
-            $"'{Mix16_32PrecisionMode}'.",
+            $"are '{Float32PrecisionMode}', '{BFloat16PrecisionMode}', " +
+            $"'{Mix16_32PrecisionMode}', '{Bfp8PrecisionMode}', and " +
+            $"'{Mix8_32PrecisionMode}'.",
             PrecisionMode is null ? nameof(ModelDType) : nameof(PrecisionMode));
     }
 

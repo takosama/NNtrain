@@ -58,7 +58,11 @@ partial class Tensor
         {
             return probability == 0f
                 ? AddLayerNormLastDim(branch, gamma, beta, eps)
-                : AddDropout(branch, probability, random)
+                : AddDropout(
+                    branch,
+                    probability,
+                    random,
+                    directBFloat16BranchGradient: true)
                     .LayerNormLastDim(gamma, beta, eps);
         }
 
@@ -132,7 +136,11 @@ partial class Tensor
 
         return probability == 0f
             ? AddLayerNormLastDim(branch, gamma, beta, eps)
-            : AddDropout(branch, probability, random)
+            : AddDropout(
+                branch,
+                probability,
+                random,
+                directBFloat16BranchGradient: true)
                 .LayerNormLastDim(gamma, beta, eps);
     }
 
@@ -154,12 +162,21 @@ partial class Tensor
                 context.Dispose();
             return;
         }
-        result.Node.RegisterResource(context);
-        result.Node.BackwardAction = () =>
+        int deviceIndex = CudaDeviceIndex;
+        AutogradLease<TensorCudaKernels.BFloat16LayerNormResidentContext>
+            lease = AutogradLease<TensorCudaKernels
+                .BFloat16LayerNormResidentContext>.Own(
+                context,
+                AutogradLeaseMetadata.CudaOwned(
+                    deviceIndex,
+                    TensorDType.BFloat16,
+                    DataVersion),
+                static saved => saved.Dispose());
+        result.Node.SetBackward(lease, savedContext =>
         {
             void Backward() => TensorCudaKernels
                 .ResidualDropoutLayerNormBackwardBFloat16Resident(
-                    this, branch, gamma, beta, result, context,
+                    this, branch, gamma, beta, result, savedContext,
                     rows, columns, ReferenceEquals(this, branch),
                     seed, dropThreshold, dropoutScale);
             if (CudaOperationProfiler.IsEnabled)
@@ -167,7 +184,7 @@ partial class Tensor
                     "backward.residual_dropout_layer_norm", Backward);
             else
                 Backward();
-        };
+        });
     }
 
     private void ConfigureFloat32Backward(
@@ -188,12 +205,20 @@ partial class Tensor
                 context.Dispose();
             return;
         }
-        result.Node.RegisterResource(context);
-        result.Node.BackwardAction = () =>
+        int deviceIndex = CudaDeviceIndex;
+        AutogradLease<TensorCudaKernels.LayerNormResidentContext> lease =
+            AutogradLease<TensorCudaKernels.LayerNormResidentContext>.Own(
+                context,
+                AutogradLeaseMetadata.CudaOwned(
+                    deviceIndex,
+                    TensorDType.Float32,
+                    DataVersion),
+                static saved => saved.Dispose());
+        result.Node.SetBackward(lease, savedContext =>
         {
             void Backward() => TensorCudaKernels
                 .ResidualDropoutLayerNormBackwardResident(
-                    this, branch, gamma, beta, result, context,
+                    this, branch, gamma, beta, result, savedContext,
                     rows, columns, ReferenceEquals(this, branch),
                     seed, dropThreshold, dropoutScale);
             if (CudaOperationProfiler.IsEnabled)
@@ -201,6 +226,6 @@ partial class Tensor
                     "backward.residual_dropout_layer_norm", Backward);
             else
                 Backward();
-        };
+        });
     }
 }

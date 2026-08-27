@@ -44,11 +44,6 @@ public partial class AdamW
                     ? 1f - options.LearningRate * options.WeightDecay
                     : 1f);
             Vector256<float> one = Vector256.Create(1f);
-            Vector256<float> two = Vector256.Create(2f);
-            Vector256<float> half = Vector256.Create(0.5f);
-            Vector256<float> three = Vector256.Create(3f);
-            Vector256<float> inverseZeroDenominator =
-                Vector256.Create(1f / scaledEpsilon);
             ref float dataStart = ref System.Runtime.InteropServices
                 .MemoryMarshal.GetArrayDataReference(data);
             ref float gradientStart = ref System.Runtime.InteropServices
@@ -115,26 +110,8 @@ public partial class AdamW
                             ref dataStart,
                             index))
                     * parameterScale;
-                Vector256<float> inverseRoot =
-                    System.Runtime.Intrinsics.X86.Avx
-                        .ReciprocalSqrt(secondMoment);
-                inverseRoot *= half
-                    * (three - secondMoment * inverseRoot * inverseRoot);
-                Vector256<float> epsilonCorrection =
-                    one + epsilon * inverseRoot;
-                Vector256<float> inverseCorrection =
-                    System.Runtime.Intrinsics.X86.Avx.Reciprocal(
-                        epsilonCorrection);
-                inverseCorrection *= two
-                    - epsilonCorrection * inverseCorrection;
                 Vector256<float> inverseDenominator =
-                    inverseRoot * inverseCorrection;
-                inverseDenominator = Vector256.ConditionalSelect(
-                    Vector256.Equals(
-                        secondMoment,
-                        Vector256<float>.Zero),
-                    inverseZeroDenominator,
-                    inverseDenominator);
+                    one / (Vector256.Sqrt(secondMoment) + epsilon);
                 parameter -= updateScaleVector
                     * firstMoment
                     * inverseDenominator;

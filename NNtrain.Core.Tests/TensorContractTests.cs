@@ -64,7 +64,8 @@ public sealed class TensorContractTests
     {
         Assert.Throws<ArgumentNullException>(() => new Tensor(null!, [1]));
         Assert.Throws<ArgumentNullException>(() => new Tensor([1f], null!));
-        Assert.Throws<ArgumentNullException>(() => new Tensor([1f], [1], null!));
+        Assert.Throws<ArgumentNullException>(
+            () => new Tensor([1f], [1], name: null!));
         Assert.Throws<ArgumentNullException>(() => Tensor.From1D(null!));
         Assert.Throws<ArgumentNullException>(() => Tensor.From2D(null!));
     }

@@ -43,8 +43,8 @@ public sealed class NekoMuonWorkspaceTests
             (float[][] Data, NekoMuonState State, int CpuWorkspaces) Run(
                 TensorDevice device)
             {
-                Tensor.ExecutionDevice = device;
                 Tensor.CudaDeviceIndices = [0];
+                Tensor.ExecutionDevice = device;
                 Parameter wide = new(
                     Values(60, 3),
                     [5, 12],
@@ -111,8 +111,8 @@ public sealed class NekoMuonWorkspaceTests
         }
         finally
         {
-            Tensor.ExecutionDevice = previousDevice;
             Tensor.CudaDeviceIndices = previousIndices;
+            Tensor.ExecutionDevice = previousDevice;
             Environment.SetEnvironmentVariable(
                 "NNTRAIN_NEKOMUON_BATCH_SIZE", previousBatchSize);
             Environment.SetEnvironmentVariable(
@@ -141,8 +141,8 @@ public sealed class NekoMuonWorkspaceTests
 
             (float[][] Data, NekoMuonState State) Run(TensorDevice device)
             {
-                Tensor.ExecutionDevice = device;
                 Tensor.CudaDeviceIndices = [0];
+                Tensor.ExecutionDevice = device;
                 float[] initial = Values(48 * 64, 19);
                 float[] gradient = Values(initial.Length, 47);
                 Parameter[] parameters = Enumerable.Range(0, 8)
@@ -209,8 +209,8 @@ public sealed class NekoMuonWorkspaceTests
         }
         finally
         {
-            Tensor.ExecutionDevice = previousDevice;
             Tensor.CudaDeviceIndices = previousIndices;
+            Tensor.ExecutionDevice = previousDevice;
             Environment.SetEnvironmentVariable(
                 "NNTRAIN_NEKOMUON_BATCH_SIZE", previousBatchSize);
             Environment.SetEnvironmentVariable(
@@ -228,8 +228,8 @@ public sealed class NekoMuonWorkspaceTests
         int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
         try
         {
-            Tensor.ExecutionDevice = TensorDevice.Cuda;
             Tensor.CudaDeviceIndices = [0];
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
 
             (float Confidence, float Depth) Run(bool forceFull)
             {
@@ -279,8 +279,8 @@ public sealed class NekoMuonWorkspaceTests
         }
         finally
         {
-            Tensor.ExecutionDevice = previousDevice;
             Tensor.CudaDeviceIndices = previousIndices;
+            Tensor.ExecutionDevice = previousDevice;
         }
     }
 

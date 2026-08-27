@@ -18,6 +18,8 @@ internal static class TensorFloat16OperationManifest
         PublicTensorReturningMembers { get; } =
         [
             Factory("FromOwnedData(Single[],Int32[],String,TensorDType)"),
+            Bfp8Factory(
+                "FromBfp8(Single[],Int32[],Bfp8QuantizationDescriptor,String)"),
             Factory("Scalar(Single,String,TensorDType)"),
             Factory("tensor(Single[],Int32[],String,TensorDType)"),
             Factory("Zeros(Int32[])"),
@@ -223,6 +225,13 @@ internal static class TensorFloat16OperationManifest
             TensorFloat16ResultPolicy.Conversion,
             "TensorFloat16OperationManifestTests.FactoriesAndConversionsSupportFloat16");
 
+    private static TensorFloat16OperationManifestEntry Bfp8Factory(
+        string memberId)
+        => new(
+            memberId,
+            TensorFloat16ResultPolicy.Bfp8Factory,
+            "Bfp8QuantizationTests.TensorWideStorageUsesOneScale");
+
     private static TensorFloat16OperationManifestEntry Preserve(
         string memberId,
         string verification)
@@ -243,6 +252,9 @@ internal enum TensorFloat16ResultPolicy
 {
     /// <summary>Creates a Tensor in an explicitly selected dtype.</summary>
     Factory,
+
+    /// <summary>Creates the distinct signed Int8 plus scale contract.</summary>
+    Bfp8Factory,
 
     /// <summary>Changes storage dtype explicitly.</summary>
     Conversion,

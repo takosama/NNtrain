@@ -16,11 +16,11 @@ public sealed class CudaTrainingKernelTests
             (float[] Output, float[] Input, float[] Weight, float[] Bias)
                 Dense(TensorDevice device)
             {
-                Tensor.ExecutionDevice = device;
                 Tensor.CudaDeviceIndices = device == TensorDevice.Cuda
                     && Tensor.CudaDeviceCount >= 2
                         ? [0, 1]
                         : [0];
+                Tensor.ExecutionDevice = device;
                 var input = new Tensor(
                     [0.25f, -0.5f, 0.75f, 1f, -0.25f, 0.5f],
                     [2, 3],
@@ -100,15 +100,15 @@ public sealed class CudaTrainingKernelTests
             var cpuLoss = Loss(TensorDevice.Cpu);
             var cudaLoss = Loss(TensorDevice.Cuda);
             Assert.InRange(MathF.Abs(cpuLoss.Loss - cudaLoss.Loss), 0f, 2e-5f);
-            // BF16 mode stores dLogits physically as BF16 so the 11.5k-wide
-            // language-model head does not retain a second FP32 logits-sized
-            // buffer. Validate BF16 quantization error, not FP32 identity.
+            // BF16 logits are the softmax operands while PrecisionPolicy keeps
+            // accumulated gradients in FP32. Validate the operand-quantized
+            // forward/backward result rather than exact Float32 identity.
             AssertClose(cpuLoss.Gradient, cudaLoss.Gradient, 1e-3f);
         }
         finally
         {
-            Tensor.ExecutionDevice = previous;
             Tensor.CudaDeviceIndices = previousIndices;
+            Tensor.ExecutionDevice = previous;
         }
     }
 
@@ -143,8 +143,8 @@ public sealed class CudaTrainingKernelTests
             (float[] Output, float[] Residual, float[] Branch,
                 float[] Gamma, float[] Beta) Run(TensorDevice device)
             {
-                Tensor.ExecutionDevice = device;
                 Tensor.CudaDeviceIndices = [0];
+                Tensor.ExecutionDevice = device;
                 var residual = new Tensor(
                     residualValues, [rows, columns],
                     dtype: TensorDType.BFloat16);
@@ -174,8 +174,8 @@ public sealed class CudaTrainingKernelTests
         }
         finally
         {
-            Tensor.ExecutionDevice = previous;
             Tensor.CudaDeviceIndices = previousIndices;
+            Tensor.ExecutionDevice = previous;
         }
     }
 
@@ -239,8 +239,8 @@ public sealed class CudaTrainingKernelTests
         }
         finally
         {
-            Tensor.ExecutionDevice = previous;
             Tensor.CudaDeviceIndices = previousIndices;
+            Tensor.ExecutionDevice = previous;
         }
     }
 
@@ -267,8 +267,8 @@ public sealed class CudaTrainingKernelTests
         {
             (float[] Data, float Confidence) Run(TensorDevice device)
             {
-                Tensor.ExecutionDevice = device;
                 Tensor.CudaDeviceIndices = [0];
+                Tensor.ExecutionDevice = device;
                 var parameter = new Parameter(
                     values,
                     [rows, columns],
@@ -305,8 +305,8 @@ public sealed class CudaTrainingKernelTests
         }
         finally
         {
-            Tensor.ExecutionDevice = previous;
             Tensor.CudaDeviceIndices = previousIndices;
+            Tensor.ExecutionDevice = previous;
         }
     }
 
@@ -360,8 +360,8 @@ public sealed class CudaTrainingKernelTests
         }
         finally
         {
-            Tensor.ExecutionDevice = previous;
             Tensor.CudaDeviceIndices = previousIndices;
+            Tensor.ExecutionDevice = previous;
         }
     }
 
@@ -373,10 +373,12 @@ public sealed class CudaTrainingKernelTests
         Assert.Equal(expected.Count, actual.Count);
         for (int index = 0; index < expected.Count; index++)
         {
-            Assert.InRange(
-                MathF.Abs(expected[index] - actual[index]),
-                0f,
-                tolerance);
+            float difference = MathF.Abs(expected[index] - actual[index]);
+            Assert.True(
+                difference <= tolerance,
+                $"Index {index}: expected {expected[index]:R}, " +
+                $"actual {actual[index]:R}, difference {difference:R}, " +
+                $"tolerance {tolerance:R}.");
         }
     }
 }

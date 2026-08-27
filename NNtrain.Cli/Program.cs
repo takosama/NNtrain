@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using NNtrain.Training.Execution;
 
 namespace NNtrain;
 
@@ -10,10 +11,24 @@ internal static partial class Program
         TextWriter output,
         TextWriter error,
         bool openLossGraph = false)
+        => Run(
+            args,
+            output,
+            error,
+            openLossGraph,
+            ConfigLoader.Load);
+
+    internal static int Run(
+        string[] args,
+        TextWriter output,
+        TextWriter error,
+        bool openLossGraph,
+        Func<string, CanonicalTrainingSpec> loadConfiguration)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(error);
+        ArgumentNullException.ThrowIfNull(loadConfiguration);
 
         string configurationPath;
         string? generatePrompt = null;
@@ -111,22 +126,22 @@ internal static partial class Program
         {
             if (generationConfigurationPath is not null)
                 return GenerateCommand.Run(generationConfigurationPath, output, error);
-            if (WikiTrainingConfiguration.IsWikiConfiguration(
-                configurationPath))
+            CanonicalTrainingSpec canonical =
+                loadConfiguration(configurationPath);
+            if (canonical is CanonicalWikiTrainingSpec wiki)
             {
                 if (generatePrompt is not null)
                 {
                     return WikiLanguageModelCommand.Run(
-                        configurationPath,
+                        wiki,
                         generatePrompt,
                         output,
                         error,
                         openLossGraph);
                 }
-                WikiTrainingConfiguration wikiConfig =
-                    WikiTrainingConfiguration.Load(configurationPath);
+                WikiTrainingConfiguration wikiConfig = wiki.Configuration;
                 using TrainingRunGuard wikiRun = TrainingRunGuard.Begin(
-                    configurationPath,
+                    wiki.ConfigurationPath,
                     wikiConfig.CheckpointPath);
                 bool resumeWiki = ResolveAutomaticResume(
                     resumeFromCheckpoint,
@@ -135,7 +150,7 @@ internal static partial class Program
                     wikiConfig.CheckpointPath,
                     output);
                 int wikiExitCode = WikiLanguageModelCommand.Run(
-                    configurationPath,
+                    wiki,
                     generatePrompt: null,
                     output,
                     error,
@@ -152,12 +167,14 @@ internal static partial class Program
                     "configuration.");
             }
 
-            TrainingConfiguration config =
-                TrainingConfiguration.Load(configurationPath);
-            using TrainingRunGuard classificationRun =
-                TrainingRunGuard.Begin(
-                    configurationPath,
-                    config.CheckpointPath);
+            CanonicalClassificationTrainingSpec classification = canonical
+                as CanonicalClassificationTrainingSpec
+                ?? throw new InvalidDataException(
+                    "Configuration is not an image-classification task.");
+            TrainingConfiguration config = classification.Configuration;
+            using TrainingRunGuard classificationRun = TrainingRunGuard.Begin(
+                classification.ConfigurationPath,
+                config.CheckpointPath);
             bool resumeClassification = ResolveAutomaticResume(
                 resumeFromCheckpoint,
                 autoResume || config.AutoResume,
@@ -187,8 +204,19 @@ internal static partial class Program
                 generator: new Random(config.Model.Seed),
                 init_scale: config.Model.InitializationScale,
                 dropout: config.Model.Dropout);
+            model.to(
+                classification.PrecisionMode,
+                classification.Bfp8BlockSize);
             output.WriteLine(
                 $"model = {model.GetType().Name} (image classifier)");
+            output.WriteLine(
+                $"precision = " +
+                $"{TensorPrecisionModeNames.Format(classification.PrecisionMode)}" +
+                (classification.PrecisionMode is TensorPrecisionMode.Bfp8
+                    ? " (tensor scale)"
+                    : classification.PrecisionMode == TensorPrecisionMode.Mix8_32
+                        ? $" (block {classification.Bfp8BlockSize})"
+                        : string.Empty));
             IOptimizer optimizer = CreateOptimizer(
                 model,
                 config);
@@ -201,18 +229,9 @@ internal static partial class Program
             DataLoader evalLoader = torch.utils.data.DataLoader(
                 evalData,
                 batch_size: config.ResolvedMicroBatchSize);
-            LossGraph? lossGraph = null;
-            if (config.ShowLossGraph)
-            {
-                string graphPath = Path.ChangeExtension(
-                    Path.GetFullPath(configurationPath),
-                    ".loss.html");
-                lossGraph = new LossGraph(graphPath, config.Epochs);
-                lossGraph.Write();
-                output.WriteLine($"loss graph = {lossGraph.Path}");
-                if (openLossGraph)
-                    lossGraph.TryOpen(error);
-            }
+            string graphPath = Path.ChangeExtension(
+                Path.GetFullPath(configurationPath),
+                ".loss.html");
             output.WriteLine(
                 $"workers = {Environment.ProcessorCount}");
             output.WriteLine(
@@ -293,6 +312,15 @@ internal static partial class Program
             double resumedTrainingLossSum = 0d;
             int resumedTrainingCorrect = 0;
             int resumedTrainingSamples = 0;
+            int classificationMicroBatchesPerEpoch =
+                TrainingRunner.DivideRoundUp(
+                    trainData.Count,
+                    config.ResolvedMicroBatchSize);
+            int classificationUpdatesPerEpoch =
+                TrainingRunner.DivideRoundUp(
+                    classificationMicroBatchesPerEpoch,
+                    config.MicroBatchCount);
+            long globalStep = 0;
 
             if (config.ResumeFromCheckpoint)
             {
@@ -303,7 +331,9 @@ internal static partial class Program
                         config.CheckpointPath);
                 }
                 ClassificationTrainingCheckpoint checkpoint =
-                    ClassificationCheckpoint.Load(config.CheckpointPath);
+                    ClassificationCheckpoint.LoadIntoModel(
+                        config.CheckpointPath,
+                        model);
                 bool hasPartialEpoch = checkpoint.CurrentEpoch
                     > checkpoint.CompletedEpoch;
                 if (!hasPartialEpoch
@@ -314,7 +344,6 @@ internal static partial class Program
                         $"{checkpoint.CompletedEpoch}, but configuration " +
                         $"requests only {config.Epochs} epoch(s).");
                 }
-                model.load_state_dict(checkpoint.Model);
                 optimizer.load_state_dict(checkpoint.Optimizer);
                 scheduler.load_state_dict(checkpoint.Scheduler);
                 bestModelState = checkpoint.BestModel;
@@ -330,6 +359,10 @@ internal static partial class Program
                 firstUpdate = hasPartialEpoch
                     ? checkpoint.CompletedUpdatesInEpoch
                     : 0;
+                globalStep = checked(
+                    (long)checkpoint.CompletedEpoch
+                        * classificationUpdatesPerEpoch
+                    + checkpoint.CompletedUpdatesInEpoch);
                 if (hasPartialEpoch)
                 {
                     resumedTrainingLossSum =
@@ -346,6 +379,40 @@ internal static partial class Program
                         ? string.Empty
                         : $", update {firstUpdate + 1}"));
             }
+
+            double checkpointEpoch = firstEpoch - 1d
+                + (double)firstUpdate / classificationUpdatesPerEpoch;
+            TrainingMetricReporter metricReporter =
+                TrainingMetricReporter.Open(
+                    graphPath,
+                    config.Epochs,
+                    config.ResumeFromCheckpoint,
+                    config.ResumeFromCheckpoint ? globalStep : -1,
+                    checkpointEpoch,
+                    config.ShowLossGraph);
+            output.WriteLine($"metrics = {metricReporter.SidecarPath}");
+            if (config.ShowLossGraph)
+            {
+                output.WriteLine($"loss graph = {metricReporter.HtmlPath}");
+                if (openLossGraph)
+                    metricReporter.TryOpenHtml(error);
+            }
+            using TrainingSession trainingSession =
+                ProductionTrainingSessionFactory.Create(
+                    classification.PrecisionMode,
+                    globalStep);
+            using IDisposable executionScope =
+                trainingSession.ExecutionSession.Enter();
+            var stepExecutor = new TrainingStepExecutor(trainingSession);
+            var stepOperations =
+                new ClassificationTrainingStepOperations(
+                    model,
+                    optimizer,
+                    scheduler,
+                    output,
+                    config.LabelSmoothing,
+                    trainData.ClassCount,
+                    globalStep);
 
             foreach (TrainingEpoch epochRun in TrainingRunner.Epochs(
                 firstEpoch,
@@ -365,9 +432,8 @@ internal static partial class Program
                             config.Seed ^ 0x51F15EED,
                             epoch)));
                 int resumeUpdate = epochRun.ResumeUnit;
-                IReadOnlyList<float> scheduledRates = resumeUpdate > 0
-                    ? scheduler.get_last_lr()
-                    : scheduler.step();
+                IReadOnlyList<float> scheduledRates =
+                    scheduler.get_last_lr();
                 var learningRates = new LearningRates(
                     scheduledRates[0],
                     scheduledRates.Count > 1 ? scheduledRates[1] : null);
@@ -387,6 +453,12 @@ internal static partial class Program
                 int updateTotal = TrainingRunner.DivideRoundUp(
                     microBatchTotal,
                     config.MicroBatchCount);
+                if (updateTotal != classificationUpdatesPerEpoch)
+                {
+                    throw new InvalidOperationException(
+                        "Classification update count changed after metric " +
+                        "resume position was established.");
+                }
                 using IEnumerator<DataBatch> trainingBatches =
                     trainLoader.GetEnumerator();
                 int microBatchesToSkip = Math.Min(
@@ -400,15 +472,21 @@ internal static partial class Program
                     {
                         throw new InvalidDataException(
                             "DataLoader ended while restoring checkpoint " +
-                            "position.");
+                        "position.");
                     }
                 }
+                stepOperations.StartEpoch(
+                    epoch,
+                    trainingBatches,
+                    trainLoss,
+                    trainCorrect,
+                    completedTrainingSamples,
+                    advanceSchedule: resumeUpdate == 0);
 
                 for (int update = resumeUpdate;
                     update < updateTotal;
                     update++)
                 {
-                    optimizer.zero_grad();
                     int firstMicroBatch = update * config.MicroBatchCount;
                     int microBatchesInUpdate = Math.Min(
                         config.MicroBatchCount,
@@ -417,55 +495,40 @@ internal static partial class Program
                     int samplesInUpdate = Math.Min(
                         config.EffectiveBatchSize,
                         trainData.Count - updateStart);
-
-                    for (int accumulation = 0;
-                        accumulation < microBatchesInUpdate;
-                        accumulation++)
-                    {
-                        int microBatch = firstMicroBatch + accumulation;
-                        if (!trainingBatches.MoveNext())
-                        {
-                            throw new InvalidOperationException(
-                                "DataLoader ended before the expected " +
-                                "training microbatch count.");
-                        }
-                        DataBatch samples = trainingBatches.Current;
-                        int samplesInMicroBatch = samples.target.Length;
-                        Tensor logits = model.forward(samples.input);
-                        Tensor loss = nn.functional.cross_entropy(
-                            logits,
-                            samples.target,
-                            label_smoothing: config.LabelSmoothing);
-                        float microBatchLoss = loss.item();
-                        float gradientWeight =
-                            (float)samplesInMicroBatch / samplesInUpdate;
-
-                        loss.backward([gradientWeight]);
-                        trainLoss +=
-                            microBatchLoss * samplesInMicroBatch;
-                        completedTrainingSamples += samplesInMicroBatch;
-                        trainCorrect += CountCorrect(
-                            logits.Data,
-                            samples.target,
-                            trainData.ClassCount);
-
-                        output.WriteLine(
-                            $"epoch {epoch}, " +
-                            $"microbatch {microBatch + 1}/" +
-                            $"{microBatchTotal}, accumulation " +
-                            $"{accumulation + 1}/{microBatchesInUpdate}, " +
-                            $"update {update + 1}/{updateTotal}, " +
-                            $"loss = {microBatchLoss:F6}");
-                    }
-
-                    optimizer.step();
+                    stepOperations.ConfigureUpdate(
+                        update,
+                        updateTotal,
+                        firstMicroBatch,
+                        microBatchesInUpdate,
+                        microBatchTotal,
+                        samplesInUpdate);
+                    TrainingStepState committedStep = stepExecutor.Execute(
+                        checked(globalStep + 1),
+                        stepOperations);
+                    globalStep = committedStep.GlobalStep;
+                    trainLoss = stepOperations.TrainingLossSum;
+                    trainCorrect = stepOperations.TrainingCorrect;
+                    completedTrainingSamples =
+                        stepOperations.TrainingSamples;
+                    IReadOnlyList<float> currentRates =
+                        stepOperations.LearningRates;
+                    learningRates = new LearningRates(
+                        currentRates[0],
+                        currentRates.Count > 1
+                            ? currentRates[1]
+                            : null);
                     int completedUpdates = update + 1;
                     if (TrainingRunner.ShouldSaveCheckpoint(
                         completedUpdates,
                         updateTotal))
                     {
+                        ProductionTrainingSessionFactory
+                            .EnsureCanPublishCheckpoint(
+                                trainingSession,
+                                globalStep);
                         ClassificationCheckpoint.Save(
                             config.CheckpointPath,
+                            model,
                             CreateClassificationCheckpoint(
                                 completedEpoch: epoch - 1,
                                 currentEpoch: epoch,
@@ -490,7 +553,7 @@ internal static partial class Program
                             model.GetType().Name,
                             epoch - 1d
                                 + (double)completedUpdates / updateTotal,
-                            model.state_dict());
+                            model);
                         output.WriteLine(
                             $"model snapshot = {snapshotPath}");
                     }
@@ -560,11 +623,11 @@ internal static partial class Program
                     epochsWithoutImprovement++;
                 }
 
-                lossGraph?.AddEpoch(
+                metricReporter.AppendCommittedEpochLosses(
+                    globalStep,
                     epoch,
                     averageTrainingLoss,
                     averageEvaluationLoss);
-                lossGraph?.Write();
                 output.WriteLine();
                 output.WriteLine(
                     $"epoch {epoch}, " +
@@ -576,8 +639,13 @@ internal static partial class Program
                     $"train time = {trainTimer.Elapsed.TotalSeconds:F2} sec, " +
                     $"eval time = {evalTimer.Elapsed.TotalSeconds:F2} sec");
 
+                ProductionTrainingSessionFactory
+                    .EnsureCanPublishCheckpoint(
+                        trainingSession,
+                        globalStep);
                 ClassificationCheckpoint.Save(
                     config.CheckpointPath,
+                    model,
                     CreateClassificationCheckpoint(
                         completedEpoch: epoch,
                         currentEpoch: 0,
@@ -622,7 +690,8 @@ internal static partial class Program
                     bestEvaluationLoss,
                     bestModelState);
                 safetensors.torch.save_file(
-                    bestModelState,
+                    ClassificationCheckpoint.GetSafeTensorArtifactState(
+                        bestModelState),
                     Path.ChangeExtension(
                         checkpointPath,
                         ".safetensors"));
@@ -699,7 +768,7 @@ internal static partial class Program
         => new(
             ClassificationTrainingCheckpoint.CurrentFormatVersion,
             completedEpoch,
-            model.state_dict(),
+            new ModuleState(ModuleState.CurrentFormatVersion, []),
             optimizer.state_dict(),
             scheduler.state_dict(),
             bestModelState,

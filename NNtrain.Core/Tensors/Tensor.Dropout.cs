@@ -149,6 +149,17 @@ partial class Tensor
         Tensor branch,
         float probability,
         Random? random = null)
+        => AddDropout(
+            branch,
+            probability,
+            random,
+            directBFloat16BranchGradient: false);
+
+    private Tensor AddDropout(
+        Tensor branch,
+        float probability,
+        Random? random,
+        bool directBFloat16BranchGradient)
     {
         ArgumentNullException.ThrowIfNull(branch);
         if (!float.IsFinite(probability)
@@ -296,6 +307,19 @@ partial class Tensor
                     seed,
                     dropThreshold,
                     scale);
+                if (directBFloat16BranchGradient
+                    && !sameParent
+                    && branch.DType == TensorDType.BFloat16
+                    && TensorExecutionContext.ActivePrecisionPolicy is null)
+                {
+                    for (int index = 0; index < columns; index++)
+                    {
+                        int valueIndex = offset + index;
+                        branch._grad[valueIndex] =
+                            TensorStorageCodec.RoundToBFloat16(
+                                branch._grad[valueIndex]);
+                    }
+                }
             }
 
             RunBatches(rows, columns * 5L, BackwardRow);

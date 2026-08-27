@@ -1,5 +1,8 @@
 <Solution>
+  <Project Path="NNtrain.Runtime/NNtrain.Runtime.csproj" />
+  <Project Path="NNtrain.Cuda/NNtrain.Cuda.csproj" />
   <Project Path="NNtrain.Core/NNtrain.Core.csproj" />
+  <Project Path="NNtrain.Training/NNtrain.Training.csproj" />
   <Project Path="NNtrain.Data/NNtrain.Data.csproj" />
   <Project Path="NNtrain.Cli/NNtrain.Cli.csproj" />
   <Project Path="NNtrain.Core.Tests/NNtrain.Core.Tests.csproj" />

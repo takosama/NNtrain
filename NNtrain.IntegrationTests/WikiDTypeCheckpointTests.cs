@@ -43,6 +43,132 @@ public sealed class WikiDTypeCheckpointTests
                 parameter.T.DType));
     }
 
+    [Theory]
+    [InlineData(TensorPrecisionMode.Bfp8, 128)]
+    [InlineData(TensorPrecisionMode.Mix8_32, 4)]
+    public void V8Bfp8CheckpointUsesFloat32ArtifactsAndResumes(
+        TensorPrecisionMode mode,
+        int blockSize)
+    {
+        string checkpointPath = CreateCheckpointPath(
+            $"{TensorPrecisionModeNames.Format(mode)}-resume");
+        try
+        {
+            WikiTrainingConfiguration sourceConfig = CreateConfiguration(
+                checkpointPath,
+                precisionMode: null,
+                resume: false) with
+            {
+                Precision = TensorPrecisionModeNames.Format(mode),
+                Bfp8BlockSize = blockSize,
+                Optimizer = WikiTrainingConfiguration.AdamWOptimizer,
+            };
+            LanguageModel source = WikiLanguageModelCommand.CreateModel(
+                sourceConfig,
+                sourceConfig.VocabularySize);
+            Assert.All(
+                source.parameters(),
+                parameter =>
+                {
+                    Assert.Equal(TensorDType.Bfp8, parameter.T.DType);
+                    Bfp8QuantizationDescriptor descriptor =
+                        parameter.T.Bfp8Quantization!;
+                    Assert.Equal(
+                        mode == TensorPrecisionMode.Bfp8
+                            ? Bfp8ScaleGranularity.Tensor
+                            : Bfp8ScaleGranularity.Block,
+                        descriptor.Granularity);
+                    if (mode == TensorPrecisionMode.Mix8_32)
+                        Assert.Equal(blockSize, descriptor.BlockSize);
+                });
+            ModuleState expected = source.state_dict();
+            IOptimizer optimizer = WikiLanguageModelCommand.CreateOptimizer(
+                source,
+                sourceConfig);
+            WarmupCosineProgressLRScheduler scheduler =
+                lr_scheduler.WarmupCosineProgressLR(
+                    optimizer,
+                    sourceConfig.WarmupPercent);
+            WikiLanguageModelCommand.SaveTrainingCheckpoint(
+                sourceConfig,
+                sourceConfig.VocabularySize,
+                completedEpoch: 1,
+                expected,
+                bestLoss: 1.25f,
+                bestEpoch: 1,
+                source,
+                optimizer,
+                scheduler,
+                globalStep: 7);
+
+            WikiLanguageModelCommand.WikiModelCheckpoint serialized =
+                torch.load<WikiLanguageModelCommand.WikiModelCheckpoint>(
+                    checkpointPath);
+            Assert.Equal(TensorDType.Bfp8, serialized.ModelDType);
+            Assert.Equal(mode, serialized.PrecisionMode);
+            ModuleState currentArtifact = safetensors.torch.load_file(
+                WikiLanguageModelCommand.GetCurrentModelArtifactPath(
+                    checkpointPath,
+                    serialized.ArtifactSlot));
+            Assert.All(
+                currentArtifact.Parameters,
+                parameter => Assert.Equal(
+                    TensorDType.Float32,
+                    parameter.DType));
+
+            WikiTrainingConfiguration resumeConfig = sourceConfig with
+            {
+                ResumeFromCheckpoint = true,
+            };
+            LanguageModel restored = WikiLanguageModelCommand.CreateModel(
+                resumeConfig,
+                resumeConfig.VocabularySize,
+                WikiLanguageModelCommand.ResolvePrecisionModeForTraining(
+                    resumeConfig));
+            IOptimizer restoredOptimizer =
+                WikiLanguageModelCommand.CreateOptimizer(
+                    restored,
+                    resumeConfig);
+            WarmupCosineProgressLRScheduler restoredScheduler =
+                lr_scheduler.WarmupCosineProgressLR(
+                    restoredOptimizer,
+                    resumeConfig.WarmupPercent);
+            ModuleState? bestState = null;
+            float bestLoss = float.PositiveInfinity;
+            int bestEpoch = 0;
+            long globalStep = 0;
+            using var output = new StringWriter();
+            _ = WikiLanguageModelCommand.RestoreTrainingCheckpoint(
+                resumeConfig,
+                restored,
+                restoredOptimizer,
+                restoredScheduler,
+                ref bestState,
+                ref bestLoss,
+                ref bestEpoch,
+                ref globalStep,
+                output);
+
+            Assert.Null(bestState);
+            AssertStatesBitwiseEqual(expected, restored.state_dict());
+            Assert.Equal(7, globalStep);
+
+            LanguageModel generation = WikiLanguageModelCommand.CreateModel(
+                serialized,
+                sourceConfig.Seed,
+                blockSize);
+            WikiLanguageModelCommand.LoadGenerationModelInto(
+                serialized,
+                checkpointPath,
+                generation);
+            AssertStatesBitwiseEqual(expected, generation.state_dict());
+        }
+        finally
+        {
+            DeleteCheckpointArtifacts(checkpointPath);
+        }
+    }
+
     [Fact]
     public void LegacyV4V2CheckpointResumesAndGeneratesAsFloat32()
     {

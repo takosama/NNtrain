@@ -56,19 +56,46 @@ internal sealed class CudaInferenceScope : IDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
+        List<Exception>? failures = null;
+
+        void TryCleanup(Action cleanup)
+        {
+            try
+            {
+                cleanup();
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+        }
+
         try
         {
             foreach (int device in _devices)
-                ForgetMemoryV2Cuda.GetAccelerator(device).Synchronize();
+            {
+                TryCleanup(
+                    () => ForgetMemoryV2Cuda.GetAccelerator(device)
+                        .Synchronize());
+            }
             foreach (IDisposable resource in _resources)
-                resource.Dispose();
+                TryCleanup(resource.Dispose);
             foreach (Tensor tensor in _tensors)
-                tensor.ReleaseCudaInferenceBuffers();
+                TryCleanup(tensor.ReleaseCudaInferenceBuffers);
             if (_clearPoolOnDispose && _poolDeviceToClear.HasValue)
             {
-                int deviceIndex = _poolDeviceToClear.Value;
-                ForgetMemoryV2Cuda.GetAccelerator(deviceIndex).Synchronize();
-                Tensor.ClearCudaFloatBufferPool(deviceIndex);
+                var poolDevices = new HashSet<int>(_devices)
+                {
+                    _poolDeviceToClear.Value,
+                };
+                foreach (int deviceIndex in poolDevices)
+                {
+                    TryCleanup(
+                        () => ForgetMemoryV2Cuda.GetAccelerator(deviceIndex)
+                            .Synchronize());
+                    TryCleanup(
+                        () => Tensor.ClearCudaFloatBufferPool(deviceIndex));
+                }
             }
         }
         finally
@@ -78,5 +105,14 @@ internal sealed class CudaInferenceScope : IDisposable
             _devices.Clear();
             Current.Value = _previous;
         }
+
+        if (failures is [Exception failure])
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                .Capture(failure)
+                .Throw();
+        }
+        if (failures is { Count: > 1 })
+            throw new AggregateException("CUDA inference cleanup failed.", failures);
     }
 }

@@ -24,7 +24,11 @@ public partial class Tensor
             TorchDevice current = TensorExecutionContext.Device;
             TensorExecutionContext.Device = new TorchDevice(
                 value,
-                value == TensorDevice.Cuda ? current.Index : 0);
+                value == TensorDevice.Cuda
+                    ? current.IsCuda
+                        ? current.Index
+                        : TensorExecutionContext.CudaDevices[0]
+                    : 0);
         }
     }
 
@@ -62,7 +66,7 @@ public partial class Tensor
     /// <summary>Gets the number of CUDA adapters visible to the runtime.</summary>
     public static int CudaDeviceCount => NNtrain.ForgetMemoryV2Cuda.DeviceCount;
 
-    private readonly TensorStorage _data;
+    private TensorStorage _data;
     private float[]? _masterData;
     private float[]? _physicalFloat32Cache;
     private long _physicalFloat32CacheDataVersion = -1;
@@ -90,11 +94,28 @@ public partial class Tensor
     /// <summary>Gets the physical storage dtype.</summary>
     public TensorDType DType => _data.DType;
 
+    /// <summary>Gets the physical payload and sidecar layout.</summary>
+    public TensorStorageDescriptor StorageDescriptor
+    {
+        get
+        {
+            EnsureHostDataCurrent();
+            return _data.StorageDescriptor;
+        }
+    }
+
+    /// <summary>Gets the BFP8 scaling contract, or null for other dtypes.</summary>
+    public Bfp8QuantizationDescriptor? Bfp8Quantization
+        => _data.Bfp8Descriptor;
+
     /// <summary>Gets the dtype used for tensor operation results.</summary>
     public TensorDType ComputeDType
-        => DType == TensorDType.BFloat16
-            ? TensorDType.BFloat16
-            : TensorDType.Float32;
+        => DType switch
+        {
+            TensorDType.BFloat16 => TensorDType.BFloat16,
+            TensorDType.Bfp8 => TensorDType.Bfp8,
+            _ => TensorDType.Float32,
+        };
 
     /// <summary>Gets the dtype used by reductions and gradient accumulation.</summary>
     /// <remarks>
@@ -167,6 +188,40 @@ public partial class Tensor
 
         Node = new AutogradNode();
     }
+
+    /// <summary>
+    /// Creates signed Int8 BFP storage with an explicit tensor/block scaling
+    /// contract. Use <see cref="Bfp8QuantizationDescriptor.Mix8_32"/> for
+    /// the stable mixed 8/32-bit policy.
+    /// </summary>
+    private Tensor(
+        float[] data,
+        int[] shape,
+        string name,
+        Bfp8QuantizationDescriptor quantization)
+    {
+        ArgumentNullException.ThrowIfNull(data);
+        ArgumentNullException.ThrowIfNull(quantization);
+        ValidateShape(shape, data.Length);
+
+        _data = TensorStorage.CreateBfp8(data, quantization);
+        if (quantization.Granularity == Bfp8ScaleGranularity.Block)
+            _masterData = (float[])data.Clone();
+        _grad = [];
+        _shape = (int[])shape.Clone();
+        Name = name ?? throw new ArgumentNullException(nameof(name));
+
+        Grad = new GradientView(this);
+        Shape = Array.AsReadOnly(_shape);
+        Node = new AutogradNode();
+    }
+
+    public static Tensor FromBfp8(
+        float[] data,
+        int[] shape,
+        Bfp8QuantizationDescriptor quantization,
+        string name = "")
+        => new(data, shape, name, quantization);
 
     /// <summary>
     /// Creates a leaf tensor without copying a newly allocated data array.
@@ -253,7 +308,8 @@ public partial class Tensor
         TensorStorage data,
         int[] shape,
         Tensor[] prev,
-        string name = "")
+        string name = "",
+        bool cudaResult = false)
     {
         ArgumentNullException.ThrowIfNull(data);
         ArgumentNullException.ThrowIfNull(prev);
@@ -274,9 +330,18 @@ public partial class Tensor
         {
             foreach (Tensor parent in prev)
             {
-                if (ExecutionDevice != TensorDevice.Cuda
-                    || parent.Device != TensorDevice.Cuda)
+                // A CUDA result owns a CUDA backward action even when a
+                // parameter is still logically reported as CPU because its
+                // device replica was materialized lazily.  Pulling that
+                // parameter's gradient through the shared host mirror here
+                // would merge one data-parallel lane into the next before the
+                // explicit all-reduce.
+                if (!cudaResult
+                    && (ExecutionDevice != TensorDevice.Cuda
+                        || parent.Device != TensorDevice.Cuda))
+                {
                     parent.EnsureGradientBuffer();
+                }
             }
             Node = new AutogradNode(prev);
         }
@@ -374,6 +439,65 @@ public partial class Tensor
             1f,
             Numel);
         return result;
+    }
+
+    /// <summary>
+    /// Replaces only this tensor's physical storage while preserving the
+    /// Tensor/autograd identity. Callers select whether a Float32 master is
+    /// retained; block BFP8 defaults to retaining it for Mix8_32.
+    /// </summary>
+    internal void ConvertStorageInPlace(
+        TensorDType dtype,
+        Bfp8QuantizationDescriptor? bfp8Quantization = null,
+        bool? preserveFloat32Master = null)
+    {
+        TensorDTypeContract.ValidateImplemented(dtype, nameof(dtype));
+        if (dtype == TensorDType.Bfp8)
+        {
+            bfp8Quantization ??= Bfp8QuantizationDescriptor.TensorWide;
+        }
+        else if (bfp8Quantization is not null)
+        {
+            throw new ArgumentException(
+                "BFP8 quantization metadata can only be used with BFP8 storage.",
+                nameof(bfp8Quantization));
+        }
+
+        lock (_deviceSync)
+        {
+            SynchronizeHostFromCudaLocked();
+            SynchronizeHostGradientFromCudaLocked();
+            float[] authoritative = _masterData is not null
+                ? (float[])_masterData.Clone()
+                : _data.ToFloat32Array();
+            bool retainMaster = preserveFloat32Master
+                ?? (dtype == TensorDType.Bfp8
+                    && bfp8Quantization!.Granularity
+                        == Bfp8ScaleGranularity.Block);
+
+            // Monitor locks are reentrant. Keeping invalidation inside the
+            // same critical section closes the race with a concurrent Ensure
+            // that could otherwise publish a replica for the old storage.
+            InvalidateCudaBuffers();
+            CudaResidentArrayCache.Invalidate(_physicalFloat32Cache);
+            _data = dtype == TensorDType.Bfp8
+                ? TensorStorage.CreateBfp8(authoritative, bfp8Quantization!)
+                : TensorStorage.Create(authoritative, dtype);
+            _masterData = dtype != TensorDType.Float32 && retainMaster
+                ? authoritative
+                : null;
+            _physicalFloat32Cache = null;
+            _physicalFloat32CacheDataVersion = -1;
+            _transposedDataCache = null;
+            _transposedDataVersion = -1;
+            unchecked
+            {
+                _dataVersion++;
+            }
+            // The gradient was materialized before device replicas were
+            // released. Its array and AutogradNode retain Tensor identity.
+            _hostGradientCurrent = true;
+        }
     }
 
     public Tensor to(TensorDType dtype) => To(dtype);

@@ -343,6 +343,7 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                     gramSquared,
                     rows,
                     columns,
+                    parameter.T.DType == TensorDType.BFloat16,
                     profileTicks);
                 (x, next) = (next, x);
             }
@@ -356,6 +357,7 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                     gramSquared,
                     rows,
                     columns,
+                    parameter.T.DType == TensorDType.BFloat16,
                     profileTicks);
                 InterpolateInPlace(x, next, fraction);
             }
@@ -756,6 +758,7 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         float[] gramSquared,
         int rows,
         int columns,
+        bool bfloat16MatrixOperands,
         long[]? profileTicks)
     {
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
@@ -780,14 +783,52 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         long phaseStart = profileTicks is null
             ? 0L
             : Stopwatch.GetTimestamp();
-        ComputeSymmetricGram(source, gram, rows, columns);
+        ComputeSymmetricGram(
+            source, gram, rows, columns, bfloat16MatrixOperands);
         AddProfileTicks(profileTicks, 6, phaseStart);
 
         phaseStart = profileTicks is null ? 0L : Stopwatch.GetTimestamp();
-        ComputeSymmetricGram(gram, gramSquared, rows, rows);
+        ComputeSymmetricGram(
+            gram, gramSquared, rows, rows, bfloat16MatrixOperands);
         AddProfileTicks(profileTicks, 7, phaseStart);
 
         phaseStart = profileTicks is null ? 0L : Stopwatch.GetTimestamp();
+        if (bfloat16MatrixOperands)
+        {
+            // The CUDA Tensor Core path performs three BF16-operand/FP32-
+            // accumulate GEMMs: X*X^T, G*G, and P*X.  Mirror those operand
+            // boundaries on CPU while retaining FP32 reductions and output
+            // storage, as required by PrecisionPolicy.
+            for (int bfOutputRow = 0; bfOutputRow < rows; bfOutputRow++)
+            {
+                int coefficientOffset = bfOutputRow * rows;
+                int destinationOffset = bfOutputRow * columns;
+                for (int column = 0; column < columns; column++)
+                {
+                    float sum = 0f;
+                    for (int inner = 0; inner < rows; inner++)
+                    {
+                        float coefficient = MathF.FusedMultiplyAdd(
+                            NewtonSchulzC,
+                            gramSquared[coefficientOffset + inner],
+                            NewtonSchulzB
+                                * gram[coefficientOffset + inner]);
+                        if (bfOutputRow == inner)
+                            coefficient += NewtonSchulzA;
+                        coefficient = TensorStorageCodec.RoundToBFloat16(
+                            coefficient);
+                        float sourceValue = TensorStorageCodec.RoundToBFloat16(
+                            source[inner * columns + column]);
+                        sum = MathF.FusedMultiplyAdd(
+                            coefficient, sourceValue, sum);
+                    }
+                    destination[destinationOffset + column] = sum;
+                }
+            }
+            AddProfileTicks(profileTicks, 8, phaseStart);
+            return;
+        }
+
         Scale(source, destination, NewtonSchulzA);
         int outputRow = 0;
         for (; outputRow + 7 < rows; outputRow += 8)
@@ -905,8 +946,33 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         float[] source,
         float[] destination,
         int rows,
-        int columns)
+        int columns,
+        bool bfloat16MatrixOperands = false)
     {
+        if (bfloat16MatrixOperands)
+        {
+            for (int row = 0; row < rows; row++)
+            {
+                int rowOffset = row * columns;
+                for (int other = 0; other <= row; other++)
+                {
+                    int otherOffset = other * columns;
+                    float dot = 0f;
+                    for (int column = 0; column < columns; column++)
+                    {
+                        float left = TensorStorageCodec.RoundToBFloat16(
+                            source[rowOffset + column]);
+                        float right = TensorStorageCodec.RoundToBFloat16(
+                            source[otherOffset + column]);
+                        dot = MathF.FusedMultiplyAdd(left, right, dot);
+                    }
+                    destination[row * rows + other] = dot;
+                    destination[other * rows + row] = dot;
+                }
+            }
+            return;
+        }
+
         if (!Tensor.SimdEnabled
             || !Vector256.IsHardwareAccelerated
             || rows % 4 != 0

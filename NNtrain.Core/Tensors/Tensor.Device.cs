@@ -13,7 +13,6 @@ public partial class Tensor
     private readonly Dictionary<int, BFloat16GradientDeviceBuffer>
         _cudaBFloat16GradientBuffers = [];
     private readonly Dictionary<int, DeviceBuffer> _cudaStagingBuffers = [];
-    private long _cudaBufferDataVersion = -1;
     private bool _hostDataCurrent = true;
     private long _gradientVersion;
     private bool _hostGradientCurrent = true;
@@ -36,6 +35,8 @@ public partial class Tensor
         {
             if (DType == TensorDType.BFloat16)
                 EnsureCudaBFloat16Buffer(device.Index);
+            else if (DType == TensorDType.Bfp8)
+                EnsureCudaBfp8Buffer(device.Index);
             else
                 EnsureCudaFloat32Buffer(device.Index);
             _device = TensorDevice.Cuda;
@@ -63,22 +64,25 @@ public partial class Tensor
     internal NativeCudaBuffer<float> EnsureCudaFloat32Buffer(
         int deviceIndex = -1)
     {
-        if (DType == TensorDType.BFloat16)
+        if (DType is TensorDType.BFloat16 or TensorDType.Bfp8)
         {
             throw new InvalidOperationException(
-                "BFloat16 tensors must use their physical 16-bit CUDA buffer; " +
+                $"{DType} tensors must use their physical CUDA buffer; " +
                 "implicit expansion to a float32 device buffer is forbidden.");
         }
         int resolvedDeviceIndex = ResolveCudaDeviceIndex(deviceIndex);
         NativeCudaDevice accelerator =
             NNtrain.ForgetMemoryV2Cuda.GetAccelerator(resolvedDeviceIndex);
-        if (!_hostDataCurrent
-            && !_cudaBuffers.ContainsKey(resolvedDeviceIndex))
-        {
-            SynchronizeHostFromCuda();
-        }
         lock (_deviceSync)
         {
+            if (!_hostDataCurrent
+                && (!_cudaBuffers.TryGetValue(
+                        resolvedDeviceIndex,
+                        out DeviceBuffer? requestedBuffer)
+                    || requestedBuffer.Version != _dataVersion))
+            {
+                SynchronizeHostFromCudaLocked(_cudaDeviceIndex);
+            }
             if (!_cudaBuffers.TryGetValue(
                 resolvedDeviceIndex,
                 out DeviceBuffer? buffer)
@@ -87,16 +91,16 @@ public partial class Tensor
                 buffer?.Dispose();
                 buffer = new DeviceBuffer(
                     accelerator.Allocate1D(GetPhysicalFloat32ComputeCache()),
+                    _dataVersion,
                     resolvedDeviceIndex);
                 _cudaBuffers[resolvedDeviceIndex] = buffer;
-                _cudaBufferDataVersion = _dataVersion;
                 return buffer.Buffer;
             }
 
-            if (_cudaBufferDataVersion != _dataVersion)
+            if (buffer.Version != _dataVersion)
             {
                 buffer.Buffer.CopyFromCPU(GetPhysicalFloat32ComputeCache());
-                _cudaBufferDataVersion = _dataVersion;
+                buffer.Version = _dataVersion;
             }
             return buffer.Buffer;
         }
@@ -110,13 +114,16 @@ public partial class Tensor
             return EnsureCudaFloat32Buffer(resolvedDeviceIndex);
         NativeCudaDevice accelerator =
             NNtrain.ForgetMemoryV2Cuda.GetAccelerator(resolvedDeviceIndex);
-        if (!_hostDataCurrent
-            && !_cudaMasterBuffers.ContainsKey(resolvedDeviceIndex))
-        {
-            SynchronizeHostFromCuda();
-        }
         lock (_deviceSync)
         {
+            if (!_hostDataCurrent
+                && (!_cudaMasterBuffers.TryGetValue(
+                        resolvedDeviceIndex,
+                        out DeviceBuffer? requestedMaster)
+                    || requestedMaster.Version != _dataVersion))
+            {
+                SynchronizeHostFromCudaLocked(_cudaDeviceIndex);
+            }
             if (!_cudaMasterBuffers.TryGetValue(
                 resolvedDeviceIndex,
                 out DeviceBuffer? buffer)
@@ -125,8 +132,14 @@ public partial class Tensor
                 buffer?.Dispose();
                 buffer = new DeviceBuffer(
                     accelerator.Allocate1D(DataBuffer),
+                    _dataVersion,
                     resolvedDeviceIndex);
                 _cudaMasterBuffers[resolvedDeviceIndex] = buffer;
+            }
+            else if (buffer.Version != _dataVersion)
+            {
+                buffer.Buffer.CopyFromCPU(DataBuffer);
+                buffer.Version = _dataVersion;
             }
             return buffer.Buffer;
         }
@@ -136,14 +149,15 @@ public partial class Tensor
         int deviceIndex = -1)
     {
         int resolvedDeviceIndex = ResolveCudaDeviceIndex(deviceIndex);
-        if (!_hostGradientCurrent
-            && !_cudaGradientBuffers.ContainsKey(resolvedDeviceIndex)
-            && !_cudaBFloat16GradientBuffers.ContainsKey(resolvedDeviceIndex))
-        {
-            SynchronizeHostGradientFromCuda();
-        }
         lock (_deviceSync)
         {
+            if (!_hostGradientCurrent
+                && !_cudaGradientBuffers.ContainsKey(resolvedDeviceIndex)
+                && !_cudaBFloat16GradientBuffers.ContainsKey(
+                    resolvedDeviceIndex))
+            {
+                SynchronizeHostGradientFromCudaLocked();
+            }
             if (!_cudaGradientBuffers.TryGetValue(
                 resolvedDeviceIndex,
                 out GradientDeviceBuffer? buffer)
@@ -241,9 +255,14 @@ public partial class Tensor
             {
                 return;
             }
+            // An arena is an allocation detail of a data-parallel plan, not
+            // the owner of the tensor's logical gradient.  Preserve the
+            // authoritative value before the plan releases its arena; merely
+            // marking the host mirror current here would silently turn a
+            // completed resident gradient into zeros after engine disposal.
+            SynchronizeHostGradientFromCudaLocked(deviceIndex);
             _cudaGradientBuffers.Remove(deviceIndex);
             current.Dispose();
-            _hostGradientCurrent = true;
         }
     }
 
@@ -274,7 +293,8 @@ public partial class Tensor
                 buffer?.Dispose();
                 buffer = new DeviceBuffer(
                     accelerator.Allocate1D<float>(Numel),
-                    deviceIndex);
+                    version: -1,
+                    deviceIndex: deviceIndex);
                 _cudaStagingBuffers[deviceIndex] = buffer;
             }
             return buffer.Buffer;
@@ -369,8 +389,8 @@ public partial class Tensor
         {
             if (_cudaBuffers.Remove(deviceIndex, out DeviceBuffer? previous))
                 previous.Dispose();
-            _cudaBuffers[deviceIndex] = new DeviceBuffer(buffer, deviceIndex);
-            _cudaBufferDataVersion = _dataVersion;
+            _cudaBuffers[deviceIndex] = new DeviceBuffer(
+                buffer, _dataVersion, deviceIndex);
             _hostDataCurrent = false;
             _device = TensorDevice.Cuda;
             _cudaDeviceIndex = deviceIndex;
@@ -397,6 +417,11 @@ public partial class Tensor
         CudaIntBufferPool.Upload(deviceIndex, buffer, values);
         return buffer;
     }
+
+    internal static NativeCudaBuffer<int> RentCudaIntBuffer(
+        int deviceIndex,
+        int length)
+        => CudaIntBufferPool.Rent(deviceIndex, length);
 
     internal static void ReturnCudaIntBuffer(
         NativeCudaDevice accelerator,
@@ -425,7 +450,8 @@ public partial class Tensor
                 checked((int)buffer.Length),
                 resultDType),
             shape,
-            parents);
+            parents,
+            cudaResult: true);
         result.AdoptCudaFloat32Buffer(buffer, deviceIndex);
         if (!AutogradContext.IsRecordingEnabled)
             CudaInferenceScope.Track(result, deviceIndex);
@@ -450,7 +476,8 @@ public partial class Tensor
                 checked((int)buffer.Length),
                 resultDType),
             shape,
-            parents);
+            parents,
+            cudaResult: true);
         result.AdoptCudaBFloat16Buffer(buffer, deviceIndex);
         if (!AutogradContext.IsRecordingEnabled)
             CudaInferenceScope.Track(result, deviceIndex);
@@ -459,46 +486,71 @@ public partial class Tensor
 
     internal void SynchronizeHostFromCuda(int deviceIndex = -1)
     {
-        int resolvedDeviceIndex = ResolveCudaDeviceIndex(deviceIndex);
         lock (_deviceSync)
+            SynchronizeHostFromCudaLocked(deviceIndex);
+    }
+
+    private void SynchronizeHostFromCudaLocked(int deviceIndex = -1)
+    {
+        if (_hostDataCurrent)
+            return;
+
+        // Host synchronization follows the tensor's authoritative replica,
+        // not the ambient execution device.  This matters when a tensor
+        // produced on GPU 0 is first materialized on GPU 1.
+        int resolvedDeviceIndex = deviceIndex >= 0
+            ? deviceIndex
+            : _cudaDeviceIndex;
+        bool hasFloat = _cudaBuffers.TryGetValue(
+                resolvedDeviceIndex,
+                out DeviceBuffer? buffer)
+            && buffer.Version == _dataVersion;
+        bool hasBFloat16 = _cudaBFloat16Buffers.TryGetValue(
+                resolvedDeviceIndex,
+                out BFloat16DeviceBuffer? bfloat16Buffer)
+            && bfloat16Buffer.Version == _dataVersion;
+        bool hasBfp8 = _cudaBfp8Buffers.TryGetValue(
+                resolvedDeviceIndex,
+                out Bfp8DeviceBuffer? bfp8Buffer)
+            && bfp8Buffer.Version == _dataVersion;
+        bool hasMaster = _cudaMasterBuffers.TryGetValue(
+                resolvedDeviceIndex,
+                out DeviceBuffer? masterBuffer)
+            && masterBuffer.Version == _dataVersion;
+        if (!hasFloat && !hasBFloat16 && !hasBfp8 && !hasMaster)
+            return;
+
+        if (hasBfp8 && !hasMaster)
         {
-            bool hasFloat = _cudaBuffers.TryGetValue(
-                resolvedDeviceIndex,
-                out DeviceBuffer? buffer);
-            bool hasBFloat16 = _cudaBFloat16Buffers.TryGetValue(
-                resolvedDeviceIndex,
-                out BFloat16DeviceBuffer? bfloat16Buffer);
-            if (!hasFloat && !hasBFloat16)
-            {
-                return;
-            }
-
-            if (_hostDataCurrent)
-                return;
-
-            float[] data = DataBuffer;
-            if (_cudaMasterBuffers.TryGetValue(
-                resolvedDeviceIndex,
-                out DeviceBuffer? masterBuffer))
-            {
-                masterBuffer.Buffer.CopyToCPU(data);
-            }
-            else if (buffer is not null)
-            {
-                buffer.Buffer.CopyToCPU(data);
-            }
-            else
-            {
-                var encoded = new ushort[Numel];
-                bfloat16Buffer!.Buffer.CopyToCPU(encoded);
-                TensorStorageCodec.DecodeBFloat16(encoded, data);
-            }
-            if (DType != TensorDType.Float32)
-                _data.CopyFrom(data);
+            var payload = new sbyte[Numel];
+            var scales = new float[bfp8Buffer!.Scales.Length];
+            bfp8Buffer.Payload.CopyToCPU(payload);
+            bfp8Buffer.Scales.CopyToCPU(scales);
+            _data.CopyFromBfp8Encoded(payload, scales);
             _physicalFloat32CacheDataVersion = -1;
             _hostDataCurrent = true;
-            _cudaBufferDataVersion = _dataVersion;
+            return;
         }
+
+        float[] data = DataBuffer;
+        if (hasMaster)
+        {
+            masterBuffer!.Buffer.CopyToCPU(data);
+        }
+        else if (hasFloat)
+        {
+            buffer!.Buffer.CopyToCPU(data);
+        }
+        else if (hasBFloat16)
+        {
+            var encoded = new ushort[Numel];
+            bfloat16Buffer!.Buffer.CopyToCPU(encoded);
+            TensorStorageCodec.DecodeBFloat16(encoded, data);
+        }
+        if (DType != TensorDType.Float32)
+            _data.CopyFrom(data);
+        _physicalFloat32CacheDataVersion = -1;
+        _hostDataCurrent = true;
     }
 
     internal void MarkCudaDataMutated(int deviceIndex = -1)
@@ -507,7 +559,8 @@ public partial class Tensor
         lock (_deviceSync)
         {
             if (!_cudaBuffers.ContainsKey(resolvedDeviceIndex)
-                && !_cudaBFloat16Buffers.ContainsKey(resolvedDeviceIndex))
+                && !_cudaBFloat16Buffers.ContainsKey(resolvedDeviceIndex)
+                && !_cudaBfp8Buffers.ContainsKey(resolvedDeviceIndex))
             {
                 throw new InvalidOperationException(
                     "Cannot mark CUDA data modified before allocating its buffer.");
@@ -516,7 +569,30 @@ public partial class Tensor
             {
                 _dataVersion++;
             }
-            _cudaBufferDataVersion = _dataVersion;
+            if (_cudaBuffers.TryGetValue(
+                    resolvedDeviceIndex,
+                    out DeviceBuffer? floatBuffer))
+            {
+                floatBuffer.Version = _dataVersion;
+            }
+            if (_cudaBFloat16Buffers.TryGetValue(
+                    resolvedDeviceIndex,
+                    out BFloat16DeviceBuffer? bfloat16Buffer))
+            {
+                bfloat16Buffer.Version = _dataVersion;
+            }
+            if (_cudaBfp8Buffers.TryGetValue(
+                    resolvedDeviceIndex,
+                    out Bfp8DeviceBuffer? bfp8Buffer))
+            {
+                bfp8Buffer.Version = _dataVersion;
+            }
+            if (_cudaMasterBuffers.TryGetValue(
+                    resolvedDeviceIndex,
+                    out DeviceBuffer? masterBuffer))
+            {
+                masterBuffer.Version = _dataVersion;
+            }
             _physicalFloat32CacheDataVersion = -1;
             _hostDataCurrent = false;
             _device = TensorDevice.Cuda;
@@ -526,14 +602,14 @@ public partial class Tensor
 
     private void EnsureHostDataCurrent()
     {
-        if (!_hostDataCurrent)
-            SynchronizeHostFromCuda();
+        lock (_deviceSync)
+            SynchronizeHostFromCudaLocked();
     }
 
     private void EnsureHostGradientCurrent()
     {
-        if (!_hostGradientCurrent)
-            SynchronizeHostGradientFromCuda();
+        lock (_deviceSync)
+            SynchronizeHostGradientFromCudaLocked();
     }
 
     internal void EnsureHostGradientStorage()
@@ -556,7 +632,8 @@ public partial class Tensor
         int resolvedDeviceIndex = ResolveCudaDeviceIndex(deviceIndex);
         if (!_cudaGradientBuffers.TryGetValue(
             resolvedDeviceIndex,
-            out GradientDeviceBuffer? buffer))
+            out GradientDeviceBuffer? buffer)
+            || buffer.Version != _gradientVersion)
         {
             buffer = _cudaGradientBuffers.Values.FirstOrDefault(
                 candidate => candidate.Version == _gradientVersion);
@@ -571,7 +648,8 @@ public partial class Tensor
         {
             if (!_cudaBFloat16GradientBuffers.TryGetValue(
                     resolvedDeviceIndex,
-                    out BFloat16GradientDeviceBuffer? encoded))
+                    out BFloat16GradientDeviceBuffer? encoded)
+                || encoded.Version != _gradientVersion)
             {
                 encoded = _cudaBFloat16GradientBuffers.Values.FirstOrDefault(
                     candidate => candidate.Version == _gradientVersion);
@@ -654,6 +732,7 @@ public partial class Tensor
                 buffer.Dispose();
             foreach (BFloat16DeviceBuffer buffer in _cudaBFloat16Buffers.Values)
                 buffer.Dispose();
+            DisposeCudaBfp8BuffersLocked();
             foreach (DeviceBuffer buffer in _cudaMasterBuffers.Values)
                 buffer.Dispose();
             foreach (GradientDeviceBuffer buffer in _cudaGradientBuffers.Values)
@@ -671,7 +750,6 @@ public partial class Tensor
             _cudaGradientBuffers.Clear();
             _cudaBFloat16GradientBuffers.Clear();
             _cudaStagingBuffers.Clear();
-            _cudaBufferDataVersion = -1;
             _hostDataCurrent = true;
             _device = TensorDevice.Cpu;
         }
@@ -685,6 +763,7 @@ public partial class Tensor
                 buffer.ReturnToPool();
             foreach (BFloat16DeviceBuffer buffer in _cudaBFloat16Buffers.Values)
                 buffer.ReturnToPool();
+            DisposeCudaBfp8BuffersLocked();
             foreach (DeviceBuffer buffer in _cudaMasterBuffers.Values)
                 buffer.ReturnToPool();
             foreach (GradientDeviceBuffer buffer in _cudaGradientBuffers.Values)
@@ -716,6 +795,7 @@ public partial class Tensor
                 buffer.ReturnToPool();
             foreach (BFloat16DeviceBuffer buffer in _cudaBFloat16Buffers.Values)
                 buffer.ReturnToPool();
+            DisposeCudaBfp8BuffersLocked();
             foreach (DeviceBuffer buffer in _cudaMasterBuffers.Values)
                 buffer.ReturnToPool();
             foreach (GradientDeviceBuffer buffer in _cudaGradientBuffers.Values)
@@ -746,13 +826,16 @@ public partial class Tensor
 
         internal DeviceBuffer(
             NativeCudaBuffer<float> buffer,
+            long version,
             int deviceIndex)
         {
             Buffer = buffer;
+            Version = version;
             _accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
         }
 
         internal NativeCudaBuffer<float> Buffer { get; }
+        internal long Version { get; set; }
 
         public void Dispose()
         {

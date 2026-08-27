@@ -29,6 +29,8 @@ internal static class AutogradEngine
         ValidateSeed(output, seed);
 
         List<Tensor> topologicalOrder = BuildTopologicalOrder(output);
+        Exception? backwardFailure = null;
+        List<Exception>? cleanupFailures = releaseGraph ? [] : null;
         try
         {
             ValidateGraphVersions(topologicalOrder);
@@ -41,14 +43,8 @@ internal static class AutogradEngine
                 tensor.Node.RunBackward();
                 if (tensor.Node.IsLeaf)
                     CudaGradientReductionContext.NotifyLeaf(tensor);
-                if (releaseGraph && !tensor.Node.IsLeaf)
-                {
-                    // Work is ordered on the device stream. The allocation can
-                    // be reused by an earlier graph node after its final use is
-                    // queued, without retaining the entire graph until the end.
-                    tensor.ReleaseCudaGraphBuffers();
-                    tensor.Node.ReleaseGraph();
-                }
+                if (releaseGraph)
+                    ReleaseGraphNode(tensor, cleanupFailures!);
             }
 
             // Resident backward operations share one ordered stream per
@@ -61,13 +57,97 @@ internal static class AutogradEngine
                 foreach (int deviceIndex in Tensor.CudaDeviceIndices)
                     ForgetMemoryV2Cuda.GetAccelerator(deviceIndex).Synchronize();
             }
-
+        }
+        catch (Exception exception)
+        {
+            backwardFailure = exception;
         }
         finally
         {
+            if (releaseGraph)
+            {
+                // RunBackward can fail at any point. Revisit the complete
+                // topology so both processed and not-yet-processed nodes drop
+                // every saved context. Already released leases are idempotent.
+                foreach (Tensor tensor in topologicalOrder)
+                    ReleaseGraphNode(tensor, cleanupFailures!);
+            }
             topologicalOrder.Clear();
             OrderPool.Add(topologicalOrder);
         }
+
+        ThrowAfterCleanup(backwardFailure, cleanupFailures);
+    }
+
+    private static void ReleaseGraphNode(
+        Tensor tensor,
+        List<Exception> cleanupFailures)
+    {
+        bool wasNonLeaf = !tensor.Node.IsLeaf;
+        bool hasLeases = tensor.Node.HasLeases;
+        if (!wasNonLeaf && !hasLeases)
+            return;
+
+        if (wasNonLeaf)
+        {
+            try
+            {
+                // Existing context callbacks preserve the operation's stream
+                // ordering, while Tensor returns only intermediate buffers.
+                tensor.ReleaseCudaGraphBuffers();
+            }
+            catch (Exception exception)
+            {
+                AddFailures(cleanupFailures, exception);
+            }
+        }
+
+        try
+        {
+            tensor.Node.ReleaseGraph();
+        }
+        catch (Exception exception)
+        {
+            AddFailures(cleanupFailures, exception);
+        }
+    }
+
+    private static void ThrowAfterCleanup(
+        Exception? backwardFailure,
+        List<Exception>? cleanupFailures)
+    {
+        if (backwardFailure is null
+            && (cleanupFailures is null || cleanupFailures.Count == 0))
+        {
+            return;
+        }
+
+        if (cleanupFailures is null || cleanupFailures.Count == 0)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                .Capture(backwardFailure!)
+                .Throw();
+            return;
+        }
+
+        if (backwardFailure is not null)
+            cleanupFailures.Insert(0, backwardFailure);
+        throw new AggregateException(
+            backwardFailure is null
+                ? "One or more autograd resources failed to release."
+                : "Backward failed, and one or more autograd resources also " +
+                    "failed to release.",
+            cleanupFailures);
+    }
+
+    private static void AddFailures(
+        List<Exception> failures,
+        Exception exception)
+    {
+        if (exception is AggregateException aggregate)
+            failures.AddRange(aggregate.Flatten().InnerExceptions);
+        else
+            failures.Add(exception);
     }
 
     private static List<Tensor> BuildTopologicalOrder(Tensor output)

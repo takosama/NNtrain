@@ -1,4 +1,6 @@
 using NNtrain;
+using NNtrain.Runtime.Execution;
+using NNtrain.Training.Execution;
 using Xunit;
 
 public sealed class CudaDataParallelTests
@@ -87,7 +89,48 @@ public sealed class CudaDataParallelTests
     }
 
     [Fact]
-    public void TwoGpuGradientsMatchSingleGpu()
+    public void PureBfp8DataParallelTrainingRequiresBfp8GradientReducer()
+    {
+        if (Tensor.CudaDeviceCount == 0)
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cpu;
+            var model = new GptRinWikiJp(
+                vocabularySize: 32,
+                contextLength: 4,
+                dModel: 8,
+                numHeads: 2,
+                dHidden: 16,
+                numLayers: 1,
+                rng: new Random(109),
+                dropout: 0f,
+                dtype: TensorDType.Float32);
+            model.to(TensorPrecisionMode.Bfp8);
+
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            Tensor.CudaDeviceIndices = [0];
+            using var engine = new CudaDataParallelEngine(model, [0]);
+            NotSupportedException error = Assert.Throws<NotSupportedException>(
+                () => engine.ForwardBackward(
+                    [1, 2, 3, 4],
+                    [2, 3, 4, 5],
+                    batchSize: 1,
+                    sequenceLength: 4));
+            Assert.Contains("BFP8 gradient reducer", error.Message);
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndices = previousIndices;
+        }
+    }
+
+    [Fact]
+    public void ExplicitEngineTwoGpuGradientsMatchSingleGpu()
     {
         if (Tensor.CudaDeviceCount < 2)
             return;
@@ -119,17 +162,11 @@ public sealed class CudaDataParallelTests
                     dtype: TensorDType.BFloat16);
                 model.ZeroGrad();
                 float loss;
-                if (devices.Length == 1)
+                using (var engine = new CudaDataParallelEngine(
+                    model,
+                    new CudaAdaptiveShardingOptions { Enabled = false }))
                 {
-                    Tensor logits = model.Forward(input, batch, sequence);
-                    Tensor value = logits.CrossEntropyWithLogits(target);
-                    loss = value.item();
-                    value.Backward();
-                }
-                else
-                {
-                    loss = CudaDataParallel.ForwardBackward(
-                        model,
+                    loss = engine.ForwardBackward(
                         input,
                         target,
                         batch,
@@ -157,14 +194,92 @@ public sealed class CudaDataParallelTests
                     index < single.Gradients[parameter].Length;
                     index++)
                 {
-                    Assert.InRange(
-                        MathF.Abs(
-                            single.Gradients[parameter][index]
-                            - parallel.Gradients[parameter][index]),
-                        0f,
-                        3e-3f);
+                    float difference = MathF.Abs(
+                        single.Gradients[parameter][index]
+                        - parallel.Gradients[parameter][index]);
+                    Assert.True(
+                        difference <= 3e-3f,
+                        $"Parameter {parameter}, index {index}: " +
+                        $"single={single.Gradients[parameter][index]:R}, " +
+                        $"parallel={parallel.Gradients[parameter][index]:R}, " +
+                        $"difference={difference:R}.");
                 }
             }
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndices = previousIndices;
+        }
+    }
+
+    [Fact]
+    public void ConsecutiveExplicitEnginesReleaseOwnedCudaAllocations()
+    {
+        if (Tensor.CudaDeviceCount < 2)
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            Tensor.CudaDeviceIndices = [0, 1];
+            var models = new List<LanguageModel>();
+            foreach (TensorDType dtype in new[]
+            {
+                TensorDType.Float32,
+                TensorDType.BFloat16,
+            })
+            {
+                var model = new GptRinWikiJp(
+                    vocabularySize: 32,
+                    contextLength: 4,
+                    dModel: 8,
+                    numHeads: 2,
+                    dHidden: 16,
+                    numLayers: 1,
+                    rng: new Random(83 + (int)dtype),
+                    dropout: 0f,
+                    dtype: dtype);
+                models.Add(model);
+                model.ZeroGrad();
+                var execution = new ExecutionSession(new ExecutionOptions
+                {
+                    Device = ExecutionDeviceKind.Cuda,
+                    CudaDevices = new DeviceSet(0, 1),
+                });
+                var training = new TrainingSession(
+                    execution,
+                    ownsExecutionSession: true);
+                CudaDataParallelEngine engine = training.OwnCudaDataParallel(
+                    model,
+                    [0, 1],
+                    new CudaAdaptiveShardingOptions { Enabled = false });
+
+                NativeCudaAllocationTelemetry beforeStep =
+                    NativeCudaRuntime.AllocationTelemetry;
+                float loss = engine.ForwardBackward(
+                    [1, 2, 3, 4, 5, 6, 7, 8],
+                    [2, 3, 4, 5, 6, 7, 8, 9],
+                    batchSize: 2,
+                    sequenceLength: 4);
+                NativeCudaAllocationTelemetry afterStep =
+                    NativeCudaRuntime.AllocationTelemetry;
+
+                training.Dispose();
+                NativeCudaAllocationTelemetry afterDispose =
+                    NativeCudaRuntime.AllocationTelemetry;
+
+                Assert.True(float.IsFinite(loss));
+                Assert.True(engine.IsDisposed);
+                Assert.True(execution.IsDisposed);
+                Assert.True(
+                    afterStep.AllocationCount > beforeStep.AllocationCount);
+                Assert.True(afterDispose.FreeCount > afterStep.FreeCount);
+                Assert.True(afterDispose.FreeBytes > afterStep.FreeBytes);
+            }
+            GC.KeepAlive(models);
         }
         finally
         {

@@ -4,6 +4,54 @@ using Xunit;
 public sealed class WikiLanguageModelCommandTests
 {
     [Fact]
+    public void WikiCudaRouteCreatesSessionOwnedDataParallelEngine()
+    {
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            Tensor.CudaDeviceIndices = [3, 5];
+            var config = new WikiTrainingConfiguration
+            {
+                Device = WikiTrainingConfiguration.CudaDevice,
+                DeviceIndices = [3, 5],
+                BatchSize = 4,
+            };
+            using var session =
+                WikiLanguageModelCommand.CreateCudaDataParallelSession(
+                    config,
+                    TensorPrecisionMode.Mix16_32);
+
+            Assert.NotNull(session);
+            Assert.Equal(
+                [3, 5],
+                session.ExecutionSession.Options.CudaDevices);
+            var model = new GptRinWikiJp(
+                vocabularySize: 16,
+                contextLength: 2,
+                dModel: 4,
+                numHeads: 1,
+                dHidden: 8,
+                numLayers: 1,
+                rng: new Random(107));
+            CudaDataParallelEngine engine = session.OwnCudaDataParallel(
+                model,
+                session.ExecutionSession.Options.CudaDevices);
+
+            session.Dispose();
+
+            Assert.True(engine.IsDisposed);
+            Assert.True(session.ExecutionSession.IsDisposed);
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndices = previousIndices;
+        }
+    }
+
+    [Fact]
     public void FiniteBatchPadsInputAndIgnoresPaddedTargets()
     {
         int[] tokens =

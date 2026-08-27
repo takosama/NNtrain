@@ -7,6 +7,11 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\NNtrain.Runtime\NNtrain.Runtime.csproj" />
+    <ProjectReference Include="..\NNtrain.Cuda\NNtrain.Cuda.csproj" />
+  </ItemGroup>
+
   <!-- The native F16C accelerator is optional.  A portable managed AVX2/
        scalar codec remains the default when this Windows x64 payload is not
        present or the processor does not advertise F16C. -->

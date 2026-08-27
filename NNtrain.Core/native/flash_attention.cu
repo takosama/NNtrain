@@ -1670,6 +1670,13 @@ __device__ __forceinline__ void block_sum_pair(float& first, float& second) {
     second = second_warps[0];
 }
 
+// LayerNorm is declared as FP32 normalization.  Keep sqrt and division
+// correctly rounded even though the translation unit is built with
+// --use_fast_math, so CPU and CUDA share one numerical contract.
+__device__ __forceinline__ float layer_norm_inverse_sqrt(float value) {
+    return __fdiv_rn(1.f, __fsqrt_rn(value));
+}
+
 __device__ __forceinline__ float dropout_multiplier(
     unsigned int seed,
     int index,
@@ -1731,7 +1738,8 @@ __global__ void layer_norm_forward_block(
                 sum += cached[item];
             }
         }
-        const float mean = block_sum(sum) / columns;
+        const float mean = __fdiv_rn(
+            block_sum(sum), static_cast<float>(columns));
         float variance_sum = 0.f;
         #pragma unroll
         for (int item = 0; item < kLayerNormValuesPerThread; ++item) {
@@ -1742,8 +1750,9 @@ __global__ void layer_norm_forward_block(
                     difference, difference, variance_sum);
             }
         }
-        const float inverse = rsqrtf(
-            block_sum(variance_sum) / columns + epsilon);
+        const float variance = __fdiv_rn(
+            block_sum(variance_sum), static_cast<float>(columns));
+        const float inverse = layer_norm_inverse_sqrt(variance + epsilon);
         if (threadIdx.x == 0) {
             means[row] = mean;
             inverses[row] = inverse;
@@ -1768,7 +1777,8 @@ __global__ void layer_norm_forward_block(
             input, branch, offset + column, seed, drop_threshold,
             dropout_scale);
     }
-    const float mean = block_sum(sum) / columns;
+    const float mean = __fdiv_rn(
+        block_sum(sum), static_cast<float>(columns));
     float variance_sum = 0.f;
     for (int column = threadIdx.x; column < columns; column += blockDim.x) {
         const float difference = layer_norm_input<T, FuseResidualDropout>(
@@ -1776,7 +1786,9 @@ __global__ void layer_norm_forward_block(
             dropout_scale) - mean;
         variance_sum = fmaf(difference, difference, variance_sum);
     }
-    const float inverse = rsqrtf(block_sum(variance_sum) / columns + epsilon);
+    const float variance = __fdiv_rn(
+        block_sum(variance_sum), static_cast<float>(columns));
+    const float inverse = layer_norm_inverse_sqrt(variance + epsilon);
     if (threadIdx.x == 0) {
         means[row] = mean;
         inverses[row] = inverse;
@@ -1835,7 +1847,8 @@ __global__ void layer_norm_backward_input_block(
             }
         }
         block_sum_pair(dxhat_sum, dxhat_xhat_sum);
-        const float inverse_over_columns = inverse / columns;
+        const float inverse_over_columns = __fdiv_rn(
+            inverse, static_cast<float>(columns));
         #pragma unroll
         for (int item = 0; item < kLayerNormValuesPerThread; ++item) {
             const int column = threadIdx.x + item * blockDim.x;
@@ -1877,7 +1890,8 @@ __global__ void layer_norm_backward_input_block(
         dxhat_xhat_sum = fmaf(dxhat, xhat, dxhat_xhat_sum);
     }
     block_sum_pair(dxhat_sum, dxhat_xhat_sum);
-    const float inverse_over_columns = inverses[row] / columns;
+    const float inverse_over_columns = __fdiv_rn(
+        inverses[row], static_cast<float>(columns));
     for (int column = threadIdx.x; column < columns; column += blockDim.x) {
         const int index = offset + column;
         const float dxhat = load_value(output_gradient, index)
