@@ -3,12 +3,41 @@ namespace NNtrain;
 /// <summary>CUDA data-parallel forward/backward for language-model batches.</summary>
 public static class CudaDataParallel
 {
+    private const string CudaSyncPhasesEnvironmentVariable =
+        "NNTRAIN_CUDA_SYNC_PHASES";
+    private static readonly bool SynchronizeCudaPhases = string.Equals(
+        Environment.GetEnvironmentVariable(CudaSyncPhasesEnvironmentVariable),
+        "1",
+        StringComparison.Ordinal);
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
         LanguageModel,
         FlatGradientPlanCache> FlatGradientPlans = new();
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
         LanguageModel,
         BFloat16GradientPlanCache> BFloat16GradientPlans = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        LanguageModel,
+        CudaAdaptiveShardScheduler> AdaptiveShardSchedulers = new();
+    private static CudaAdaptiveShardingOptions _adaptiveShardingOptions = new();
+
+    /// <summary>Configures EMA-based CUDA batch balancing.</summary>
+    public static void ConfigureAdaptiveSharding(
+        CudaAdaptiveShardingOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        options.Validate();
+        Volatile.Write(ref _adaptiveShardingOptions, options);
+        AdaptiveShardSchedulers.Clear();
+    }
+
+    /// <summary>Returns the last per-device batch allocation for a model.</summary>
+    public static IReadOnlyList<int> GetLastShardBatchSizes(LanguageModel model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        return AdaptiveShardSchedulers.TryGetValue(model, out var scheduler)
+            ? scheduler.LastAllocation
+            : [];
+    }
 
     public static float ForwardBackward(
         LanguageModel model,
@@ -49,6 +78,12 @@ public static class CudaDataParallel
             return readback.CompleteAndReturn();
         }
 
+        CudaAdaptiveShardScheduler shardScheduler =
+            GetAdaptiveShardScheduler(model);
+        int[] shardBatches = AllocateShardBatches(
+            shardScheduler, batchSize, devices);
+        int[] shardStarts = GetShardStarts(shardBatches);
+
         Parameter[] parameters = model.Parameters().ToArray();
         CudaBFloat16GradientAllReducePlan? bfloat16Plan = UseBFloat16GradientBuckets(
             devices, model.PrecisionMode)
@@ -67,11 +102,14 @@ public static class CudaDataParallel
         if (totalValid == 0)
             throw new ArgumentException("At least one target must be valid.", nameof(target));
         var weightedLosses = new double[devices.Length];
+        var shardElapsed = new double[devices.Length];
+        var shardStarted = new long[devices.Length];
         Parallel.For(0, devices.Length, shard =>
         {
-            int batchStart = batchSize * shard / devices.Length;
-            int batchEnd = batchSize * (shard + 1) / devices.Length;
-            int shardBatch = batchEnd - batchStart;
+            shardStarted[shard] =
+                System.Diagnostics.Stopwatch.GetTimestamp();
+            int batchStart = shardStarts[shard];
+            int shardBatch = shardBatches[shard];
             int elementStart = batchStart * sequenceLength;
             int elementCount = shardBatch * sequenceLength;
             int[] shardInput = input.AsSpan(elementStart, elementCount).ToArray();
@@ -84,25 +122,65 @@ public static class CudaDataParallel
                 ? null
                 : CudaGradientReductionContext.Push(
                     bfloat16Plan, devices[shard]);
+            NativeCudaDevice accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(devices[shard]);
             Tensor logits = model.Forward(
                 shardInput,
                 shardBatch,
                 sequenceLength);
+            if (SynchronizeCudaPhases)
+            {
+                accelerator.Synchronize(
+                    $"data-parallel forward device {devices[shard]}");
+            }
             Tensor loss = logits.CrossEntropyWithLogits(
                 shardTarget,
                 ignoreIndex: ignoreIndex);
             float weight = (float)shardValid / totalValid;
-            NativeCudaDevice accelerator =
-                ForgetMemoryV2Cuda.GetAccelerator(devices[shard]);
             NativeCudaScalarReadback readback =
                 NativeCudaScalarReadback.Rent(devices[shard]);
             readback.Begin(
                 loss.EnsureCudaFloat32Buffer(devices[shard]).NativePtr,
                 accelerator.DefaultStream);
+            if (SynchronizeCudaPhases)
+            {
+                accelerator.Synchronize(
+                    $"data-parallel loss device {devices[shard]}");
+            }
             loss.BackwardAndRelease([weight]);
+            if (SynchronizeCudaPhases)
+            {
+                accelerator.Synchronize(
+                    $"data-parallel backward device {devices[shard]}");
+            }
             weightedLosses[shard] =
                 readback.CompleteAndReturn() * shardValid;
+            shardElapsed[shard] = System.Diagnostics.Stopwatch.GetElapsedTime(
+                shardStarted[shard]).TotalMilliseconds;
         });
+
+        bool canMeasureShardRuntime = bfloat16Plan is null
+            || bfloat16Plan.DefersExchangeUntilBackward;
+        if (canMeasureShardRuntime)
+        {
+            // The scalar readback is intentionally queued before backward, so
+            // CPU task duration measures enqueue time rather than GPU work.
+            // Non-peer exchange already has to wait for both completed packs;
+            // synchronize in parallel here to obtain real per-device runtimes
+            // without adding another serialization point to that path.
+            Parallel.For(0, devices.Length, shard =>
+            {
+                ForgetMemoryV2Cuda.GetAccelerator(devices[shard])
+                    .Synchronize(
+                        $"data-parallel backward device {devices[shard]}");
+                shardElapsed[shard] =
+                    System.Diagnostics.Stopwatch.GetElapsedTime(
+                        shardStarted[shard]).TotalMilliseconds;
+            });
+        }
+
+        if (canMeasureShardRuntime)
+            shardScheduler.Observe(shardBatches, shardElapsed);
 
         if (bfloat16Plan is not null)
         {
@@ -144,6 +222,11 @@ public static class CudaDataParallel
         int[] devices = Tensor.CudaDeviceIndices
             .Take(Math.Min(batchSize, Tensor.CudaDeviceIndices.Count))
             .ToArray();
+        CudaAdaptiveShardScheduler shardScheduler =
+            GetAdaptiveShardScheduler(model);
+        int[] shardBatches = AllocateShardBatches(
+            shardScheduler, batchSize, devices);
+        int[] shardStarts = GetShardStarts(shardBatches);
         void SynchronizeAll()
         {
             foreach (int device in devices)
@@ -178,9 +261,8 @@ public static class CudaDataParallel
         Parallel.For(0, devices.Length, shard =>
         {
             var shardTimer = System.Diagnostics.Stopwatch.StartNew();
-            int batchStart = batchSize * shard / devices.Length;
-            int batchEnd = batchSize * (shard + 1) / devices.Length;
-            int shardBatch = batchEnd - batchStart;
+            int batchStart = shardStarts[shard];
+            int shardBatch = shardBatches[shard];
             int elementStart = batchStart * sequenceLength;
             int elementCount = shardBatch * sequenceLength;
             int[] shardInput = input.AsSpan(elementStart, elementCount).ToArray();
@@ -244,6 +326,46 @@ public static class CudaDataParallel
             allReduceTimer.Elapsed.TotalMilliseconds,
             totalTimer.Elapsed.TotalMilliseconds,
             shards);
+    }
+
+    private static CudaAdaptiveShardScheduler GetAdaptiveShardScheduler(
+        LanguageModel model)
+        => AdaptiveShardSchedulers.GetValue(
+            model,
+            _ => new CudaAdaptiveShardScheduler(
+                Volatile.Read(ref _adaptiveShardingOptions)));
+
+    private static int[] AllocateShardBatches(
+        CudaAdaptiveShardScheduler scheduler,
+        int batchSize,
+        IReadOnlyList<int> devices)
+    {
+        int[] previous = scheduler.LastAllocation;
+        int[] current = scheduler.Allocate(batchSize, devices);
+        if (previous.Length == current.Length
+            && !previous.SequenceEqual(current))
+        {
+            // A shard change changes every activation length. Keeping all
+            // prior-shape blocks in the exact-size transient pools eventually
+            // fills VRAM and forces a multi-gigabyte emergency flush. Retire
+            // the old generation at the deliberate transition instead. Once
+            // the EMA converges, the new fixed shape remains allocation-free.
+            foreach (int device in devices)
+                Tensor.ClearCudaFloatBufferPool(device);
+        }
+        return current;
+    }
+
+    private static int[] GetShardStarts(IReadOnlyList<int> shardBatches)
+    {
+        var starts = new int[shardBatches.Count];
+        int next = 0;
+        for (int index = 0; index < starts.Length; index++)
+        {
+            starts[index] = next;
+            next = checked(next + shardBatches[index]);
+        }
+        return starts;
     }
 
     private sealed class FlatGradientPlanCache

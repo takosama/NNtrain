@@ -10,6 +10,7 @@
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
     <ProjectReference Include="..\NNtrain.Core\NNtrain.Core.csproj" />
+    <ProjectReference Include="..\NNtrain.Data\NNtrain.Data.csproj" />
   </ItemGroup>
 
 </Project>

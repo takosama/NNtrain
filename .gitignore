@@ -6,6 +6,7 @@
 # .NET build outputs
 **/bin/
 **/obj/
+**/artifacts/
 TestResults/
 
 # Local training datasets

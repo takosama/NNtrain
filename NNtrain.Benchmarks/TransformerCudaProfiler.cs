@@ -53,7 +53,9 @@ internal static class TransformerCudaProfiler
         int measuredSteps,
         int generationEverySteps = 0,
         int generatedTokens = 0,
-        string? precisionModeOverride = null)
+        string? precisionModeOverride = null,
+        float? learningRateOverride = null,
+        float? auxiliaryLearningRateOverride = null)
     {
         string path = Path.GetFullPath(configurationPath);
         using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
@@ -99,8 +101,10 @@ internal static class TransformerCudaProfiler
             root.GetProperty("tieWordEmbeddings").GetBoolean(),
             dtype,
             precisionMode,
-            optimizer.GetProperty("learningRate").GetSingle(),
-            optimizer.GetProperty("auxiliaryLearningRate").GetSingle(),
+            learningRateOverride
+                ?? optimizer.GetProperty("learningRate").GetSingle(),
+            auxiliaryLearningRateOverride
+                ?? optimizer.GetProperty("auxiliaryLearningRate").GetSingle(),
             optimizer.GetProperty("weightDecay").GetSingle(),
             optimizer.GetProperty("nekoMuonNewtonSchulzInterval").GetInt32(),
             path,
@@ -209,37 +213,55 @@ internal static class TransformerCudaProfiler
             .Select(_ => random.Next(vocabulary)).ToArray();
         int[] target = Enumerable.Range(0, batch * sequence)
             .Select(_ => random.Next(vocabulary)).ToArray();
+        Parameter[] benchmarkParameters = model.Parameters().ToArray();
 
-        (double Total, double ForwardBackward, double Optimizer, float Loss,
-            long Allocated, int Gen0, int Gen1, int Gen2) Step()
+        (double Total, double ZeroGrad, double ForwardBackward,
+            double GradientClip, double Optimizer, float Loss,
+            float GradientNorm, long Allocated,
+            int Gen0, int Gen1, int Gen2,
+            NativeCudaAllocationTelemetry NativeAllocations) Step()
         {
-            optimizer.zero_grad();
+            NativeCudaAllocationTelemetry nativeBefore =
+                NativeCudaRuntime.AllocationTelemetry;
             long allocated = GC.GetTotalAllocatedBytes(precise: false);
             int gen0 = GC.CollectionCount(0);
             int gen1 = GC.CollectionCount(1);
             int gen2 = GC.CollectionCount(2);
             var timer = Stopwatch.StartNew();
+            optimizer.zero_grad();
+            double zeroGrad = timer.Elapsed.TotalMilliseconds;
             float loss = CudaDataParallel.ForwardBackward(
                 model, input, target, batch, sequence);
-            double forwardBackward = timer.Elapsed.TotalMilliseconds;
+            double afterForwardBackward = timer.Elapsed.TotalMilliseconds;
+            float gradientNorm = nn.utils.clip_grad_norm_(
+                benchmarkParameters,
+                max_norm: 1f);
+            double afterGradientClip = timer.Elapsed.TotalMilliseconds;
             optimizer.step();
             timer.Stop();
             return (
                 timer.Elapsed.TotalMilliseconds,
-                forwardBackward,
-                timer.Elapsed.TotalMilliseconds - forwardBackward,
+                zeroGrad,
+                afterForwardBackward - zeroGrad,
+                afterGradientClip - afterForwardBackward,
+                timer.Elapsed.TotalMilliseconds - afterGradientClip,
                 loss,
+                gradientNorm,
                 GC.GetTotalAllocatedBytes(precise: false) - allocated,
                 GC.CollectionCount(0) - gen0,
                 GC.CollectionCount(1) - gen1,
-                GC.CollectionCount(2) - gen2);
+                GC.CollectionCount(2) - gen2,
+                NativeCudaRuntime.AllocationTelemetry - nativeBefore);
         }
 
         for (int step = 0; step < warmupSteps; step++)
             Step();
-        var samples = new (double Total, double ForwardBackward,
-            double Optimizer, float Loss, long Allocated, int Gen0, int Gen1,
-            int Gen2)[measuredSteps];
+        var samples = new (double Total, double ZeroGrad,
+            double ForwardBackward, double GradientClip, double Optimizer,
+            float Loss, float GradientNorm, long Allocated,
+            int Gen0, int Gen1, int Gen2,
+            NativeCudaAllocationTelemetry NativeAllocations)
+            [measuredSteps];
         for (int step = 0; step < measuredSteps; step++)
         {
             samples[step] = Step();
@@ -251,12 +273,24 @@ internal static class TransformerCudaProfiler
             }
             Console.WriteLine(
                 $"step {step + 1} = {samples[step].Total:F2} ms " +
-                $"(fwd+bwd {samples[step].ForwardBackward:F2}, " +
+                $"(zero {samples[step].ZeroGrad:F2}, " +
+                $"fwd+bwd {samples[step].ForwardBackward:F2}, " +
+                $"clip {samples[step].GradientClip:F2}, " +
                 $"optimizer {samples[step].Optimizer:F2}, " +
                 $"loss {samples[step].Loss:F6}, " +
+                $"grad norm {samples[step].GradientNorm:F4}" +
+                $"{(samples[step].GradientNorm > 1f ? " (clipped), " : ", ")}" +
                 $"alloc {samples[step].Allocated / 1024d:N0} KiB, " +
+                $"CUDA malloc/free " +
+                $"{samples[step].NativeAllocations.AllocationCount}/" +
+                $"{samples[step].NativeAllocations.FreeCount} " +
+                $"({samples[step].NativeAllocations.AllocationBytes
+                    / 1048576d:F1}/" +
+                $"{samples[step].NativeAllocations.FreeBytes
+                    / 1048576d:F1} MiB), " +
                 $"GC {samples[step].Gen0}/{samples[step].Gen1}/" +
-                $"{samples[step].Gen2})");
+                $"{samples[step].Gen2}, gpu shard " +
+                $"{string.Join('/', CudaDataParallel.GetLastShardBatchSizes(model))})");
             if (generationEverySteps > 0
                 && generatedTokens > 0
                 && (step + 1) % generationEverySteps == 0)
@@ -312,6 +346,12 @@ internal static class TransformerCudaProfiler
         Console.WriteLine(
             $"configuration = {configurationDescription}");
         Console.WriteLine(
+            $"learning rates = NekoMuon {learningRate:G}, " +
+            $"AdamW {auxiliaryLearningRate:G}; gradient clipping " +
+            $"{samples.Count(sample => sample.GradientNorm > 1f)}/" +
+            $"{samples.Length} measured steps, mean pre-clip norm " +
+            $"{samples.Average(sample => sample.GradientNorm):F4}");
+        Console.WriteLine(
             $"transformer CUDA ({devices.Length} GPU, " +
             $"{TensorPrecisionModeNames.Format(precisionMode)}): " +
             $"mean {mean:F2} ms, " +
@@ -330,6 +370,9 @@ internal static class TransformerCudaProfiler
             $"linear slope {trendPerStep:F4} ms/step, " +
             $"max {samples.Max(sample => sample.Total):F2} ms; " +
             $"loss {samples[0].Loss:F6} -> {samples[^1].Loss:F6}");
+        Console.WriteLine(
+            $"final adaptive GPU shard = [" +
+            $"{string.Join(',', CudaDataParallel.GetLastShardBatchSizes(model))}]");
     }
 
     private static void RunDetailedCore(
@@ -386,11 +429,17 @@ internal static class TransformerCudaProfiler
                 UseBFloat16SecondMoment = adamSecondMomentBFloat16,
             });
         var optimizer = new CompositeOptimizer(nekoMuon, adamW);
+        bool skipOptimizer = string.Equals(
+            Environment.GetEnvironmentVariable(
+                "NNTRAIN_PROFILE_SKIP_OPTIMIZER"),
+            "1",
+            StringComparison.Ordinal);
         var random = new Random(seed ^ 0x5A17);
         int[] input = Enumerable.Range(0, batch * sequence)
             .Select(_ => random.Next(vocabulary)).ToArray();
         int[] target = Enumerable.Range(0, batch * sequence)
             .Select(_ => random.Next(vocabulary)).ToArray();
+        Parameter[] benchmarkParameters = model.Parameters().ToArray();
 
         void SynchronizeAll()
         {
@@ -408,14 +457,17 @@ internal static class TransformerCudaProfiler
         Console.WriteLine(
             $"optimizer=NekoMuon(interval={newtonSchulzInterval})+AdamW " +
             $"(moments={(adamFirstMomentBFloat16 ? "bf16" : "fp32")}/" +
-            $"{(adamSecondMomentBFloat16 ? "bf16" : "fp32")})");
+            $"{(adamSecondMomentBFloat16 ? "bf16" : "fp32")})" +
+            (skipOptimizer ? " [optimizer step skipped]" : ""));
 
         for (int step = 0; step < warmupSteps; step++)
         {
             optimizer.zero_grad();
             _ = CudaDataParallel.ForwardBackward(
                 model, input, target, batch, sequence);
-            optimizer.step();
+            _ = nn.utils.clip_grad_norm_(benchmarkParameters, max_norm: 1f);
+            if (!skipOptimizer)
+                optimizer.step();
         }
         SynchronizeAll();
 
@@ -431,6 +483,7 @@ internal static class TransformerCudaProfiler
 
             CudaDataParallelProfile dataParallel;
             IReadOnlyList<CudaOperationProfileSample> operations;
+            double measuredGradientClip;
             double nekoMuonMilliseconds;
             double adamWMilliseconds;
             using (CudaOperationProfiler.Begin())
@@ -438,14 +491,25 @@ internal static class TransformerCudaProfiler
                 dataParallel = CudaDataParallel.ForwardBackwardProfiled(
                     model, input, target, batch, sequence);
                 phaseTimer.Restart();
-                nekoMuon.step();
+                _ = nn.utils.clip_grad_norm_(benchmarkParameters, max_norm: 1f);
                 SynchronizeAll();
-                double measuredNekoMuon = phaseTimer.Elapsed.TotalMilliseconds;
+                measuredGradientClip =
+                    phaseTimer.Elapsed.TotalMilliseconds;
 
-                phaseTimer.Restart();
-                adamW.step();
-                SynchronizeAll();
-                double measuredAdamW = phaseTimer.Elapsed.TotalMilliseconds;
+                double measuredNekoMuon = 0d;
+                double measuredAdamW = 0d;
+                if (!skipOptimizer)
+                {
+                    phaseTimer.Restart();
+                    nekoMuon.step();
+                    SynchronizeAll();
+                    measuredNekoMuon = phaseTimer.Elapsed.TotalMilliseconds;
+
+                    phaseTimer.Restart();
+                    adamW.step();
+                    SynchronizeAll();
+                    measuredAdamW = phaseTimer.Elapsed.TotalMilliseconds;
+                }
                 operations = CudaOperationProfiler.Snapshot();
                 nekoMuonMilliseconds = measuredNekoMuon;
                 adamWMilliseconds = measuredAdamW;
@@ -459,6 +523,7 @@ internal static class TransformerCudaProfiler
                 newtonSchulz,
                 zeroGrad,
                 dataParallel,
+                measuredGradientClip,
                 nekoMuonMilliseconds,
                 adamWMilliseconds,
                 totalTimer.Elapsed.TotalMilliseconds,
@@ -482,6 +547,7 @@ internal static class TransformerCudaProfiler
             $"loss {results.Average(value => value.DataParallel.Shards.Max(shard => shard.LossMilliseconds)):F2} ms; " +
             $"backward {results.Average(value => value.DataParallel.Shards.Max(shard => shard.BackwardMilliseconds)):F2} ms; " +
             $"all-reduce {results.Average(value => value.DataParallel.AllReduceMilliseconds):F2} ms; " +
+            $"gradient-clip {results.Average(value => value.GradientClip):F2} ms; " +
             $"NekoMuon {results.Average(value => value.NekoMuon):F2} ms; " +
             $"AdamW {results.Average(value => value.AdamW):F2} ms; " +
             $"total {results.Average(value => value.Total):F2} ms");
@@ -494,7 +560,8 @@ internal static class TransformerCudaProfiler
                 : "native CUDA backend unavailable")}");
         Console.WriteLine(
             $"linear backend = {(CudaBlasLt.BackendActive
-                ? "cuBLASLt BF16 Tensor Core fused epilogue"
+                ? $"cuBLASLt BF16 Tensor Core fused epilogue; backward=" +
+                    $"{(CudaBlasLt.BackwardBackendActive ? "cuBLASLt" : "cuBLAS")}"
                 : "cuBLAS GEMM + separate epilogue")}");
         Console.WriteLine("=== mean CUDA operation critical time (max of GPUs) ===");
         foreach ((string operation, double total) in operationTotals
@@ -520,6 +587,7 @@ internal static class TransformerCudaProfiler
             $"gradient-prepare {result.DataParallel.GradientPreparationMilliseconds:F2} | " +
             $"forward {forward:F2} | loss {loss:F2} | backward {backward:F2} | " +
             $"all-reduce {result.DataParallel.AllReduceMilliseconds:F2} | " +
+            $"gradient-clip {result.GradientClip:F2} | " +
             $"NekoMuon {result.NekoMuon:F2} | AdamW {result.AdamW:F2}");
         foreach (CudaShardProfile shard in result.DataParallel.Shards)
         {
@@ -547,6 +615,7 @@ internal static class TransformerCudaProfiler
         bool NewtonSchulz,
         double ZeroGrad,
         CudaDataParallelProfile DataParallel,
+        double GradientClip,
         double NekoMuon,
         double AdamW,
         double Total,

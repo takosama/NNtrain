@@ -193,7 +193,7 @@ public partial class Tensor
 
     private static class CudaBFloat16BufferPool
     {
-        private const int MaximumBuffersPerSize = 64;
+        private const int MaximumBuffersPerSize = 128;
         private static readonly System.Collections.Concurrent
             .ConcurrentDictionary<NativeCudaDevice, PoolState> Pools = new();
 

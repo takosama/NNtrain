@@ -58,8 +58,13 @@ public sealed class CheckpointDirectoryCreationTests
                 globalStep: 0);
 
             Assert.True(File.Exists(checkpointPath));
+            WikiLanguageModelCommand.WikiModelCheckpoint manifest =
+                torch.load<WikiLanguageModelCommand.WikiModelCheckpoint>(
+                    checkpointPath);
             Assert.True(File.Exists(
-                WikiLanguageModelCommand.GetSafeTensorsPath(checkpointPath)));
+                WikiLanguageModelCommand.GetCurrentModelArtifactPath(
+                    checkpointPath,
+                    manifest.ArtifactSlot)));
         }
         finally
         {

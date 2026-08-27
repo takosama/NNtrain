@@ -3,6 +3,30 @@ using NNtrain;
 using NNtrain.Benchmarks;
 
 if (args.Length > 0
+    && string.Equals(args[0], "--profile-transformer-convergence-json", StringComparison.Ordinal))
+{
+    string configurationPath = args.Length > 1
+        ? args[1]
+        : "training.transformer.json";
+    int steps = args.Length > 2 ? int.Parse(args[2]) : 3;
+    float matrixLearningRate = args.Length > 3
+        ? float.Parse(args[3], System.Globalization.CultureInfo.InvariantCulture)
+        : 0.001f;
+    float auxiliaryLearningRate = args.Length > 4
+        ? float.Parse(args[4], System.Globalization.CultureInfo.InvariantCulture)
+        : 0.001f;
+    string schedule = args.Length > 5 ? args[5] : "pure-cosine";
+    bool forceFullNewtonSchulz = args.Length > 6
+        && string.Equals(args[6], "full-ns", StringComparison.Ordinal);
+    TransformerConvergenceProfiler.Run(
+        configurationPath,
+        steps,
+        matrixLearningRate,
+        auxiliaryLearningRate,
+        schedule,
+        forceFullNewtonSchulz);
+}
+else if (args.Length > 0
     && string.Equals(args[0], "--benchmark-generation-cache", StringComparison.Ordinal))
 {
     int warmup = args.Length > 1 ? int.Parse(args[1]) : 1;
@@ -41,13 +65,21 @@ else if (args.Length > 0
     int generationEvery = args.Length > 4 ? int.Parse(args[4]) : 0;
     int generatedTokens = args.Length > 5 ? int.Parse(args[5]) : 0;
     string? precisionMode = args.Length > 6 ? args[6] : null;
+    float? learningRate = args.Length > 7
+        ? float.Parse(args[7], System.Globalization.CultureInfo.InvariantCulture)
+        : null;
+    float? auxiliaryLearningRate = args.Length > 8
+        ? float.Parse(args[8], System.Globalization.CultureInfo.InvariantCulture)
+        : null;
     TransformerCudaProfiler.RunFromConfiguration(
         configurationPath,
         warmup,
         steps,
         generationEvery,
         generatedTokens,
-        precisionMode);
+        precisionMode,
+        learningRate,
+        auxiliaryLearningRate);
 }
 else if (args.Length > 0
     && string.Equals(args[0], "--profile-transformer-cuda", StringComparison.Ordinal))

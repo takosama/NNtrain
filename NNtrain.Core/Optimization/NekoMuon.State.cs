@@ -144,6 +144,35 @@ public sealed partial class NekoMuon
                 "NekoMuon Newton-Schulz interval must be positive.");
         }
 
+        if (!Enum.IsDefined(options.NewtonSchulzDepthMode))
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                options.NewtonSchulzDepthMode,
+                "NekoMuon Newton-Schulz depth mode is invalid.");
+        }
+
+        if (!float.IsFinite(options.NewtonSchulzDepth)
+            || options.NewtonSchulzDepth < 0f
+            || options.NewtonSchulzDepth > options.MaxNewtonSchulzSteps)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                options.NewtonSchulzDepth,
+                "NekoMuon Newton-Schulz depth must be finite and in " +
+                $"[0, {options.MaxNewtonSchulzSteps}].");
+        }
+
+        if (options.NewtonSchulzDepthMode
+                == NekoMuonNewtonSchulzDepthMode.Adaptive
+            && options.NewtonSchulzDepth != 0f)
+        {
+            throw new ArgumentException(
+                "NekoMuon adaptive Newton-Schulz depth must not specify a " +
+                "fixed depth.",
+                parameterName);
+        }
+
         if (!float.IsFinite(options.WeightDecay)
             || options.WeightDecay < 0f)
         {

@@ -309,6 +309,15 @@ public partial class Tensor
         }
     }
 
+    internal long GradientVersion
+    {
+        get
+        {
+            lock (_deviceSync)
+                return _gradientVersion;
+        }
+    }
+
     internal void PrepareCudaGradientBuffers(IReadOnlyList<int> deviceIndices)
     {
         ArgumentNullException.ThrowIfNull(deviceIndices);
@@ -608,6 +617,35 @@ public partial class Tensor
         }
     }
 
+    private bool TryClearResidentCudaGradients()
+    {
+        lock (_deviceSync)
+        {
+            if (_cudaGradientBuffers.Count == 0
+                && _cudaBFloat16GradientBuffers.Count == 0)
+            {
+                return false;
+            }
+            unchecked
+            {
+                _gradientVersion++;
+            }
+            foreach (GradientDeviceBuffer buffer in _cudaGradientBuffers.Values)
+            {
+                buffer.Buffer.ClearGradientStorage();
+                buffer.Version = _gradientVersion;
+            }
+            foreach (BFloat16GradientDeviceBuffer buffer
+                in _cudaBFloat16GradientBuffers.Values)
+            {
+                buffer.Buffer.MemSetToZero();
+                buffer.Version = _gradientVersion;
+            }
+            _hostGradientCurrent = false;
+            return true;
+        }
+    }
+
     internal void InvalidateCudaBuffers()
     {
         lock (_deviceSync)
@@ -764,7 +802,11 @@ public partial class Tensor
     /// </summary>
     private static class CudaFloatBufferPool
     {
-        private const int MaximumBuffersPerSize = 64;
+        // A 16-layer transformer can have more than 64 simultaneously-live
+        // buffers with the same flattened shape.  Keep the observed fixed
+        // shape high-water mark resident; the shared byte budget below still
+        // provides the actual memory bound.
+        private const int MaximumBuffersPerSize = 128;
         private static readonly System.Collections.Concurrent
             .ConcurrentDictionary<NativeCudaDevice, PoolState> Pools = new();
 
@@ -891,19 +933,24 @@ public partial class Tensor
     /// </summary>
     private static class CudaTransientBufferBudget
     {
-        // Leave room for resident weights, master weights, gradient arenas,
-        // optimizer moments/workspaces, and the Windows display allocation.
-        // This budget counts only idle transient buffers, so 45% still keeps
-        // the full activation working set reusable without crowding out the
-        // next step's persistent allocations.
-        private const int CacheMemoryPercent = 45;
+        // Start conservatively, then learn the fixed-shape high-water mark.
+        // Returned buffers are already allocated, so retaining them does not
+        // lower the free-memory value observed at that point.  Expansion is
+        // allowed only while a real emergency reserve remains, and a genuine
+        // allocation OOM still flushes every transient pool before retrying.
+        private const int InitialCacheMemoryPercent = 45;
+        private const int MaximumCacheMemoryPercent = 65;
+        private const long MinimumFreeReserveBytes = 512L * 1024 * 1024;
         private static readonly System.Collections.Concurrent
             .ConcurrentDictionary<NativeCudaDevice, BudgetState> States = new();
 
-        private sealed class BudgetState(long maximumBytes)
+        private sealed class BudgetState(
+            long initialMaximumBytes,
+            long hardMaximumBytes)
         {
             internal object Sync { get; } = new();
-            internal long MaximumBytes { get; } = maximumBytes;
+            internal long MaximumBytes = initialMaximumBytes;
+            internal long HardMaximumBytes { get; } = hardMaximumBytes;
             internal long CachedBytes;
         }
 
@@ -913,12 +960,35 @@ public partial class Tensor
         {
             BudgetState state = States.GetOrAdd(
                 accelerator,
-                static device => new BudgetState(checked(
-                    device.MemorySize * CacheMemoryPercent / 100)));
+                static device => new BudgetState(
+                    checked(device.MemorySize
+                        * InitialCacheMemoryPercent / 100),
+                    checked(device.MemorySize
+                        * MaximumCacheMemoryPercent / 100)));
             lock (state.Sync)
             {
                 if (bytes > state.MaximumBytes - state.CachedBytes)
-                    return false;
+                {
+                    long requested = checked(state.CachedBytes + bytes);
+                    if (requested > state.HardMaximumBytes)
+                        return false;
+
+                    long freeBytes;
+                    try
+                    {
+                        freeBytes = accelerator.GetFreeMemory();
+                    }
+                    catch (NativeCudaException)
+                    {
+                        return false;
+                    }
+                    if (freeBytes < MinimumFreeReserveBytes)
+                        return false;
+
+                    // Grow only as far as the high-water mark actually seen.
+                    // Subsequent steady steps therefore avoid cudaMemGetInfo.
+                    state.MaximumBytes = requested;
+                }
                 state.CachedBytes += bytes;
                 return true;
             }
@@ -940,7 +1010,7 @@ public partial class Tensor
 
     private static class CudaIntBufferPool
     {
-        private const int MaximumBuffersPerSize = 64;
+        private const int MaximumBuffersPerSize = 128;
         private static readonly System.Collections.Concurrent
             .ConcurrentDictionary<NativeCudaDevice, PoolState> Pools = new();
 

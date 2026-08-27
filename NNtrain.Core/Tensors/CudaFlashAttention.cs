@@ -162,10 +162,12 @@ internal static class CudaFlashAttention
         NativeCudaDevice accelerator,
         NativeCudaBuffer<ushort> projected,
         NativeCudaBuffer<ushort> output,
-        NativeCudaBuffer<float> outputGradient,
+        NativeCudaBuffer<float>? outputGradient,
+        NativeCudaBuffer<ushort>? outputGradientBFloat16,
         NativeCudaBuffer<float> softmaxLogSumExp,
         NativeCudaBuffer<float>? rowDelta,
-        NativeCudaBuffer<float> projectedGradient,
+        NativeCudaBuffer<float>? projectedGradient,
+        NativeCudaBuffer<ushort>? projectedGradientBFloat16,
         int batch,
         int sequence,
         int modelWidth,
@@ -183,22 +185,116 @@ internal static class CudaFlashAttention
                 throw new InvalidOperationException(
                     "Tensor Core FlashAttention backward requires row workspace.");
             }
-            status = BackwardNativeBFloat16TensorCore(
-                projected.NativePtr,
-                output.NativePtr,
-                outputGradient.NativePtr,
-                softmaxLogSumExp.NativePtr,
-                rowDelta.NativePtr,
-                projectedGradient.NativePtr,
-                batch,
-                sequence,
-                modelWidth,
-                heads,
-                causal ? 1 : 0,
-                stream);
+            bool parallelDkv = !string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "NNTRAIN_DISABLE_PARALLEL_ATTENTION_DKV"),
+                "1",
+                StringComparison.Ordinal);
+            bool asyncBackwardLoads = !string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "NNTRAIN_DISABLE_ASYNC_ATTENTION_BACKWARD"),
+                "1",
+                StringComparison.Ordinal);
+            if (projectedGradientBFloat16 is not null
+                && outputGradientBFloat16 is not null)
+            {
+                status = asyncBackwardLoads
+                    ? BackwardNativeBFloat16TensorCoreBFloat16IoGradient(
+                        projected.NativePtr,
+                        output.NativePtr,
+                        outputGradientBFloat16.NativePtr,
+                        softmaxLogSumExp.NativePtr,
+                        rowDelta.NativePtr,
+                        projectedGradientBFloat16.NativePtr,
+                        batch,
+                        sequence,
+                        modelWidth,
+                        heads,
+                        causal ? 1 : 0,
+                        stream)
+                    : BackwardNativeBFloat16TensorCoreBFloat16IoGradientSync(
+                        projected.NativePtr,
+                        output.NativePtr,
+                        outputGradientBFloat16.NativePtr,
+                        softmaxLogSumExp.NativePtr,
+                        rowDelta.NativePtr,
+                        projectedGradientBFloat16.NativePtr,
+                        batch,
+                        sequence,
+                        modelWidth,
+                        heads,
+                        causal ? 1 : 0,
+                        stream);
+            }
+            else if (projectedGradientBFloat16 is not null)
+            {
+                if (outputGradient is null)
+                {
+                    throw new InvalidOperationException(
+                        "FlashAttention backward requires output gradient storage.");
+                }
+                status = BackwardNativeBFloat16TensorCoreBFloat16Gradient(
+                    projected.NativePtr,
+                    output.NativePtr,
+                    outputGradient.NativePtr,
+                    softmaxLogSumExp.NativePtr,
+                    rowDelta.NativePtr,
+                    projectedGradientBFloat16.NativePtr,
+                    batch,
+                    sequence,
+                    modelWidth,
+                    heads,
+                    causal ? 1 : 0,
+                    stream);
+            }
+            else if (projectedGradient is null)
+            {
+                throw new InvalidOperationException(
+                    "FlashAttention backward requires gradient storage.");
+            }
+            else
+            {
+                if (outputGradient is null)
+                {
+                    throw new InvalidOperationException(
+                        "FlashAttention backward requires FP32 output gradient storage.");
+                }
+                status = parallelDkv
+                    ? BackwardNativeBFloat16TensorCoreParallelDkv(
+                        projected.NativePtr,
+                        output.NativePtr,
+                        outputGradient.NativePtr,
+                        softmaxLogSumExp.NativePtr,
+                        rowDelta.NativePtr,
+                        projectedGradient.NativePtr,
+                        batch,
+                        sequence,
+                        modelWidth,
+                        heads,
+                        causal ? 1 : 0,
+                        stream)
+                    : BackwardNativeBFloat16TensorCore(
+                        projected.NativePtr,
+                        output.NativePtr,
+                        outputGradient.NativePtr,
+                        softmaxLogSumExp.NativePtr,
+                        rowDelta.NativePtr,
+                        projectedGradient.NativePtr,
+                        batch,
+                        sequence,
+                        modelWidth,
+                        heads,
+                        causal ? 1 : 0,
+                        stream);
+            }
         }
         else
         {
+            if (projectedGradient is null || outputGradient is null)
+            {
+                throw new InvalidOperationException(
+                    "FlashAttention backward requires FP32 gradient storage.");
+            }
             status = BackwardNativeBFloat16(
                 projected.NativePtr,
                 output.NativePtr,
@@ -356,6 +452,79 @@ internal static class CudaFlashAttention
         int heads,
         int causal,
         nint stream);
+
+    [DllImport(
+        Library,
+        EntryPoint = "nntrain_flash_attention_backward_bf16_tensor_core_parallel_dkv",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int BackwardNativeBFloat16TensorCoreParallelDkv(
+        nint projected,
+        nint output,
+        nint outputGradient,
+        nint softmaxLogSumExp,
+        nint rowDelta,
+        nint projectedGradient,
+        int batch,
+        int sequence,
+        int modelWidth,
+        int heads,
+        int causal,
+        nint stream);
+
+    [DllImport(
+        Library,
+        EntryPoint = "nntrain_flash_attention_backward_bf16_tensor_core_bf16_gradient",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int BackwardNativeBFloat16TensorCoreBFloat16Gradient(
+        nint projected,
+        nint output,
+        nint outputGradient,
+        nint softmaxLogSumExp,
+        nint rowDelta,
+        nint projectedGradient,
+        int batch,
+        int sequence,
+        int modelWidth,
+        int heads,
+        int causal,
+        nint stream);
+
+    [DllImport(
+        Library,
+        EntryPoint = "nntrain_flash_attention_backward_bf16_tensor_core_bf16_io_gradient",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int BackwardNativeBFloat16TensorCoreBFloat16IoGradient(
+        nint projected,
+        nint output,
+        nint outputGradient,
+        nint softmaxLogSumExp,
+        nint rowDelta,
+        nint projectedGradient,
+        int batch,
+        int sequence,
+        int modelWidth,
+        int heads,
+        int causal,
+        nint stream);
+
+    [DllImport(
+        Library,
+        EntryPoint = "nntrain_flash_attention_backward_bf16_tensor_core_bf16_io_gradient_sync",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int
+        BackwardNativeBFloat16TensorCoreBFloat16IoGradientSync(
+            nint projected,
+            nint output,
+            nint outputGradient,
+            nint softmaxLogSumExp,
+            nint rowDelta,
+            nint projectedGradient,
+            int batch,
+            int sequence,
+            int modelWidth,
+            int heads,
+            int causal,
+            nint stream);
 
     [DllImport(
         Library,

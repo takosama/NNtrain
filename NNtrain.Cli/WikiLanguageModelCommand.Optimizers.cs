@@ -18,7 +18,11 @@ internal static partial class WikiLanguageModelCommand
                 lr: config.LearningRate,
                 newton_schulz_interval:
                     config.NekoMuonNewtonSchulzInterval,
-                weight_decay: config.WeightDecay);
+                weight_decay: config.WeightDecay,
+                newton_schulz_depth_mode:
+                    config.GetNekoMuonNewtonSchulzDepthMode(),
+                newton_schulz_depth:
+                    config.GetNekoMuonNewtonSchulzDepth());
             IOptimizer auxiliaryAdamW = optim.AdamW(
                 model.AuxiliaryParameters,
                 lr: config.AuxiliaryLearningRate,
@@ -75,7 +79,9 @@ internal static partial class WikiLanguageModelCommand
                 $"optimizer = NekoMuon " +
                 $"({model.HiddenWeightParameters.Count} matrix parameters, " +
                 $"lr {config.LearningRate:G}, Newton-Schulz every " +
-                $"{config.NekoMuonNewtonSchulzInterval} steps) + AdamW " +
+                $"{config.NekoMuonNewtonSchulzInterval} steps, " +
+                $"{FormatNekoMuonNewtonSchulzDepthPolicy(config)}) + " +
+                "AdamW " +
                 $"({model.AuxiliaryParameters.Count} auxiliary parameters, " +
                 $"lr {config.AuxiliaryLearningRate:G}, moments " +
                 $"{GetAdamWMomentStorage(model)})");
@@ -109,10 +115,23 @@ internal static partial class WikiLanguageModelCommand
                 $"parameters, lr {config.LearningRate:G}, moments " +
                 $"{GetAdamWMomentStorage(model)})");
         }
-        output.WriteLine(
-            $"learning-rate schedule = linear warmup " +
-            $"{config.WarmupPercent:G}% of total training, then cosine " +
-            "decay");
+        output.WriteLine(config.WarmupPercent == 0f
+            ? "learning-rate schedule = no warmup; cosine decay from the " +
+                "first update"
+            : $"learning-rate schedule = linear warmup " +
+                $"{config.WarmupPercent:G}% of total training, then " +
+                "cosine decay");
+    }
+
+    private static string FormatNekoMuonNewtonSchulzDepthPolicy(
+        WikiTrainingConfiguration config)
+    {
+        NekoMuonNewtonSchulzDepthMode mode =
+            config.GetNekoMuonNewtonSchulzDepthMode();
+        return mode == NekoMuonNewtonSchulzDepthMode.Adaptive
+            ? "adaptive depth"
+            : $"{mode.ToString().ToLowerInvariant()} depth " +
+                $"{config.GetNekoMuonNewtonSchulzDepth():G}";
     }
 
     private static string GetAdamWMomentStorage(
@@ -120,4 +139,25 @@ internal static partial class WikiLanguageModelCommand
         => model.PrecisionMode == TensorPrecisionMode.BFloat16
             ? "bf16/bf16"
             : "f32/f32";
+
+    private static string FormatOptimizerDiagnostics(IOptimizer optimizer)
+    {
+        NekoMuon? nekoMuon = optimizer switch
+        {
+            NekoMuon direct => direct,
+            CompositeOptimizer composite => composite.Optimizers
+                .OfType<NekoMuon>()
+                .FirstOrDefault(),
+            _ => null,
+        };
+        if (nekoMuon is null)
+            return string.Empty;
+
+        NekoMuonDiagnostics diagnostics = nekoMuon.GetDiagnostics();
+        return $", neko confidence = {diagnostics.MeanConfidence:G4} " +
+            $"[{diagnostics.MinimumConfidence:G4}-" +
+            $"{diagnostics.MaximumConfidence:G4}], NS depth = " +
+            $"{diagnostics.MeanNewtonSchulzDepth:G4}/" +
+            $"{diagnostics.MaximumNewtonSchulzDepth}";
+    }
 }

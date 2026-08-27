@@ -2,40 +2,154 @@ namespace NNtrain;
 
 internal static partial class WikiLanguageModelCommand
 {
-    private const int CheckpointFormatVersion = 6;
+    private const int CheckpointFormatVersion = 8;
     private const int DTypeCheckpointFormatVersion = 5;
     private const int PrecisionModeCheckpointFormatVersion = 6;
 
     private static void SaveCheckpoint(
         string path,
-        WikiModelCheckpoint checkpoint)
+        WikiModelCheckpoint checkpoint,
+        IOptimizer optimizer)
     {
-        ValidateCheckpoint(checkpoint);
+        ValidateCheckpoint(checkpoint, requireArtifactMetadata: false);
+        ArgumentNullException.ThrowIfNull(optimizer);
         string fullPath = Path.GetFullPath(path);
         string? directory = Path.GetDirectoryName(fullPath);
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
+
+        WikiCheckpointMetadata? previous = File.Exists(fullPath)
+            ? torch.load<WikiCheckpointMetadata>(fullPath)
+            : null;
+        int artifactSlot = previous is { FormatVersion: >= 7, ArtifactSlot: 0 }
+            ? 1
+            : 0;
+        int previousBestSlot = previous is { FormatVersion: >= 7 }
+            ? GetBestArtifactSlot(
+                previous.ArtifactSlot,
+                previous.BestArtifactSlot)
+            : -1;
+        bool bestMetadataChanged = previous is null
+            || previous.Epoch != checkpoint.Epoch
+            || BitConverter.SingleToInt32Bits(previous.ValidationLoss)
+                != BitConverter.SingleToInt32Bits(
+                    checkpoint.ValidationLoss);
+        bool writeBestArtifact = previousBestSlot < 0
+            || !File.Exists(GetBestModelArtifactPath(
+                fullPath,
+                previousBestSlot))
+            || bestMetadataChanged;
+        int bestArtifactSlot = writeBestArtifact
+            ? previousBestSlot is 0 ? 1 : 0
+            : previousBestSlot;
+        if (writeBestArtifact && checkpoint.Model.Parameters.Length == 0)
+        {
+            throw new InvalidDataException(
+                "The best-model artifact is missing or its metadata changed, " +
+                "but the in-memory best state has already been released. " +
+                "Refusing to replace it with the current model.");
+        }
+        ModuleState currentState = checkpoint.CurrentModel ?? checkpoint.Model;
+        TensorPrecisionMode precisionMode =
+            GetCheckpointPrecisionMode(checkpoint);
+        ModuleState currentArtifact = precisionMode
+            == TensorPrecisionMode.Mix16_32
+            ? RelabelStateDType(currentState, TensorDType.Float32)
+            : currentState;
         safetensors.torch.save_file(
-            checkpoint.CurrentModel ?? checkpoint.Model,
-            GetSafeTensorsPath(fullPath));
-        torch.save(checkpoint, fullPath);
+            currentArtifact,
+            GetCurrentModelArtifactPath(fullPath, artifactSlot));
+        if (writeBestArtifact)
+        {
+            safetensors.torch.save_file(
+                checkpoint.Model,
+                GetBestModelArtifactPath(fullPath, bestArtifactSlot));
+        }
+
+        IReadOnlyList<IOptimizer> leaves =
+            OptimizerStateStream.GetLeafOptimizers(optimizer);
+        var optimizerTypes = new string[leaves.Count];
+        for (int index = 0; index < leaves.Count; index++)
+        {
+            optimizerTypes[index] =
+                OptimizerStateStream.GetStateType(leaves[index]);
+            SaveOptimizerBinaryArtifact(
+                GetOptimizerBinaryArtifactPath(
+                    fullPath,
+                    artifactSlot,
+                    index),
+                leaves[index]);
+            GC.Collect(
+                GC.MaxGeneration,
+                GCCollectionMode.Aggressive,
+                blocking: true,
+                compacting: true);
+        }
+
+        // The manifest is committed last. Until this atomic move succeeds,
+        // readers continue to use the other complete artifact slot.
+        var manifest = checkpoint with
+        {
+            Model = EmptyModuleState(),
+            CurrentModel = null,
+            Optimizer = null,
+            ArtifactSlot = artifactSlot,
+            BestArtifactSlot = bestArtifactSlot,
+            OptimizerStateTypes = optimizerTypes,
+        };
+        torch.save(manifest, fullPath);
+
+        // Drop the exact current-model snapshot before the caller writes an
+        // optional human-facing epoch snapshot. At production width this is
+        // hundreds of MB and otherwise remains in Gen2 until memory pressure.
+        checkpoint = manifest;
+        currentState = null!;
+        currentArtifact = null!;
+        GC.Collect(
+            GC.MaxGeneration,
+            GCCollectionMode.Aggressive,
+            blocking: true,
+            compacting: true);
     }
 
-    private static void SaveBestModelSafeTensors(
-        string checkpointPath,
-        ModuleState state)
+    private static void SaveOptimizerBinaryArtifact(
+        string path,
+        IOptimizer optimizer)
     {
-        string path = GetBestSafeTensorsPath(checkpointPath);
-        string? directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(directory))
-            Directory.CreateDirectory(directory);
-        safetensors.torch.save_file(state, path);
+        string temporaryPath = path + ".tmp";
+        try
+        {
+            using (var stream = new FileStream(
+                temporaryPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 4 * 1024 * 1024,
+                FileOptions.SequentialScan))
+            {
+                OptimizerStateStream.SaveStateBinary(optimizer, stream);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(temporaryPath, path, overwrite: true);
+        }
+        catch
+        {
+            if (File.Exists(temporaryPath))
+                File.Delete(temporaryPath);
+            throw;
+        }
     }
 
-    private static WikiModelCheckpoint LoadCheckpoint(string path)
+    private static WikiModelCheckpoint LoadCheckpoint(
+        string path,
+        bool validateSafeTensors = true)
     {
         WikiModelCheckpoint checkpoint = torch.load<WikiModelCheckpoint>(path);
         ValidateCheckpoint(checkpoint);
+        if (checkpoint.FormatVersion >= 7)
+            return checkpoint;
+        if (!validateSafeTensors)
+            return checkpoint;
         string safeTensorsPath = GetSafeTensorsPath(path);
         if (!File.Exists(safeTensorsPath))
             return checkpoint;
@@ -53,12 +167,109 @@ internal static partial class WikiLanguageModelCommand
         return checkpoint;
     }
 
+    private static WikiModelCheckpoint LoadCheckpointMetadata(string path)
+    {
+        WikiCheckpointMetadata metadata =
+            torch.load<WikiCheckpointMetadata>(path);
+        WikiModelCheckpoint checkpoint = metadata.ToCheckpointShell();
+        if (checkpoint.FormatVersion is < 1 or > CheckpointFormatVersion)
+        {
+            throw new InvalidDataException(
+                "Wiki model checkpoint has an unsupported format.");
+        }
+        _ = GetCheckpointModelDType(checkpoint);
+        _ = GetCheckpointPrecisionMode(checkpoint);
+        return checkpoint;
+    }
+
+    private static WikiModelCheckpoint LoadCheckpointForResume(string path)
+    {
+        WikiResumeCheckpointData resume =
+            torch.load<WikiResumeCheckpointData>(path);
+        if (resume.FormatVersion >= 7)
+        {
+            if (resume.ArtifactSlot is < 0 or > 1)
+            {
+                throw new InvalidDataException(
+                    "Checkpoint artifact slot is invalid.");
+            }
+            string bestArtifactPath = GetBestModelArtifactPath(
+                path,
+                GetBestArtifactSlot(
+                    resume.ArtifactSlot,
+                    resume.BestArtifactSlot));
+            if (!File.Exists(bestArtifactPath))
+            {
+                throw new FileNotFoundException(
+                    "Checkpoint best-model artifact was not found.",
+                    bestArtifactPath);
+            }
+            TensorDType modelDType = resume.ModelDType
+                ?? throw new InvalidDataException(
+                    "Checkpoint model dtype is missing.");
+            ModuleState artifactCurrentModel = safetensors.torch.load_file(
+                GetCurrentModelArtifactPath(path, resume.ArtifactSlot));
+            artifactCurrentModel = RelabelStateDType(
+                artifactCurrentModel,
+                modelDType);
+            WikiModelCheckpoint artifactCheckpoint = resume.ToCheckpoint(
+                artifactCurrentModel);
+            ValidateCheckpoint(artifactCheckpoint);
+            return artifactCheckpoint;
+        }
+        if (resume.CurrentModel is null)
+        {
+            // Formats predating mid-epoch checkpoints did not carry a
+            // current-model state. They are normally small enough for the
+            // legacy loader and still retain their exact behavior.
+            return LoadCheckpoint(path, validateSafeTensors: false);
+        }
+
+        ModuleState currentModel = resume.CurrentModel;
+        ModuleState bestModel;
+        string bestSafeTensorsPath = GetBestSafeTensorsPath(path);
+        if (File.Exists(bestSafeTensorsPath))
+        {
+            bestModel = safetensors.torch.load_file(bestSafeTensorsPath);
+        }
+        else if (resume.Epoch == 0)
+        {
+            // Before the first completed epoch, SaveTrainingCheckpoint writes
+            // the same state as both best and current. Reuse the one exact
+            // JSON state instead of allocating a duplicate hundreds-of-MB
+            // object graph.
+            bestModel = currentModel;
+        }
+        else
+        {
+            // A legacy checkpoint can have a completed best epoch without a
+            // best-model sidecar. Preserve exact compatibility for that rare
+            // case instead of silently substituting the current model.
+            return LoadCheckpoint(path, validateSafeTensors: false);
+        }
+
+        WikiModelCheckpoint checkpoint = resume.ToCheckpoint(
+            bestModel,
+            currentModel);
+        ValidateCheckpoint(checkpoint);
+        return checkpoint;
+    }
+
     internal static ModuleState LoadGenerationModelState(
         WikiModelCheckpoint checkpoint,
         string checkpointPath)
     {
         ArgumentNullException.ThrowIfNull(checkpoint);
         ValidateCheckpoint(checkpoint);
+        if (checkpoint.FormatVersion >= 7)
+        {
+            return safetensors.torch.load_file(
+                GetBestModelArtifactPath(
+                    checkpointPath,
+                    GetBestArtifactSlot(
+                        checkpoint.ArtifactSlot,
+                        checkpoint.BestArtifactSlot)));
+        }
         string bestSafeTensorsPath = GetBestSafeTensorsPath(checkpointPath);
         if (!File.Exists(bestSafeTensorsPath))
             return checkpoint.Model;
@@ -100,7 +311,11 @@ internal static partial class WikiLanguageModelCommand
                 config.CheckpointPath);
         }
 
-        WikiModelCheckpoint checkpoint = LoadCheckpoint(config.CheckpointPath);
+        // Do not deserialize the multi-gigabyte model and optimizer payload
+        // merely to determine the resume dtype. Unknown JSON properties are
+        // skipped by System.Text.Json while the small metadata shell is read.
+        WikiModelCheckpoint checkpoint =
+            LoadCheckpointMetadata(config.CheckpointPath);
         if (!CheckpointArchitectureMatchesConfiguration(checkpoint, config))
         {
             throw new InvalidDataException(
@@ -145,7 +360,12 @@ internal static partial class WikiLanguageModelCommand
                 config.CheckpointPath);
         }
 
-        WikiModelCheckpoint checkpoint = LoadCheckpoint(config.CheckpointPath);
+        // The regular checkpoint contains best model, current model, and a
+        // SafeTensors duplicate. Load only the exact current state plus the
+        // optimizer; best weights come from their compact sidecar (or share
+        // current state before the first completed epoch).
+        WikiModelCheckpoint checkpoint =
+            LoadCheckpointForResume(config.CheckpointPath);
         if (!CheckpointArchitectureMatchesConfiguration(checkpoint, config))
         {
             throw new InvalidDataException(
@@ -173,12 +393,49 @@ internal static partial class WikiLanguageModelCommand
                 $"but the configured epoch count is {config.Epochs}.");
         }
 
-        model.load_state_dict(checkpoint.CurrentModel ?? checkpoint.Model);
-        if (checkpoint.Optimizer is not null
-            && checkpoint.Scheduler is not null)
+        ModuleState? currentModel =
+            checkpoint.CurrentModel ?? checkpoint.Model;
+        model.load_state_dict(currentModel);
+        currentModel = null;
+
+        LRSchedulerStateDictionary? schedulerState = checkpoint.Scheduler;
+        // Stop the returned checkpoint shell from retaining the duplicate
+        // current state after it has moved to the model. This makes it
+        // collectible before streamed optimizer state and the first resumed
+        // forward allocate their moment/activation buffers.
+        checkpoint = checkpoint with
         {
-            optimizer.load_state_dict(checkpoint.Optimizer);
-            scheduler.load_state_dict(checkpoint.Scheduler);
+            CurrentModel = null,
+            Optimizer = null,
+            Scheduler = null,
+        };
+        GC.Collect(
+            GC.MaxGeneration,
+            GCCollectionMode.Aggressive,
+            blocking: true,
+            compacting: true);
+        bool optimizerRestored =
+            CheckpointOptimizerStateStream.TryLoad(
+                config.CheckpointPath,
+                checkpoint,
+                optimizer,
+                output);
+        if (optimizerRestored)
+        {
+            ApplyNekoMuonNewtonSchulzDepthPolicyOverride(
+                config,
+                optimizer,
+                output);
+        }
+        if (optimizerRestored && schedulerState is not null)
+        {
+            scheduler.load_state_dict(schedulerState);
+            schedulerState = null;
+            GC.Collect(
+                GC.MaxGeneration,
+                GCCollectionMode.Aggressive,
+                blocking: true,
+                compacting: true);
         }
         else
         {
@@ -187,7 +444,13 @@ internal static partial class WikiLanguageModelCommand
                 "scheduler start from their configured initial state");
         }
 
-        bestState = checkpoint.Model;
+        // Artifact checkpoints keep the best weights on disk. Loading them
+        // here would retain a second complete model for the rest of training.
+        // Legacy checkpoints still need their embedded best state until the
+        // first format-8 save migrates it to an artifact.
+        bestState = checkpoint.FormatVersion >= 7
+            ? null
+            : checkpoint.Model;
         bestLoss = checkpoint.ValidationLoss;
         bestEpoch = checkpoint.Epoch;
         globalStep = checkpoint.GlobalStep;
@@ -202,6 +465,41 @@ internal static partial class WikiLanguageModelCommand
             hasPartialEpoch ? checkpoint.CurrentTargetCount : 0,
             hasPartialEpoch ? checkpoint.CompletedDocumentsInEpoch : 0,
             hasPartialEpoch ? checkpoint.CurrentTokenBuffer ?? [] : []);
+    }
+
+    internal static void ApplyNekoMuonNewtonSchulzDepthPolicyOverride(
+        WikiTrainingConfiguration config,
+        IOptimizer optimizer,
+        TextWriter output)
+    {
+        if (!config.HasNekoMuonNewtonSchulzDepthPolicyOverride)
+            return;
+
+        NekoMuonNewtonSchulzDepthMode mode =
+            config.GetNekoMuonNewtonSchulzDepthMode();
+        float depth = config.GetNekoMuonNewtonSchulzDepth();
+        int applied = 0;
+        foreach (NekoMuon nekoMuon in OptimizerStateStream
+            .GetLeafOptimizers(optimizer)
+            .OfType<NekoMuon>())
+        {
+            nekoMuon.SetNewtonSchulzDepthPolicy(mode, depth);
+            applied++;
+        }
+
+        if (applied == 0)
+        {
+            throw new InvalidDataException(
+                "A NekoMuon Newton-Schulz depth policy was configured, but " +
+                "the restored optimizer has no NekoMuon state.");
+        }
+
+        output.WriteLine(mode == NekoMuonNewtonSchulzDepthMode.Adaptive
+            ? "resume NekoMuon Newton-Schulz depth policy = adaptive " +
+                "(runtime override)"
+            : $"resume NekoMuon Newton-Schulz depth policy = " +
+                $"{mode.ToString().ToLowerInvariant()} {depth:G} " +
+                "(runtime override)");
     }
 
     internal static void SaveTrainingCheckpoint(
@@ -220,7 +518,8 @@ internal static partial class WikiLanguageModelCommand
         double currentLossSum = 0d,
         long currentTargetCount = 0,
         long completedDocumentsInEpoch = 0,
-        int[]? currentTokenBuffer = null)
+        int[]? currentTokenBuffer = null,
+        ModuleState? currentStateOverride = null)
     {
         SaveCheckpoint(
             config.CheckpointPath,
@@ -244,8 +543,8 @@ internal static partial class WikiLanguageModelCommand
                 config.ForgetMemoryRetentionMinimum,
                 config.ForgetMemoryRetentionMaximum,
                 completedEpoch,
-                model.state_dict(),
-                optimizer.state_dict(),
+                currentStateOverride ?? model.state_dict(),
+                Optimizer: null,
                 scheduler.state_dict(),
                 globalStep,
                 currentEpoch,
@@ -260,8 +559,96 @@ internal static partial class WikiLanguageModelCommand
                 config.TieWordEmbeddings,
                 model is Module precisionModule
                     ? precisionModule.PrecisionMode
-                    : config.GetPrecisionMode()));
+                    : config.GetPrecisionMode()),
+            optimizer);
     }
+
+    internal static ModuleState LoadBestTrainingModelState(string checkpointPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpointPath);
+        WikiModelCheckpoint checkpoint = LoadCheckpoint(checkpointPath);
+        return LoadGenerationModelState(checkpoint, checkpointPath);
+    }
+
+    internal static string GetCurrentModelArtifactPath(
+        string checkpointPath,
+        int artifactSlot)
+        => GetArtifactPath(
+            checkpointPath,
+            $"current.{ValidateArtifactSlot(artifactSlot)}.safetensors");
+
+    internal static string GetBestModelArtifactPath(
+        string checkpointPath,
+        int artifactSlot)
+        => GetArtifactPath(
+            checkpointPath,
+            $"best.{ValidateArtifactSlot(artifactSlot)}.safetensors");
+
+    internal static string GetOptimizerArtifactPath(
+        string checkpointPath,
+        int artifactSlot,
+        int optimizerIndex)
+    {
+        if (optimizerIndex < 0)
+            throw new ArgumentOutOfRangeException(nameof(optimizerIndex));
+        return GetArtifactPath(
+            checkpointPath,
+            $"optimizer.{ValidateArtifactSlot(artifactSlot)}." +
+            $"{optimizerIndex}.json");
+    }
+
+    internal static string GetOptimizerBinaryArtifactPath(
+        string checkpointPath,
+        int artifactSlot,
+        int optimizerIndex)
+    {
+        if (optimizerIndex < 0)
+            throw new ArgumentOutOfRangeException(nameof(optimizerIndex));
+        return GetArtifactPath(
+            checkpointPath,
+            $"optimizer.{ValidateArtifactSlot(artifactSlot)}." +
+            $"{optimizerIndex}.bin");
+    }
+
+    private static int GetBestArtifactSlot(
+        int currentArtifactSlot,
+        int bestArtifactSlot)
+        => bestArtifactSlot is 0 or 1
+            ? bestArtifactSlot
+            : ValidateArtifactSlot(currentArtifactSlot);
+
+    private static string GetArtifactPath(
+        string checkpointPath,
+        string artifactSuffix)
+    {
+        string fullPath = Path.GetFullPath(checkpointPath);
+        string directory = Path.GetDirectoryName(fullPath)
+            ?? Environment.CurrentDirectory;
+        return Path.Combine(
+            directory,
+            $"{Path.GetFileNameWithoutExtension(fullPath)}." +
+            artifactSuffix);
+    }
+
+    private static int ValidateArtifactSlot(int artifactSlot)
+        => artifactSlot is 0 or 1
+            ? artifactSlot
+            : throw new ArgumentOutOfRangeException(nameof(artifactSlot));
+
+    private static ModuleState EmptyModuleState()
+        => new(ModuleState.CurrentFormatVersion, []);
+
+    private static ModuleState RelabelStateDType(
+        ModuleState state,
+        TensorDType dtype)
+        => state with
+        {
+            Parameters = state.Parameters
+                .Select(parameter => parameter.DType == dtype
+                    ? parameter
+                    : parameter with { DType = dtype })
+                .ToArray(),
+        };
 
     internal static string GetSafeTensorsPath(string checkpointPath)
         => Path.ChangeExtension(
@@ -327,7 +714,9 @@ internal static partial class WikiLanguageModelCommand
         return BitConverter.UInt32BitsToSingle((rounded >> 16) << 16);
     }
 
-    private static void ValidateCheckpoint(WikiModelCheckpoint checkpoint)
+    private static void ValidateCheckpoint(
+        WikiModelCheckpoint checkpoint,
+        bool requireArtifactMetadata = true)
     {
         ArgumentNullException.ThrowIfNull(checkpoint);
         if (checkpoint.FormatVersion is < 1 or > CheckpointFormatVersion
@@ -339,6 +728,25 @@ internal static partial class WikiLanguageModelCommand
 
         TensorDType modelDType = GetCheckpointModelDType(checkpoint);
         _ = GetCheckpointPrecisionMode(checkpoint);
+        if (checkpoint.FormatVersion >= 7 && requireArtifactMetadata)
+        {
+            if (checkpoint.ArtifactSlot is < 0 or > 1
+                || (checkpoint.FormatVersion >= 8
+                    && checkpoint.BestArtifactSlot is < 0 or > 1)
+                || checkpoint.OptimizerStateTypes is null
+                || checkpoint.OptimizerStateTypes.Length == 0
+                || checkpoint.OptimizerStateTypes.Any(
+                    string.IsNullOrWhiteSpace))
+            {
+                throw new InvalidDataException(
+                    "Wiki checkpoint artifact metadata is invalid.");
+            }
+            if (checkpoint.Model.Parameters is { Length: 0 }
+                && checkpoint.CurrentModel is null)
+            {
+                return;
+            }
+        }
         ValidateCheckpointModelState(
             checkpoint.Model,
             modelDType,
@@ -409,6 +817,167 @@ internal static partial class WikiLanguageModelCommand
         TensorPrecisionMode Mode,
         TensorDType StorageDType);
 
+    /// <summary>
+    /// Scalar-only view of a Wiki checkpoint. System.Text.Json skips the
+    /// omitted model and optimizer properties while streaming through the
+    /// file, so resume precision detection does not allocate their payloads.
+    /// </summary>
+    private sealed record WikiCheckpointMetadata(
+        int FormatVersion,
+        int Epoch,
+        float ValidationLoss,
+        int VocabularySize,
+        int ContextLength,
+        int ModelWidth,
+        int Heads,
+        int HiddenSize,
+        int Layers,
+        float Dropout,
+        float InitializationScale,
+        string? ModelArchitecture = null,
+        int HyenaFilterWidth = 64,
+        int ForgetMemoryKeyWidth = 16,
+        int ForgetMemoryValueWidth = 16,
+        float ForgetMemoryRetentionMinimum = 0.5f,
+        float ForgetMemoryRetentionMaximum = 0.99f,
+        int CompletedEpoch = 0,
+        long GlobalStep = 0,
+        int CurrentEpoch = 0,
+        int CompletedBatchesInEpoch = 0,
+        double CurrentLossSum = 0d,
+        long CurrentTargetCount = 0,
+        long CompletedDocumentsInEpoch = 0,
+        int[]? CurrentTokenBuffer = null,
+        TensorDType? ModelDType = null,
+        bool TieWordEmbeddings = false,
+        TensorPrecisionMode? PrecisionMode = null,
+        int ArtifactSlot = -1,
+        int BestArtifactSlot = -1,
+        string[]? OptimizerStateTypes = null)
+    {
+        internal WikiModelCheckpoint ToCheckpointShell()
+            => new(
+                FormatVersion,
+                Epoch,
+                ValidationLoss,
+                VocabularySize,
+                ContextLength,
+                ModelWidth,
+                Heads,
+                HiddenSize,
+                Layers,
+                Dropout,
+                InitializationScale,
+                new ModuleState(ModuleState.CurrentFormatVersion, []),
+                ModelArchitecture,
+                HyenaFilterWidth,
+                ForgetMemoryKeyWidth,
+                ForgetMemoryValueWidth,
+                ForgetMemoryRetentionMinimum,
+                ForgetMemoryRetentionMaximum,
+                CompletedEpoch,
+                CurrentModel: null,
+                Optimizer: null,
+                Scheduler: null,
+                GlobalStep,
+                CurrentEpoch,
+                CompletedBatchesInEpoch,
+                CurrentLossSum,
+                CurrentTargetCount,
+                CompletedDocumentsInEpoch,
+                CurrentTokenBuffer,
+                ModelDType,
+                TieWordEmbeddings,
+                PrecisionMode,
+                ArtifactSlot,
+                BestArtifactSlot,
+                OptimizerStateTypes);
+    }
+
+    /// <summary>
+    /// Resume-oriented checkpoint view. The duplicated best-model JSON field
+    /// is deliberately absent; the compact best SafeTensors sidecar supplies
+    /// it after an epoch, while a partial first epoch shares CurrentModel.
+    /// </summary>
+    private sealed record WikiResumeCheckpointData(
+        int FormatVersion,
+        int Epoch,
+        float ValidationLoss,
+        int VocabularySize,
+        int ContextLength,
+        int ModelWidth,
+        int Heads,
+        int HiddenSize,
+        int Layers,
+        float Dropout,
+        float InitializationScale,
+        string? ModelArchitecture = null,
+        int HyenaFilterWidth = 64,
+        int ForgetMemoryKeyWidth = 16,
+        int ForgetMemoryValueWidth = 16,
+        float ForgetMemoryRetentionMinimum = 0.5f,
+        float ForgetMemoryRetentionMaximum = 0.99f,
+        int CompletedEpoch = 0,
+        ModuleState? CurrentModel = null,
+        LRSchedulerStateDictionary? Scheduler = null,
+        long GlobalStep = 0,
+        int CurrentEpoch = 0,
+        int CompletedBatchesInEpoch = 0,
+        double CurrentLossSum = 0d,
+        long CurrentTargetCount = 0,
+        long CompletedDocumentsInEpoch = 0,
+        int[]? CurrentTokenBuffer = null,
+        TensorDType? ModelDType = null,
+        bool TieWordEmbeddings = false,
+        TensorPrecisionMode? PrecisionMode = null,
+        int ArtifactSlot = -1,
+        int BestArtifactSlot = -1,
+        string[]? OptimizerStateTypes = null)
+    {
+        internal WikiModelCheckpoint ToCheckpoint(ModuleState currentModel)
+            => ToCheckpoint(EmptyModuleState(), currentModel);
+
+        internal WikiModelCheckpoint ToCheckpoint(
+            ModuleState bestModel,
+            ModuleState currentModel)
+            => new(
+                FormatVersion,
+                Epoch,
+                ValidationLoss,
+                VocabularySize,
+                ContextLength,
+                ModelWidth,
+                Heads,
+                HiddenSize,
+                Layers,
+                Dropout,
+                InitializationScale,
+                bestModel,
+                ModelArchitecture,
+                HyenaFilterWidth,
+                ForgetMemoryKeyWidth,
+                ForgetMemoryValueWidth,
+                ForgetMemoryRetentionMinimum,
+                ForgetMemoryRetentionMaximum,
+                CompletedEpoch,
+                currentModel,
+                Optimizer: null,
+                Scheduler,
+                GlobalStep,
+                CurrentEpoch,
+                CompletedBatchesInEpoch,
+                CurrentLossSum,
+                CurrentTargetCount,
+                CompletedDocumentsInEpoch,
+                CurrentTokenBuffer,
+                ModelDType,
+                TieWordEmbeddings,
+                PrecisionMode,
+                ArtifactSlot,
+                BestArtifactSlot,
+                OptimizerStateTypes);
+    }
+
     internal sealed record WikiModelCheckpoint(
         int FormatVersion,
         int Epoch,
@@ -441,5 +1010,8 @@ internal static partial class WikiLanguageModelCommand
         int[]? CurrentTokenBuffer = null,
         TensorDType? ModelDType = null,
         bool TieWordEmbeddings = false,
-        TensorPrecisionMode? PrecisionMode = null);
+        TensorPrecisionMode? PrecisionMode = null,
+        int ArtifactSlot = -1,
+        int BestArtifactSlot = -1,
+        string[]? OptimizerStateTypes = null);
 }

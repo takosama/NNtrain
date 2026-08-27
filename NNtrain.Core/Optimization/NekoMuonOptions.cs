@@ -1,5 +1,12 @@
 namespace NNtrain;
 
+public enum NekoMuonNewtonSchulzDepthMode
+{
+    Adaptive = 0,
+    Minimum = 1,
+    Fixed = 2,
+}
+
 public sealed record NekoMuonOptions
 {
     public float LearningRate { get; init; } = 3e-4f;
@@ -15,6 +22,11 @@ public sealed record NekoMuonOptions
     public int MaxNewtonSchulzSteps { get; init; } = 5;
 
     public int NewtonSchulzInterval { get; init; } = 5;
+
+    public NekoMuonNewtonSchulzDepthMode NewtonSchulzDepthMode { get; init; } =
+        NekoMuonNewtonSchulzDepthMode.Adaptive;
+
+    public float NewtonSchulzDepth { get; init; }
 
     public float WeightDecay { get; init; } = 1e-2f;
 

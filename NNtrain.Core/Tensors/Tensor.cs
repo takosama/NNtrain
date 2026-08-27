@@ -135,7 +135,17 @@ public partial class Tensor
     }
     internal long DataVersion => _dataVersion;
     internal bool HasGradientBuffer
-        => _grad.Length != 0 || _cudaGradientBuffers.Count != 0;
+    {
+        get
+        {
+            lock (_deviceSync)
+            {
+                return _grad.Length != 0
+                    || _cudaGradientBuffers.Count != 0
+                    || _cudaBFloat16GradientBuffers.Count != 0;
+            }
+        }
+    }
 
     public Tensor(
         float[] data,
@@ -401,6 +411,15 @@ public partial class Tensor
 
     internal void ClearGradient()
     {
+        // During CUDA training the device gradient is authoritative. Clearing
+        // the equally large host mirror every step needlessly writes the full
+        // parameter set on the CPU. Mark the host mirror stale instead; a rare
+        // host read will copy the already-cleared device gradient on demand.
+        if (ExecutionDevice == TensorDevice.Cuda
+            && TryClearResidentCudaGradients())
+        {
+            return;
+        }
         _grad.AsSpan().Clear();
         ClearCudaGradients();
     }

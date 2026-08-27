@@ -255,6 +255,60 @@ internal static class CudaLayerNorm
             seed, dropThreshold, dropoutScale, Stream(accelerator)));
     }
 
+    internal static void FusedBackwardBFloat16DirectBranch(
+        NativeCudaDevice accelerator,
+        NativeCudaBuffer<ushort> residual,
+        NativeCudaBuffer<ushort> branch,
+        NativeCudaBuffer<ushort> gamma,
+        NativeCudaBuffer<float> means,
+        NativeCudaBuffer<float> inverses,
+        NativeCudaBuffer<float>? outputGradient,
+        NativeCudaBuffer<ushort>? outputGradientBFloat16,
+        NativeCudaBuffer<float> residualGradient,
+        NativeCudaBuffer<ushort> branchGradientBFloat16,
+        NativeCudaBuffer<float> gammaGradient,
+        NativeCudaBuffer<float> betaGradient,
+        int rows,
+        int columns,
+        uint seed,
+        uint dropThreshold,
+        float dropoutScale)
+    {
+        accelerator.Bind();
+        NativeCudaBuffer<float> parameterScratch = GetParameterScratch(
+            accelerator, rows, columns);
+        int status;
+        if (outputGradientBFloat16 is not null)
+        {
+            status = FusedBackwardBFloat16IoGradientNative(
+                residual.NativePtr, branch.NativePtr, gamma.NativePtr,
+                means.NativePtr, inverses.NativePtr,
+                outputGradientBFloat16.NativePtr, residualGradient.NativePtr,
+                branchGradientBFloat16.NativePtr, gammaGradient.NativePtr,
+                betaGradient.NativePtr, parameterScratch.NativePtr,
+                rows, columns, seed, dropThreshold, dropoutScale,
+                Stream(accelerator));
+        }
+        else
+        {
+            if (outputGradient is null)
+            {
+                throw new ArgumentNullException(
+                    nameof(outputGradient),
+                    "LayerNorm backward requires an output gradient.");
+            }
+            status = FusedBackwardBFloat16BranchGradientNative(
+                residual.NativePtr, branch.NativePtr, gamma.NativePtr,
+                means.NativePtr, inverses.NativePtr,
+                outputGradient.NativePtr, residualGradient.NativePtr,
+                branchGradientBFloat16.NativePtr, gammaGradient.NativePtr,
+                betaGradient.NativePtr, parameterScratch.NativePtr,
+                rows, columns, seed, dropThreshold, dropoutScale,
+                Stream(accelerator));
+        }
+        ThrowIfFailed(status);
+    }
+
     private static nint Stream(NativeCudaDevice accelerator) =>
         accelerator.DefaultStream;
 
@@ -352,5 +406,29 @@ internal static class CudaLayerNorm
         nint residualGradient, nint branchGradient, nint gammaGradient,
         nint betaGradient, nint parameterScratch,
         int rows, int columns, int sameParent, uint seed,
+        uint dropThreshold, float dropoutScale, nint stream);
+
+    [DllImport(
+        Library,
+        EntryPoint = "nntrain_residual_dropout_layer_norm_backward_bf16_branch_gradient",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int FusedBackwardBFloat16BranchGradientNative(
+        nint residual, nint branch, nint gamma, nint means, nint inverses,
+        nint outputGradient,
+        nint residualGradient, nint branchGradient, nint gammaGradient,
+        nint betaGradient, nint parameterScratch,
+        int rows, int columns, uint seed,
+        uint dropThreshold, float dropoutScale, nint stream);
+
+    [DllImport(
+        Library,
+        EntryPoint = "nntrain_residual_dropout_layer_norm_backward_bf16_io_gradient",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int FusedBackwardBFloat16IoGradientNative(
+        nint residual, nint branch, nint gamma, nint means, nint inverses,
+        nint outputGradient,
+        nint residualGradient, nint branchGradient, nint gammaGradient,
+        nint betaGradient, nint parameterScratch,
+        int rows, int columns, uint seed,
         uint dropThreshold, float dropoutScale, nint stream);
 }

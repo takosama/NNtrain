@@ -280,3 +280,12 @@ public partial class AdamW
         }
     }
 }
+
+internal readonly record struct AdamWStreamingParameterState(
+    int Index,
+    string Name,
+    int[] Shape,
+    float[] FirstMoment,
+    short[]? FirstMomentBFloat16,
+    float[] SecondMoment,
+    short[]? SecondMomentBFloat16);

@@ -2,12 +2,19 @@
 #include <cuda_bf16.h>
 #include <mma.h>
 #include <cmath>
+#include <new>
 
 #if defined(_WIN32)
 #define NNTRAIN_EXPORT extern "C" __declspec(dllexport)
 #else
 #define NNTRAIN_EXPORT extern "C" __attribute__((visibility("default")))
 #endif
+
+// Keep cuda_runtime_bridge.cu's thread-local selected-device cache coherent.
+// The host-staged gradient pipeline switches devices on managed thread-pool
+// threads; calling cudaSetDevice directly here left that cache stale and a
+// later managed launch could consequently use another GPU's pointers.
+extern "C" int nntrain_cuda_set_device(int device);
 
 namespace {
 constexpr int kWarpSize = 32;
@@ -16,6 +23,9 @@ constexpr int kQueriesPerWarp = 4;
 constexpr int kColumnsPerLane = 4;
 constexpr int kThreadsPerBlock = kWarpSize * kWarpsPerBlock;
 constexpr int kLayerNormThreads = 256;
+constexpr int kLayerNormValuesPerThread = 4;
+constexpr int kLayerNormCachedColumns =
+    kLayerNormThreads * kLayerNormValuesPerThread;
 constexpr int kLayerNormParameterColumns = 32;
 constexpr int kLayerNormParameterRows = 8;
 constexpr int kLayerNormRowsPerTile = 1024;
@@ -110,6 +120,45 @@ __device__ __forceinline__ void store_value<float>(
 template <>
 __device__ __forceinline__ void store_value<__nv_bfloat16>(
     __nv_bfloat16* values, int index, float value) {
+    values[index] = __float2bfloat16_rn(value);
+}
+
+template <typename T>
+__device__ __forceinline__ void accumulate_layer_norm_gradient(
+    T* values, int index, float value);
+
+template <>
+__device__ __forceinline__ void accumulate_layer_norm_gradient<float>(
+    float* values, int index, float value) {
+    values[index] += value;
+}
+
+template <>
+__device__ __forceinline__ void
+accumulate_layer_norm_gradient<__nv_bfloat16>(
+    __nv_bfloat16* values, int index, float value) {
+    // Used only when the managed autograd graph proves that this branch has
+    // no earlier gradient. It is therefore an initializing store, not an
+    // accumulation into BF16 state.
+    values[index] = __float2bfloat16_rn(value);
+}
+
+template <typename T>
+__device__ __forceinline__ void accumulate_attention_gradient(
+    T* values, int index, float value);
+
+template <>
+__device__ __forceinline__ void accumulate_attention_gradient<float>(
+    float* values, int index, float value) {
+    values[index] += value;
+}
+
+template <>
+__device__ __forceinline__ void
+accumulate_attention_gradient<__nv_bfloat16>(
+    __nv_bfloat16* values, int index, float value) {
+    // This specialization is used only for a fresh, single-consumer
+    // attention projection gradient, so no prior value must be accumulated.
     values[index] = __float2bfloat16_rn(value);
 }
 
@@ -411,6 +460,93 @@ int launch_backward(
 
 __device__ __forceinline__ float block_sum(float value);
 
+// Move one strided 16-row attention tile into the compact shared-memory
+// layout consumed by WMMA. Loads are issued as aligned BF16 pairs so Ampere
+// and newer devices can overlap cp.async traffic with the previous tile's
+// matrix products. Invalid rows/columns are zero-filled by cp.async.
+template <int max_head, bool async_load>
+__device__ __forceinline__ void load_projected_bfloat16_tile(
+    __nv_bfloat16* destination,
+    const __nv_bfloat16* source,
+    int batch_base,
+    int row_start,
+    int sequence,
+    int projected_width,
+    int projection_offset,
+    int head_base,
+    int head_width) {
+    constexpr int tile = kAttentionTensorCoreTile;
+    for (int pair = threadIdx.x; pair < tile * max_head / 2;
+         pair += blockDim.x) {
+        const int index = pair * 2;
+        const int row = index / max_head;
+        const int column = index % max_head;
+        const int source_row = row_start + row;
+        const int valid_bytes = source_row < sequence && column < head_width
+            ? (column + 1 < head_width ? 4 : 2)
+            : 0;
+        const int source_index = valid_bytes
+            ? batch_base + source_row * projected_width
+                + projection_offset + head_base + column
+            : batch_base;
+        copy_bfloat16_pair<async_load>(
+            destination + index, source + source_index, valid_bytes);
+    }
+}
+
+template <int max_head, bool async_load>
+__device__ __forceinline__ void load_output_gradient_tile(
+    __nv_bfloat16* destination,
+    const __nv_bfloat16* source,
+    int batch_index,
+    int row_start,
+    int sequence,
+    int model_width,
+    int head_base,
+    int head_width) {
+    constexpr int tile = kAttentionTensorCoreTile;
+    for (int pair = threadIdx.x; pair < tile * max_head / 2;
+         pair += blockDim.x) {
+        const int index = pair * 2;
+        const int row = index / max_head;
+        const int column = index % max_head;
+        const int source_row = row_start + row;
+        const int valid_bytes = source_row < sequence && column < head_width
+            ? (column + 1 < head_width ? 4 : 2)
+            : 0;
+        const int source_index = valid_bytes
+            ? (batch_index * sequence + source_row) * model_width
+                + head_base + column
+            : 0;
+        copy_bfloat16_pair<async_load>(
+            destination + index, source + source_index, valid_bytes);
+    }
+}
+
+template <int max_head, bool async_load>
+__device__ __forceinline__ void load_output_gradient_tile(
+    __nv_bfloat16* destination,
+    const float* source,
+    int batch_index,
+    int row_start,
+    int sequence,
+    int model_width,
+    int head_base,
+    int head_width) {
+    constexpr int tile = kAttentionTensorCoreTile;
+    for (int index = threadIdx.x; index < tile * max_head;
+         index += blockDim.x) {
+        const int row = index / max_head;
+        const int column = index % max_head;
+        const int source_row = row_start + row;
+        destination[index] = source_row < sequence && column < head_width
+            ? __float2bfloat16_rn(source[
+                (batch_index * sequence + source_row) * model_width
+                    + head_base + column])
+            : __float2bfloat16_rn(0.f);
+    }
+}
+
 // BF16 Tensor Core attention uses one 16-query or 16-key tile per CTA. The
 // head dimension is padded to a multiple of 16 up to 128, so this path is not
 // specialized for any single model width. Matrix products use BF16 operands
@@ -664,9 +800,10 @@ __global__ void attention_forward_tensor_core_bf16(
     }
 }
 
+template <typename output_gradient_t>
 __global__ void attention_row_delta_bf16(
     const __nv_bfloat16* __restrict__ output,
-    const float* __restrict__ output_gradient,
+    const output_gradient_t* __restrict__ output_gradient,
     float* __restrict__ row_delta,
     int sequence,
     int model_width,
@@ -683,13 +820,23 @@ __global__ void attention_row_delta_bf16(
     for (int column = threadIdx.x; column < head_width;
          column += blockDim.x) {
         partial = fmaf(
-            output_gradient[offset + column],
+            load_value(output_gradient, offset + column),
             __bfloat162float(output[offset + column]),
             partial);
     }
-    partial = block_sum(partial);
-    if (threadIdx.x == 0)
-        row_delta[batch_head_query] = partial;
+    // The training shape uses head_width=32. A single warp consumes the row
+    // without the shared-memory round trip and two block barriers required by
+    // the general reduction. Wider heads retain the block reduction path.
+    if (blockDim.x == kWarpSize) {
+        partial = warp_sum(partial);
+        if (threadIdx.x == 0)
+            row_delta[batch_head_query] = partial;
+    }
+    else {
+        partial = block_sum(partial);
+        if (threadIdx.x == 0)
+            row_delta[batch_head_query] = partial;
+    }
 }
 
 __global__ void attention_incremental_bf16(
@@ -778,13 +925,14 @@ __global__ void attention_prefill_cache_bf16(
     value_cache[index] = qkv[projected + 2 * model_width];
 }
 
-template <int max_head>
+template <int max_head, bool async_load,
+    typename qkv_gradient_t, typename output_gradient_t>
 __global__ void attention_backward_query_owner_bf16(
     const __nv_bfloat16* __restrict__ qkv,
-    const float* __restrict__ output_gradient,
+    const output_gradient_t* __restrict__ output_gradient,
     const float* __restrict__ log_sum_exp,
     const float* __restrict__ row_delta,
-    float* __restrict__ qkv_gradient,
+    qkv_gradient_t* __restrict__ qkv_gradient,
     int sequence,
     int model_width,
     int heads,
@@ -792,8 +940,8 @@ __global__ void attention_backward_query_owner_bf16(
     using namespace nvcuda;
     constexpr int tile = kAttentionTensorCoreTile;
     __shared__ __nv_bfloat16 query_tile[tile * max_head];
-    __shared__ __nv_bfloat16 key_tile[tile * max_head];
-    __shared__ __nv_bfloat16 value_tile[tile * max_head];
+    __shared__ __nv_bfloat16 key_tile[2][tile * max_head];
+    __shared__ __nv_bfloat16 value_tile[2][tile * max_head];
     __shared__ __nv_bfloat16 output_gradient_tile[tile * max_head];
     __shared__ __nv_bfloat16 score_gradients[tile * tile];
     __shared__ float scores[tile * tile];
@@ -815,49 +963,49 @@ __global__ void attention_backward_query_owner_bf16(
 
     for (int index = threadIdx.x; index < tile * max_head;
          index += blockDim.x) {
-        const int row = index / max_head;
-        const int column = index % max_head;
-        const int query = query_start + row;
-        if (query < sequence && column < head_width) {
-            query_tile[index] = qkv[
-                batch_base + query * projected_width + head_base + column];
-            const int gradient_index =
-                (batch_index * sequence + query) * model_width
-                + head_base + column;
-            output_gradient_tile[index] = __float2bfloat16_rn(
-                output_gradient[gradient_index]);
-        }
-        else {
-            query_tile[index] = __float2bfloat16_rn(0.f);
-            output_gradient_tile[index] = __float2bfloat16_rn(0.f);
-        }
         accumulated[index] = 0.f;
         product[index] = 0.f;
     }
+    load_projected_bfloat16_tile<max_head, async_load>(
+        query_tile, qkv, batch_base, query_start, sequence,
+        projected_width, 0, head_base, head_width);
+    load_output_gradient_tile<max_head, async_load>(
+        output_gradient_tile, output_gradient, batch_index, query_start,
+        sequence, model_width, head_base, head_width);
+    commit_async_copy_group<async_load>();
+    wait_for_async_copy_group<async_load>();
     __syncthreads();
 
     const int key_limit = causal
         ? min(sequence, query_start + tile)
         : sequence;
+    load_projected_bfloat16_tile<max_head, async_load>(
+        key_tile[0], qkv, batch_base, 0, sequence,
+        projected_width, model_width, head_base, head_width);
+    load_projected_bfloat16_tile<max_head, async_load>(
+        value_tile[0], qkv, batch_base, 0, sequence,
+        projected_width, 2 * model_width, head_base, head_width);
+    commit_async_copy_group<async_load>();
     for (int key_start = 0; key_start < key_limit; key_start += tile) {
-        for (int index = threadIdx.x; index < tile * max_head;
-             index += blockDim.x) {
-            const int row = index / max_head;
-            const int column = index % max_head;
-            const int key = key_start + row;
-            if (key < sequence && column < head_width) {
-                const int key_index = batch_base
-                    + key * projected_width + model_width
-                    + head_base + column;
-                key_tile[index] = qkv[key_index];
-                value_tile[index] = qkv[key_index + model_width];
-            }
-            else {
-                key_tile[index] = __float2bfloat16_rn(0.f);
-                value_tile[index] = __float2bfloat16_rn(0.f);
-            }
-        }
+        const int buffer_index = (key_start / tile) & 1;
+        wait_for_async_copy_group<async_load>();
         __syncthreads();
+        __nv_bfloat16* current_key = key_tile[buffer_index];
+        __nv_bfloat16* current_value = value_tile[buffer_index];
+
+        const int next_key_start = key_start + tile;
+        if (next_key_start < key_limit) {
+            const int next_buffer = buffer_index ^ 1;
+            load_projected_bfloat16_tile<max_head, async_load>(
+                key_tile[next_buffer], qkv, batch_base, next_key_start,
+                sequence, projected_width, model_width, head_base,
+                head_width);
+            load_projected_bfloat16_tile<max_head, async_load>(
+                value_tile[next_buffer], qkv, batch_base, next_key_start,
+                sequence, projected_width, 2 * model_width, head_base,
+                head_width);
+            commit_async_copy_group<async_load>();
+        }
 
         if (warp == 0 || warp == 1) {
             wmma::fragment<wmma::accumulator, tile, tile, tile, float>
@@ -880,7 +1028,7 @@ __global__ void attention_backward_query_owner_bf16(
                     max_head);
                 wmma::load_matrix_sync(
                     right_fragment,
-                    (warp == 0 ? key_tile : value_tile) + dimension,
+                    (warp == 0 ? current_key : current_value) + dimension,
                     max_head);
                 wmma::mma_sync(
                     accumulator_fragment,
@@ -930,7 +1078,7 @@ __global__ void attention_backward_query_owner_bf16(
             wmma::load_matrix_sync(
                 score_gradient_fragment, score_gradients, tile);
             wmma::load_matrix_sync(
-                key_fragment, key_tile + warp * tile, max_head);
+                key_fragment, current_key + warp * tile, max_head);
             wmma::mma_sync(
                 gradient_fragment,
                 score_gradient_fragment,
@@ -959,35 +1107,46 @@ __global__ void attention_backward_query_owner_bf16(
         const int column = index % max_head;
         const int query = query_start + row;
         if (query < sequence && column < head_width) {
-            qkv_gradient[
-                batch_base + query * projected_width + head_base + column]
-                += accumulated[index] * scale;
+            accumulate_attention_gradient(
+                qkv_gradient,
+                batch_base + query * projected_width
+                    + head_base + column,
+                accumulated[index] * scale);
         }
     }
 }
 
-template <int max_head>
+template <int max_head, bool parallel_dkv, bool async_load,
+    typename qkv_gradient_t, typename output_gradient_t>
 __global__ void attention_backward_key_owner_bf16(
     const __nv_bfloat16* __restrict__ qkv,
-    const float* __restrict__ output_gradient,
+    const output_gradient_t* __restrict__ output_gradient,
     const float* __restrict__ log_sum_exp,
     const float* __restrict__ row_delta,
-    float* __restrict__ qkv_gradient,
+    qkv_gradient_t* __restrict__ qkv_gradient,
     int sequence,
     int model_width,
     int heads,
     int causal) {
     using namespace nvcuda;
     constexpr int tile = kAttentionTensorCoreTile;
-    __shared__ __nv_bfloat16 query_tile[tile * max_head];
+    // The <=64 paths fit two Q/dO stages below the portable 48 KiB shared
+    // memory limit. The 128-wide fallback keeps one stage so sm80/86/89/90
+    // all remain launchable without an opt-in dynamic shared-memory limit.
+    constexpr bool pipelined_load = async_load && max_head <= 64;
+    __shared__ __nv_bfloat16 query_tile[
+        pipelined_load ? 2 : 1][tile * max_head];
     __shared__ __nv_bfloat16 key_tile[tile * max_head];
     __shared__ __nv_bfloat16 value_tile[tile * max_head];
-    __shared__ __nv_bfloat16 output_gradient_tile[tile * max_head];
+    __shared__ __nv_bfloat16 output_gradient_tile[
+        pipelined_load ? 2 : 1][tile * max_head];
     __shared__ __nv_bfloat16 probabilities[tile * tile];
     __shared__ __nv_bfloat16 score_gradients[tile * tile];
     __shared__ float scores[tile * tile];
     __shared__ float probability_gradients[tile * tile];
     __shared__ float product[tile * max_head];
+    __shared__ float value_product[
+        parallel_dkv ? tile * max_head : 1];
     __shared__ float accumulated_key[tile * max_head];
     __shared__ float accumulated_value[tile * max_head];
 
@@ -1005,51 +1164,65 @@ __global__ void attention_backward_key_owner_bf16(
 
     for (int index = threadIdx.x; index < tile * max_head;
          index += blockDim.x) {
-        const int row = index / max_head;
-        const int column = index % max_head;
-        const int key = key_start + row;
-        if (key < sequence && column < head_width) {
-            const int key_index = batch_base
-                + key * projected_width + model_width
-                + head_base + column;
-            key_tile[index] = qkv[key_index];
-            value_tile[index] = qkv[key_index + model_width];
-        }
-        else {
-            key_tile[index] = __float2bfloat16_rn(0.f);
-            value_tile[index] = __float2bfloat16_rn(0.f);
-        }
         accumulated_key[index] = 0.f;
         accumulated_value[index] = 0.f;
         product[index] = 0.f;
     }
+    load_projected_bfloat16_tile<max_head, async_load>(
+        key_tile, qkv, batch_base, key_start, sequence,
+        projected_width, model_width, head_base, head_width);
+    load_projected_bfloat16_tile<max_head, async_load>(
+        value_tile, qkv, batch_base, key_start, sequence,
+        projected_width, 2 * model_width, head_base, head_width);
+    commit_async_copy_group<async_load>();
+    wait_for_async_copy_group<async_load>();
     __syncthreads();
 
     const int first_query_tile = causal ? key_start : 0;
+    if constexpr (pipelined_load) {
+        load_projected_bfloat16_tile<max_head, async_load>(
+            query_tile[0], qkv, batch_base, first_query_tile, sequence,
+            projected_width, 0, head_base, head_width);
+        load_output_gradient_tile<max_head, async_load>(
+            output_gradient_tile[0], output_gradient, batch_index,
+            first_query_tile, sequence, model_width, head_base, head_width);
+        commit_async_copy_group<async_load>();
+    }
     for (int query_start = first_query_tile;
          query_start < sequence;
          query_start += tile) {
-        for (int index = threadIdx.x; index < tile * max_head;
-             index += blockDim.x) {
-            const int row = index / max_head;
-            const int column = index % max_head;
-            const int query = query_start + row;
-            if (query < sequence && column < head_width) {
-                query_tile[index] = qkv[
-                    batch_base + query * projected_width
-                    + head_base + column];
-                const int gradient_index =
-                    (batch_index * sequence + query) * model_width
-                    + head_base + column;
-                output_gradient_tile[index] = __float2bfloat16_rn(
-                    output_gradient[gradient_index]);
-            }
-            else {
-                query_tile[index] = __float2bfloat16_rn(0.f);
-                output_gradient_tile[index] = __float2bfloat16_rn(0.f);
-            }
+        if constexpr (!pipelined_load) {
+            load_projected_bfloat16_tile<max_head, async_load>(
+                query_tile[0], qkv, batch_base, query_start, sequence,
+                projected_width, 0, head_base, head_width);
+            load_output_gradient_tile<max_head, async_load>(
+                output_gradient_tile[0], output_gradient, batch_index,
+                query_start, sequence, model_width, head_base, head_width);
+            commit_async_copy_group<async_load>();
         }
+        const int buffer_index = pipelined_load
+            ? ((query_start - first_query_tile) / tile) & 1
+            : 0;
+        wait_for_async_copy_group<async_load>();
         __syncthreads();
+        __nv_bfloat16* current_query = query_tile[buffer_index];
+        __nv_bfloat16* current_output_gradient =
+            output_gradient_tile[buffer_index];
+
+        if constexpr (pipelined_load) {
+          const int next_query_start = query_start + tile;
+          if (next_query_start < sequence) {
+            const int next_buffer = buffer_index ^ 1;
+            load_projected_bfloat16_tile<max_head, async_load>(
+                query_tile[next_buffer], qkv, batch_base, next_query_start,
+                sequence, projected_width, 0, head_base, head_width);
+            load_output_gradient_tile<max_head, async_load>(
+                output_gradient_tile[next_buffer], output_gradient,
+                batch_index, next_query_start, sequence, model_width,
+                head_base, head_width);
+            commit_async_copy_group<async_load>();
+          }
+        }
 
         if (warp == 0 || warp == 1) {
             wmma::fragment<wmma::accumulator, tile, tile, tile, float>
@@ -1067,7 +1240,7 @@ __global__ void attention_backward_key_owner_bf16(
                 const int dimension = dimension_tile * tile;
                 wmma::load_matrix_sync(
                     left_fragment,
-                    (warp == 0 ? query_tile : output_gradient_tile)
+                    (warp == 0 ? current_query : current_output_gradient)
                         + dimension,
                     max_head);
                 wmma::load_matrix_sync(
@@ -1110,7 +1283,40 @@ __global__ void attention_backward_key_owner_bf16(
         }
         __syncthreads();
 
-        if (warp < head_tiles) {
+        if (parallel_dkv && warp < 2 * head_tiles) {
+            const bool value_gradient = warp >= head_tiles;
+            const int dimension_warp = warp % head_tiles;
+            wmma::fragment<wmma::matrix_a, tile, tile, tile,
+                __nv_bfloat16, wmma::col_major>
+                left_fragment;
+            wmma::fragment<wmma::matrix_b, tile, tile, tile,
+                __nv_bfloat16, wmma::row_major>
+                right_fragment;
+            wmma::fragment<wmma::accumulator, tile, tile, tile, float>
+                gradient_fragment;
+            wmma::fill_fragment(gradient_fragment, 0.f);
+            wmma::load_matrix_sync(
+                left_fragment,
+                value_gradient ? probabilities : score_gradients,
+                tile);
+            wmma::load_matrix_sync(
+                right_fragment,
+                (value_gradient ? current_output_gradient : current_query)
+                    + dimension_warp * tile,
+                max_head);
+            wmma::mma_sync(
+                gradient_fragment,
+                left_fragment,
+                right_fragment,
+                gradient_fragment);
+            wmma::store_matrix_sync(
+                (value_gradient ? value_product : product)
+                    + dimension_warp * tile,
+                gradient_fragment,
+                max_head,
+                wmma::mem_row_major);
+        }
+        else if (!parallel_dkv && warp < head_tiles) {
             wmma::fragment<wmma::matrix_a, tile, tile, tile,
                 __nv_bfloat16, wmma::col_major>
                 score_gradient_fragment;
@@ -1123,7 +1329,7 @@ __global__ void attention_backward_key_owner_bf16(
             wmma::load_matrix_sync(
                 score_gradient_fragment, score_gradients, tile);
             wmma::load_matrix_sync(
-                query_fragment, query_tile + warp * tile, max_head);
+                query_fragment, current_query + warp * tile, max_head);
             wmma::mma_sync(
                 gradient_fragment,
                 score_gradient_fragment,
@@ -1140,12 +1346,15 @@ __global__ void attention_backward_key_owner_bf16(
              index += blockDim.x) {
             const int row = index / max_head;
             const int column = index % max_head;
-            if (key_start + row < sequence && column < head_width)
+            if (key_start + row < sequence && column < head_width) {
                 accumulated_key[index] += product[index];
+                if (parallel_dkv)
+                    accumulated_value[index] += value_product[index];
+            }
         }
         __syncthreads();
 
-        if (warp < head_tiles) {
+        if (!parallel_dkv && warp < head_tiles) {
             wmma::fragment<wmma::matrix_a, tile, tile, tile,
                 __nv_bfloat16, wmma::col_major>
                 probability_fragment;
@@ -1159,7 +1368,7 @@ __global__ void attention_backward_key_owner_bf16(
                 probability_fragment, probabilities, tile);
             wmma::load_matrix_sync(
                 output_gradient_fragment,
-                output_gradient_tile + warp * tile,
+                current_output_gradient + warp * tile,
                 max_head);
             wmma::mma_sync(
                 gradient_fragment,
@@ -1173,12 +1382,14 @@ __global__ void attention_backward_key_owner_bf16(
                 wmma::mem_row_major);
         }
         __syncthreads();
-        for (int index = threadIdx.x; index < tile * max_head;
-             index += blockDim.x) {
-            const int row = index / max_head;
-            const int column = index % max_head;
-            if (key_start + row < sequence && column < head_width)
-                accumulated_value[index] += product[index];
+        if (!parallel_dkv) {
+            for (int index = threadIdx.x; index < tile * max_head;
+                 index += blockDim.x) {
+                const int row = index / max_head;
+                const int column = index % max_head;
+                if (key_start + row < sequence && column < head_width)
+                    accumulated_value[index] += product[index];
+            }
         }
         __syncthreads();
     }
@@ -1192,9 +1403,14 @@ __global__ void attention_backward_key_owner_bf16(
             const int key_index = batch_base
                 + key * projected_width + model_width
                 + head_base + column;
-            qkv_gradient[key_index] += accumulated_key[index] * scale;
-            qkv_gradient[key_index + model_width] +=
-                accumulated_value[index];
+            accumulate_attention_gradient(
+                qkv_gradient,
+                key_index,
+                accumulated_key[index] * scale);
+            accumulate_attention_gradient(
+                qkv_gradient,
+                key_index + model_width,
+                accumulated_value[index]);
         }
     }
 }
@@ -1261,13 +1477,14 @@ int launch_forward_tensor_core_bf16(
         causal, async_load, stream);
 }
 
-template <int max_head>
+template <int max_head, bool parallel_dkv, bool async_load,
+    typename qkv_gradient_t, typename output_gradient_t>
 int launch_backward_tensor_core_bf16_specialized(
     const __nv_bfloat16* qkv,
-    const float* output_gradient,
+    const output_gradient_t* output_gradient,
     const float* log_sum_exp,
     const float* row_delta,
-    float* qkv_gradient,
+    qkv_gradient_t* qkv_gradient,
     int batch,
     int sequence,
     int model_width,
@@ -1275,36 +1492,45 @@ int launch_backward_tensor_core_bf16_specialized(
     int causal,
     cudaStream_t stream) {
     constexpr int threads = max_head * 2;
+    constexpr int key_owner_threads = parallel_dkv
+        ? max_head * 4
+        : threads;
     const dim3 grid(
         (sequence + kAttentionTensorCoreTile - 1)
             / kAttentionTensorCoreTile,
         batch * heads);
-    attention_backward_query_owner_bf16<max_head><<<
+    attention_backward_query_owner_bf16<
+        max_head, async_load, qkv_gradient_t, output_gradient_t><<<
         grid, threads, 0, stream>>>(
             qkv, output_gradient, log_sum_exp, row_delta, qkv_gradient,
             sequence, model_width, heads, causal);
     cudaError_t status = cudaPeekAtLastError();
     if (status != cudaSuccess)
         return (int)status;
-    attention_backward_key_owner_bf16<max_head><<<
-        grid, threads, 0, stream>>>(
+    attention_backward_key_owner_bf16<
+        max_head, parallel_dkv, async_load,
+        qkv_gradient_t, output_gradient_t><<<
+        grid, key_owner_threads, 0, stream>>>(
             qkv, output_gradient, log_sum_exp, row_delta, qkv_gradient,
             sequence, model_width, heads, causal);
     return (int)cudaPeekAtLastError();
 }
 
+template <typename qkv_gradient_t, typename output_gradient_t>
 int launch_backward_tensor_core_bf16(
     const __nv_bfloat16* qkv,
     const __nv_bfloat16* output,
-    const float* output_gradient,
+    const output_gradient_t* output_gradient,
     const float* log_sum_exp,
     float* row_delta,
-    float* qkv_gradient,
+    qkv_gradient_t* qkv_gradient,
     int batch,
     int sequence,
     int model_width,
     int heads,
     int causal,
+    bool parallel_dkv,
+    bool async_load,
     cudaStream_t stream) {
     const int head_width = heads > 0 ? model_width / heads : 0;
     if (!qkv || !output || !output_gradient || !log_sum_exp || !row_delta
@@ -1313,24 +1539,78 @@ int launch_backward_tensor_core_bf16(
         || head_width > kAttentionTensorCoreMaxHead) {
         return (int)cudaErrorInvalidValue;
     }
-    attention_row_delta_bf16<<<
-        batch * heads * sequence, 128, 0, stream>>>(
+    // Four-byte cp.async transactions require every row/head origin to remain
+    // pair-aligned. Odd generic head widths retain the synchronous loader.
+    async_load = async_load
+        && (model_width & 1) == 0
+        && (head_width & 1) == 0;
+    const int row_delta_threads = head_width <= kWarpSize
+        ? kWarpSize
+        : 128;
+    attention_row_delta_bf16<output_gradient_t><<<
+        batch * heads * sequence, row_delta_threads, 0, stream>>>(
             output, output_gradient, row_delta,
             sequence, model_width, heads);
     cudaError_t status = cudaPeekAtLastError();
     if (status != cudaSuccess)
         return (int)status;
-    if (head_width <= 32)
-        return launch_backward_tensor_core_bf16_specialized<32>(
+    if (head_width <= 32) {
+        if (async_load) {
+            return parallel_dkv
+                ? launch_backward_tensor_core_bf16_specialized<
+                    32, true, true, qkv_gradient_t, output_gradient_t>(
+                    qkv, output_gradient, log_sum_exp, row_delta,
+                    qkv_gradient, batch, sequence, model_width, heads,
+                    causal, stream)
+                : launch_backward_tensor_core_bf16_specialized<
+                    32, false, true, qkv_gradient_t, output_gradient_t>(
+                    qkv, output_gradient, log_sum_exp, row_delta,
+                    qkv_gradient, batch, sequence, model_width, heads,
+                    causal, stream);
+        }
+        return parallel_dkv
+            ? launch_backward_tensor_core_bf16_specialized<
+                32, true, false, qkv_gradient_t, output_gradient_t>(
+                qkv, output_gradient, log_sum_exp, row_delta, qkv_gradient,
+                batch, sequence, model_width, heads, causal, stream)
+            : launch_backward_tensor_core_bf16_specialized<
+                32, false, false, qkv_gradient_t, output_gradient_t>(
+                qkv, output_gradient, log_sum_exp, row_delta, qkv_gradient,
+                batch, sequence, model_width, heads, causal, stream);
+    }
+    if (head_width <= 64) {
+        if (async_load) {
+            return parallel_dkv
+                ? launch_backward_tensor_core_bf16_specialized<
+                    64, true, true, qkv_gradient_t, output_gradient_t>(
+                    qkv, output_gradient, log_sum_exp, row_delta,
+                    qkv_gradient, batch, sequence, model_width, heads,
+                    causal, stream)
+                : launch_backward_tensor_core_bf16_specialized<
+                    64, false, true, qkv_gradient_t, output_gradient_t>(
+                    qkv, output_gradient, log_sum_exp, row_delta,
+                    qkv_gradient, batch, sequence, model_width, heads,
+                    causal, stream);
+        }
+        return parallel_dkv
+            ? launch_backward_tensor_core_bf16_specialized<
+                64, true, false, qkv_gradient_t, output_gradient_t>(
+                qkv, output_gradient, log_sum_exp, row_delta, qkv_gradient,
+                batch, sequence, model_width, heads, causal, stream)
+            : launch_backward_tensor_core_bf16_specialized<
+                64, false, false, qkv_gradient_t, output_gradient_t>(
+                qkv, output_gradient, log_sum_exp, row_delta, qkv_gradient,
+                batch, sequence, model_width, heads, causal, stream);
+    }
+    return async_load
+        ? launch_backward_tensor_core_bf16_specialized<
+            128, false, true, qkv_gradient_t, output_gradient_t>(
+            qkv, output_gradient, log_sum_exp, row_delta, qkv_gradient,
+            batch, sequence, model_width, heads, causal, stream)
+        : launch_backward_tensor_core_bf16_specialized<
+            128, false, false, qkv_gradient_t, output_gradient_t>(
             qkv, output_gradient, log_sum_exp, row_delta, qkv_gradient,
             batch, sequence, model_width, heads, causal, stream);
-    if (head_width <= 64)
-        return launch_backward_tensor_core_bf16_specialized<64>(
-            qkv, output_gradient, log_sum_exp, row_delta, qkv_gradient,
-            batch, sequence, model_width, heads, causal, stream);
-    return launch_backward_tensor_core_bf16_specialized<128>(
-        qkv, output_gradient, log_sum_exp, row_delta, qkv_gradient,
-        batch, sequence, model_width, heads, causal, stream);
 }
 
 __device__ __forceinline__ float block_sum(float value) {
@@ -1438,6 +1718,50 @@ __global__ void layer_norm_forward_block(
     float dropout_scale) {
     const int row = blockIdx.x;
     const int offset = row * columns;
+    if (columns <= kLayerNormCachedColumns) {
+        float cached[kLayerNormValuesPerThread] = {};
+        float sum = 0.f;
+        #pragma unroll
+        for (int item = 0; item < kLayerNormValuesPerThread; ++item) {
+            const int column = threadIdx.x + item * blockDim.x;
+            if (column < columns) {
+                cached[item] = layer_norm_input<T, FuseResidualDropout>(
+                    input, branch, offset + column, seed, drop_threshold,
+                    dropout_scale);
+                sum += cached[item];
+            }
+        }
+        const float mean = block_sum(sum) / columns;
+        float variance_sum = 0.f;
+        #pragma unroll
+        for (int item = 0; item < kLayerNormValuesPerThread; ++item) {
+            const int column = threadIdx.x + item * blockDim.x;
+            if (column < columns) {
+                const float difference = cached[item] - mean;
+                variance_sum = fmaf(
+                    difference, difference, variance_sum);
+            }
+        }
+        const float inverse = rsqrtf(
+            block_sum(variance_sum) / columns + epsilon);
+        if (threadIdx.x == 0) {
+            means[row] = mean;
+            inverses[row] = inverse;
+        }
+        #pragma unroll
+        for (int item = 0; item < kLayerNormValuesPerThread; ++item) {
+            const int column = threadIdx.x + item * blockDim.x;
+            if (column < columns) {
+                const int index = offset + column;
+                const float xhat = (cached[item] - mean) * inverse;
+                store_value(output, index, fmaf(
+                    xhat,
+                    load_value(gamma, column),
+                    load_value(beta, column)));
+            }
+        }
+        return;
+    }
     float sum = 0.f;
     for (int column = threadIdx.x; column < columns; column += blockDim.x) {
         sum += layer_norm_input<T, FuseResidualDropout>(
@@ -1467,16 +1791,17 @@ __global__ void layer_norm_forward_block(
     }
 }
 
-template <typename T, bool FuseResidualDropout>
+template <typename T, bool FuseResidualDropout,
+    typename output_gradient_t, typename branch_gradient_t>
 __global__ void layer_norm_backward_input_block(
     const T* __restrict__ input,
     const T* __restrict__ branch,
     const T* __restrict__ gamma,
     const float* __restrict__ means,
     const float* __restrict__ inverses,
-    const float* __restrict__ output_gradient,
+    const output_gradient_t* __restrict__ output_gradient,
     float* __restrict__ input_gradient,
-    float* __restrict__ branch_gradient,
+    branch_gradient_t* __restrict__ branch_gradient,
     int columns,
     int same_parent,
     unsigned int seed,
@@ -1486,11 +1811,64 @@ __global__ void layer_norm_backward_input_block(
     const int offset = row * columns;
     const float mean = means[row];
     const float inverse = inverses[row];
+    if (columns <= kLayerNormCachedColumns) {
+        float cached_dxhat[kLayerNormValuesPerThread] = {};
+        float cached_xhat[kLayerNormValuesPerThread] = {};
+        float dxhat_sum = 0.f;
+        float dxhat_xhat_sum = 0.f;
+        #pragma unroll
+        for (int item = 0; item < kLayerNormValuesPerThread; ++item) {
+            const int column = threadIdx.x + item * blockDim.x;
+            if (column < columns) {
+                const int index = offset + column;
+                const float dxhat = load_value(output_gradient, index)
+                    * load_value(gamma, column);
+                const float xhat =
+                    (layer_norm_input<T, FuseResidualDropout>(
+                        input, branch, index, seed, drop_threshold,
+                        dropout_scale) - mean) * inverse;
+                cached_dxhat[item] = dxhat;
+                cached_xhat[item] = xhat;
+                dxhat_sum += dxhat;
+                dxhat_xhat_sum = fmaf(
+                    dxhat, xhat, dxhat_xhat_sum);
+            }
+        }
+        block_sum_pair(dxhat_sum, dxhat_xhat_sum);
+        const float inverse_over_columns = inverse / columns;
+        #pragma unroll
+        for (int item = 0; item < kLayerNormValuesPerThread; ++item) {
+            const int column = threadIdx.x + item * blockDim.x;
+            if (column < columns) {
+                const int index = offset + column;
+                const float gradient = inverse_over_columns
+                    * (columns * cached_dxhat[item] - dxhat_sum
+                        - cached_xhat[item] * dxhat_xhat_sum);
+                if constexpr (FuseResidualDropout) {
+                    const float multiplier = dropout_multiplier(
+                        seed, index, drop_threshold, dropout_scale);
+                    if (same_parent) {
+                        input_gradient[index] +=
+                            gradient * (1.f + multiplier);
+                    }
+                    else {
+                        input_gradient[index] += gradient;
+                        accumulate_layer_norm_gradient(
+                            branch_gradient, index, gradient * multiplier);
+                    }
+                }
+                else {
+                    input_gradient[index] += gradient;
+                }
+            }
+        }
+        return;
+    }
     float dxhat_sum = 0.f;
     float dxhat_xhat_sum = 0.f;
     for (int column = threadIdx.x; column < columns; column += blockDim.x) {
         const int index = offset + column;
-        const float dxhat = output_gradient[index]
+        const float dxhat = load_value(output_gradient, index)
             * load_value(gamma, column);
         dxhat_sum += dxhat;
         const float xhat = (layer_norm_input<T, FuseResidualDropout>(
@@ -1502,7 +1880,7 @@ __global__ void layer_norm_backward_input_block(
     const float inverse_over_columns = inverses[row] / columns;
     for (int column = threadIdx.x; column < columns; column += blockDim.x) {
         const int index = offset + column;
-        const float dxhat = output_gradient[index]
+        const float dxhat = load_value(output_gradient, index)
             * load_value(gamma, column);
         const float xhat = (layer_norm_input<T, FuseResidualDropout>(
             input, branch, index, seed, drop_threshold, dropout_scale) - mean)
@@ -1517,7 +1895,8 @@ __global__ void layer_norm_backward_input_block(
                 input_gradient[index] += gradient * (1.f + multiplier);
             else {
                 input_gradient[index] += gradient;
-                branch_gradient[index] += gradient * multiplier;
+                accumulate_layer_norm_gradient(
+                    branch_gradient, index, gradient * multiplier);
             }
         }
         else {
@@ -1526,13 +1905,13 @@ __global__ void layer_norm_backward_input_block(
     }
 }
 
-template <typename T, bool FuseResidualDropout>
+template <typename T, bool FuseResidualDropout, typename output_gradient_t>
 __global__ void layer_norm_backward_parameters_tiled(
     const T* __restrict__ input,
     const T* __restrict__ branch,
     const float* __restrict__ means,
     const float* __restrict__ inverses,
-    const float* __restrict__ output_gradient,
+    const output_gradient_t* __restrict__ output_gradient,
     float* __restrict__ parameter_partials,
     int rows,
     int columns,
@@ -1554,7 +1933,7 @@ __global__ void layer_norm_backward_parameters_tiled(
              row < row_end;
              row += kLayerNormParameterRows) {
             const int index = row * columns + column;
-            const float gradient = output_gradient[index];
+            const float gradient = load_value(output_gradient, index);
             const float xhat = (layer_norm_input<T, FuseResidualDropout>(
                 input, branch, index, seed, drop_threshold, dropout_scale)
                 - means[row]) * inverses[row];
@@ -1627,16 +2006,17 @@ int launch_layer_norm_forward(
     return (int)cudaPeekAtLastError();
 }
 
-template <typename T, bool FuseResidualDropout>
+template <typename T, bool FuseResidualDropout,
+    typename output_gradient_t, typename branch_gradient_t>
 int launch_layer_norm_backward(
     const T* input,
     const T* branch,
     const T* gamma,
     const float* means,
     const float* inverses,
-    const float* output_gradient,
+    const output_gradient_t* output_gradient,
     float* input_gradient,
-    float* branch_gradient,
+    branch_gradient_t* branch_gradient,
     float* gamma_gradient,
     float* beta_gradient,
     float* parameter_partials,
@@ -1654,7 +2034,8 @@ int launch_layer_norm_backward(
         || rows <= 0 || columns <= 0) {
         return (int)cudaErrorInvalidValue;
     }
-    layer_norm_backward_input_block<T, FuseResidualDropout><<<
+    layer_norm_backward_input_block<T, FuseResidualDropout,
+        output_gradient_t, branch_gradient_t><<<
         rows, kLayerNormThreads, 0, stream>>>(
         input, branch, gamma, means, inverses, output_gradient, input_gradient,
         branch_gradient, columns, same_parent, seed, drop_threshold,
@@ -1668,7 +2049,8 @@ int launch_layer_norm_backward(
         (columns + kLayerNormParameterColumns - 1)
             / kLayerNormParameterColumns,
         (rows + kLayerNormRowsPerTile - 1) / kLayerNormRowsPerTile);
-    layer_norm_backward_parameters_tiled<T, FuseResidualDropout><<<
+    layer_norm_backward_parameters_tiled<T, FuseResidualDropout,
+        output_gradient_t><<<
         grid, threads, 0, stream>>>(
         input, branch, means, inverses, output_gradient,
         parameter_partials, rows, columns, grid.y,
@@ -1684,6 +2066,7 @@ int launch_layer_norm_backward(
     return (int)cudaPeekAtLastError();
 }
 
+template <bool store_corrected_moments>
 __global__ void nekomuon_moments_stats_block(
     const float* __restrict__ gradient,
     float* __restrict__ fast,
@@ -1714,8 +2097,10 @@ __global__ void nekomuon_moments_stats_block(
         const float residual = corrected_fast - corrected_slow;
         fast[index] = next_fast;
         slow[index] = next_slow;
-        fast_hat[index] = corrected_fast;
-        slow_hat[index] = corrected_slow;
+        if constexpr (store_corrected_moments) {
+            fast_hat[index] = corrected_fast;
+            slow_hat[index] = corrected_slow;
+        }
         dot = fmaf(corrected_fast, corrected_slow, dot);
         fast_norm = fmaf(corrected_fast, corrected_fast, fast_norm);
         slow_norm = fmaf(corrected_slow, corrected_slow, slow_norm);
@@ -1763,6 +2148,7 @@ __global__ void nekomuon_moments_stats_block(
     }
 }
 
+template <bool store_corrected_moments>
 int launch_nekomuon_moments_stats(
     const float* gradient,
     float* fast,
@@ -1776,7 +2162,8 @@ int launch_nekomuon_moments_stats(
     float fast_correction,
     float slow_correction,
     cudaStream_t stream) {
-    if (!gradient || !fast || !slow || !fast_hat || !slow_hat || !stats
+    if (!gradient || !fast || !slow || !stats
+        || (store_corrected_moments && (!fast_hat || !slow_hat))
         || length <= 0 || fast_correction <= 0.f
         || slow_correction <= 0.f) {
         return (int)cudaErrorInvalidValue;
@@ -1784,7 +2171,8 @@ int launch_nekomuon_moments_stats(
     const int blocks = min(
         (length + kNekoMuonThreads - 1) / kNekoMuonThreads,
         kNekoMuonMaxBlocks);
-    nekomuon_moments_stats_block<<<blocks, kNekoMuonThreads, 0, stream>>>(
+    nekomuon_moments_stats_block<store_corrected_moments><<<
+        blocks, kNekoMuonThreads, 0, stream>>>(
         gradient, fast, slow, fast_hat, slow_hat, stats, length,
         beta_fast, beta_slow, fast_correction, slow_correction);
     return (int)cudaPeekAtLastError();
@@ -1807,13 +2195,30 @@ __global__ void sum_gradient_bf16(
     const __nv_bfloat16* __restrict__ local,
     const __nv_bfloat16* __restrict__ remote,
     float* __restrict__ reduced,
-    int length) {
+    int length,
+    double* __restrict__ squared_sum) {
+    __shared__ double partials[kGradientBucketThreads];
+    double partial = 0.0;
     for (int index = blockIdx.x * blockDim.x + threadIdx.x;
          index < length;
          index += blockDim.x * gridDim.x) {
-        reduced[index] = __bfloat162float(local[index])
+        float value = __bfloat162float(local[index])
             + __bfloat162float(remote[index]);
+        reduced[index] = value;
+        if (squared_sum)
+            partial += (double)value * value;
     }
+    if (!squared_sum)
+        return;
+    partials[threadIdx.x] = partial;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride)
+            partials[threadIdx.x] += partials[threadIdx.x + stride];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0)
+        atomicAdd(squared_sum, partials[0]);
 }
 
 __global__ void unpack_gradient_float(
@@ -2048,6 +2453,63 @@ int gradient_blocks(int length) {
         (length + kGradientBucketThreads - 1) / kGradientBucketThreads,
         512);
 }
+
+cudaError_t set_gradient_pipeline_device(int device) {
+    return static_cast<cudaError_t>(nntrain_cuda_set_device(device));
+}
+
+struct gradient_host_pipeline {
+    int source_device = -1;
+    int destination_device = -1;
+    int capacity = 0;
+    void* host[2] = {nullptr, nullptr};
+    __nv_bfloat16* device[2] = {nullptr, nullptr};
+    cudaStream_t download_stream = nullptr;
+    cudaStream_t upload_stream = nullptr;
+    cudaEvent_t download_done[2] = {nullptr, nullptr};
+    cudaEvent_t upload_done[2] = {nullptr, nullptr};
+};
+
+cudaError_t destroy_gradient_host_pipeline(
+    gradient_host_pipeline* pipeline) {
+    if (!pipeline)
+        return cudaSuccess;
+    cudaError_t first = cudaSuccess;
+    auto retain = [&first](cudaError_t status) {
+        if (first == cudaSuccess && status != cudaSuccess)
+            first = status;
+    };
+    if (pipeline->source_device >= 0) {
+        retain(set_gradient_pipeline_device(pipeline->source_device));
+        if (pipeline->download_stream)
+            retain(cudaStreamSynchronize(pipeline->download_stream));
+        for (int slot = 0; slot < 2; ++slot) {
+            if (pipeline->download_done[slot])
+                retain(cudaEventDestroy(pipeline->download_done[slot]));
+        }
+        if (pipeline->download_stream)
+            retain(cudaStreamDestroy(pipeline->download_stream));
+    }
+    if (pipeline->destination_device >= 0) {
+        retain(set_gradient_pipeline_device(pipeline->destination_device));
+        if (pipeline->upload_stream)
+            retain(cudaStreamSynchronize(pipeline->upload_stream));
+        for (int slot = 0; slot < 2; ++slot) {
+            if (pipeline->upload_done[slot])
+                retain(cudaEventDestroy(pipeline->upload_done[slot]));
+            if (pipeline->device[slot])
+                retain(cudaFree(pipeline->device[slot]));
+        }
+        if (pipeline->upload_stream)
+            retain(cudaStreamDestroy(pipeline->upload_stream));
+    }
+    for (int slot = 0; slot < 2; ++slot) {
+        if (pipeline->host[slot])
+            retain(cudaFreeHost(pipeline->host[slot]));
+    }
+    delete pipeline;
+    return first;
+}
 }
 
 NNTRAIN_EXPORT int nntrain_forget_memory_forward_bf16_tensor_core(
@@ -2142,7 +2604,59 @@ NNTRAIN_EXPORT int nntrain_flash_attention_backward_bf16_tensor_core(
     int model_width, int heads, int causal, cudaStream_t stream) {
     return launch_backward_tensor_core_bf16(
         qkv, output, output_gradient, log_sum_exp, row_delta,
-        qkv_gradient, batch, sequence, model_width, heads, causal, stream);
+        qkv_gradient, batch, sequence, model_width, heads, causal,
+        false, true, stream);
+}
+
+NNTRAIN_EXPORT int
+nntrain_flash_attention_backward_bf16_tensor_core_parallel_dkv(
+    const __nv_bfloat16* qkv, const __nv_bfloat16* output,
+    const float* output_gradient, const float* log_sum_exp,
+    float* row_delta, float* qkv_gradient, int batch, int sequence,
+    int model_width, int heads, int causal, cudaStream_t stream) {
+    return launch_backward_tensor_core_bf16(
+        qkv, output, output_gradient, log_sum_exp, row_delta,
+        qkv_gradient, batch, sequence, model_width, heads, causal,
+        true, true, stream);
+}
+
+NNTRAIN_EXPORT int
+nntrain_flash_attention_backward_bf16_tensor_core_bf16_gradient(
+    const __nv_bfloat16* qkv, const __nv_bfloat16* output,
+    const float* output_gradient, const float* log_sum_exp,
+    float* row_delta, __nv_bfloat16* qkv_gradient, int batch,
+    int sequence, int model_width, int heads, int causal,
+    cudaStream_t stream) {
+    return launch_backward_tensor_core_bf16(
+        qkv, output, output_gradient, log_sum_exp, row_delta,
+        qkv_gradient, batch, sequence, model_width, heads, causal,
+        true, true, stream);
+}
+
+NNTRAIN_EXPORT int
+nntrain_flash_attention_backward_bf16_tensor_core_bf16_io_gradient(
+    const __nv_bfloat16* qkv, const __nv_bfloat16* output,
+    const __nv_bfloat16* output_gradient, const float* log_sum_exp,
+    float* row_delta, __nv_bfloat16* qkv_gradient, int batch,
+    int sequence, int model_width, int heads, int causal,
+    cudaStream_t stream) {
+    return launch_backward_tensor_core_bf16(
+        qkv, output, output_gradient, log_sum_exp, row_delta,
+        qkv_gradient, batch, sequence, model_width, heads, causal,
+        true, true, stream);
+}
+
+NNTRAIN_EXPORT int
+nntrain_flash_attention_backward_bf16_tensor_core_bf16_io_gradient_sync(
+    const __nv_bfloat16* qkv, const __nv_bfloat16* output,
+    const __nv_bfloat16* output_gradient, const float* log_sum_exp,
+    float* row_delta, __nv_bfloat16* qkv_gradient, int batch,
+    int sequence, int model_width, int heads, int causal,
+    cudaStream_t stream) {
+    return launch_backward_tensor_core_bf16(
+        qkv, output, output_gradient, log_sum_exp, row_delta,
+        qkv_gradient, batch, sequence, model_width, heads, causal,
+        true, false, stream);
 }
 
 NNTRAIN_EXPORT int nntrain_flash_attention_incremental_bf16(
@@ -2214,7 +2728,7 @@ NNTRAIN_EXPORT int nntrain_layer_norm_backward(
     const float* output_gradient, float* input_gradient,
     float* gamma_gradient, float* beta_gradient, float* parameter_partials,
     int rows, int columns, cudaStream_t stream) {
-    return launch_layer_norm_backward<float, false>(
+    return launch_layer_norm_backward<float, false, float, float>(
         input, nullptr, gamma, means, inverses, output_gradient, input_gradient,
         nullptr, gamma_gradient, beta_gradient, parameter_partials,
         rows, columns, 0,
@@ -2227,7 +2741,8 @@ NNTRAIN_EXPORT int nntrain_layer_norm_backward_bf16(
     float* input_gradient, float* gamma_gradient, float* beta_gradient,
     float* parameter_partials,
     int rows, int columns, cudaStream_t stream) {
-    return launch_layer_norm_backward<__nv_bfloat16, false>(
+    return launch_layer_norm_backward<
+        __nv_bfloat16, false, float, float>(
         input, nullptr, gamma, means, inverses, output_gradient, input_gradient,
         nullptr, gamma_gradient, beta_gradient, parameter_partials,
         rows, columns, 0,
@@ -2263,7 +2778,7 @@ NNTRAIN_EXPORT int nntrain_residual_dropout_layer_norm_backward(
     float* parameter_partials,
     int rows, int columns, int same_parent, unsigned int seed,
     unsigned int drop_threshold, float dropout_scale, cudaStream_t stream) {
-    return launch_layer_norm_backward<float, true>(
+    return launch_layer_norm_backward<float, true, float, float>(
         residual, branch, gamma, means, inverses, output_gradient,
         residual_gradient,
         branch_gradient, gamma_gradient, beta_gradient, parameter_partials,
@@ -2280,7 +2795,8 @@ NNTRAIN_EXPORT int nntrain_residual_dropout_layer_norm_backward_bf16(
     float* parameter_partials,
     int rows, int columns, int same_parent, unsigned int seed,
     unsigned int drop_threshold, float dropout_scale, cudaStream_t stream) {
-    return launch_layer_norm_backward<__nv_bfloat16, true>(
+    return launch_layer_norm_backward<
+        __nv_bfloat16, true, float, float>(
         residual, branch, gamma, means, inverses, output_gradient,
         residual_gradient,
         branch_gradient, gamma_gradient, beta_gradient, parameter_partials,
@@ -2288,13 +2804,58 @@ NNTRAIN_EXPORT int nntrain_residual_dropout_layer_norm_backward_bf16(
         same_parent, seed, drop_threshold, dropout_scale, stream);
 }
 
+NNTRAIN_EXPORT int
+nntrain_residual_dropout_layer_norm_backward_bf16_branch_gradient(
+    const __nv_bfloat16* residual, const __nv_bfloat16* branch,
+    const __nv_bfloat16* gamma, const float* means,
+    const float* inverses, const float* output_gradient,
+    float* residual_gradient, __nv_bfloat16* branch_gradient,
+    float* gamma_gradient, float* beta_gradient,
+    float* parameter_partials,
+    int rows, int columns, unsigned int seed,
+    unsigned int drop_threshold, float dropout_scale, cudaStream_t stream) {
+    return launch_layer_norm_backward<
+        __nv_bfloat16, true, float, __nv_bfloat16>(
+        residual, branch, gamma, means, inverses, output_gradient,
+        residual_gradient, branch_gradient, gamma_gradient, beta_gradient,
+        parameter_partials, rows, columns, 0, seed, drop_threshold,
+        dropout_scale, stream);
+}
+
+NNTRAIN_EXPORT int
+nntrain_residual_dropout_layer_norm_backward_bf16_io_gradient(
+    const __nv_bfloat16* residual, const __nv_bfloat16* branch,
+    const __nv_bfloat16* gamma, const float* means,
+    const float* inverses, const __nv_bfloat16* output_gradient,
+    float* residual_gradient, __nv_bfloat16* branch_gradient,
+    float* gamma_gradient, float* beta_gradient,
+    float* parameter_partials,
+    int rows, int columns, unsigned int seed,
+    unsigned int drop_threshold, float dropout_scale, cudaStream_t stream) {
+    return launch_layer_norm_backward<
+        __nv_bfloat16, true, __nv_bfloat16, __nv_bfloat16>(
+        residual, branch, gamma, means, inverses, output_gradient,
+        residual_gradient, branch_gradient, gamma_gradient, beta_gradient,
+        parameter_partials, rows, columns, 0, seed, drop_threshold,
+        dropout_scale, stream);
+}
+
 NNTRAIN_EXPORT int nntrain_nekomuon_moments_stats(
     const float* gradient, float* fast, float* slow,
     float* fast_hat, float* slow_hat, float* stats, int length,
     float beta_fast, float beta_slow, float fast_correction,
     float slow_correction, cudaStream_t stream) {
-    return launch_nekomuon_moments_stats(
+    return launch_nekomuon_moments_stats<true>(
         gradient, fast, slow, fast_hat, slow_hat, stats, length,
+        beta_fast, beta_slow, fast_correction, slow_correction, stream);
+}
+
+NNTRAIN_EXPORT int nntrain_nekomuon_moments_stats_compact(
+    const float* gradient, float* fast, float* slow, float* stats,
+    int length, float beta_fast, float beta_slow, float fast_correction,
+    float slow_correction, cudaStream_t stream) {
+    return launch_nekomuon_moments_stats<false>(
+        gradient, fast, slow, nullptr, nullptr, stats, length,
         beta_fast, beta_slow, fast_correction, slow_correction, stream);
 }
 
@@ -2340,6 +2901,7 @@ NNTRAIN_EXPORT int nntrain_gradient_exchange_bf16(
     __nv_bfloat16* remote_staging,
     float* reduced,
     int length,
+    double* squared_sum,
     cudaStream_t communication_stream,
     cudaEvent_t local_ready,
     cudaEvent_t remote_ready) {
@@ -2365,8 +2927,165 @@ NNTRAIN_EXPORT int nntrain_gradient_exchange_bf16(
         return (int)status;
     sum_gradient_bf16<<<
         gradient_blocks(length), kGradientBucketThreads, 0,
-        communication_stream>>>(local, remote_staging, reduced, length);
+        communication_stream>>>(
+            local, remote_staging, reduced, length, squared_sum);
     return (int)cudaPeekAtLastError();
+}
+
+NNTRAIN_EXPORT int nntrain_gradient_host_pipeline_create(
+    int source_device,
+    int destination_device,
+    int chunk_elements,
+    void** pipeline_pointer) {
+    if (!pipeline_pointer || source_device == destination_device
+        || chunk_elements <= 0) {
+        return (int)cudaErrorInvalidValue;
+    }
+    *pipeline_pointer = nullptr;
+    gradient_host_pipeline* pipeline = new (std::nothrow)
+        gradient_host_pipeline();
+    if (!pipeline)
+        return (int)cudaErrorMemoryAllocation;
+    pipeline->source_device = source_device;
+    pipeline->destination_device = destination_device;
+    pipeline->capacity = chunk_elements;
+    const size_t bytes =
+        (size_t)chunk_elements * sizeof(__nv_bfloat16);
+    cudaError_t status = set_gradient_pipeline_device(source_device);
+    if (status == cudaSuccess) {
+        status = cudaStreamCreateWithFlags(
+            &pipeline->download_stream, cudaStreamNonBlocking);
+    }
+    for (int slot = 0; status == cudaSuccess && slot < 2; ++slot) {
+        status = cudaEventCreateWithFlags(
+            &pipeline->download_done[slot], cudaEventDisableTiming);
+    }
+    if (status == cudaSuccess)
+        status = set_gradient_pipeline_device(destination_device);
+    if (status == cudaSuccess) {
+        status = cudaStreamCreateWithFlags(
+            &pipeline->upload_stream, cudaStreamNonBlocking);
+    }
+    for (int slot = 0; status == cudaSuccess && slot < 2; ++slot) {
+        status = cudaEventCreateWithFlags(
+            &pipeline->upload_done[slot], cudaEventDisableTiming);
+        if (status == cudaSuccess)
+            status = cudaMalloc((void**)&pipeline->device[slot], bytes);
+        if (status == cudaSuccess)
+            status = cudaMallocHost(&pipeline->host[slot], bytes);
+    }
+    if (status != cudaSuccess) {
+        (void)destroy_gradient_host_pipeline(pipeline);
+        return (int)status;
+    }
+    *pipeline_pointer = pipeline;
+    return (int)cudaSuccess;
+}
+
+NNTRAIN_EXPORT int nntrain_gradient_host_pipeline_exchange_bf16(
+    void* pipeline_pointer,
+    const __nv_bfloat16* local,
+    const __nv_bfloat16* remote_source,
+    float* reduced,
+    int length,
+    double* squared_sum,
+    cudaEvent_t local_ready,
+    cudaEvent_t remote_ready) {
+    gradient_host_pipeline* pipeline =
+        reinterpret_cast<gradient_host_pipeline*>(pipeline_pointer);
+    if (!pipeline || !local || !remote_source || !reduced || length <= 0
+        || !local_ready || !remote_ready) {
+        return (int)cudaErrorInvalidValue;
+    }
+
+    cudaError_t status = set_gradient_pipeline_device(
+        pipeline->source_device);
+    if (status != cudaSuccess)
+        return (int)status;
+    status = cudaEventSynchronize(remote_ready);
+    if (status != cudaSuccess)
+        return (int)status;
+    status = set_gradient_pipeline_device(pipeline->destination_device);
+    if (status != cudaSuccess)
+        return (int)status;
+    status = cudaEventSynchronize(local_ready);
+    if (status != cudaSuccess)
+        return (int)status;
+
+    const int chunks = (length + pipeline->capacity - 1)
+        / pipeline->capacity;
+    auto queue_download = [&](int chunk) -> cudaError_t {
+        const int slot = chunk & 1;
+        const int offset = chunk * pipeline->capacity;
+        const int count = min(pipeline->capacity, length - offset);
+        cudaError_t queue_status = set_gradient_pipeline_device(
+            pipeline->source_device);
+        if (queue_status != cudaSuccess)
+            return queue_status;
+        queue_status = cudaMemcpyAsync(
+            pipeline->host[slot], remote_source + offset,
+            (size_t)count * sizeof(__nv_bfloat16),
+            cudaMemcpyDeviceToHost, pipeline->download_stream);
+        if (queue_status != cudaSuccess)
+            return queue_status;
+        return cudaEventRecord(
+            pipeline->download_done[slot], pipeline->download_stream);
+    };
+
+    status = queue_download(0);
+    if (status == cudaSuccess && chunks > 1)
+        status = queue_download(1);
+    for (int chunk = 0; status == cudaSuccess && chunk < chunks; ++chunk) {
+        const int slot = chunk & 1;
+        const int offset = chunk * pipeline->capacity;
+        const int count = min(pipeline->capacity, length - offset);
+        status = set_gradient_pipeline_device(pipeline->source_device);
+        if (status == cudaSuccess) {
+            status = cudaEventSynchronize(
+                pipeline->download_done[slot]);
+        }
+        if (status != cudaSuccess)
+            break;
+        status = set_gradient_pipeline_device(
+            pipeline->destination_device);
+        if (status == cudaSuccess) {
+            status = cudaMemcpyAsync(
+                pipeline->device[slot], pipeline->host[slot],
+                (size_t)count * sizeof(__nv_bfloat16),
+                cudaMemcpyHostToDevice, pipeline->upload_stream);
+        }
+        if (status == cudaSuccess) {
+            sum_gradient_bf16<<<
+                gradient_blocks(count), kGradientBucketThreads, 0,
+                pipeline->upload_stream>>>(
+                    local + offset, pipeline->device[slot],
+                    reduced + offset, count, squared_sum);
+            status = cudaPeekAtLastError();
+        }
+        if (status == cudaSuccess) {
+            status = cudaEventRecord(
+                pipeline->upload_done[slot], pipeline->upload_stream);
+        }
+        const int next = chunk + 2;
+        if (status == cudaSuccess && next < chunks) {
+            status = cudaEventSynchronize(pipeline->upload_done[slot]);
+            if (status == cudaSuccess)
+                status = queue_download(next);
+        }
+    }
+    if (status == cudaSuccess) {
+        status = set_gradient_pipeline_device(
+            pipeline->destination_device);
+    }
+    if (status == cudaSuccess)
+        status = cudaStreamSynchronize(pipeline->upload_stream);
+    return (int)status;
+}
+
+NNTRAIN_EXPORT int nntrain_gradient_host_pipeline_destroy(
+    void* pipeline_pointer) {
+    return (int)destroy_gradient_host_pipeline(
+        reinterpret_cast<gradient_host_pipeline*>(pipeline_pointer));
 }
 
 NNTRAIN_EXPORT int nntrain_gradient_unpack_float(

@@ -7,6 +7,8 @@ internal static partial class TensorCudaKernels
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<
         int,
         Lazy<NativeCudaBuffer<double>>> GradientNormScratch = new();
+    private static readonly object GradientSquaredSumCacheLock = new();
+    private static GradientSquaredSumCacheEntry? _gradientSquaredSumCache;
 
     internal static AttentionResidentContext
         AttentionForwardResident(
@@ -87,48 +89,53 @@ internal static partial class TensorCudaKernels
         IReadOnlyList<Parameter> parameters,
         float maxNorm)
     {
-        NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator();
-        NativeCudaBuffer<double> squaredSumBuffer = GradientNormScratch
-            .GetOrAdd(
-                Tensor.CudaDeviceIndex,
-                static deviceIndex => new Lazy<NativeCudaBuffer<double>>(
-                    () => ForgetMemoryV2Cuda.GetAccelerator(deviceIndex)
-                        .Allocate1D<double>(1),
-                    LazyThreadSafetyMode.ExecutionAndPublication)).Value;
-        squaredSumBuffer.MemSetToZero();
         int[] devices = Tensor.CudaDeviceIndices.ToArray();
-        var primaryArenas = new HashSet<NativeCudaArena<float>>(
-            ReferenceEqualityComparer.Instance);
-        foreach (Parameter parameter in parameters)
+        double squaredSumValue;
+        if (!TryConsumeGradientSquaredSum(parameters, devices, out squaredSumValue))
         {
-            Tensor tensor = parameter.T;
-            if (!tensor.HasGradientBuffer)
-                continue;
-            NativeCudaArena<float>? arena = tensor.GetCudaGradientArena(
-                Tensor.CudaDeviceIndex);
-            if (arena is not null)
+            NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator();
+            NativeCudaBuffer<double> squaredSumBuffer = GradientNormScratch
+                .GetOrAdd(
+                    Tensor.CudaDeviceIndex,
+                    static deviceIndex => new Lazy<NativeCudaBuffer<double>>(
+                        () => ForgetMemoryV2Cuda.GetAccelerator(deviceIndex)
+                            .Allocate1D<double>(1),
+                        LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+            squaredSumBuffer.MemSetToZero();
+            var primaryArenas = new HashSet<NativeCudaArena<float>>(
+                ReferenceEqualityComparer.Instance);
+            foreach (Parameter parameter in parameters)
             {
-                if (primaryArenas.Add(arena))
+                Tensor tensor = parameter.T;
+                if (!tensor.HasGradientBuffer)
+                    continue;
+                NativeCudaArena<float>? arena = tensor.GetCudaGradientArena(
+                    Tensor.CudaDeviceIndex);
+                if (arena is not null)
                 {
-                    CudaTensorNative.SquaredSum(
-                        Tensor.CudaDeviceIndex,
-                        arena.NativePtr,
-                        arena.Length,
-                        squaredSumBuffer.NativePtr);
+                    if (primaryArenas.Add(arena))
+                    {
+                        CudaTensorNative.SquaredSum(
+                            Tensor.CudaDeviceIndex,
+                            arena.NativePtr,
+                            arena.Length,
+                            squaredSumBuffer.NativePtr);
+                    }
+                    continue;
                 }
-                continue;
+                var gradient = tensor.EnsureCudaGradientBuffer();
+                CudaTensorNative.SquaredSum(
+                    Tensor.CudaDeviceIndex,
+                    gradient.NativePtr,
+                    tensor.Numel,
+                    squaredSumBuffer.NativePtr);
             }
-            var gradient = tensor.EnsureCudaGradientBuffer();
-            CudaTensorNative.SquaredSum(
-                Tensor.CudaDeviceIndex,
-                gradient.NativePtr,
-                tensor.Numel,
-                squaredSumBuffer.NativePtr);
+            accelerator.Synchronize();
+            var squaredSum = new double[1];
+            squaredSumBuffer.CopyToCPU(squaredSum);
+            squaredSumValue = squaredSum[0];
         }
-        accelerator.Synchronize();
-        var squaredSum = new double[1];
-        squaredSumBuffer.CopyToCPU(squaredSum);
-        float totalNorm = (float)Math.Sqrt(squaredSum[0]);
+        float totalNorm = (float)Math.Sqrt(squaredSumValue);
         if (totalNorm <= maxNorm)
             return totalNorm;
 
@@ -172,6 +179,55 @@ internal static partial class TensorCudaKernels
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex).Synchronize();
         return totalNorm;
     }
+
+    internal static void PublishGradientSquaredSum(
+        IReadOnlyList<Parameter> parameters,
+        IReadOnlyList<int> devices,
+        double squaredSum)
+    {
+        if (!double.IsFinite(squaredSum) || squaredSum < 0d)
+            return;
+        var entry = new GradientSquaredSumCacheEntry(
+            parameters.Select(parameter =>
+                new WeakReference<Parameter>(parameter)).ToArray(),
+            parameters.Select(parameter => parameter.T.GradientVersion).ToArray(),
+            devices.ToArray(),
+            squaredSum);
+        lock (GradientSquaredSumCacheLock)
+            _gradientSquaredSumCache = entry;
+    }
+
+    private static bool TryConsumeGradientSquaredSum(
+        IReadOnlyList<Parameter> parameters,
+        IReadOnlyList<int> devices,
+        out double squaredSum)
+    {
+        lock (GradientSquaredSumCacheLock)
+        {
+            GradientSquaredSumCacheEntry? entry = _gradientSquaredSumCache;
+            if (entry is not null
+                && entry.Parameters.Length == parameters.Count
+                && entry.Devices.SequenceEqual(devices)
+                && parameters.Select((parameter, index) =>
+                    entry.Parameters[index].TryGetTarget(out Parameter? cached)
+                    && ReferenceEquals(parameter, cached)
+                    && parameter.T.GradientVersion == entry.Versions[index])
+                    .All(value => value))
+            {
+                _gradientSquaredSumCache = null;
+                squaredSum = entry.SquaredSum;
+                return true;
+            }
+        }
+        squaredSum = 0d;
+        return false;
+    }
+
+    private sealed record GradientSquaredSumCacheEntry(
+        WeakReference<Parameter>[] Parameters,
+        long[] Versions,
+        int[] Devices,
+        double SquaredSum);
 
     internal static void AllReduceGradientResident(
         Tensor tensor,

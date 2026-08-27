@@ -109,11 +109,13 @@ internal static class CudaOptimizerNative
 
     internal static void NekoInitialize(int device, nint source,
         nint destination, int length, int originalRows, int originalColumns,
-        bool transpose, float inverseNorm)
+        bool transpose, float inverseFastCorrection, float inverseNorm)
     {
         Select(device);
-        Check(NekoInitializeNative(source, destination, length, originalRows,
-            originalColumns, transpose ? 1 : 0, inverseNorm),
+        Check(NekoInitializeCorrectedNative(
+            source, destination, length, originalRows,
+            originalColumns, transpose ? 1 : 0,
+            inverseFastCorrection, inverseNorm),
             "NekoMuon initialize");
     }
 
@@ -148,6 +150,23 @@ internal static class CudaOptimizerNative
         Select(device);
         Check(NekoCombineNative(gram, gramSquared, length, rows, a, b, c),
             "NekoMuon polynomial");
+    }
+
+    internal static void NekoCombineBatched(
+        int device,
+        nint gram,
+        nint gramSquared,
+        int matrixLength,
+        int batch,
+        int rows,
+        float a,
+        float b,
+        float c)
+    {
+        Select(device);
+        Check(NekoCombineBatchedNative(
+            gram, gramSquared, matrixLength, batch, rows, a, b, c),
+            "NekoMuon batched polynomial");
     }
 
     internal static void SymmetricGram(int device, nint source,
@@ -197,6 +216,8 @@ internal static class CudaOptimizerNative
     private static extern int NekoMomentsNative(nint gradient, nint fast, nint slow, nint fastHat, nint slowHat, int length, float betaFast, float betaSlow, float fastCorrection, float slowCorrection);
     [DllImport(Library, EntryPoint = "nntrain_optimizer_neko_initialize", CallingConvention = CallingConvention.Cdecl)]
     private static extern int NekoInitializeNative(nint source, nint destination, int length, int originalRows, int originalColumns, int transpose, float inverseNorm);
+    [DllImport(Library, EntryPoint = "nntrain_optimizer_neko_initialize_corrected", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NekoInitializeCorrectedNative(nint source, nint destination, int length, int originalRows, int originalColumns, int transpose, float inverseFastCorrection, float inverseNorm);
     [DllImport(Library, EntryPoint = "nntrain_optimizer_neko_interpolate", CallingConvention = CallingConvention.Cdecl)]
     private static extern int NekoInterpolateNative(nint current, nint next, int length, float fraction);
     [DllImport(Library, EntryPoint = "nntrain_optimizer_neko_transpose_back", CallingConvention = CallingConvention.Cdecl)]
@@ -205,6 +226,8 @@ internal static class CudaOptimizerNative
     private static extern int NekoApplyNative(nint data, nint update, int length, float learningRate, float finalScale, float weightDecay, int applyWeightDecay);
     [DllImport(Library, EntryPoint = "nntrain_optimizer_neko_combine", CallingConvention = CallingConvention.Cdecl)]
     private static extern int NekoCombineNative(nint gram, nint gramSquared, int length, int rows, float a, float b, float c);
+    [DllImport(Library, EntryPoint = "nntrain_optimizer_neko_combine_batched", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NekoCombineBatchedNative(nint gram, nint gramSquared, int matrixLength, int batch, int rows, float a, float b, float c);
     [DllImport(Library, EntryPoint = "nntrain_optimizer_symmetric_gram", CallingConvention = CallingConvention.Cdecl)]
     private static extern int SymmetricGramNative(nint source, nint destination, int rows, int columns);
     [DllImport(Library, EntryPoint = "nntrain_optimizer_newton_schulz", CallingConvention = CallingConvention.Cdecl)]

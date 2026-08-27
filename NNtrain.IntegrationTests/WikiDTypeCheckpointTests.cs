@@ -91,7 +91,7 @@ public sealed class WikiDTypeCheckpointTests
     }
 
     [Fact]
-    public void AutoResumeV6MixedPreservesExactMastersAndOptimizerContinuity()
+    public void AutoResumeV8MixedPreservesExactMastersAndOptimizerContinuity()
     {
         string checkpointPath = CreateCheckpointPath("f16-exact");
         try
@@ -99,7 +99,11 @@ public sealed class WikiDTypeCheckpointTests
             WikiTrainingConfiguration sourceConfig = CreateConfiguration(
                 checkpointPath,
                 WikiTrainingConfiguration.Mix16_32PrecisionMode,
-                resume: false);
+                resume: false) with
+            {
+                Optimizer = WikiTrainingConfiguration.NekoMuonOptimizer,
+                AuxiliaryLearningRate = 0.003f,
+            };
             LanguageModel source = WikiLanguageModelCommand.CreateModel(
                 sourceConfig,
                 sourceConfig.VocabularySize);
@@ -140,20 +144,50 @@ public sealed class WikiDTypeCheckpointTests
             WikiLanguageModelCommand.WikiModelCheckpoint serialized =
                 torch.load<WikiLanguageModelCommand.WikiModelCheckpoint>(
                     checkpointPath);
-            Assert.Equal(6, serialized.FormatVersion);
+            Assert.Equal(8, serialized.FormatVersion);
             Assert.Equal(TensorDType.BFloat16, serialized.ModelDType);
             Assert.Equal(
                 TensorPrecisionMode.Mix16_32,
                 serialized.PrecisionMode);
-            Assert.NotNull(serialized.CurrentModel);
-            AssertStatesBitwiseEqual(
-                exactSourceState,
-                serialized.CurrentModel!);
+            Assert.Null(serialized.CurrentModel);
+            Assert.Empty(serialized.Model.Parameters);
+            Assert.NotNull(serialized.OptimizerStateTypes);
+            Assert.Equal(
+                ["NekoMuon", "AdamW"],
+                serialized.OptimizerStateTypes!);
+            for (int optimizerIndex = 0;
+                optimizerIndex < serialized.OptimizerStateTypes.Length;
+                optimizerIndex++)
+            {
+                Assert.True(File.Exists(
+                    WikiLanguageModelCommand.GetOptimizerBinaryArtifactPath(
+                        checkpointPath,
+                        serialized.ArtifactSlot,
+                        optimizerIndex)));
+                Assert.False(File.Exists(
+                    WikiLanguageModelCommand.GetOptimizerArtifactPath(
+                        checkpointPath,
+                        serialized.ArtifactSlot,
+                        optimizerIndex)));
+            }
+            Assert.True(new FileInfo(checkpointPath).Length < 128 * 1024);
+            Assert.DoesNotContain(
+                "\"Values\"",
+                File.ReadAllText(checkpointPath));
 
             ModuleState safeState = safetensors.torch.load_file(
-                WikiLanguageModelCommand.GetSafeTensorsPath(checkpointPath));
-            AssertSafeStateEqualsQuantizedMaster(
+                WikiLanguageModelCommand.GetCurrentModelArtifactPath(
+                    checkpointPath,
+                    serialized.ArtifactSlot));
+            AssertSafeStateEqualsExactMaster(
                 safeState,
+                exactSourceState);
+            ModuleState generationState =
+                WikiLanguageModelCommand.LoadGenerationModelState(
+                    serialized,
+                    checkpointPath);
+            AssertSafeStateEqualsQuantizedMaster(
+                generationState,
                 exactSourceState);
 
             string markerPath = TrainingRunGuard.GetMarkerPath(
@@ -212,6 +246,7 @@ public sealed class WikiDTypeCheckpointTests
                 ref globalStep,
                 output);
 
+            Assert.Null(bestState);
             AssertStatesBitwiseEqual(
                 exactSourceState,
                 restored.state_dict());
@@ -242,6 +277,30 @@ public sealed class WikiDTypeCheckpointTests
             Assert.Equal(
                 sourceScheduler.state_dict(),
                 restoredScheduler.state_dict());
+
+            int firstArtifactSlot = serialized.ArtifactSlot;
+            WikiLanguageModelCommand.SaveTrainingCheckpoint(
+                sourceConfig,
+                sourceConfig.VocabularySize,
+                completedEpoch: 1,
+                new ModuleState(ModuleState.CurrentFormatVersion, []),
+                bestLoss: 1.5f,
+                bestEpoch: 1,
+                source,
+                sourceOptimizer,
+                sourceScheduler,
+                globalStep: 12);
+            WikiLanguageModelCommand.WikiModelCheckpoint secondManifest =
+                torch.load<WikiLanguageModelCommand.WikiModelCheckpoint>(
+                    checkpointPath);
+            Assert.NotEqual(firstArtifactSlot, secondManifest.ArtifactSlot);
+            Assert.Equal(
+                serialized.BestArtifactSlot,
+                secondManifest.BestArtifactSlot);
+            Assert.False(File.Exists(
+                WikiLanguageModelCommand.GetBestModelArtifactPath(
+                    checkpointPath,
+                    serialized.BestArtifactSlot == 0 ? 1 : 0)));
             run.Complete();
         }
         finally
@@ -346,10 +405,37 @@ public sealed class WikiDTypeCheckpointTests
                     modelDType: TensorDType.Float16);
             torch.save(checkpoint, checkpointPath);
 
-            InvalidDataException exception =
-                Assert.Throws<InvalidDataException>(
-                    () => WikiLanguageModelCommand
-                        .ResolveModelDTypeForTraining(config));
+            Assert.Equal(
+                TensorDType.Float16,
+                WikiLanguageModelCommand.ResolveModelDTypeForTraining(config));
+            LanguageModel restored = WikiLanguageModelCommand.CreateModel(
+                config,
+                config.VocabularySize,
+                TensorDType.Float16);
+            IOptimizer optimizer = WikiLanguageModelCommand.CreateOptimizer(
+                restored,
+                config);
+            WarmupCosineProgressLRScheduler scheduler =
+                lr_scheduler.WarmupCosineProgressLR(
+                    optimizer,
+                    config.WarmupPercent);
+            ModuleState? bestState = null;
+            float bestLoss = float.PositiveInfinity;
+            int bestEpoch = 0;
+            long globalStep = 0;
+            using var output = new StringWriter();
+
+            InvalidDataException exception = Assert.Throws<InvalidDataException>(
+                () => WikiLanguageModelCommand.RestoreTrainingCheckpoint(
+                    config,
+                    restored,
+                    optimizer,
+                    scheduler,
+                    ref bestState,
+                    ref bestLoss,
+                    ref bestEpoch,
+                    ref globalStep,
+                    output));
 
             Assert.Contains("does not match model dtype", exception.Message);
         }
@@ -386,11 +472,13 @@ public sealed class WikiDTypeCheckpointTests
             string currentSafePath =
                 WikiLanguageModelCommand.GetSafeTensorsPath(checkpointPath);
             safetensors.torch.save_file(mismatched, currentSafePath);
-            InvalidDataException currentException =
-                Assert.Throws<InvalidDataException>(
-                    () => WikiLanguageModelCommand
-                        .ResolveModelDTypeForTraining(config));
-            Assert.Contains("SafeTensors sidecar", currentException.Message);
+            // The exact JSON state is authoritative for training resume. A
+            // terminated save can leave the independently committed current
+            // SafeTensors sidecar one checkpoint ahead, so dtype resolution
+            // must not allocate or reject that redundant artifact.
+            Assert.Equal(
+                TensorDType.Float16,
+                WikiLanguageModelCommand.ResolveModelDTypeForTraining(config));
 
             File.Delete(currentSafePath);
             safetensors.torch.save_file(
@@ -646,6 +734,28 @@ public sealed class WikiDTypeCheckpointTests
         }
     }
 
+    private static void AssertSafeStateEqualsExactMaster(
+        ModuleState safeState,
+        ModuleState masterState)
+    {
+        Assert.Equal(masterState.FormatVersion, safeState.FormatVersion);
+        Assert.Equal(
+            masterState.Parameters.Length,
+            safeState.Parameters.Length);
+        for (int parameterIndex = 0;
+            parameterIndex < masterState.Parameters.Length;
+            parameterIndex++)
+        {
+            ModuleParameterState master = masterState.Parameters[parameterIndex];
+            ModuleParameterState safe = safeState.Parameters[parameterIndex];
+            Assert.Equal(master.Index, safe.Index);
+            Assert.Equal(master.Name, safe.Name);
+            Assert.Equal(master.Shape, safe.Shape);
+            Assert.Equal(TensorDType.Float32, safe.DType);
+            Assert.Equal(master.Values, safe.Values);
+        }
+    }
+
     private static float QuantizeBFloat16(float value)
     {
         uint bits = BitConverter.SingleToUInt32Bits(value);
@@ -699,6 +809,39 @@ public sealed class WikiDTypeCheckpointTests
         {
             if (File.Exists(path))
                 File.Delete(path);
+        }
+        for (int slot = 0; slot < 2; slot++)
+        {
+            string currentArtifact =
+                WikiLanguageModelCommand.GetCurrentModelArtifactPath(
+                    checkpointPath,
+                    slot);
+            string bestArtifact =
+                WikiLanguageModelCommand.GetBestModelArtifactPath(
+                    checkpointPath,
+                    slot);
+            if (File.Exists(currentArtifact))
+                File.Delete(currentArtifact);
+            if (File.Exists(bestArtifact))
+                File.Delete(bestArtifact);
+            for (int optimizerIndex = 0; optimizerIndex < 4;
+                optimizerIndex++)
+            {
+                string optimizerArtifact =
+                    WikiLanguageModelCommand.GetOptimizerArtifactPath(
+                        checkpointPath,
+                        slot,
+                        optimizerIndex);
+                if (File.Exists(optimizerArtifact))
+                    File.Delete(optimizerArtifact);
+                string optimizerBinaryArtifact =
+                    WikiLanguageModelCommand.GetOptimizerBinaryArtifactPath(
+                        checkpointPath,
+                        slot,
+                        optimizerIndex);
+                if (File.Exists(optimizerBinaryArtifact))
+                    File.Delete(optimizerBinaryArtifact);
+            }
         }
     }
 }

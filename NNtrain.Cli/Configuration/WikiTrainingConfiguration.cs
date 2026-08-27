@@ -67,11 +67,12 @@ sealed record WikiTrainingConfiguration
     public int MaxDocumentTokens { get; init; } = 4096;
 
     /// <summary>
-    /// Documents held back to randomize reading order. Zero reads the corpus
-    /// in file order. A larger buffer mixes further but costs memory, because
-    /// the held documents are raw text: roughly 2.7 KB per Japanese Wikipedia
-    /// article, so the default holds on the order of 700 MB and delays the
-    /// first training step until the buffer is full.
+    /// Documents held back to randomize reading order. Zero reads the globally
+    /// shuffled Parquet row groups without additional document mixing. A
+    /// larger buffer mixes individual documents further but costs memory,
+    /// because the held documents are raw text: roughly 2.7 KB per Japanese
+    /// Wikipedia article, so the default holds on the order of 700 MB and
+    /// delays the first training step until the buffer is full.
     /// </summary>
     public int ShuffleBufferSize { get; init; } = 262_144;
 
@@ -110,6 +111,14 @@ sealed record WikiTrainingConfiguration
 
     public int[]? DeviceIndices { get; init; }
 
+    public bool AdaptiveCudaSharding { get; init; } = true;
+
+    public double CudaShardEmaAlpha { get; init; } = 0.2d;
+
+    public double CudaMinimumRelativeShardSize { get; init; } = 0.5d;
+
+    public int CudaMaximumBatchAdjustmentPerStep { get; init; } = 1;
+
     public int ForgetMemoryKeyWidth { get; init; } = 16;
 
     public int ForgetMemoryValueWidth { get; init; } = 16;
@@ -134,6 +143,10 @@ sealed record WikiTrainingConfiguration
     public float AuxiliaryLearningRate { get; init; } = 3e-4f;
 
     public int NekoMuonNewtonSchulzInterval { get; init; } = 5;
+
+    public string? NekoMuonNewtonSchulzDepthMode { get; init; }
+
+    public float? NekoMuonNewtonSchulzDepth { get; init; }
 
     public int GainShareBlockDepth { get; init; } = 1;
 
@@ -312,6 +325,8 @@ sealed record WikiTrainingConfiguration
             "auxiliaryLearningRate",
             "weightDecay",
             "nekoMuonNewtonSchulzInterval",
+            "nekoMuonNewtonSchulzDepthMode",
+            "nekoMuonNewtonSchulzDepth",
             "warmupPercent",
             "adamWUseBFloat16FirstMoment",
             "adamWUseBFloat16SecondMoment");
@@ -344,6 +359,10 @@ sealed record WikiTrainingConfiguration
             WeightDecay = optimizer.WeightDecay,
             NekoMuonNewtonSchulzInterval =
                 optimizer.NekoMuonNewtonSchulzInterval,
+            NekoMuonNewtonSchulzDepthMode =
+                optimizer.NekoMuonNewtonSchulzDepthMode,
+            NekoMuonNewtonSchulzDepth =
+                optimizer.NekoMuonNewtonSchulzDepth,
             GainShareBlockDepth = optimizer.GainShareBlockDepth,
             GainShareBeta1 = optimizer.GainShareBeta1,
             GainShareBeta2 = optimizer.GainShareBeta2,
@@ -476,6 +495,25 @@ sealed record WikiTrainingConfiguration
                 "deviceIndices must contain unique, non-negative indices.",
                 nameof(DeviceIndices));
         }
+        if (!double.IsFinite(CudaShardEmaAlpha)
+            || CudaShardEmaAlpha <= 0d
+            || CudaShardEmaAlpha > 1d)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(CudaShardEmaAlpha),
+                "cudaShardEmaAlpha must be in (0, 1].");
+        }
+        if (!double.IsFinite(CudaMinimumRelativeShardSize)
+            || CudaMinimumRelativeShardSize <= 0d
+            || CudaMinimumRelativeShardSize > 1d)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(CudaMinimumRelativeShardSize),
+                "cudaMinimumRelativeShardSize must be in (0, 1].");
+        }
+        ValidatePositive(
+            CudaMaximumBatchAdjustmentPerStep,
+            nameof(CudaMaximumBatchAdjustmentPerStep));
         ValidatePositive(
             ForgetMemoryKeyWidth,
             nameof(ForgetMemoryKeyWidth));
@@ -597,6 +635,7 @@ sealed record WikiTrainingConfiguration
         ValidatePositive(
             NekoMuonNewtonSchulzInterval,
             nameof(NekoMuonNewtonSchulzInterval));
+        ValidateNekoMuonNewtonSchulzDepthPolicy();
         if (!float.IsFinite(WarmupPercent)
             || WarmupPercent < 0f
             || WarmupPercent >= 100f)
@@ -692,6 +731,74 @@ sealed record WikiTrainingConfiguration
         }
     }
 
+    private void ValidateNekoMuonNewtonSchulzDepthPolicy()
+    {
+        if (NekoMuonNewtonSchulzDepthMode is null)
+        {
+            if (NekoMuonNewtonSchulzDepth.HasValue)
+            {
+                throw new ArgumentException(
+                    "nekoMuonNewtonSchulzDepth requires " +
+                    "nekoMuonNewtonSchulzDepthMode.",
+                    nameof(NekoMuonNewtonSchulzDepth));
+            }
+            return;
+        }
+
+        if (!IsOptimizer(NekoMuonOptimizer))
+        {
+            throw new ArgumentException(
+                "NekoMuon Newton-Schulz depth policy can only be used with " +
+                "the NekoMuon optimizer.",
+                nameof(NekoMuonNewtonSchulzDepthMode));
+        }
+
+        if (!Enum.TryParse(
+                NekoMuonNewtonSchulzDepthMode,
+                ignoreCase: true,
+                out global::NNtrain.NekoMuonNewtonSchulzDepthMode mode)
+            || !Enum.IsDefined(mode))
+        {
+            throw new ArgumentException(
+                $"Unsupported NekoMuon Newton-Schulz depth mode " +
+                $"'{NekoMuonNewtonSchulzDepthMode}'. Expected adaptive, " +
+                "minimum, or fixed.",
+                nameof(NekoMuonNewtonSchulzDepthMode));
+        }
+
+        if (mode
+            == global::NNtrain.NekoMuonNewtonSchulzDepthMode.Adaptive)
+        {
+            if (NekoMuonNewtonSchulzDepth.HasValue)
+            {
+                throw new ArgumentException(
+                    "Adaptive NekoMuon Newton-Schulz depth must not specify " +
+                    "nekoMuonNewtonSchulzDepth.",
+                    nameof(NekoMuonNewtonSchulzDepth));
+            }
+            return;
+        }
+
+        if (!NekoMuonNewtonSchulzDepth.HasValue)
+        {
+            throw new ArgumentException(
+                $"NekoMuon Newton-Schulz depth mode '{mode}' requires " +
+                "nekoMuonNewtonSchulzDepth.",
+                nameof(NekoMuonNewtonSchulzDepth));
+        }
+
+        float depth = NekoMuonNewtonSchulzDepth.Value;
+        int maximumDepth = new NekoMuonOptions().MaxNewtonSchulzSteps;
+        if (!float.IsFinite(depth) || depth < 0f || depth > maximumDepth)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(NekoMuonNewtonSchulzDepth),
+                depth,
+                $"NekoMuon Newton-Schulz depth must be finite and in " +
+                $"[0, {maximumDepth}].");
+        }
+    }
+
     private static void ValidateGainShareUnitInterval(
         float value,
         string parameterName,
@@ -711,6 +818,20 @@ sealed record WikiTrainingConfiguration
             Optimizer,
             expectedOptimizer,
             StringComparison.OrdinalIgnoreCase);
+
+    internal bool HasNekoMuonNewtonSchulzDepthPolicyOverride
+        => NekoMuonNewtonSchulzDepthMode is not null;
+
+    internal global::NNtrain.NekoMuonNewtonSchulzDepthMode
+        GetNekoMuonNewtonSchulzDepthMode()
+        => NekoMuonNewtonSchulzDepthMode is null
+            ? global::NNtrain.NekoMuonNewtonSchulzDepthMode.Adaptive
+            : Enum.Parse<global::NNtrain.NekoMuonNewtonSchulzDepthMode>(
+                NekoMuonNewtonSchulzDepthMode,
+                ignoreCase: true);
+
+    internal float GetNekoMuonNewtonSchulzDepth()
+        => NekoMuonNewtonSchulzDepth ?? 0f;
 
     internal bool IsArchitecture(string expectedArchitecture)
         => string.Equals(

@@ -352,9 +352,14 @@ public sealed class WikiLanguageModelCommandTests
             ModuleState expectedBest = expectedCurrent with
             {
                 Parameters = expectedCurrent.Parameters
-                    .Select(parameter => parameter with
+                    .Select((parameter, parameterIndex) => parameter with
                     {
-                        Values = parameter.Values.ToArray(),
+                        Values = parameter.Values
+                            .Select((value, valueIndex) =>
+                                parameterIndex == 0 && valueIndex == 0
+                                    ? value + 0.25f
+                                    : value)
+                            .ToArray(),
                     })
                     .ToArray(),
             };
@@ -369,6 +374,15 @@ public sealed class WikiLanguageModelCommandTests
                 sourceOptimizer,
                 sourceScheduler,
                 globalStep: 7);
+            WikiLanguageModelCommand.WikiModelCheckpoint manifest =
+                torch.load<WikiLanguageModelCommand.WikiModelCheckpoint>(
+                    checkpointPath);
+            string bestArtifactPath =
+                WikiLanguageModelCommand.GetBestModelArtifactPath(
+                    checkpointPath,
+                    manifest.BestArtifactSlot);
+            byte[] bestArtifactPayload = File.ReadAllBytes(bestArtifactPath);
+            File.WriteAllBytes(bestArtifactPath, [0]);
 
             LanguageModel restored =
                 WikiLanguageModelCommand.CreateModel(
@@ -398,14 +412,24 @@ public sealed class WikiLanguageModelCommandTests
                     ref globalStep,
                     output);
 
+            // Restore only consumes the current artifact. The deliberately
+            // invalid best artifact is not parsed until best weights are
+            // actually requested.
+            File.WriteAllBytes(bestArtifactPath, bestArtifactPayload);
             Assert.Equal(2, position.Epoch);
             Assert.Equal(1, bestEpoch);
             Assert.Equal(1.25f, bestLoss);
             Assert.Equal(7, globalStep);
-            Assert.NotNull(bestState);
+            Assert.Null(bestState);
             Assert.Equal(
                 expectedCurrent.Parameters[0].Values,
                 restored.state_dict().Parameters[0].Values);
+            ModuleState lazyBest =
+                WikiLanguageModelCommand.LoadBestTrainingModelState(
+                    checkpointPath);
+            Assert.Equal(
+                expectedBest.Parameters[0].Values,
+                lazyBest.Parameters[0].Values);
             Assert.Equal(
                 sourceOptimizer.state_dict().StateJsonText,
                 restoredOptimizer.state_dict().StateJsonText);
@@ -413,8 +437,9 @@ public sealed class WikiLanguageModelCommandTests
                 sourceScheduler.state_dict(),
                 restoredScheduler.state_dict());
             Assert.True(File.Exists(
-                WikiLanguageModelCommand.GetSafeTensorsPath(
-                    checkpointPath)));
+                WikiLanguageModelCommand.GetCurrentModelArtifactPath(
+                    checkpointPath,
+                    manifest.ArtifactSlot)));
         }
         finally
         {
@@ -425,6 +450,40 @@ public sealed class WikiLanguageModelCommandTests
                     checkpointPath);
             if (File.Exists(safeTensorsPath))
                 File.Delete(safeTensorsPath);
+            for (int slot = 0; slot < 2; slot++)
+            {
+                string currentArtifact =
+                    WikiLanguageModelCommand.GetCurrentModelArtifactPath(
+                        checkpointPath,
+                        slot);
+                string bestArtifact =
+                    WikiLanguageModelCommand.GetBestModelArtifactPath(
+                        checkpointPath,
+                        slot);
+                if (File.Exists(currentArtifact))
+                    File.Delete(currentArtifact);
+                if (File.Exists(bestArtifact))
+                    File.Delete(bestArtifact);
+                for (int optimizerIndex = 0; optimizerIndex < 4;
+                    optimizerIndex++)
+                {
+                    string optimizerArtifact =
+                        WikiLanguageModelCommand.GetOptimizerArtifactPath(
+                            checkpointPath,
+                            slot,
+                            optimizerIndex);
+                    if (File.Exists(optimizerArtifact))
+                        File.Delete(optimizerArtifact);
+                    string optimizerBinaryArtifact =
+                        WikiLanguageModelCommand
+                            .GetOptimizerBinaryArtifactPath(
+                                checkpointPath,
+                                slot,
+                                optimizerIndex);
+                    if (File.Exists(optimizerBinaryArtifact))
+                        File.Delete(optimizerBinaryArtifact);
+                }
+            }
         }
     }
 

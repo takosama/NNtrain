@@ -98,6 +98,32 @@ public sealed class NekoMuonStateTests
             }));
     }
 
+    [Fact]
+    public void NewtonSchulzDepthPolicyRoundTripsThroughCapturedState()
+    {
+        var source = new NekoMuon(
+            [CreateParameter([1f, 2f], [1, 2])],
+            new NekoMuonOptions
+            {
+                MaxNewtonSchulzSteps = 4,
+            });
+        source.SetNewtonSchulzDepthPolicy(
+            NekoMuonNewtonSchulzDepthMode.Minimum,
+            1.5f);
+
+        NekoMuonState captured = source.CaptureState();
+        var restored = new NekoMuon(
+            [CreateParameter([1f, 2f], [1, 2])]);
+        restored.RestoreState(captured);
+
+        NekoMuonOptions options = restored.CaptureState().Options;
+        Assert.Equal(
+            NekoMuonNewtonSchulzDepthMode.Minimum,
+            options.NewtonSchulzDepthMode);
+        Assert.Equal(1.5f, options.NewtonSchulzDepth);
+        Assert.Equal(4, options.MaxNewtonSchulzSteps);
+    }
+
     private static Parameter CreateParameter(float[] data, int[] shape)
     {
         return new Parameter(

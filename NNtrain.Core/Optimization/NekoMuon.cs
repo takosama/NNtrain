@@ -10,8 +10,11 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
 
     private readonly List<Parameter> _parameters;
     private readonly long _totalElements;
-    private readonly NekoMuonWorkspace[] _workspaces;
+    private readonly NekoMuonWorkspace?[] _workspaces;
     private readonly CudaOptimizerKernels.NekoMuonResidentState?[] _cudaStates;
+    private readonly int _cudaBatchCapacity;
+    private readonly Dictionary<int, CudaOptimizerKernels.NekoMuonDeviceScratch>
+        _cudaScratch = [];
     private readonly Dictionary<int, CudaOptimizerKernels.NekoMuonStatsBatch>
         _cudaStatsBatches = [];
     private NekoMuonState _state;
@@ -21,6 +24,14 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
     public bool ProfilingEnabled { get; set; }
 
     public NekoMuonStepProfile LastStepProfile { get; private set; }
+
+    /// <summary>
+    /// Diagnostic-only switch used by the convergence profiler to compare
+    /// adaptive depth with an exact full five-step Newton-Schulz update. It is
+    /// intentionally not serialized and therefore cannot silently change a
+    /// resumed training run.
+    /// </summary>
+    internal bool ForceFullNewtonSchulz { get; set; }
 
     public NekoMuon(
         IEnumerable<Parameter> parameters,
@@ -58,14 +69,68 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         NekoMuonOptions effectiveOptions = options ?? new NekoMuonOptions();
         ValidateOptions(effectiveOptions, nameof(options));
         _state = CreateInitialState(_parameters, effectiveOptions);
-        _workspaces = _parameters.Select(CreateWorkspace).ToArray();
+        // CUDA never consumes the managed Newton-Schulz work arrays.  Keep
+        // them lazy so constructing a CUDA optimizer does not retain another
+        // six full-size host arrays for every matrix parameter.
+        _workspaces = new NekoMuonWorkspace?[_parameters.Count];
         _cudaStates = new CudaOptimizerKernels.NekoMuonResidentState?[
             _parameters.Count];
+        _cudaBatchCapacity = ResolveCudaBatchCapacity();
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
             CudaOptimizerKernels.PrewarmNekoMuon(Tensor.CudaDeviceIndices);
     }
 
     public NekoMuonState CaptureState()
+        => CloneState(CaptureStateForStreaming());
+
+    /// <summary>
+    /// Returns scalar optimizer diagnostics without copying the large moment
+    /// arrays. This is safe to query after <see cref="step"/> for training
+    /// telemetry and makes adaptive Newton-Schulz depth observable.
+    /// </summary>
+    public NekoMuonDiagnostics GetDiagnostics()
+    {
+        NekoMuonParameterState[] states = _state.ParameterStates;
+        if (states.Length == 0)
+        {
+            return new NekoMuonDiagnostics(
+                _state.Step,
+                0f,
+                0f,
+                0f,
+                0f,
+                _state.Options.MaxNewtonSchulzSteps);
+        }
+
+        float minimum = float.PositiveInfinity;
+        float maximum = float.NegativeInfinity;
+        double sum = 0d;
+        double depthSum = 0d;
+        bool runNewtonSchulz =
+            _state.Step % _state.Options.NewtonSchulzInterval == 0;
+        foreach (NekoMuonParameterState state in states)
+        {
+            minimum = MathF.Min(minimum, state.Confidence);
+            maximum = MathF.Max(maximum, state.Confidence);
+            sum += state.Confidence;
+            depthSum += ForceFullNewtonSchulz && runNewtonSchulz
+                ? _state.Options.MaxNewtonSchulzSteps
+                : ResolveNewtonSchulzDepth(
+                    _state.Options,
+                    state.Confidence,
+                    runNewtonSchulz);
+        }
+        float mean = (float)(sum / states.Length);
+        return new NekoMuonDiagnostics(
+            _state.Step,
+            minimum,
+            mean,
+            maximum,
+            (float)(depthSum / states.Length),
+            _state.Options.MaxNewtonSchulzSteps);
+    }
+
+    internal NekoMuonState CaptureStateForStreaming()
     {
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
         {
@@ -76,10 +141,15 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                 state?.SynchronizeHost(primaryDevice);
             }
         }
-        return CloneState(_state);
+        return _state;
     }
 
     public float LearningRate => _state.Options.LearningRate;
+
+    public NekoMuonNewtonSchulzDepthMode NewtonSchulzDepthMode =>
+        _state.Options.NewtonSchulzDepthMode;
+
+    public float NewtonSchulzDepth => _state.Options.NewtonSchulzDepth;
 
     public void SetLearningRate(float learningRate)
     {
@@ -97,7 +167,30 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         };
     }
 
+    /// <summary>
+    /// Selects how confidence controls Newton-Schulz depth. This intentionally
+    /// updates optimizer state so the selected runtime policy is preserved by
+    /// the next checkpoint.
+    /// </summary>
+    public void SetNewtonSchulzDepthPolicy(
+        NekoMuonNewtonSchulzDepthMode mode,
+        float depth = 0f)
+    {
+        NekoMuonOptions options = _state.Options with
+        {
+            NewtonSchulzDepthMode = mode,
+            NewtonSchulzDepth = depth,
+        };
+        ValidateOptions(options, nameof(depth));
+        _state = _state with { Options = options };
+    }
+
     public void RestoreState(NekoMuonState state)
+        => RestoreState(state, takeOwnership: false);
+
+    private void RestoreState(
+        NekoMuonState state,
+        bool takeOwnership)
     {
         ArgumentNullException.ThrowIfNull(state);
         ValidateState(state);
@@ -113,8 +206,11 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         }
         _cudaStatsBatches.Clear();
         Array.Clear(_cudaStates);
-        _state = CloneState(state);
+        _state = takeOwnership ? state : CloneState(state);
     }
+
+    internal void RestoreStateOwned(NekoMuonState state)
+        => RestoreState(state, takeOwnership: true);
 
     internal void ZeroGrad()
     {
@@ -167,7 +263,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
             float[] gradientBuffer = parameter.T.GradientBuffer;
             float[] fast = parameterState.FastMoment;
             float[] slow = parameterState.SlowMoment;
-            NekoMuonWorkspace workspace = _workspaces[parameterIndex];
+            NekoMuonWorkspace workspace = _workspaces[parameterIndex]
+                ??= CreateWorkspace(parameter);
             float[] fastHat = workspace.FastHat;
             float[] slowHat = workspace.SlowHat;
 
@@ -204,9 +301,12 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
             // Moments and weights still advance on the intervening steps.
             // They use the normalized current momentum matrix; only the
             // expensive orthogonalization is cadence-limited.
-            float depth = runNewtonSchulz
-                ? options.MaxNewtonSchulzSteps * confidence
-                : 0f;
+            float depth = ForceFullNewtonSchulz && runNewtonSchulz
+                ? options.MaxNewtonSchulzSteps
+                : ResolveNewtonSchulzDepth(
+                    options,
+                    confidence,
+                    runNewtonSchulz);
             int wholeSteps = Math.Min(
                 options.MaxNewtonSchulzSteps,
                 (int)MathF.Floor(depth));
@@ -312,7 +412,12 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
     public void load_state_dict(OptimizerStateDictionary state)
     {
         ArgumentNullException.ThrowIfNull(state);
-        RestoreState(state.Read<NekoMuonState>("NekoMuon"));
+        // Read<T> creates a private object graph from serialized JSON. Taking
+        // ownership avoids immediately cloning every moment array during a
+        // checkpoint restore, which otherwise doubles the resume peak.
+        RestoreState(
+            state.Read<NekoMuonState>("NekoMuon"),
+            takeOwnership: true);
     }
 
     private void StepCuda(
@@ -320,59 +425,60 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         float fastCorrection,
         float slowCorrection)
     {
+        if (_parameters.Count == 0)
+            return;
+
         int[] devices = Tensor.CudaDeviceIndices.ToArray();
+        int maximumLength = _parameters.Max(parameter => parameter.T.Numel);
+        int maximumGramLength = 0;
+        foreach (Parameter parameter in _parameters)
+        {
+            GetMatrixShape(parameter, out int shapeRows, out int shapeColumns);
+            int rows = Math.Min(shapeRows, shapeColumns);
+            maximumGramLength = Math.Max(
+                maximumGramLength,
+                checked(rows * rows));
+        }
+
+        CudaOptimizerKernels.NekoMuonDeviceScratch GetCudaScratch(
+            int deviceIndex)
+        {
+            lock (_cudaScratch)
+            {
+                if (!_cudaScratch.TryGetValue(
+                    deviceIndex,
+                    out CudaOptimizerKernels.NekoMuonDeviceScratch? scratch))
+                {
+                    scratch = new CudaOptimizerKernels.NekoMuonDeviceScratch(
+                        deviceIndex,
+                        maximumLength,
+                        maximumGramLength,
+                        _cudaBatchCapacity);
+                    _cudaScratch.Add(deviceIndex, scratch);
+                }
+                return scratch;
+            }
+        }
+
+        // Materialize one reusable work area per device before moment kernels
+        // are queued.  Each device has a single ordered stream, so subsequent
+        // parameter updates can safely reuse it without a host-side wait.
+        var deviceScratch = new CudaOptimizerKernels.NekoMuonDeviceScratch[
+            devices.Length];
+        for (int deviceSlot = 0; deviceSlot < devices.Length; deviceSlot++)
+            deviceScratch[deviceSlot] = GetCudaScratch(devices[deviceSlot]);
+
         CudaOptimizerKernels.NekoMuonResidentState GetCudaState(
             int parameterIndex)
         {
             Parameter parameter = _parameters[parameterIndex];
             GetMatrixShape(parameter, out int originalRows, out int originalColumns);
-            int rows = Math.Min(originalRows, originalColumns);
             NekoMuonParameterState parameterState =
                 _state.ParameterStates[parameterIndex];
             return _cudaStates[parameterIndex] ??=
                 new CudaOptimizerKernels.NekoMuonResidentState(
                     parameterState.FastMoment,
-                    parameterState.SlowMoment,
-                    checked(rows * rows));
-        }
-
-        float QueueParameterUpdate(int parameterIndex, int deviceIndex)
-        {
-            Parameter parameter = _parameters[parameterIndex];
-            NekoMuonParameterState parameterState =
-                _state.ParameterStates[parameterIndex];
-            GetMatrixShape(
-                parameter,
-                out int originalRows,
-                out int originalColumns);
-            CudaOptimizerKernels.NekoMuonResidentState cudaState =
-                GetCudaState(parameterIndex);
-            bool applyWeightDecay =
-                parameter.WeightDecay == WeightDecayPolicy.Apply
-                || (options.Decay1D && parameter.T.Rank == 1);
-            bool runNewtonSchulz =
-                _state.Step % options.NewtonSchulzInterval == 0;
-            return CudaOptimizerKernels.NekoMuonFinishStepResident(
-                parameter.T,
-                deviceIndex,
-                cudaState,
-                originalRows,
-                originalColumns,
-                options.BetaFast,
-                options.BetaSlow,
-                fastCorrection,
-                slowCorrection,
-                options.Epsilon,
-                parameterState.Confidence,
-                options.Rho,
-                options.MaxNewtonSchulzSteps,
-                runNewtonSchulz,
-                NewtonSchulzA,
-                NewtonSchulzB,
-                NewtonSchulzC,
-                options.LearningRate,
-                options.WeightDecay,
-                applyWeightDecay);
+                    parameterState.SlowMoment);
         }
 
         // Queue every moment/statistics update before waiting. Previously the
@@ -454,12 +560,58 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
             Parallel.For(0, devices.Length, deviceSlot =>
             {
                 int deviceIndex = devices[deviceSlot];
+                CudaOptimizerKernels.NekoMuonDeviceScratch scratch =
+                    deviceScratch[deviceSlot];
+                var batchItems = new CudaOptimizerKernels
+                    .NekoMuonBatchItem[_parameters.Count];
                 for (int parameterIndex = 0;
                     parameterIndex < _parameters.Count;
                     parameterIndex++)
                 {
+                    Parameter parameter = _parameters[parameterIndex];
+                    NekoMuonParameterState parameterState =
+                        _state.ParameterStates[parameterIndex];
+                    GetMatrixShape(
+                        parameter,
+                        out int originalRows,
+                        out int originalColumns);
+                    bool applyWeightDecay =
+                        parameter.WeightDecay == WeightDecayPolicy.Apply
+                        || (options.Decay1D && parameter.T.Rank == 1);
+                    batchItems[parameterIndex] = new CudaOptimizerKernels
+                        .NekoMuonBatchItem(
+                            parameter.T,
+                            GetCudaState(parameterIndex),
+                            originalRows,
+                            originalColumns,
+                            parameterState.Confidence,
+                            applyWeightDecay);
+                }
+                float[] deviceConfidences = CudaOptimizerKernels
+                    .NekoMuonFinishStepGrouped(
+                        deviceIndex,
+                        batchItems,
+                        scratch,
+                        fastCorrection,
+                        slowCorrection,
+                        options.Epsilon,
+                        options.Rho,
+                        options.MaxNewtonSchulzSteps,
+                        options.NewtonSchulzDepthMode,
+                        options.NewtonSchulzDepth,
+                        _state.Step % options.NewtonSchulzInterval == 0,
+                        NewtonSchulzA,
+                        NewtonSchulzB,
+                        NewtonSchulzC,
+                        options.LearningRate,
+                        options.WeightDecay,
+                        ForceFullNewtonSchulz);
+                for (int parameterIndex = 0;
+                    parameterIndex < deviceConfidences.Length;
+                    parameterIndex++)
+                {
                     confidences[deviceSlot, parameterIndex] =
-                        QueueParameterUpdate(parameterIndex, deviceIndex);
+                        deviceConfidences[parameterIndex];
                 }
             });
         }
@@ -477,7 +629,9 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         // Native CUDA optimizer kernels are enqueued on the accelerator
         // stream. Complete the parameter publication before zero_grad can
         // reuse the same gradient allocation on the caller thread.
-        CudaOptimizerKernels.SynchronizeDevices(devices);
+        CudaOptimizerKernels.SynchronizeDevices(
+            devices,
+            "NekoMuon update");
 
         int primarySlot = Array.IndexOf(devices, Tensor.CudaDeviceIndex);
         if (primarySlot < 0)
@@ -511,6 +665,45 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
 
     private static double TicksToMilliseconds(long ticks)
         => ticks * 1000d / Stopwatch.Frequency;
+
+    internal static float ResolveNewtonSchulzDepth(
+        NekoMuonOptions options,
+        float confidence,
+        bool runNewtonSchulz)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return ResolveNewtonSchulzDepth(
+            options.MaxNewtonSchulzSteps,
+            options.NewtonSchulzDepthMode,
+            options.NewtonSchulzDepth,
+            confidence,
+            runNewtonSchulz);
+    }
+
+    internal static float ResolveNewtonSchulzDepth(
+        int maxNewtonSchulzSteps,
+        NekoMuonNewtonSchulzDepthMode mode,
+        float configuredDepth,
+        float confidence,
+        bool runNewtonSchulz)
+    {
+        if (!runNewtonSchulz)
+            return 0f;
+
+        float adaptiveDepth = maxNewtonSchulzSteps * confidence;
+        float depth = mode switch
+        {
+            NekoMuonNewtonSchulzDepthMode.Adaptive => adaptiveDepth,
+            NekoMuonNewtonSchulzDepthMode.Minimum =>
+                MathF.Max(adaptiveDepth, configuredDepth),
+            NekoMuonNewtonSchulzDepthMode.Fixed => configuredDepth,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(mode),
+                mode,
+                "NekoMuon Newton-Schulz depth mode is invalid."),
+        };
+        return Math.Clamp(depth, 0f, maxNewtonSchulzSteps);
+    }
 
     private static void InitializeMuonMatrix(
         float[] source,
@@ -1184,6 +1377,14 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
     }
 
 }
+
+public readonly record struct NekoMuonDiagnostics(
+    int Step,
+    float MinimumConfidence,
+    float MeanConfidence,
+    float MaximumConfidence,
+    float MeanNewtonSchulzDepth,
+    int MaximumNewtonSchulzDepth);
 
 public readonly record struct NekoMuonStepProfile(
     double UpdateMomentsMilliseconds,

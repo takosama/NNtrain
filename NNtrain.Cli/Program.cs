@@ -359,9 +359,9 @@ internal static partial class Program
                     shuffle: true,
                     training: true,
                     generator: new Random(
-                        HashCode.Combine(config.Seed, epoch)),
+                        TrainingRunner.CombineSeed(config.Seed, epoch)),
                     augmentation_generator: new Random(
-                        HashCode.Combine(
+                        TrainingRunner.CombineSeed(
                             config.Seed ^ 0x51F15EED,
                             epoch)));
                 int resumeUpdate = epochRun.ResumeUnit;

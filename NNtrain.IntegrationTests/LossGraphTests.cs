@@ -47,6 +47,24 @@ public sealed class LossGraphTests
     }
 
     [Fact]
+    public void TrainingOnlyGraphDoesNotClaimToContainEvaluationLoss()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = Path.Combine(directory.Root, "loss.html");
+        var graph = new LossGraph(path, totalEpochs: 2);
+        graph.AddPoint(0.5f, trainingLoss: 5f);
+        graph.AddPoint(1.1f, trainingLoss: 4f);
+
+        graph.Write();
+
+        string html = File.ReadAllText(path);
+        Assert.Contains("train loss", html);
+        Assert.Contains("eval points 0", html);
+        Assert.DoesNotContain("eval loss", html);
+        Assert.DoesNotContain("class=\"eval-point\"", html);
+    }
+
+    [Fact]
     public void ExpandsSubEpochProgressAcrossPlotWidthWithoutRoundingToZero()
     {
         using var directory = new TemporaryDirectory();
@@ -93,6 +111,68 @@ public sealed class LossGraphTests
         Assert.Contains("epoch 0.1: 5.000000", html);
         Assert.Contains("epoch 0.1: 4.000000", html);
         Assert.DoesNotContain("epoch 0.1: 4.500000", html);
+    }
+
+    [Fact]
+    public void RestoresExistingPointsOnlyThroughCheckpointPosition()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = Path.Combine(directory.Root, "loss.html");
+        var original = new LossGraph(path, totalEpochs: 3);
+        original.AddPoint(0.5f, trainingLoss: 5f);
+        original.AddPoint(
+            1f,
+            trainingLoss: 4f,
+            evaluationLoss: 4.25f);
+        original.AddPoint(1.2f, trainingLoss: 3f);
+        original.Write();
+
+        var resumed = new LossGraph(path, totalEpochs: 3);
+        resumed.RestoreExisting(resumeEpoch: 1f);
+        resumed.AddPoint(1.1f, trainingLoss: 3.5f);
+        resumed.Write();
+
+        string html = File.ReadAllText(path);
+        Assert.Equal(3, Count(html, "class=\"train-point\""));
+        Assert.Equal(1, Count(html, "class=\"eval-point\""));
+        Assert.Contains("epoch 0.5: 5.000000", html);
+        Assert.Contains("epoch 1: 4.000000", html);
+        Assert.Contains("epoch 1: 4.250000", html);
+        Assert.Contains("epoch 1.1: 3.500000", html);
+        Assert.DoesNotContain("epoch 1.2: 3.000000", html);
+    }
+
+    [Fact]
+    public void DisplaysActiveEpochAndItsProgressWithoutChangingXAxisPosition()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = Path.Combine(directory.Root, "loss.html");
+        var graph = new LossGraph(path, totalEpochs: 5);
+        graph.AddPoint(1.044f, trainingLoss: 4f);
+
+        graph.Write();
+
+        string html = File.ReadAllText(path);
+        Assert.Contains("<p>epoch 2 / 5", html);
+        Assert.Contains("progress 4.4%", html);
+        Assert.Contains("epoch 1.044: 4.000000", html);
+    }
+
+    [Fact]
+    public void IgnoresMalformedExistingGraphWhenResuming()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = Path.Combine(directory.Root, "loss.html");
+        File.WriteAllText(path, "not a loss graph");
+        var graph = new LossGraph(path, totalEpochs: 2);
+
+        graph.RestoreExisting(resumeEpoch: 1f);
+        graph.AddPoint(1.1f, trainingLoss: 4f);
+        graph.Write();
+
+        string html = File.ReadAllText(path);
+        Assert.Contains("train points 1", html);
+        Assert.Contains("epoch 1.1: 4.000000", html);
     }
 
     private static int Count(string text, string value)

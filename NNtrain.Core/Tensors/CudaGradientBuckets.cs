@@ -63,6 +63,7 @@ internal static class CudaGradientBuckets
         NativeCudaBuffer<ushort> remoteStaging,
         NativeCudaBuffer<float> reduced,
         int length,
+        nint squaredSum,
         nint communicationStream,
         nint localReadyEvent,
         nint remoteReadyEvent)
@@ -76,9 +77,64 @@ internal static class CudaGradientBuckets
             remoteStaging.NativePtr,
             reduced.NativePtr,
             length,
+            squaredSum,
             communicationStream,
             localReadyEvent,
             remoteReadyEvent));
+    }
+
+    internal static nint CreateHostPipeline(
+        int sourceDevice,
+        int destinationDevice,
+        int chunkElements)
+    {
+        NativeCudaRuntime.Check(
+            NativeCudaRuntime.SetDeviceNative(destinationDevice),
+            "cudaSetDevice(gradient host pipeline)");
+        ThrowIfFailed(CreateHostPipelineNative(
+            sourceDevice,
+            destinationDevice,
+            chunkElements,
+            out nint pipeline));
+        return pipeline;
+    }
+
+    internal static void HostPipelineExchange(
+        NativeCudaDevice destinationAccelerator,
+        nint pipeline,
+        NativeCudaBuffer<ushort> local,
+        NativeCudaBuffer<ushort> remoteSource,
+        NativeCudaBuffer<float> reduced,
+        int length,
+        nint squaredSum,
+        nint localReadyEvent,
+        nint remoteReadyEvent)
+    {
+        // The native host pipeline switches between the source and
+        // destination device. Bind first so older native binaries that used
+        // direct cudaSetDevice calls still leave the managed bridge cache and
+        // the CUDA runtime on the same destination device when they return.
+        destinationAccelerator.Bind();
+        ThrowIfFailed(HostPipelineExchangeNative(
+            pipeline,
+            local.NativePtr,
+            remoteSource.NativePtr,
+            reduced.NativePtr,
+            length,
+            squaredSum,
+            localReadyEvent,
+            remoteReadyEvent));
+    }
+
+    internal static void DestroyHostPipeline(
+        NativeCudaDevice destinationAccelerator,
+        nint pipeline)
+    {
+        if (pipeline != 0)
+        {
+            destinationAccelerator.Bind();
+            _ = DestroyHostPipelineNative(pipeline);
+        }
     }
 
     internal static void Unpack(
@@ -168,8 +224,26 @@ internal static class CudaGradientBuckets
     private static extern int ExchangeNative(
         int destinationDevice, int sourceDevice, nint local,
         nint remoteSource, nint remoteStaging, nint reduced, int length,
-        nint communicationStream, nint localReadyEvent,
+        nint squaredSum, nint communicationStream, nint localReadyEvent,
         nint remoteReadyEvent);
+
+    [DllImport(Library, EntryPoint = "nntrain_gradient_host_pipeline_create",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int CreateHostPipelineNative(
+        int sourceDevice, int destinationDevice, int chunkElements,
+        out nint pipeline);
+
+    [DllImport(Library,
+        EntryPoint = "nntrain_gradient_host_pipeline_exchange_bf16",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int HostPipelineExchangeNative(
+        nint pipeline, nint local, nint remoteSource, nint reduced,
+        int length, nint squaredSum, nint localReadyEvent,
+        nint remoteReadyEvent);
+
+    [DllImport(Library, EntryPoint = "nntrain_gradient_host_pipeline_destroy",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int DestroyHostPipelineNative(nint pipeline);
 
     [DllImport(Library, EntryPoint = "nntrain_gradient_unpack_float",
         CallingConvention = CallingConvention.Cdecl)]

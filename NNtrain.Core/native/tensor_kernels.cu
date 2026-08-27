@@ -220,6 +220,19 @@ __global__ void linear_encode_bf16_kernel(const float* output_gradient,
     bf16_store(encoded, index, gradient);
 }
 
+__global__ void linear_mask_bf16_gradient_kernel(
+    const unsigned short* output_gradient,
+    const unsigned short* output,
+    unsigned short* masked,
+    int length) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= length)
+        return;
+    masked[index] = bf16_load(output, index) > 0.f
+        ? output_gradient[index]
+        : 0;
+}
+
 template <typename T>
 __global__ void linear_bias_backward_kernel(const T* output_gradient,
     float* bias_gradient, int rows, int width) {
@@ -496,6 +509,22 @@ __global__ void neko_initialize_kernel(const float* source,
     destination[column * original_rows + row] = source[linear] * inverse_norm;
 }
 
+__global__ void neko_initialize_corrected_kernel(const float* source,
+    float* destination, int length, int original_rows, int original_columns,
+    int transpose, float inverse_fast_correction, float inverse_norm) {
+    int linear = blockIdx.x * blockDim.x + threadIdx.x;
+    if (linear >= length)
+        return;
+    float value = (source[linear] * inverse_fast_correction) * inverse_norm;
+    if (!transpose) {
+        destination[linear] = value;
+        return;
+    }
+    int row = linear / original_columns;
+    int column = linear - row * original_columns;
+    destination[column * original_rows + row] = value;
+}
+
 __global__ void neko_interpolate_kernel(float* current, const float* next,
     int length, float fraction) {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -532,6 +561,25 @@ __global__ void neko_combine_kernel(const float* gram, float* gram_squared,
         return;
     int row = linear / rows;
     int column = linear - row * rows;
+    gram_squared[linear] = b * gram[linear] + c * gram_squared[linear]
+        + (row == column ? a : 0.f);
+}
+
+__global__ void neko_combine_batched_kernel(
+    const float* gram,
+    float* gram_squared,
+    int matrix_length,
+    int total_length,
+    int rows,
+    float a,
+    float b,
+    float c) {
+    int linear = blockIdx.x * blockDim.x + threadIdx.x;
+    if (linear >= total_length)
+        return;
+    int matrix_linear = linear % matrix_length;
+    int row = matrix_linear / rows;
+    int column = matrix_linear - row * rows;
     gram_squared[linear] = b * gram[linear] + c * gram_squared[linear]
         + (row == column ? a : 0.f);
 }
@@ -1127,6 +1175,20 @@ NNTRAIN_EXPORT int nntrain_tensor_linear_encode_bf16(
         output, encoded, length, relu);
 }
 
+NNTRAIN_EXPORT int nntrain_tensor_linear_mask_bf16_gradient(
+    const unsigned short* output_gradient,
+    const unsigned short* output,
+    unsigned short* masked,
+    int length) {
+    NNTRAIN_LAUNCH_1D(
+        linear_mask_bf16_gradient_kernel,
+        length,
+        output_gradient,
+        output,
+        masked,
+        length);
+}
+
 NNTRAIN_EXPORT int nntrain_tensor_linear_bias_backward_float(
     const float* output_gradient, float* bias_gradient, int rows, int width) {
     NNTRAIN_LAUNCH_1D(linear_bias_backward_kernel<float>, width,
@@ -1276,6 +1338,17 @@ NNTRAIN_EXPORT int nntrain_optimizer_neko_initialize(const float* source,
         length, original_rows, original_columns, transpose, inverse_norm);
 }
 
+NNTRAIN_EXPORT int nntrain_optimizer_neko_initialize_corrected(
+    const float* source, float* destination, int length,
+    int original_rows, int original_columns, int transpose,
+    float inverse_fast_correction, float inverse_norm) {
+    if (!(inverse_fast_correction > 0.f))
+        return static_cast<int>(cudaErrorInvalidValue);
+    NNTRAIN_LAUNCH_1D(neko_initialize_corrected_kernel, length,
+        source, destination, length, original_rows, original_columns,
+        transpose, inverse_fast_correction, inverse_norm);
+}
+
 NNTRAIN_EXPORT int nntrain_optimizer_neko_interpolate(float* current,
     const float* next, int length, float fraction) {
     NNTRAIN_LAUNCH_1D(neko_interpolate_kernel, length, current, next, length,
@@ -1300,6 +1373,27 @@ NNTRAIN_EXPORT int nntrain_optimizer_neko_combine(const float* gram,
     float* gram_squared, int length, int rows, float a, float b, float c) {
     NNTRAIN_LAUNCH_1D(neko_combine_kernel, length, gram, gram_squared, length,
         rows, a, b, c);
+}
+
+NNTRAIN_EXPORT int nntrain_optimizer_neko_combine_batched(
+    const float* gram, float* gram_squared, int matrix_length,
+    int batch, int rows, float a, float b, float c) {
+    if (!gram || !gram_squared || matrix_length <= 0 || batch <= 0
+        || rows <= 0) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+    int total_length = matrix_length * batch;
+    NNTRAIN_LAUNCH_1D(
+        neko_combine_batched_kernel,
+        total_length,
+        gram,
+        gram_squared,
+        matrix_length,
+        total_length,
+        rows,
+        a,
+        b,
+        c);
 }
 
 NNTRAIN_EXPORT int nntrain_optimizer_symmetric_gram(const float* source,

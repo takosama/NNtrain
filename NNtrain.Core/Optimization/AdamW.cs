@@ -70,15 +70,16 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
 
     public AdamWState CaptureState()
     {
-        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
-        {
-            int primaryDevice = Tensor.CudaDeviceIndex;
-            foreach (AdamWParameterRuntime runtime in _parameterRuntime)
-            {
-                runtime.CudaState?.SynchronizeHost(primaryDevice);
-                runtime.CudaBFloat16State?.SynchronizeHost(primaryDevice);
-            }
-        }
+        AdamWState state = CaptureStateForStreaming();
+        return _options.UseBFloat16FirstMoment
+            || _options.UseBFloat16SecondMoment
+            ? state
+            : CloneState(state);
+    }
+
+    internal AdamWState CaptureStateForStreaming()
+    {
+        SynchronizeStateForStreaming();
         if (_options.UseBFloat16FirstMoment
             || _options.UseBFloat16SecondMoment)
         {
@@ -108,12 +109,50 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                 states);
         }
 
-        return CloneState(
-            new AdamWState(
-                AdamWState.CurrentFormatVersion,
-                _step,
-                _options,
-                _parameterStates));
+        return new AdamWState(
+            AdamWState.CurrentFormatVersion,
+            _step,
+            _options,
+            _parameterStates);
+    }
+
+    /// <summary>
+    /// Makes the managed moment arrays authoritative before a streaming
+    /// serializer reads them.  Unlike <see cref="CaptureStateForStreaming"/>,
+    /// this does not decode every BF16 moment into a second full-size FP32
+    /// object graph.
+    /// </summary>
+    internal void SynchronizeStateForStreaming()
+    {
+        if (Tensor.ExecutionDevice != TensorDevice.Cuda)
+            return;
+
+        int primaryDevice = Tensor.CudaDeviceIndex;
+        foreach (AdamWParameterRuntime runtime in _parameterRuntime)
+        {
+            runtime.CudaState?.SynchronizeHost(primaryDevice);
+            runtime.CudaBFloat16State?.SynchronizeHost(primaryDevice);
+        }
+    }
+
+    internal int StreamingStep => _step;
+
+    internal AdamWOptions StreamingOptions => _options;
+
+    internal int StreamingParameterCount => _parameterStates.Length;
+
+    internal AdamWStreamingParameterState GetStreamingParameterState(int index)
+    {
+        AdamWParameterState state = _parameterStates[index];
+        AdamWParameterRuntime runtime = _parameterRuntime[index];
+        return new AdamWStreamingParameterState(
+            state.Index,
+            state.Name,
+            state.Shape,
+            runtime.FirstMoment,
+            runtime.FirstMomentBFloat16,
+            runtime.SecondMoment,
+            runtime.SecondMomentBFloat16);
     }
 
     public float LearningRate => _options.LearningRate;
@@ -133,13 +172,18 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
     }
 
     public void RestoreState(AdamWState state)
+        => RestoreState(state, takeOwnership: false);
+
+    private void RestoreState(
+        AdamWState state,
+        bool takeOwnership)
     {
         ArgumentNullException.ThrowIfNull(state);
         ValidateState(state);
-        AdamWState clone = CloneState(state);
-        _step = clone.Step;
-        _options = clone.Options;
-        _parameterStates = clone.ParameterStates;
+        AdamWState restored = takeOwnership ? state : CloneState(state);
+        _step = restored.Step;
+        _options = restored.Options;
+        _parameterStates = restored.ParameterStates;
         for (int index = 0; index < _parameterRuntime.Length; index++)
         {
             _parameterRuntime[index].CudaState?.Dispose();
@@ -187,6 +231,9 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         _cudaMultiTensorPlans.Clear();
         RefreshWeightDecayFlags();
     }
+
+    internal void RestoreStateOwned(AdamWState state)
+        => RestoreState(state, takeOwnership: true);
 
     internal void ZeroGrad()
     {
@@ -353,7 +400,9 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                 runtime.Parameter.T.MarkCudaDataMutated(
                     Tensor.CudaDeviceIndex);
             }
-            CudaOptimizerKernels.SynchronizeDevices(devices);
+            CudaOptimizerKernels.SynchronizeDevices(
+                devices,
+                "AdamW update");
             return;
         }
 
@@ -393,7 +442,11 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
     public void load_state_dict(OptimizerStateDictionary state)
     {
         ArgumentNullException.ThrowIfNull(state);
-        RestoreState(state.Read<AdamWState>("AdamW"));
+        // The deserializer already created arrays owned by this restore. Do
+        // not duplicate all first/second moments before assigning them.
+        RestoreState(
+            state.Read<AdamWState>("AdamW"),
+            takeOwnership: true);
     }
 
 }

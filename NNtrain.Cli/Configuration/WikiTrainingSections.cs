@@ -38,6 +38,10 @@ sealed record WikiOptimizerConfiguration
 
     public int NekoMuonNewtonSchulzInterval { get; init; } = 5;
 
+    public string? NekoMuonNewtonSchulzDepthMode { get; init; }
+
+    public float? NekoMuonNewtonSchulzDepth { get; init; }
+
     public int GainShareBlockDepth { get; init; } = 1;
 
     public float GainShareBeta1 { get; init; } = 0.9f;

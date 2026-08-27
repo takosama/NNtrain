@@ -172,4 +172,52 @@ public sealed class CudaDataParallelTests
             Tensor.CudaDeviceIndices = previousIndices;
         }
     }
+
+    [Fact]
+    public void TwoGpuAllReducePublishesExactGradientNormForClipping()
+    {
+        if (Tensor.CudaDeviceCount < 2)
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            Tensor.CudaDeviceIndices = [0, 1];
+            var model = new GptRinWikiJp(
+                vocabularySize: 32,
+                contextLength: 4,
+                dModel: 8,
+                numHeads: 2,
+                dHidden: 16,
+                numLayers: 1,
+                rng: new Random(47),
+                dropout: 0f,
+                dtype: TensorDType.BFloat16);
+            model.ZeroGrad();
+            _ = CudaDataParallel.ForwardBackward(
+                model,
+                [1, 2, 3, 4, 5, 6, 7, 8],
+                [2, 3, 4, 5, 6, 7, 8, 9],
+                batchSize: 2,
+                sequenceLength: 4);
+
+            Parameter[] parameters = model.Parameters().ToArray();
+            double expectedSquared = parameters
+                .SelectMany(parameter => parameter.T.Grad)
+                .Sum(value => (double)value * value);
+            float actual = nn.utils.clip_grad_norm_(parameters, max_norm: 100f);
+
+            Assert.InRange(
+                Math.Abs(actual - Math.Sqrt(expectedSquared)),
+                0d,
+                1e-4d);
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndices = previousIndices;
+        }
+    }
 }

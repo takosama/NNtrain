@@ -138,6 +138,22 @@ internal static class CudaTensorNative
             length, relu ? 1 : 0), "linear BF16 gradient encode");
     }
 
+    internal static void LinearMaskBFloat16Gradient(
+        int device,
+        nint outputGradient,
+        nint output,
+        nint masked,
+        int length)
+    {
+        Select(device);
+        Check(LinearMaskBFloat16GradientNative(
+            outputGradient,
+            output,
+            masked,
+            length),
+            "linear BF16 gradient mask");
+    }
+
     internal static void LinearBiasBackward(int device, nint outputGradient,
         nint biasGradient, int rows, int width, bool bfloat16)
     {
@@ -313,6 +329,13 @@ internal static class CudaTensorNative
     private static extern int LinearMaskFloat(nint output, nint outputGradient, int length, int relu);
     [DllImport(Library, EntryPoint = "nntrain_tensor_linear_encode_bf16", CallingConvention = CallingConvention.Cdecl)]
     private static extern int LinearEncodeBFloat16Native(nint outputGradient, nint output, nint encoded, int length, int relu);
+
+    [DllImport(Library, EntryPoint = "nntrain_tensor_linear_mask_bf16_gradient", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int LinearMaskBFloat16GradientNative(
+        nint outputGradient,
+        nint output,
+        nint masked,
+        int length);
     [DllImport(Library, EntryPoint = "nntrain_tensor_linear_bias_backward_float", CallingConvention = CallingConvention.Cdecl)]
     private static extern int LinearBiasBackwardFloat(nint outputGradient, nint biasGradient, int rows, int width);
     [DllImport(Library, EntryPoint = "nntrain_tensor_linear_bias_backward_bf16", CallingConvention = CallingConvention.Cdecl)]

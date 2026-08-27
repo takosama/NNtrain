@@ -106,7 +106,20 @@ internal static unsafe class CudaBlas
         int rows,
         int inputWidth,
         int outputWidth)
-        => GemmBFloat16ToFloat32(
+    {
+        if (CudaBlasLt.TryLinearBackwardInputBFloat16(
+                accelerator,
+                deviceIndex,
+                outputGradient,
+                weight,
+                inputGradient,
+                rows,
+                inputWidth,
+                outputWidth))
+        {
+            return;
+        }
+        GemmBFloat16ToFloat32(
             accelerator,
             deviceIndex,
             OperationNone,
@@ -121,6 +134,56 @@ internal static unsafe class CudaBlas
             inputGradient,
             inputWidth,
             beta: 1f);
+    }
+
+    internal static void LinearBackwardInputBFloat16Direct(
+        NativeCudaDevice accelerator,
+        int deviceIndex,
+        NativeCudaBuffer<ushort> outputGradient,
+        NativeCudaBuffer<ushort> weight,
+        NativeCudaBuffer<ushort> inputGradient,
+        int rows,
+        int inputWidth,
+        int outputWidth)
+    {
+        if (CudaBlasLt.TryLinearBackwardInputBFloat16Direct(
+                accelerator,
+                deviceIndex,
+                outputGradient,
+                weight,
+                inputGradient,
+                rows,
+                inputWidth,
+                outputWidth))
+        {
+            return;
+        }
+        accelerator.Bind();
+        nint handle = PrepareHandle(accelerator, deviceIndex);
+        float alpha = 1f;
+        float beta = 0f;
+        int status = CublasGemmEx(
+            handle,
+            OperationNone,
+            OperationNone,
+            inputWidth,
+            rows,
+            outputWidth,
+            (nint)(&alpha),
+            weight.NativePtr,
+            CudaR16BF,
+            inputWidth,
+            outputGradient.NativePtr,
+            CudaR16BF,
+            outputWidth,
+            (nint)(&beta),
+            inputGradient.NativePtr,
+            CudaR16BF,
+            inputWidth,
+            Compute32FFast16BFloat,
+            GemmDefaultTensorOp);
+        ThrowIfFailed(status, "cublasGemmEx(BF16 direct gradient)");
+    }
 
     internal static void LinearBackwardWeightBFloat16(
         NativeCudaDevice accelerator,
@@ -131,7 +194,20 @@ internal static unsafe class CudaBlas
         int rows,
         int inputWidth,
         int outputWidth)
-        => GemmBFloat16ToFloat32(
+    {
+        if (CudaBlasLt.TryLinearBackwardWeightBFloat16(
+                accelerator,
+                deviceIndex,
+                input,
+                outputGradient,
+                weightGradient,
+                rows,
+                inputWidth,
+                outputWidth))
+        {
+            return;
+        }
+        GemmBFloat16ToFloat32(
             accelerator,
             deviceIndex,
             OperationNone,
@@ -146,6 +222,7 @@ internal static unsafe class CudaBlas
             weightGradient,
             inputWidth,
             beta: 1f);
+    }
 
     internal static void LinearBackwardInput(
         NativeCudaDevice accelerator,
@@ -223,6 +300,43 @@ internal static unsafe class CudaBlas
             destination, columns,
             beta: 0f,
             bfloat16: bfloat16TensorCores);
+
+    internal static void MuonGramBatched(
+        NativeCudaDevice accelerator,
+        int deviceIndex,
+        nint source,
+        nint destination,
+        int rows,
+        int columns,
+        int batch,
+        bool bfloat16TensorCores)
+        => GemmStridedPointers(
+            accelerator, deviceIndex,
+            OperationTranspose, OperationNone,
+            rows, rows, columns,
+            source, columns, (long)rows * columns,
+            source, columns, (long)rows * columns,
+            destination, rows, (long)rows * rows,
+            batch, beta: 0f, bfloat16TensorCores);
+
+    internal static void MuonPolynomialUpdateBatched(
+        NativeCudaDevice accelerator,
+        int deviceIndex,
+        nint source,
+        nint coefficients,
+        nint destination,
+        int rows,
+        int columns,
+        int batch,
+        bool bfloat16TensorCores)
+        => GemmStridedPointers(
+            accelerator, deviceIndex,
+            OperationNone, OperationNone,
+            columns, rows, rows,
+            source, columns, (long)rows * columns,
+            coefficients, rows, (long)rows * rows,
+            destination, columns, (long)rows * columns,
+            batch, beta: 0f, bfloat16TensorCores);
 
     internal static void MatMulForward(
         NativeCudaDevice accelerator,
@@ -430,6 +544,43 @@ internal static unsafe class CudaBlas
             c.NativePtr, CudaR32F, ldc, strideC,
             batch, 68, GemmDefault);
         ThrowIfFailed(status, "cublasGemmStridedBatchedEx");
+    }
+
+    private static void GemmStridedPointers(
+        NativeCudaDevice accelerator,
+        int deviceIndex,
+        int transA,
+        int transB,
+        int m,
+        int n,
+        int k,
+        nint a,
+        int lda,
+        long strideA,
+        nint b,
+        int ldb,
+        long strideB,
+        nint c,
+        int ldc,
+        long strideC,
+        int batch,
+        float beta,
+        bool bfloat16)
+    {
+        accelerator.Bind();
+        nint handle = PrepareHandle(accelerator, deviceIndex);
+        float alpha = 1f;
+        int status = CublasGemmStridedBatchedEx(
+            handle, transA, transB, m, n, k,
+            (nint)(&alpha),
+            a, CudaR32F, lda, strideA,
+            b, CudaR32F, ldb, strideB,
+            (nint)(&beta),
+            c, CudaR32F, ldc, strideC,
+            batch,
+            bfloat16 ? Compute32FFast16BFloat : 68,
+            bfloat16 ? GemmDefaultTensorOp : GemmDefault);
+        ThrowIfFailed(status, "cublasGemmStridedBatchedEx(NekoMuon)");
     }
 
     private static void GemmStridedBFloat16(

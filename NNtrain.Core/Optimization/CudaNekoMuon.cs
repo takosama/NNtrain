@@ -7,13 +7,11 @@ internal static class CudaNekoMuon
     private const string Library = "NNtrain.CudaKernels";
     private static int _availability;
 
-    internal static bool TryMomentsAndStats(
+    internal static bool TryMomentsAndStatsCompact(
         NativeCudaDevice accelerator,
         NativeCudaBuffer<float> gradient,
         NativeCudaBuffer<float> fast,
         NativeCudaBuffer<float> slow,
-        NativeCudaBuffer<float> fastHat,
-        NativeCudaBuffer<float> slowHat,
         NativeCudaBuffer<float> stats,
         int length,
         float betaFast,
@@ -27,12 +25,10 @@ internal static class CudaNekoMuon
         {
             accelerator.Bind();
             nint stream = accelerator.DefaultStream;
-            int status = MomentsAndStats(
+            int status = MomentsAndStatsCompact(
                 gradient.NativePtr,
                 fast.NativePtr,
                 slow.NativePtr,
-                fastHat.NativePtr,
-                slowHat.NativePtr,
                 stats.NativePtr,
                 length,
                 betaFast,
@@ -58,14 +54,14 @@ internal static class CudaNekoMuon
         }
     }
 
-    [DllImport(Library, EntryPoint = "nntrain_nekomuon_moments_stats",
+    [DllImport(
+        Library,
+        EntryPoint = "nntrain_nekomuon_moments_stats_compact",
         CallingConvention = CallingConvention.Cdecl)]
-    private static extern int MomentsAndStats(
+    private static extern int MomentsAndStatsCompact(
         nint gradient,
         nint fast,
         nint slow,
-        nint fastHat,
-        nint slowHat,
         nint stats,
         int length,
         float betaFast,

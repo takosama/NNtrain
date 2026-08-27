@@ -18,11 +18,39 @@ internal sealed class NativeCudaException : InvalidOperationException
 internal static class NativeCudaRuntime
 {
     private const string Library = "NNtrain.CudaKernels.dll";
+    // cudaErrorNotReady. CUDA allocation APIs may surface this status from a
+    // previously queued asynchronous operation even though allocation itself
+    // is valid after the device reaches the synchronization point.
+    internal const int NotReadyStatus = 600;
+    private const int OutOfMemoryStatus = 2;
     private static readonly Lazy<int> CachedDeviceCount = new(
         QueryDeviceCount,
         LazyThreadSafetyMode.ExecutionAndPublication);
+    private static long _allocationCount;
+    private static long _allocationBytes;
+    private static long _freeCount;
+    private static long _freeBytes;
 
     internal static int DeviceCount => CachedDeviceCount.Value;
+
+    internal static NativeCudaAllocationTelemetry AllocationTelemetry
+        => new(
+            Interlocked.Read(ref _allocationCount),
+            Interlocked.Read(ref _allocationBytes),
+            Interlocked.Read(ref _freeCount),
+            Interlocked.Read(ref _freeBytes));
+
+    internal static void RecordAllocation(nuint bytes)
+    {
+        Interlocked.Increment(ref _allocationCount);
+        Interlocked.Add(ref _allocationBytes, checked((long)bytes));
+    }
+
+    internal static void RecordFree(nuint bytes)
+    {
+        Interlocked.Increment(ref _freeCount);
+        Interlocked.Add(ref _freeBytes, checked((long)bytes));
+    }
 
     internal static bool CanAccessPeer(int device, int peerDevice)
     {
@@ -57,6 +85,41 @@ internal static class NativeCudaRuntime
     {
         if (status != 0)
             throw new NativeCudaException(operation, status);
+    }
+
+    internal static nint AllocateWithNotReadyRetry(
+        NativeCudaDevice device,
+        nuint bytes)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        int status = AllocateNative(device.Index, bytes, out nint pointer);
+        if (status == NotReadyStatus)
+        {
+            // cudaErrorNotReady is not an OOM and does not indicate an
+            // invalid pointer. Wait for all queued work once, then retry the
+            // allocation. A real asynchronous kernel failure is returned by
+            // cudaDeviceSynchronize and is deliberately not hidden.
+            Check(
+                SynchronizeNative(device.Index),
+                $"cudaDeviceSynchronize before cudaMalloc retry " +
+                $"(device {device.Index})");
+            status = AllocateNative(device.Index, bytes, out pointer);
+        }
+        if (status == OutOfMemoryStatus)
+        {
+            // Exact-shape activation pools contain only idle allocations and
+            // are recoverable. Persistent optimizer state, cuBLAS workspaces,
+            // and other direct allocations also pass through this method; do
+            // not fail them while several GiB of reusable cache can be
+            // reclaimed. Pool disposal calls cudaFree only, so this recovery
+            // path cannot recurse back into allocation.
+            Tensor.ClearCudaFloatBufferPool(device.Index);
+            status = AllocateNative(device.Index, bytes, out pointer);
+        }
+        Check(
+            status,
+            $"cudaMalloc (device {device.Index}, {bytes:N0} bytes)");
+        return pointer;
     }
 
     [DllImport(Library, EntryPoint = "nntrain_cuda_device_count",
@@ -345,9 +408,12 @@ internal sealed class NativeCudaDevice
             NativeCudaRuntime.SetDeviceNative(Index), "cudaSetDevice");
 
     internal void Synchronize()
+        => Synchronize("cudaDeviceSynchronize");
+
+    internal void Synchronize(string operation)
         => NativeCudaRuntime.Check(
             NativeCudaRuntime.SynchronizeNative(Index),
-            "cudaDeviceSynchronize");
+            operation);
 
     internal long GetFreeMemory()
     {
@@ -409,9 +475,8 @@ internal sealed unsafe class NativeCudaBuffer<T> : IDisposable
         Length = length;
         _ownsMemory = true;
         nuint bytes = checked((nuint)length * (nuint)sizeof(T));
-        NativeCudaRuntime.Check(
-            NativeCudaRuntime.AllocateNative(device.Index, bytes, out _pointer),
-            "cudaMalloc");
+        _pointer = NativeCudaRuntime.AllocateWithNotReadyRetry(device, bytes);
+        NativeCudaRuntime.RecordAllocation(bytes);
     }
 
     internal NativeCudaBuffer(
@@ -511,11 +576,28 @@ internal sealed unsafe class NativeCudaBuffer<T> : IDisposable
         {
             NativeCudaRuntime.Check(
                 NativeCudaRuntime.FreeNative(Device.Index, pointer), "cudaFree");
+            NativeCudaRuntime.RecordFree(ByteLength);
         }
         GC.SuppressFinalize(this);
     }
 
     private nuint ByteLength => checked((nuint)Length * (nuint)sizeof(T));
+}
+
+internal readonly record struct NativeCudaAllocationTelemetry(
+    long AllocationCount,
+    long AllocationBytes,
+    long FreeCount,
+    long FreeBytes)
+{
+    public static NativeCudaAllocationTelemetry operator -(
+        NativeCudaAllocationTelemetry left,
+        NativeCudaAllocationTelemetry right)
+        => new(
+            left.AllocationCount - right.AllocationCount,
+            left.AllocationBytes - right.AllocationBytes,
+            left.FreeCount - right.FreeCount,
+            left.FreeBytes - right.FreeBytes);
 }
 
 /// <summary>

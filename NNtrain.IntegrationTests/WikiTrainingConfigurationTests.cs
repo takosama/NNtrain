@@ -191,7 +191,9 @@ public sealed class WikiTrainingConfigurationTests
                   "learningRate": 0.001,
                   "auxiliaryLearningRate": 0.002,
                   "weightDecay": 0.02,
-                  "nekoMuonNewtonSchulzInterval": 7
+                  "nekoMuonNewtonSchulzInterval": 7,
+                  "nekoMuonNewtonSchulzDepthMode": "minimum",
+                  "nekoMuonNewtonSchulzDepth": 1.5
                 },
                 "scheduler": {
                   "type": "warmupCosineProgress",
@@ -218,6 +220,12 @@ public sealed class WikiTrainingConfigurationTests
         Assert.Equal(0.002f, configuration.AuxiliaryLearningRate);
         Assert.Equal(0.02f, configuration.WeightDecay);
         Assert.Equal(7, configuration.NekoMuonNewtonSchulzInterval);
+        Assert.True(
+            configuration.HasNekoMuonNewtonSchulzDepthPolicyOverride);
+        Assert.Equal(
+            NekoMuonNewtonSchulzDepthMode.Minimum,
+            configuration.GetNekoMuonNewtonSchulzDepthMode());
+        Assert.Equal(1.5f, configuration.GetNekoMuonNewtonSchulzDepth());
         Assert.Equal(
             TensorPrecisionMode.BFloat16,
             configuration.GetPrecisionMode());
@@ -625,6 +633,44 @@ public sealed class WikiTrainingConfigurationTests
         Assert.Equal(
             "NekoMuonNewtonSchulzInterval",
             exception.ParamName);
+    }
+
+    [Fact]
+    public void AcceptsExplicitAdaptiveNekoMuonDepthPolicyWithoutDepth()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            NekoMuonNewtonSchulzDepthMode = "adaptive",
+        };
+
+        configuration.Validate();
+
+        Assert.True(
+            configuration.HasNekoMuonNewtonSchulzDepthPolicyOverride);
+        Assert.Equal(
+            NekoMuonNewtonSchulzDepthMode.Adaptive,
+            configuration.GetNekoMuonNewtonSchulzDepthMode());
+        Assert.Equal(0f, configuration.GetNekoMuonNewtonSchulzDepth());
+    }
+
+    [Theory]
+    [InlineData(null, 1f)]
+    [InlineData("adaptive", 1f)]
+    [InlineData("minimum", null)]
+    [InlineData("fixed", -1f)]
+    [InlineData("fixed", 6f)]
+    [InlineData("unknown", 1f)]
+    public void RejectsInvalidNekoMuonDepthPolicy(
+        string? mode,
+        float? depth)
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            NekoMuonNewtonSchulzDepthMode = mode,
+            NekoMuonNewtonSchulzDepth = depth,
+        };
+
+        Assert.ThrowsAny<ArgumentException>(configuration.Validate);
     }
 
     [Fact]

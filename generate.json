@@ -1,7 +1,7 @@
 {
   "trainingConfigPath": "training.transformer.json",
   "safeTensorsPath": "checkpoints/training.transformer.tied.model.best.safetensors",
-  "prompt": "日本の首都東京は",
+  "prompt": "日本の首都は",
   "sampling": "topk",
   "maxNewTokens": 200,
   "temperature": 1,

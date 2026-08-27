@@ -61,6 +61,16 @@ public sealed class CompositeOptimizer : IOptimizer
 
     internal void ZeroGrad()
     {
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            // The composite already owns a deduplicated parameter list. Avoid
+            // starting a separate parallel traversal for NekoMuon followed by
+            // a second AdamW traversal; CUDA gradient arenas collapse these
+            // calls to one clear per bucket through their dirty gates.
+            foreach (Parameter parameter in Parameters)
+                parameter.T.ClearGradient();
+            return;
+        }
         foreach (IOptimizer optimizer in _optimizers)
             optimizer.zero_grad();
     }
