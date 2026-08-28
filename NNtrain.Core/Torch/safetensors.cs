@@ -46,7 +46,7 @@ public static class safetensors
     }
 }
 
-internal static class SafeTensorFile
+internal static partial class SafeTensorFile
 {
     private const int LengthPrefixSize = sizeof(long);
     private const int Float32Size = sizeof(float);

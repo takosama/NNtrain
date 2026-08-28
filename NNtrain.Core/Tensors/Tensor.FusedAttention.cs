@@ -44,9 +44,119 @@ partial class Tensor
 
         int headWidth = modelWidth / numHeads;
         float scale = 1f / MathF.Sqrt(headWidth);
+        bool directBFloat16Gradients = DType == TensorDType.BFloat16
+            && TensorExecutionContext.UsesBFloat16GradientStorage;
         if (ExecutionDevice == TensorDevice.Cuda)
         {
             int deviceIndex = CudaDeviceIndex;
+            if (DType == TensorDType.Bfp8)
+            {
+                Bfp8QuantizationDescriptor outputDescriptor =
+                    SelectBfp8ResultDescriptor(this);
+                var bfp8Context = CudaOperationProfiler.IsEnabled
+                    ? CudaOperationProfiler.Measure(
+                        "forward.attention",
+                        () => TensorCudaKernels
+                            .AttentionForwardBfp8Resident(
+                                this,
+                                outputDescriptor,
+                                batch,
+                                sequence,
+                                modelWidth,
+                                numHeads,
+                                causal))
+                    : TensorCudaKernels.AttentionForwardBfp8Resident(
+                        this,
+                        outputDescriptor,
+                        batch,
+                        sequence,
+                        modelWidth,
+                        numHeads,
+                        causal);
+                int[] bfp8OutputShape = Rank == 3
+                    ? [batch, sequence, modelWidth]
+                    : [sequence, modelWidth];
+                Tensor bfp8Result;
+                try
+                {
+                    using CudaBfp8OwnedBuffers bfp8Output =
+                        bfp8Context.DetachEncodedOutput();
+                    bfp8Result = FromCudaBfp8Result(
+                        bfp8Output,
+                        deviceIndex,
+                        bfp8OutputShape,
+                        [this]);
+                }
+                catch (Exception conversionFailure)
+                {
+                    try
+                    {
+                        bfp8Context.Dispose();
+                    }
+                    catch (Exception cleanupFailure)
+                    {
+                        throw new AggregateException(
+                            "BFP8 attention result construction and " +
+                            "saved-context cleanup failed.",
+                            conversionFailure,
+                            cleanupFailure);
+                    }
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                        .Capture(conversionFailure)
+                        .Throw();
+                    throw;
+                }
+
+                if (AutogradContext.IsRecordingEnabled)
+                {
+                    AutogradLease<TensorCudaKernels
+                        .Bfp8AttentionResidentContext> lease =
+                        AutogradLease<TensorCudaKernels
+                            .Bfp8AttentionResidentContext>.Own(
+                            bfp8Context,
+                            AutogradLeaseMetadata.CudaOwned(
+                                deviceIndex,
+                                TensorDType.Bfp8,
+                                DataVersion),
+                            static saved => saved.Dispose());
+                    bfp8Result.Node.SetBackward(lease, savedContext =>
+                    {
+                        if (CudaOperationProfiler.IsEnabled)
+                        {
+                            CudaOperationProfiler.Measure(
+                                "backward.attention",
+                                () => TensorCudaKernels
+                                    .AttentionBackwardBfp8Resident(
+                                        this,
+                                        bfp8Result,
+                                        savedContext,
+                                        batch,
+                                        sequence,
+                                        modelWidth,
+                                        numHeads,
+                                        causal));
+                        }
+                        else
+                        {
+                            TensorCudaKernels
+                                .AttentionBackwardBfp8Resident(
+                                    this,
+                                    bfp8Result,
+                                    savedContext,
+                                    batch,
+                                    sequence,
+                                    modelWidth,
+                                    numHeads,
+                                    causal);
+                        }
+                    });
+                }
+                else if (!CudaInferenceScope.TrackResource(bfp8Context))
+                {
+                    bfp8Context.Dispose();
+                }
+                return bfp8Result;
+            }
             if (DType == TensorDType.BFloat16)
             {
                 var bfloat16Context = CudaOperationProfiler.IsEnabled
@@ -77,8 +187,17 @@ partial class Tensor
                     TensorDType.BFloat16);
                 if (AutogradContext.IsRecordingEnabled)
                 {
-                    bfloat16Result.Node.RegisterResource(bfloat16Context);
-                    bfloat16Result.Node.BackwardAction = () =>
+                    AutogradLease<TensorCudaKernels
+                        .BFloat16AttentionResidentContext> lease =
+                        AutogradLease<TensorCudaKernels
+                            .BFloat16AttentionResidentContext>.Own(
+                            bfloat16Context,
+                            AutogradLeaseMetadata.CudaOwned(
+                                deviceIndex,
+                                TensorDType.BFloat16,
+                                DataVersion),
+                            static saved => saved.Dispose());
+                    bfloat16Result.Node.SetBackward(lease, savedContext =>
                     {
                         if (CudaOperationProfiler.IsEnabled)
                         {
@@ -88,7 +207,7 @@ partial class Tensor
                                     .AttentionBackwardBFloat16Resident(
                                         this,
                                         bfloat16Result,
-                                        bfloat16Context,
+                                        savedContext,
                                         batch,
                                         sequence,
                                         modelWidth,
@@ -100,14 +219,14 @@ partial class Tensor
                             TensorCudaKernels.AttentionBackwardBFloat16Resident(
                                 this,
                                 bfloat16Result,
-                                bfloat16Context,
+                                savedContext,
                                 batch,
                                 sequence,
                                 modelWidth,
                                 numHeads,
                                 causal);
                         }
-                    };
+                    });
                 }
                 else if (!CudaInferenceScope.TrackResource(bfloat16Context))
                 {
@@ -129,24 +248,32 @@ partial class Tensor
                 cudaContext.Output, deviceIndex, cudaOutputShape, [this]);
             if (AutogradContext.IsRecordingEnabled)
             {
-                cudaResult.Node.RegisterResource(cudaContext);
-                cudaResult.Node.BackwardAction = () =>
+                AutogradLease<TensorCudaKernels.AttentionResidentContext>
+                    lease = AutogradLease<TensorCudaKernels
+                        .AttentionResidentContext>.Own(
+                        cudaContext,
+                        AutogradLeaseMetadata.CudaOwned(
+                            deviceIndex,
+                            TensorDType.Float32,
+                            DataVersion),
+                        static saved => saved.Dispose());
+                cudaResult.Node.SetBackward(lease, savedContext =>
                 {
                     if (CudaOperationProfiler.IsEnabled)
                     {
                         CudaOperationProfiler.Measure(
                             "backward.attention",
                             () => TensorCudaKernels.AttentionBackwardResident(
-                                this, cudaResult, cudaContext, batch, sequence,
-                                modelWidth, numHeads, causal));
+                                this, cudaResult, savedContext, batch,
+                                sequence, modelWidth, numHeads, causal));
                     }
                     else
                     {
                         TensorCudaKernels.AttentionBackwardResident(
-                            this, cudaResult, cudaContext, batch, sequence,
+                            this, cudaResult, savedContext, batch, sequence,
                             modelWidth, numHeads, causal);
                     }
-                };
+                });
             }
             else
             {
@@ -224,6 +351,9 @@ partial class Tensor
                 for (int key = 0; key <= lastKey; key++)
                 {
                     float probability = probabilities[probabilityRow + key];
+                    float valueProbability = directBFloat16Gradients
+                        ? TensorStorageCodec.RoundToBFloat16(probability)
+                        : probability;
                     int valueOffset = projectedBatchOffset
                         + key * projectedWidth
                         + 2 * modelWidth
@@ -233,7 +363,7 @@ partial class Tensor
                         outputOffset,
                         _data,
                         valueOffset,
-                        probability,
+                        valueProbability,
                         headWidth);
                 }
             }
@@ -280,6 +410,15 @@ partial class Tensor
                         probabilityOffset + query * sequence;
                     int lastKey = causal ? query : sequence - 1;
                     float softmaxDot = 0f;
+                    float rowDelta = 0f;
+                    if (directBFloat16Gradients)
+                    {
+                        for (int column = 0; column < headWidth; column++)
+                        {
+                            rowDelta += result._grad[outputOffset + column]
+                                * result._data[outputOffset + column];
+                        }
+                    }
 
                     for (int key = 0; key <= lastKey; key++)
                     {
@@ -289,21 +428,51 @@ partial class Tensor
                             + headOffset;
                         float probability =
                             probabilities[probabilityRow + key];
-                        float probabilityGradient = DotProduct(
-                            result._grad,
-                            outputOffset,
-                            _data,
-                            valueOffset,
-                            headWidth);
+                        float probabilityGradient;
+                        if (directBFloat16Gradients)
+                        {
+                            probabilityGradient = 0f;
+                            for (int column = 0; column < headWidth; column++)
+                            {
+                                probabilityGradient +=
+                                    TensorStorageCodec.RoundToBFloat16(
+                                        result._grad[outputOffset + column])
+                                    * _data[valueOffset + column];
+                            }
+                        }
+                        else
+                        {
+                            probabilityGradient = DotProduct(
+                                result._grad,
+                                outputOffset,
+                                _data,
+                                valueOffset,
+                                headWidth);
+                        }
                         probabilityGradients[key] = probabilityGradient;
                         softmaxDot += probabilityGradient * probability;
-                        AddScaledValues(
-                            _grad,
-                            valueOffset,
-                            result._grad,
-                            outputOffset,
-                            probability,
-                            headWidth);
+                        if (directBFloat16Gradients)
+                        {
+                            float valueProbability =
+                                TensorStorageCodec.RoundToBFloat16(probability);
+                            for (int column = 0; column < headWidth; column++)
+                            {
+                                _grad[valueOffset + column] +=
+                                    TensorStorageCodec.RoundToBFloat16(
+                                        result._grad[outputOffset + column])
+                                    * valueProbability;
+                            }
+                        }
+                        else
+                        {
+                            AddScaledValues(
+                                _grad,
+                                valueOffset,
+                                result._grad,
+                                outputOffset,
+                                probability,
+                                headWidth);
+                        }
                     }
 
                     for (int key = 0; key <= lastKey; key++)
@@ -312,9 +481,19 @@ partial class Tensor
                             + key * projectedWidth
                             + modelWidth
                             + headOffset;
-                        float scoreGradient = scale
-                            * probabilities[probabilityRow + key]
-                            * (probabilityGradients[key] - softmaxDot);
+                        float unscaledScoreGradient =
+                            probabilities[probabilityRow + key]
+                            * (probabilityGradients[key]
+                                - (directBFloat16Gradients
+                                    ? rowDelta
+                                    : softmaxDot));
+                        if (directBFloat16Gradients)
+                        {
+                            unscaledScoreGradient =
+                                TensorStorageCodec.RoundToBFloat16(
+                                    unscaledScoreGradient);
+                        }
+                        float scoreGradient = scale * unscaledScoreGradient;
                         AddScaledValues(
                             _grad,
                             queryOffset,
@@ -337,6 +516,14 @@ partial class Tensor
                 workItemCount,
                 (long)sequence * sequence * headWidth,
                 BackwardHead);
+            if (directBFloat16Gradients)
+            {
+                for (int index = 0; index < _grad.Length; index++)
+                {
+                    _grad[index] = TensorStorageCodec.RoundToBFloat16(
+                        _grad[index]);
+                }
+            }
         };
 
         return result;

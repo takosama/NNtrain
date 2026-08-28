@@ -5,13 +5,83 @@ internal static partial class WikiLanguageModelCommand
     internal static LanguageModel CreateModel(
         WikiTrainingConfiguration config,
         int vocabularySize)
-        => CreateModel(config, vocabularySize, config.GetModelDType());
+        => CreateModel(config, vocabularySize, config.GetPrecisionMode());
+
+    internal static LanguageModel CreateModel(
+        WikiTrainingConfiguration config,
+        int vocabularySize,
+        TensorPrecisionMode precisionMode)
+        => CreateModel(
+            config,
+            vocabularySize,
+            precisionMode,
+            precisionMode.ToStorageDType());
+
+    internal static LanguageModel CreateModel(
+        WikiTrainingConfiguration config,
+        int vocabularySize,
+        TensorPrecisionMode precisionMode,
+        TensorDType storageDType)
+        => CreateModel(
+            config,
+            vocabularySize,
+            precisionMode,
+            storageDType,
+            config.Bfp8BlockSize);
+
+    internal static LanguageModel CreateModel(
+        WikiTrainingConfiguration config,
+        int vocabularySize,
+        TensorPrecisionMode precisionMode,
+        TensorDType storageDType,
+        int bfp8BlockSize)
+    {
+        bool validStorage = storageDType == precisionMode.ToStorageDType()
+            || precisionMode == TensorPrecisionMode.Mix16_32
+                && storageDType == TensorDType.Float16;
+        if (!validStorage)
+        {
+            throw new ArgumentException(
+                $"Precision mode '{TensorPrecisionModeNames.Format(precisionMode)}' " +
+                $"cannot use storage dtype '{storageDType}'.",
+                nameof(storageDType));
+        }
+        bool bfp8Mode = precisionMode is TensorPrecisionMode.Bfp8
+            or TensorPrecisionMode.Mix8_32;
+        LanguageModel model = CreateModel(
+            config,
+            vocabularySize,
+            bfp8Mode ? TensorDType.Float32 : storageDType);
+        if (bfp8Mode)
+            model.to(precisionMode, bfp8BlockSize);
+        else
+            model.SetPrecisionMode(precisionMode);
+        return model;
+    }
 
     internal static LanguageModel CreateModel(
         WikiTrainingConfiguration config,
         int vocabularySize,
         TensorDType modelDType)
     {
+        var generator = new CheckpointableRandom(config.Seed);
+        LanguageModel model = CreateModel(
+            config,
+            vocabularySize,
+            modelDType,
+            generator);
+        generator.BeginRuntime();
+        model.AttachTrainingRandom(generator);
+        return model;
+    }
+
+    private static LanguageModel CreateModel(
+        WikiTrainingConfiguration config,
+        int vocabularySize,
+        TensorDType modelDType,
+        Random generator)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
         if (config.IsForgetMemoryDrnArchitecture())
         {
             return nn.forget_memory_drn_lm(
@@ -24,7 +94,7 @@ internal static partial class WikiLanguageModelCommand
                 value_width: config.ForgetMemoryValueWidth,
                 retention_min: config.ForgetMemoryRetentionMinimum,
                 retention_max: config.ForgetMemoryRetentionMaximum,
-                generator: new Random(config.Seed),
+                generator: generator,
                 init_scale: config.InitializationScale,
                 dropout: config.Dropout,
                 dtype: modelDType);
@@ -42,7 +112,7 @@ internal static partial class WikiLanguageModelCommand
                 value_width: config.ForgetMemoryValueWidth,
                 retention_min: config.ForgetMemoryRetentionMinimum,
                 retention_max: config.ForgetMemoryRetentionMaximum,
-                generator: new Random(config.Seed),
+                generator: generator,
                 init_scale: config.InitializationScale,
                 dropout: config.Dropout,
                 dtype: modelDType);
@@ -60,7 +130,7 @@ internal static partial class WikiLanguageModelCommand
                 value_width: config.ForgetMemoryValueWidth,
                 retention_min: config.ForgetMemoryRetentionMinimum,
                 retention_max: config.ForgetMemoryRetentionMaximum,
-                generator: new Random(config.Seed),
+                generator: generator,
                 init_scale: config.InitializationScale,
                 dropout: config.Dropout,
                 dtype: modelDType);
@@ -76,7 +146,7 @@ internal static partial class WikiLanguageModelCommand
                 d_model: config.ModelWidth,
                 dim_feedforward: config.HiddenSize,
                 num_layers: config.Layers,
-                generator: new Random(config.Seed),
+                generator: generator,
                 init_scale: config.InitializationScale,
                 dropout: config.Dropout);
         }
@@ -90,7 +160,7 @@ internal static partial class WikiLanguageModelCommand
                 d_model: config.ModelWidth,
                 dim_feedforward: config.HiddenSize,
                 num_layers: config.Layers,
-                generator: new Random(config.Seed),
+                generator: generator,
                 init_scale: config.InitializationScale,
                 dropout: config.Dropout,
                 filter_width: config.HyenaFilterWidth,
@@ -104,7 +174,7 @@ internal static partial class WikiLanguageModelCommand
             num_heads: config.Heads,
             dim_feedforward: config.HiddenSize,
             num_layers: config.Layers,
-            generator: new Random(config.Seed),
+            generator: generator,
             init_scale: config.InitializationScale,
             dropout: config.Dropout,
             dtype: modelDType,
@@ -192,9 +262,33 @@ internal static partial class WikiLanguageModelCommand
 
     internal static LanguageModel CreateModel(
         WikiModelCheckpoint checkpoint,
-        int seed)
+        int seed,
+        int bfp8BlockSize = Bfp8QuantizationDescriptor.DefaultBlockSize)
     {
-        TensorDType modelDType = GetCheckpointModelDType(checkpoint);
+        TensorPrecisionMode precisionMode =
+            GetCheckpointPrecisionMode(checkpoint);
+        bool bfp8Mode = precisionMode is TensorPrecisionMode.Bfp8
+            or TensorPrecisionMode.Mix8_32;
+        LanguageModel model = CreateModelStorage(
+            checkpoint,
+            seed,
+            bfp8Mode
+                ? TensorDType.Float32
+                : GetCheckpointModelDType(checkpoint));
+        if (bfp8Mode)
+            model.to(
+                precisionMode,
+                checkpoint.Bfp8BlockSize ?? bfp8BlockSize);
+        else
+            model.SetPrecisionMode(precisionMode);
+        return model;
+    }
+
+    private static LanguageModel CreateModelStorage(
+        WikiModelCheckpoint checkpoint,
+        int seed,
+        TensorDType modelDType)
+    {
         if (IsCheckpointForgetMemoryDrn(checkpoint))
         {
             return new ForgetMemoryDRNGpt(
@@ -305,7 +399,7 @@ internal static partial class WikiLanguageModelCommand
         if (modelDType != TensorDType.Float32)
         {
             throw new InvalidOperationException(
-                $"Model dtype '{modelDType}' is not supported for " +
+                $"Precision mode '{FormatPrecisionMode(modelDType)}' is not supported for " +
                 $"architecture '{architecture}'.");
         }
     }
@@ -317,7 +411,8 @@ internal static partial class WikiLanguageModelCommand
         if (modelDType != TensorDType.Float32)
         {
             throw new InvalidDataException(
-                $"Checkpoint model dtype '{modelDType}' is not supported " +
+                $"Checkpoint precision mode " +
+                $"'{FormatPrecisionMode(modelDType)}' is not supported " +
                 $"for architecture '{GetCheckpointArchitecture(checkpoint)}'.");
         }
     }
@@ -334,12 +429,39 @@ internal static partial class WikiLanguageModelCommand
                 "Wiki model checkpoint does not declare its model dtype.");
         if (dtype is not TensorDType.Float32
             and not TensorDType.Float16
-            and not TensorDType.BFloat16)
+            and not TensorDType.BFloat16
+            and not TensorDType.Bfp8)
         {
             throw new InvalidDataException(
                 $"Wiki model checkpoint declares unsupported model dtype " +
                 $"'{dtype}'.");
         }
         return dtype;
+    }
+
+    internal static TensorPrecisionMode GetCheckpointPrecisionMode(
+        WikiModelCheckpoint checkpoint)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        TensorDType dtype = GetCheckpointModelDType(checkpoint);
+        if (checkpoint.FormatVersion < PrecisionModeCheckpointFormatVersion)
+            return dtype.ToPrecisionMode();
+
+        TensorPrecisionMode mode = checkpoint.PrecisionMode
+            ?? throw new InvalidDataException(
+                "Wiki model checkpoint does not declare its precision mode.");
+        if (!Enum.IsDefined(mode))
+        {
+            throw new InvalidDataException(
+                $"Wiki model checkpoint declares unsupported precision " +
+                $"mode '{mode}'.");
+        }
+        if (mode.ToStorageDType() != dtype)
+        {
+            throw new InvalidDataException(
+                "Wiki model checkpoint precision mode does not match its " +
+                "physical model dtype.");
+        }
+        return mode;
     }
 }

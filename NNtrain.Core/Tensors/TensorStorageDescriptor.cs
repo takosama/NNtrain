@@ -7,8 +7,9 @@ namespace NNtrain;
 /// <para>
 /// This is a description and validation boundary, not a codec. The current
 /// runtime implements only raw <see cref="TensorDType.Float32"/> and
-/// <see cref="TensorDType.Float16"/> and <see cref="TensorDType.BFloat16"/>
-/// storage. The remaining dtypes can be
+/// <see cref="TensorDType.Float16"/>, <see cref="TensorDType.BFloat16"/>,
+/// and signed block-scaled <see cref="TensorDType.Bfp8"/> storage. The
+/// remaining dtypes can be
 /// described here before their codecs, kernels, and serialization are added.
 /// </para>
 /// <para>
@@ -32,7 +33,9 @@ public sealed record TensorStorageDescriptor(
     /// </summary>
     public bool IsSupportedByCurrentRuntime
         => TensorDTypeContract.IsImplemented(DType)
-            && EffectiveMetadata.IsRaw;
+            && (DType == TensorDType.Bfp8
+                ? IsBfp8Layout(EffectiveMetadata)
+                : EffectiveMetadata.IsRaw);
 
     /// <summary>Validates this descriptor for a logical element count.</summary>
     public void Validate(int elementCount)
@@ -55,6 +58,10 @@ public sealed record TensorStorageDescriptor(
             case TensorDType.Float16:
             case TensorDType.BFloat16:
                 RequireNative(DType, metadata);
+                return;
+
+            case TensorDType.Bfp8:
+                RequireBfp8Layout(metadata);
                 return;
 
             case TensorDType.Float8E4M3Fn:
@@ -98,6 +105,7 @@ public sealed record TensorStorageDescriptor(
             TensorDType.Float32 => sizeof(float),
             TensorDType.Float16 => sizeof(ushort),
             TensorDType.BFloat16 => sizeof(ushort),
+            TensorDType.Bfp8 => sizeof(sbyte),
             TensorDType.Float8E4M3Fn or TensorDType.Float8E5M2 => sizeof(byte),
             _ => throw new InvalidOperationException(
                 $"Tensor dtype '{DType}' requires packing metadata."),
@@ -156,6 +164,26 @@ public sealed record TensorStorageDescriptor(
         throw new ArgumentException(
             $"Tensor dtype '{dtype}' requires native bytes or 8-bit packing.",
             nameof(metadata));
+    }
+
+    private static bool IsBfp8Layout(TensorStorageMetadata metadata)
+        => metadata.Encoding == TensorStorageEncoding.BlockQuantized
+            && metadata.Packing is null
+            && metadata.Quantization is
+            {
+                Scheme: TensorQuantizationScheme.Symmetric,
+                ZeroPoints: null,
+            };
+
+    private static void RequireBfp8Layout(TensorStorageMetadata metadata)
+    {
+        if (!IsBfp8Layout(metadata))
+        {
+            throw new ArgumentException(
+                "BFP8 requires an unpacked signed Int8 payload with " +
+                "symmetric Float32 block scales and no zero points.",
+                nameof(metadata));
+        }
     }
 
     private static void RequirePackedBits(

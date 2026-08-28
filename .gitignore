@@ -6,20 +6,26 @@
 # .NET build outputs
 **/bin/
 **/obj/
+**/artifacts/
 TestResults/
 
-# Local training datasets
-data/
+# Local training datasets at the repository root. Keep source folders such as
+# NNtrain.Core/Data visible to Git.
+/data/
 
 # BenchmarkDotNet generated reports and executables
 BenchmarkDotNet.Artifacts/
 
-# Native F16C build by-products. The Windows x64 runtime DLL is intentional:
-# it is the optional accelerator payload copied by NNtrain.Core.csproj.
+# Native build by-products. The Windows x64 runtime DLLs are intentional:
+# NNtrain.Core owns the optional F16C accelerator, while NNtrain.Cuda owns the
+# versioned CUDA gateway payload.
 NNtrain.F16C.obj
 NNtrain.Core/runtimes/win-x64/native/*.obj
 NNtrain.Core/runtimes/win-x64/native/*.lib
 NNtrain.Core/runtimes/win-x64/native/*.exp
+NNtrain.Cuda/runtimes/win-x64/native/*.obj
+NNtrain.Cuda/runtimes/win-x64/native/*.lib
+NNtrain.Cuda/runtimes/win-x64/native/*.exp
 
 # Generated training reports and checkpoints
 checkpoints/

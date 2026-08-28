@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace NNtrain;
 
@@ -16,6 +17,13 @@ internal sealed class LossGraph
 
     private readonly List<LossPoint> _losses = [];
     private readonly int _totalEpochs;
+
+    private static readonly Regex PersistedPointPattern = new(
+        "<circle class=\"(?<series>train|eval)-point\"[^>]*>\\s*" +
+        "<title>epoch (?<epoch>[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?): " +
+        "(?<loss>[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)" +
+        "</title>\\s*</circle>",
+        RegexOptions.CultureInvariant);
 
     internal LossGraph(string path, int totalEpochs)
     {
@@ -33,6 +41,74 @@ internal sealed class LossGraph
     }
 
     internal string Path { get; }
+
+    internal int TotalEpochs => _totalEpochs;
+
+    internal void RestoreExisting(float resumeEpoch)
+    {
+        IReadOnlyList<LossPoint> restored = ImportExisting(resumeEpoch);
+        _losses.Clear();
+        _losses.AddRange(restored);
+    }
+
+    internal IReadOnlyList<LossPoint> ImportExisting(float resumeEpoch)
+    {
+        ValidateResumeEpoch(resumeEpoch);
+        var losses = new List<LossPoint>();
+        if (!File.Exists(Path))
+            return losses;
+
+        string html = File.ReadAllText(Path);
+        MatchCollection matches = PersistedPointPattern.Matches(html);
+        foreach (Match match in matches)
+        {
+            if (!string.Equals(
+                match.Groups["series"].Value,
+                "train",
+                StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!TryReadPersistedPoint(match, out float epoch, out float loss)
+                || epoch <= 0f
+                || epoch > resumeEpoch
+                || epoch > _totalEpochs
+                || (losses.Count > 0 && epoch < losses[^1].Epoch))
+            {
+                continue;
+            }
+
+            losses.Add(new LossPoint(epoch, loss, null));
+        }
+
+        foreach (Match match in matches)
+        {
+            if (!string.Equals(
+                match.Groups["series"].Value,
+                "eval",
+                StringComparison.Ordinal)
+                || !TryReadPersistedPoint(
+                    match,
+                    out float epoch,
+                    out float loss)
+                || epoch > resumeEpoch)
+            {
+                continue;
+            }
+
+            for (int index = losses.Count - 1; index >= 0; index--)
+            {
+                if (losses[index].Epoch != epoch)
+                    continue;
+
+                losses[index] = losses[index] with { Evaluation = loss };
+                break;
+            }
+        }
+
+        return losses;
+    }
 
     internal void AddEpoch(int epoch, float trainingLoss, float evaluationLoss)
         => AddPoint(epoch, trainingLoss, evaluationLoss);
@@ -108,6 +184,12 @@ internal sealed class LossGraph
     private string BuildHtml()
     {
         float currentEpoch = _losses.Count == 0 ? 0f : _losses[^1].Epoch;
+        int activeEpoch = currentEpoch == 0f
+            ? 0
+            : Math.Min(_totalEpochs, (int)MathF.Ceiling(currentEpoch));
+        float activeEpochProgress = activeEpoch == 0
+            ? 0f
+            : Math.Clamp(currentEpoch - activeEpoch + 1f, 0f, 1f);
         float xMaximum = currentEpoch > 0f ? currentEpoch : 1f;
         GetYRange(out float yMinimum, out float yMaximum);
         int plotWidth = Width - Left - Right;
@@ -128,9 +210,11 @@ internal sealed class LossGraph
         html.AppendLine("</head><body><main>");
         html.AppendLine("<h1>Loss by epoch</h1>");
         html.Append("<p>epoch ")
-            .Append(EpochNumber(currentEpoch))
+            .Append(activeEpoch)
             .Append(" / ")
             .Append(_totalEpochs)
+            .Append(" · progress ")
+            .Append(activeEpochProgress.ToString("0.0%", CultureInfo.InvariantCulture))
             .Append(" · train points ")
             .Append(_losses.Count)
             .Append(" · eval points ")
@@ -176,8 +260,16 @@ internal sealed class LossGraph
             plotWidth,
             plotHeight);
 
-        html.AppendLine("<line x1=\"720\" y1=\"34\" x2=\"750\" y2=\"34\" class=\"train\"/><text x=\"760\" y=\"39\" class=\"legend\">train loss</text>");
-        html.AppendLine("<line x1=\"850\" y1=\"34\" x2=\"880\" y2=\"34\" class=\"eval\"/><text x=\"890\" y=\"39\" class=\"legend\">eval loss</text>");
+        bool hasEvaluation = _losses.Any(loss => loss.Evaluation.HasValue);
+        if (hasEvaluation)
+        {
+            html.AppendLine("<line x1=\"720\" y1=\"34\" x2=\"750\" y2=\"34\" class=\"train\"/><text x=\"760\" y=\"39\" class=\"legend\">train loss</text>");
+            html.AppendLine("<line x1=\"850\" y1=\"34\" x2=\"880\" y2=\"34\" class=\"eval\"/><text x=\"890\" y=\"39\" class=\"legend\">eval loss</text>");
+        }
+        else
+        {
+            html.AppendLine("<line x1=\"785\" y1=\"34\" x2=\"815\" y2=\"34\" class=\"train\"/><text x=\"825\" y=\"39\" class=\"legend\">train loss</text>");
+        }
         html.Append("<text x=\"").Append(Left + plotWidth / 2)
             .Append("\" y=\"").Append(Height - 20)
             .AppendLine("\" text-anchor=\"middle\">epoch</text>");
@@ -351,7 +443,41 @@ internal sealed class LossGraph
         }
     }
 
-    private readonly record struct LossPoint(
+    private void ValidateResumeEpoch(float resumeEpoch)
+    {
+        if (!float.IsFinite(resumeEpoch)
+            || resumeEpoch < 0f
+            || resumeEpoch > _totalEpochs)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(resumeEpoch),
+                resumeEpoch,
+                $"Resume epoch must be from 0 through {_totalEpochs}.");
+        }
+    }
+
+    private static bool TryReadPersistedPoint(
+        Match match,
+        out float epoch,
+        out float loss)
+    {
+        epoch = 0f;
+        loss = 0f;
+        return float.TryParse(
+            match.Groups["epoch"].Value,
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out epoch)
+            && float.IsFinite(epoch)
+            && float.TryParse(
+                match.Groups["loss"].Value,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out loss)
+            && float.IsFinite(loss);
+    }
+
+    internal readonly record struct LossPoint(
         float Epoch,
         float Training,
         float? Evaluation);

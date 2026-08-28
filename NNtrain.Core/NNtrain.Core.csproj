@@ -5,7 +5,14 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NNtrainArchitectureLayer>Core</NNtrainArchitectureLayer>
+    <NNtrainAllowedProjectReferences>NNtrain.Runtime;NNtrain.Cuda</NNtrainAllowedProjectReferences>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NNtrain.Runtime\NNtrain.Runtime.csproj" />
+    <ProjectReference Include="..\NNtrain.Cuda\NNtrain.Cuda.csproj" />
+  </ItemGroup>
 
   <!-- The native F16C accelerator is optional.  A portable managed AVX2/
        scalar codec remains the default when this Windows x64 payload is not
@@ -14,19 +21,6 @@
     <None Include="runtimes\\win-x64\\native\\NNtrain.F16C.dll"
           CopyToOutputDirectory="PreserveNewest"
           Link="NNtrain.F16C.dll" />
-  </ItemGroup>
-
-  <ItemGroup Condition="Exists('runtimes\win-x64\native\NNtrain.CudaKernels.dll')">
-    <None Include="runtimes\win-x64\native\NNtrain.CudaKernels.dll"
-          CopyToOutputDirectory="PreserveNewest"
-          Link="NNtrain.CudaKernels.dll" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="ILGPU" Version="1.5.3" />
-    <PackageReference Include="ILGPU.Algorithms" Version="1.5.3" />
-    <PackageReference Include="NtvLibs.cuda12.cublas64_12.runtime.win-x64" Version="12.8.1" />
-    <PackageReference Include="NtvLibs.cuda12.cublasLt64_12.runtime.win-x64" Version="12.8.1" />
   </ItemGroup>
 
 </Project>

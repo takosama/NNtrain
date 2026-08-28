@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text.Json;
 using NNtrain;
+using NNtrain.Training.Metrics;
 using Xunit;
 
 public sealed class TrainingIntegrationTests
@@ -120,6 +121,14 @@ public sealed class TrainingIntegrationTests
         Assert.True(File.Exists(checkpointPath));
         Assert.True(File.Exists(
             ClassificationCheckpoint.GetSafeTensorsPath(checkpointPath)));
+        string metricsPath = TrainingMetricReporter.GetSidecarPath(
+            Path.ChangeExtension(configurationPath, ".loss.html"));
+        MetricJournalLoadResult firstMetrics =
+            new MetricJournalJsonlRepository(metricsPath).Load();
+        Assert.Equal(2, firstMetrics.Journal.Count);
+        Assert.All(
+            firstMetrics.Journal.Entries,
+            entry => Assert.Equal(1, entry.GlobalStep));
         using (JsonDocument firstCheckpoint = JsonDocument.Parse(
             File.ReadAllText(checkpointPath)))
         {
@@ -160,8 +169,160 @@ public sealed class TrainingIntegrationTests
             resumedCheckpoint.RootElement
                 .GetProperty("CompletedEpoch")
                 .GetInt32());
+        MetricJournalLoadResult resumedMetrics =
+            new MetricJournalJsonlRepository(metricsPath).Load();
+        Assert.Equal(4, resumedMetrics.Journal.Count);
+        Assert.Equal(
+            [1L, 1L, 2L, 2L],
+            resumedMetrics.Journal.Entries
+                .Select(entry => entry.GlobalStep)
+                .ToArray());
         Assert.False(File.Exists(
             TrainingRunGuard.GetMarkerPath(checkpointPath)));
+    }
+
+    [Fact]
+    public void MidEpochResumeMatchesUninterruptedModelOptimizerAndScheduler()
+    {
+        using var directory = new TemporaryDirectory();
+        DatasetFiles training = WriteDataset(
+            directory.Root,
+            "equivalence-train",
+            [0, 1, 0, 1]);
+        DatasetFiles evaluation = WriteDataset(
+            directory.Root,
+            "equivalence-eval",
+            [0, 1]);
+        string uninterruptedConfig = Path.Combine(
+            directory.Root,
+            "uninterrupted.json");
+        string resumedConfig = Path.Combine(
+            directory.Root,
+            "resumed.json");
+        string uninterruptedCheckpoint = Path.Combine(
+            directory.Root,
+            "uninterrupted.checkpoint.json");
+        string resumedCheckpoint = Path.Combine(
+            directory.Root,
+            "resumed.checkpoint.json");
+
+        void WriteConfiguration(
+            string path,
+            string checkpoint,
+            bool resume)
+        {
+            File.WriteAllText(
+                path,
+                JsonSerializer.Serialize(new
+                {
+                    trainingData = new
+                    {
+                        imagePath = training.ImagePath,
+                        labelPath = training.LabelPath,
+                    },
+                    evaluationData = new
+                    {
+                        imagePath = evaluation.ImagePath,
+                        labelPath = evaluation.LabelPath,
+                    },
+                    epochs = 1,
+                    batchSize = 2,
+                    optimizer = "adamw",
+                    learningRate = 0.001f,
+                    showLossGraph = false,
+                    resumeFromCheckpoint = resume,
+                    checkpointPath = checkpoint,
+                    seed = 37,
+                    model = new
+                    {
+                        heads = 1,
+                        hiddenSize = 4,
+                        layers = 1,
+                        dropout = 0f,
+                        seed = 41,
+                    },
+                }));
+        }
+
+        WriteConfiguration(
+            uninterruptedConfig,
+            uninterruptedCheckpoint,
+            resume: false);
+        using var uninterruptedOutput = new StringWriter();
+        using var uninterruptedError = new StringWriter();
+        Assert.Equal(
+            0,
+            Program.Run(
+                ["--config", uninterruptedConfig],
+                uninterruptedOutput,
+                uninterruptedError));
+        Assert.Equal(string.Empty, uninterruptedError.ToString());
+
+        WriteConfiguration(
+            resumedConfig,
+            resumedCheckpoint,
+            resume: false);
+        using var interruptedOutput =
+            new ThrowAfterPartialCheckpointWriter();
+        using var interruptedError = new StringWriter();
+        Assert.Equal(
+            2,
+            Program.Run(
+                ["--config", resumedConfig],
+                interruptedOutput,
+                interruptedError));
+        using (JsonDocument partial = JsonDocument.Parse(
+            File.ReadAllText(resumedCheckpoint)))
+        {
+            Assert.Equal(
+                1,
+                partial.RootElement.GetProperty("CurrentEpoch").GetInt32());
+            Assert.Equal(
+                1,
+                partial.RootElement
+                    .GetProperty("CompletedUpdatesInEpoch")
+                    .GetInt32());
+        }
+
+        WriteConfiguration(
+            resumedConfig,
+            resumedCheckpoint,
+            resume: true);
+        using var resumedOutput = new StringWriter();
+        using var resumedError = new StringWriter();
+        Assert.Equal(
+            0,
+            Program.Run(
+                ["--config", resumedConfig],
+                resumedOutput,
+                resumedError));
+        Assert.Equal(string.Empty, resumedError.ToString());
+
+        Assert.Equal(
+            File.ReadAllBytes(
+                ClassificationCheckpoint.GetSafeTensorsPath(
+                    uninterruptedCheckpoint)),
+            File.ReadAllBytes(
+                ClassificationCheckpoint.GetSafeTensorsPath(
+                    resumedCheckpoint)));
+        using JsonDocument uninterrupted = JsonDocument.Parse(
+            File.ReadAllText(uninterruptedCheckpoint));
+        using JsonDocument resumed = JsonDocument.Parse(
+            File.ReadAllText(resumedCheckpoint));
+        Assert.Equal(
+            uninterrupted.RootElement
+                .GetProperty("Optimizer")
+                .GetRawText(),
+            resumed.RootElement
+                .GetProperty("Optimizer")
+                .GetRawText());
+        Assert.Equal(
+            uninterrupted.RootElement
+                .GetProperty("Scheduler")
+                .GetRawText(),
+            resumed.RootElement
+                .GetProperty("Scheduler")
+                .GetRawText());
     }
 
     [Fact]
@@ -784,6 +945,21 @@ public sealed class TrainingIntegrationTests
         int Epoch,
         float EvaluationLoss,
         ModuleState Model);
+
+    private sealed class ThrowAfterPartialCheckpointWriter : StringWriter
+    {
+        public override void WriteLine(string? value)
+        {
+            base.WriteLine(value);
+            if (value?.Contains(
+                    "training checkpoint =",
+                    StringComparison.Ordinal) == true
+                && value.Contains(" at epoch ", StringComparison.Ordinal))
+            {
+                throw new IOException("intentional mid-epoch interruption");
+            }
+        }
+    }
 
     private readonly record struct DatasetFiles(
         string ImagePath,

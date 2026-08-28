@@ -1,31 +1,33 @@
-using System.Runtime.InteropServices;
-using ILGPU;
-using ILGPU.Runtime;
-using ILGPU.Runtime.Cuda;
+using NNtrain.Cuda.Interop;
 
 namespace NNtrain;
 
 internal static class CudaFlashAttention
 {
-    private const string Library = "NNtrain.CudaKernels";
     private static int _availability;
+    private static int _tensorCoreAvailability;
     internal static bool NativeBackendActive => Volatile.Read(ref _availability) > 0;
-    internal static bool TryForward(CudaAccelerator accelerator,
-        MemoryBuffer1D<float, Stride1D.Dense> projected,
-        MemoryBuffer1D<float, Stride1D.Dense> output, int batch,
+    internal static bool TensorCoreBackendActive
+        => Volatile.Read(ref _tensorCoreAvailability) > 0;
+    internal static bool TryForward(NativeCudaDevice accelerator,
+        NativeCudaBuffer<float> projected,
+        NativeCudaBuffer<float> output,
+        NativeCudaBuffer<float> softmaxLogSumExp, int batch,
         int sequence, int modelWidth, int heads, bool causal)
     {
-        if (Environment.GetEnvironmentVariable(
-                "NNTRAIN_DISABLE_NATIVE_FLASH_ATTENTION") == "1"
+        if (CudaDispatchPolicy.Current.DisableNativeFlashAttention
             || Volatile.Read(ref _availability) < 0
             || modelWidth / heads > 128)
             return false;
         try
         {
             accelerator.Bind();
-            nint stream = ((CudaStream)accelerator.DefaultStream).StreamPtr;
-            int status = Forward(projected.NativePtr, output.NativePtr, batch,
-                sequence, modelWidth, heads, causal ? 1 : 0, stream);
+            nint stream = accelerator.DefaultStream;
+            int status = CudaNativeGateway.FlashAttentionForward(
+                accelerator.Index,
+                projected.NativePtr, output.NativePtr,
+                softmaxLogSumExp.NativePtr, batch, sequence, modelWidth,
+                heads, causal ? 1 : 0, stream);
             if (status != 0)
                 throw new InvalidOperationException($"FlashAttention CUDA error {status}.");
             Volatile.Write(ref _availability, 1);
@@ -35,34 +37,41 @@ internal static class CudaFlashAttention
         catch (EntryPointNotFoundException) { Volatile.Write(ref _availability, -1); return false; }
     }
 
-    internal static void Backward(CudaAccelerator accelerator,
-        MemoryBuffer1D<float, Stride1D.Dense> projected,
-        MemoryBuffer1D<float, Stride1D.Dense> output,
-        MemoryBuffer1D<float, Stride1D.Dense> outputGradient,
-        MemoryBuffer1D<float, Stride1D.Dense> projectedGradient, int batch,
+    internal static void Backward(NativeCudaDevice accelerator,
+        NativeCudaBuffer<float> projected,
+        NativeCudaBuffer<float> output,
+        NativeCudaBuffer<float> outputGradient,
+        NativeCudaBuffer<float> softmaxLogSumExp,
+        NativeCudaBuffer<float> projectedGradient, int batch,
         int sequence, int modelWidth, int heads, bool causal)
     {
         accelerator.Bind();
-        nint stream = ((CudaStream)accelerator.DefaultStream).StreamPtr;
-        int status = BackwardNative(projected.NativePtr, output.NativePtr,
-            outputGradient.NativePtr, projectedGradient.NativePtr, batch,
-            sequence, modelWidth, heads, causal ? 1 : 0, stream);
+        nint stream = accelerator.DefaultStream;
+        int status = CudaNativeGateway.FlashAttentionBackward(
+            accelerator.Index,
+            projected.NativePtr, output.NativePtr,
+            outputGradient.NativePtr, softmaxLogSumExp.NativePtr,
+            projectedGradient.NativePtr, batch, sequence,
+            modelWidth, heads, causal ? 1 : 0, stream);
         if (status != 0)
             throw new InvalidOperationException($"FlashAttention backward CUDA error {status}.");
     }
 
     internal static bool TryForwardBFloat16(
-        CudaAccelerator accelerator,
-        MemoryBuffer1D<ushort, Stride1D.Dense> projected,
-        MemoryBuffer1D<ushort, Stride1D.Dense> output,
+        NativeCudaDevice accelerator,
+        NativeCudaBuffer<ushort> projected,
+        NativeCudaBuffer<ushort> output,
+        NativeCudaBuffer<float> softmaxLogSumExp,
         int batch,
         int sequence,
         int modelWidth,
         int heads,
-        bool causal)
+        bool causal,
+        out bool tensorCore)
     {
-        if (Environment.GetEnvironmentVariable(
-                "NNTRAIN_DISABLE_NATIVE_FLASH_ATTENTION") == "1"
+        tensorCore = false;
+        CudaDispatchPolicy dispatch = CudaDispatchPolicy.Current;
+        if (dispatch.DisableNativeFlashAttention
             || Volatile.Read(ref _availability) < 0
             || modelWidth / heads > 128)
         {
@@ -71,10 +80,60 @@ internal static class CudaFlashAttention
         try
         {
             accelerator.Bind();
-            nint stream = ((CudaStream)accelerator.DefaultStream).StreamPtr;
-            int status = ForwardBFloat16(
+            nint stream = accelerator.DefaultStream;
+            if (!dispatch.DisableTensorCoreFlashAttention
+                && Volatile.Read(ref _tensorCoreAvailability) >= 0)
+            {
+                try
+                {
+                    bool synchronousLoad =
+                        dispatch.DisableAsyncFlashAttention;
+                    int tensorCoreStatus = synchronousLoad
+                        ? CudaNativeGateway
+                            .FlashAttentionForwardBFloat16TensorCoreSync(
+                            accelerator.Index,
+                            projected.NativePtr,
+                            output.NativePtr,
+                            softmaxLogSumExp.NativePtr,
+                            batch,
+                            sequence,
+                            modelWidth,
+                            heads,
+                            causal ? 1 : 0,
+                            stream)
+                        : CudaNativeGateway
+                            .FlashAttentionForwardBFloat16TensorCore(
+                            accelerator.Index,
+                            projected.NativePtr,
+                            output.NativePtr,
+                            softmaxLogSumExp.NativePtr,
+                            batch,
+                            sequence,
+                            modelWidth,
+                            heads,
+                            causal ? 1 : 0,
+                            stream);
+                    if (tensorCoreStatus != 0)
+                    {
+                        throw new InvalidOperationException(
+                            $"BF16 Tensor Core FlashAttention CUDA error " +
+                            $"{tensorCoreStatus}.");
+                    }
+                    Volatile.Write(ref _tensorCoreAvailability, 1);
+                    Volatile.Write(ref _availability, 1);
+                    tensorCore = true;
+                    return true;
+                }
+                catch (EntryPointNotFoundException)
+                {
+                    Volatile.Write(ref _tensorCoreAvailability, -1);
+                }
+            }
+            int status = CudaNativeGateway.FlashAttentionForwardBFloat16(
+                accelerator.Index,
                 projected.NativePtr,
                 output.NativePtr,
+                softmaxLogSumExp.NativePtr,
                 batch,
                 sequence,
                 modelWidth,
@@ -100,67 +159,218 @@ internal static class CudaFlashAttention
     }
 
     internal static void BackwardBFloat16(
-        CudaAccelerator accelerator,
-        MemoryBuffer1D<ushort, Stride1D.Dense> projected,
-        MemoryBuffer1D<ushort, Stride1D.Dense> output,
-        MemoryBuffer1D<float, Stride1D.Dense> outputGradient,
-        MemoryBuffer1D<float, Stride1D.Dense> projectedGradient,
+        NativeCudaDevice accelerator,
+        NativeCudaBuffer<ushort> projected,
+        NativeCudaBuffer<ushort> output,
+        NativeCudaBuffer<float>? outputGradient,
+        NativeCudaBuffer<ushort>? outputGradientBFloat16,
+        NativeCudaBuffer<float> softmaxLogSumExp,
+        NativeCudaBuffer<float>? rowDelta,
+        NativeCudaBuffer<float>? projectedGradient,
+        NativeCudaBuffer<ushort>? projectedGradientBFloat16,
         int batch,
         int sequence,
         int modelWidth,
         int heads,
-        bool causal)
+        bool causal,
+        bool tensorCore)
     {
         accelerator.Bind();
-        nint stream = ((CudaStream)accelerator.DefaultStream).StreamPtr;
-        int status = BackwardNativeBFloat16(
-            projected.NativePtr,
-            output.NativePtr,
-            outputGradient.NativePtr,
-            projectedGradient.NativePtr,
-            batch,
-            sequence,
-            modelWidth,
-            heads,
-            causal ? 1 : 0,
-            stream);
+        nint stream = accelerator.DefaultStream;
+        int status;
+        if (tensorCore)
+        {
+            if (rowDelta is null)
+            {
+                throw new InvalidOperationException(
+                    "Tensor Core FlashAttention backward requires row workspace.");
+            }
+            CudaDispatchPolicy dispatch = CudaDispatchPolicy.Current;
+            bool parallelDkv = !dispatch.DisableParallelAttentionDkv;
+            bool asyncBackwardLoads = !dispatch.DisableAsyncAttentionBackward;
+            if (projectedGradientBFloat16 is not null
+                && outputGradientBFloat16 is not null)
+            {
+                status = asyncBackwardLoads
+                    ? CudaNativeGateway
+                        .FlashAttentionBackwardBFloat16TensorCoreBFloat16IoGradient(
+                        accelerator.Index,
+                        projected.NativePtr,
+                        output.NativePtr,
+                        outputGradientBFloat16.NativePtr,
+                        softmaxLogSumExp.NativePtr,
+                        rowDelta.NativePtr,
+                        projectedGradientBFloat16.NativePtr,
+                        batch,
+                        sequence,
+                        modelWidth,
+                        heads,
+                        causal ? 1 : 0,
+                        stream)
+                    : CudaNativeGateway
+                        .FlashAttentionBackwardBFloat16TensorCoreBFloat16IoGradientSync(
+                        accelerator.Index,
+                        projected.NativePtr,
+                        output.NativePtr,
+                        outputGradientBFloat16.NativePtr,
+                        softmaxLogSumExp.NativePtr,
+                        rowDelta.NativePtr,
+                        projectedGradientBFloat16.NativePtr,
+                        batch,
+                        sequence,
+                        modelWidth,
+                        heads,
+                        causal ? 1 : 0,
+                        stream);
+            }
+            else if (projectedGradientBFloat16 is not null)
+            {
+                if (outputGradient is null)
+                {
+                    throw new InvalidOperationException(
+                        "FlashAttention backward requires output gradient storage.");
+                }
+                status = CudaNativeGateway
+                    .FlashAttentionBackwardBFloat16TensorCoreBFloat16Gradient(
+                    accelerator.Index,
+                    projected.NativePtr,
+                    output.NativePtr,
+                    outputGradient.NativePtr,
+                    softmaxLogSumExp.NativePtr,
+                    rowDelta.NativePtr,
+                    projectedGradientBFloat16.NativePtr,
+                    batch,
+                    sequence,
+                    modelWidth,
+                    heads,
+                    causal ? 1 : 0,
+                    stream);
+            }
+            else if (projectedGradient is null)
+            {
+                throw new InvalidOperationException(
+                    "FlashAttention backward requires gradient storage.");
+            }
+            else
+            {
+                if (outputGradient is null)
+                {
+                    throw new InvalidOperationException(
+                        "FlashAttention backward requires FP32 output gradient storage.");
+                }
+                status = parallelDkv
+                    ? CudaNativeGateway
+                        .FlashAttentionBackwardBFloat16TensorCoreParallelDkv(
+                        accelerator.Index,
+                        projected.NativePtr,
+                        output.NativePtr,
+                        outputGradient.NativePtr,
+                        softmaxLogSumExp.NativePtr,
+                        rowDelta.NativePtr,
+                        projectedGradient.NativePtr,
+                        batch,
+                        sequence,
+                        modelWidth,
+                        heads,
+                        causal ? 1 : 0,
+                        stream)
+                    : CudaNativeGateway
+                        .FlashAttentionBackwardBFloat16TensorCore(
+                        accelerator.Index,
+                        projected.NativePtr,
+                        output.NativePtr,
+                        outputGradient.NativePtr,
+                        softmaxLogSumExp.NativePtr,
+                        rowDelta.NativePtr,
+                        projectedGradient.NativePtr,
+                        batch,
+                        sequence,
+                        modelWidth,
+                        heads,
+                        causal ? 1 : 0,
+                        stream);
+            }
+        }
+        else
+        {
+            if (projectedGradient is null || outputGradient is null)
+            {
+                throw new InvalidOperationException(
+                    "FlashAttention backward requires FP32 gradient storage.");
+            }
+            status = CudaNativeGateway.FlashAttentionBackwardBFloat16(
+                accelerator.Index,
+                projected.NativePtr,
+                output.NativePtr,
+                outputGradient.NativePtr,
+                softmaxLogSumExp.NativePtr,
+                projectedGradient.NativePtr,
+                batch,
+                sequence,
+                modelWidth,
+                heads,
+                causal ? 1 : 0,
+                stream);
+        }
         if (status != 0)
             throw new InvalidOperationException(
                 $"BF16 FlashAttention backward CUDA error {status}.");
     }
 
-    [DllImport(Library, EntryPoint = "nntrain_flash_attention_forward", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int Forward(nint projected, nint output, int batch,
-        int sequence, int modelWidth, int heads, int causal, nint stream);
-    [DllImport(Library, EntryPoint = "nntrain_flash_attention_backward", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int BackwardNative(nint projected, nint output,
-        nint outputGradient, nint projectedGradient, int batch, int sequence,
-        int modelWidth, int heads, int causal, nint stream);
-
-    [DllImport(Library, EntryPoint = "nntrain_flash_attention_forward_bf16",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ForwardBFloat16(
-        nint projected,
-        nint output,
-        int batch,
-        int sequence,
+    internal static void IncrementalBFloat16(
+        NativeCudaDevice accelerator,
+        NativeCudaBuffer<ushort> projected,
+        NativeCudaBuffer<ushort> keyCache,
+        NativeCudaBuffer<ushort> valueCache,
+        NativeCudaBuffer<ushort> output,
+        int position,
+        int cacheCapacity,
         int modelWidth,
-        int heads,
-        int causal,
-        nint stream);
+        int heads)
+    {
+        accelerator.Bind();
+        int status = CudaNativeGateway.FlashAttentionIncrementalBFloat16(
+            accelerator.Index,
+            projected.NativePtr,
+            keyCache.NativePtr,
+            valueCache.NativePtr,
+            output.NativePtr,
+            position,
+            cacheCapacity,
+            modelWidth,
+            heads,
+            accelerator.DefaultStream);
+        if (status != 0)
+        {
+            throw new InvalidOperationException(
+                $"BF16 incremental attention CUDA error {status}.");
+        }
+    }
 
-    [DllImport(Library, EntryPoint = "nntrain_flash_attention_backward_bf16",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int BackwardNativeBFloat16(
-        nint projected,
-        nint output,
-        nint outputGradient,
-        nint projectedGradient,
-        int batch,
+    internal static void PrefillCacheBFloat16(
+        NativeCudaDevice accelerator,
+        NativeCudaBuffer<ushort> projected,
+        NativeCudaBuffer<ushort> keyCache,
+        NativeCudaBuffer<ushort> valueCache,
         int sequence,
-        int modelWidth,
-        int heads,
-        int causal,
-        nint stream);
+        int cacheCapacity,
+        int modelWidth)
+    {
+        accelerator.Bind();
+        int status = CudaNativeGateway.FlashAttentionPrefillCacheBFloat16(
+            accelerator.Index,
+            projected.NativePtr,
+            keyCache.NativePtr,
+            valueCache.NativePtr,
+            sequence,
+            cacheCapacity,
+            modelWidth,
+            accelerator.DefaultStream);
+        if (status != 0)
+        {
+            throw new InvalidOperationException(
+                $"BF16 attention cache prefill CUDA error {status}.");
+        }
+    }
 
 }

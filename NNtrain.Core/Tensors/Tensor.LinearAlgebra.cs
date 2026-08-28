@@ -15,6 +15,23 @@ partial class Tensor
             if (other._shape[0] != n)
                 throw ShapeMismatch(this, other, "MatMul");
 
+            if (ExecutionDevice == TensorDevice.Cuda
+                && DType == other.DType
+                && DType is TensorDType.Float32
+                    or TensorDType.BFloat16
+                    or TensorDType.Bfp8)
+            {
+                return MatMulCuda(
+                    other,
+                    batch: 1,
+                    m: 1,
+                    k: n,
+                    n: 1,
+                    outputShape: [1]);
+            }
+
+            ThrowIfCudaHostFallback("MatMul rank1@rank1");
+
             float s = DotProduct(_data, 0, other._data, 0, n);
 
             var t = new Tensor(new[] { s }, new[] { 1 }, new[] { this, other });
@@ -35,6 +52,23 @@ partial class Tensor
             int k = _shape[1];
             if (other._shape[0] != k)
                 throw ShapeMismatch(this, other, "MatMul");
+
+            if (ExecutionDevice == TensorDevice.Cuda
+                && DType == other.DType
+                && DType is TensorDType.Float32
+                    or TensorDType.BFloat16
+                    or TensorDType.Bfp8)
+            {
+                return MatMulCuda(
+                    other,
+                    batch: 1,
+                    m,
+                    k,
+                    n: 1,
+                    outputShape: [m]);
+            }
+
+            ThrowIfCudaHostFallback("MatMul rank2@rank1");
 
             float[] y = new float[m];
             void ForwardRow(int r)
@@ -86,6 +120,17 @@ partial class Tensor
             if (other._shape[0] != k)
                 throw ShapeMismatch(this, other, "MatMul");
             int n = other._shape[1];
+
+            if (ExecutionDevice == TensorDevice.Cuda
+                && DType == other.DType
+                && (DType == TensorDType.Float32
+                    || DType == TensorDType.BFloat16
+                    || DType == TensorDType.Bfp8))
+            {
+                return MatMulCuda(other, batch: 1, m, k, n, [m, n]);
+            }
+
+            ThrowIfCudaHostFallback("MatMul rank2@rank2");
 
             float[] y = new float[m * n];
 
@@ -170,6 +215,82 @@ partial class Tensor
         throw new NotSupportedException("MatMul supports rank1@rank1, rank2@rank1, rank2@rank2");
     }
 
+    private Tensor MatMulCuda(
+        Tensor other,
+        int batch,
+        int m,
+        int k,
+        int n,
+        int[] outputShape)
+    {
+        bool bfloat16 = DType == TensorDType.BFloat16;
+        bool bfp8 = DType == TensorDType.Bfp8;
+        Tensor result;
+        if (bfp8)
+        {
+            Bfp8QuantizationDescriptor outputDescriptor =
+                SelectBfp8ResultDescriptor(this, other);
+            using CudaBfp8OwnedBuffers output = CudaBfp8Gemm.MatMulForward(
+                this,
+                other,
+                outputDescriptor,
+                batch,
+                m,
+                k,
+                n);
+            result = FromCudaBfp8Result(
+                output,
+                CudaDeviceIndex,
+                outputShape,
+                [this, other]);
+        }
+        else if (bfloat16)
+        {
+            var output = TensorCudaKernels.MatMulForwardBFloat16Resident(
+                this, other, batch, m, k, n);
+            result = FromCudaResult(
+                output,
+                CudaDeviceIndex,
+                outputShape,
+                [this, other],
+                TensorDType.BFloat16);
+        }
+        else
+        {
+            var output = TensorCudaKernels.MatMulForwardResident(
+                this, other, batch, m, k, n);
+            result = FromCudaResult(
+                output,
+                CudaDeviceIndex,
+                outputShape,
+                [this, other],
+                TensorDType.Float32);
+        }
+
+        if (AutogradContext.IsRecordingEnabled)
+        {
+            result.Node.BackwardAction = () =>
+            {
+                if (bfp8)
+                {
+                    CudaBfp8Gemm.MatMulBackward(
+                        this, other, result, batch, m, k, n);
+                }
+                else if (bfloat16)
+                {
+                    TensorCudaKernels.MatMulBackwardBFloat16Resident(
+                        this, other, result, batch, m, k, n);
+                }
+                else
+                {
+                    TensorCudaKernels.MatMulBackwardResident(
+                        this, other, result, batch, m, k, n);
+                }
+            };
+        }
+        return result;
+    }
+
     /// <summary>
     /// Multiplies two rank-2 tensors while treating the right operand as
     /// transposed, without allocating a transposed tensor.
@@ -189,6 +310,23 @@ partial class Tensor
         int n = other._shape[0];
         if (other._shape[1] != k)
             throw ShapeMismatch(this, other, "MatMulTransposedRight");
+
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType == other.DType
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return MatMulTransposedRightCuda(
+                other,
+                batch: 1,
+                m,
+                k,
+                n,
+                [m, n]);
+        }
+
+        ThrowIfCudaHostFallback(nameof(MatMulTransposedRight));
 
         float[] y = new float[m * n];
 
@@ -278,6 +416,9 @@ partial class Tensor
                 "MatMulTransposedRightAddRow requires shapes [m, k], " +
                 "[n, k], and [n].");
         }
+
+        if (ExecutionDevice == TensorDevice.Cuda)
+            return LinearLastDim(other, rowBias, applyRelu: false);
 
         float[] y = new float[m * n];
         bool useOutputVectorization = CanUseTransposedRightKernel(k, n);

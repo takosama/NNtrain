@@ -4,6 +4,50 @@ using Xunit;
 public sealed class ForgetMemoryV2Tests
 {
     [Fact]
+    public void RecurrentStateMatchesFullCpuForwardAndResetsDeterministically()
+    {
+        TensorDevice previous = Tensor.ExecutionDevice;
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cpu;
+            var model = new ForgetMemoryV2Gpt(
+                vocabularySize: 17,
+                contextLength: 8,
+                modelWidth: 8,
+                hiddenWidth: 12,
+                numLayers: 2,
+                keyWidth: 3,
+                valueWidth: 4,
+                random: new Random(91),
+                dtype: TensorDType.Float32);
+            int[] tokens = [2, 5, 7, 3];
+            Tensor expected;
+            Tensor actual;
+            using (AutogradContext.NoGrad())
+            {
+                expected = model.Forward(tokens, 1, tokens.Length);
+                using ForgetMemoryV2RecurrentState state =
+                    model.CreateRecurrentState();
+                actual = model.Advance(tokens, state);
+
+                Assert.Equal(tokens.Length, state.TokensSeen);
+                Assert.True(state.PeakMagnitude() > 0f);
+                Assert.Equal(expected.Data, actual.Data);
+
+                state.Reset();
+                Assert.Equal(0, state.TokensSeen);
+                Assert.Equal(0f, state.PeakMagnitude());
+                Tensor replay = model.Advance(tokens, state);
+                Assert.Equal(expected.Data, replay.Data);
+            }
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previous;
+        }
+    }
+
+    [Fact]
     public void SingleTokenImplementsStableDeltaMemoryAndReadout()
     {
         float valueLogit = 0.5f * MathF.Log(3f);
@@ -282,6 +326,56 @@ public sealed class ForgetMemoryV2Tests
         finally
         {
             Tensor.ExecutionDevice = previousDevice;
+        }
+    }
+
+    [Fact]
+    public void CudaBFloat16TensorCoreForwardBackwardMatchesCpu()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int previousDeviceIndex = Tensor.CudaDeviceIndex;
+        try
+        {
+            const int batch = 2;
+            const int sequence = 5;
+            const int keyWidth = 16;
+            const int valueWidth = 16;
+            const int projectionWidth = 2 * keyWidth + 3 * valueWidth;
+            float[] values = Enumerable.Range(
+                    0, batch * sequence * projectionWidth)
+                .Select(i => MathF.Sin(i * 0.071f) * 0.4f)
+                .ToArray();
+            float[] upstream = Enumerable.Range(
+                    0, batch * sequence * valueWidth)
+                .Select(i => MathF.Cos(i * 0.113f) * 0.25f)
+                .ToArray();
+
+            (float[] Output, float[] Gradient) Run(TensorDevice device)
+            {
+                Tensor.ExecutionDevice = device;
+                Tensor.CudaDeviceIndex = 0;
+                var input = new Tensor(
+                    values,
+                    [batch, sequence, projectionWidth],
+                    dtype: TensorDType.BFloat16);
+                Tensor output = input.ForgetMemoryV2(
+                    keyWidth, valueWidth, retentionFloor: 0.35f);
+                output.Backward(upstream);
+                return (output.Data.ToArray(), input.Grad.ToArray());
+            }
+
+            var cpu = Run(TensorDevice.Cpu);
+            var cuda = Run(TensorDevice.Cuda);
+            AssertClose(cpu.Output, cuda.Output, 3e-3f);
+            AssertClose(cpu.Gradient, cuda.Gradient, 4e-3f);
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndex = previousDeviceIndex;
         }
     }
 

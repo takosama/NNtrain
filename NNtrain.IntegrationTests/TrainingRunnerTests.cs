@@ -30,6 +30,16 @@ public sealed class TrainingRunnerTests
         Assert.Equal(Enumerable.Range(0, 20), first.Order());
     }
 
+    [Fact]
+    public void CombinedTrainingSeedIsStableAndSeparatesEpochsAndStreams()
+    {
+        int first = TrainingRunner.CombineSeed(1234, 2, 0x5A17);
+
+        Assert.Equal(first, TrainingRunner.CombineSeed(1234, 2, 0x5A17));
+        Assert.NotEqual(first, TrainingRunner.CombineSeed(1234, 1, 0x5A17));
+        Assert.NotEqual(first, TrainingRunner.CombineSeed(1234, 2, 0x31B7));
+    }
+
     [Theory]
     [InlineData(1, 20, false)]
     [InlineData(1, 10, true)]

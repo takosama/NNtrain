@@ -32,10 +32,12 @@ public static class datasets
         string root,
         string text_column = "text",
         int? max_documents = null,
-        CancellationToken cancellation_token = default)
+        CancellationToken cancellation_token = default,
+        int? shuffle_seed = null)
         => WikiParquetCorpus.ReadTextsAsync(
             root,
             text_column,
             max_documents,
-            cancellation_token);
+            cancellation_token,
+            shuffle_seed);
 }

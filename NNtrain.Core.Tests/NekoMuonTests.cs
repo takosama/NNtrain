@@ -36,6 +36,13 @@ public sealed class NekoMuonTests
             2e-5f);
         Assert.Equal(0.5f, optimizer.CaptureState()
             .ParameterStates[0].Confidence);
+        NekoMuonDiagnostics diagnostics = optimizer.GetDiagnostics();
+        Assert.Equal(1, diagnostics.Step);
+        Assert.Equal(0.5f, diagnostics.MinimumConfidence);
+        Assert.Equal(0.5f, diagnostics.MeanConfidence);
+        Assert.Equal(0.5f, diagnostics.MaximumConfidence);
+        Assert.Equal(0.5f, diagnostics.MeanNewtonSchulzDepth);
+        Assert.Equal(1, diagnostics.MaximumNewtonSchulzDepth);
     }
 
     [Fact]
@@ -242,6 +249,190 @@ public sealed class NekoMuonTests
                 Assert.Equal(0d, optimizer.LastStepProfile.FirstGramMilliseconds);
             else
                 Assert.True(optimizer.LastStepProfile.FirstGramMilliseconds > 0d);
+        }
+    }
+
+    [Theory]
+    [InlineData(
+        NekoMuonNewtonSchulzDepthMode.Adaptive,
+        0f,
+        0.25f,
+        true,
+        1f)]
+    [InlineData(
+        NekoMuonNewtonSchulzDepthMode.Minimum,
+        1.5f,
+        0.25f,
+        true,
+        1.5f)]
+    [InlineData(
+        NekoMuonNewtonSchulzDepthMode.Minimum,
+        1.5f,
+        0.75f,
+        true,
+        3f)]
+    [InlineData(
+        NekoMuonNewtonSchulzDepthMode.Fixed,
+        1.5f,
+        0.75f,
+        true,
+        1.5f)]
+    [InlineData(
+        NekoMuonNewtonSchulzDepthMode.Adaptive,
+        0f,
+        0.25f,
+        false,
+        0f)]
+    [InlineData(
+        NekoMuonNewtonSchulzDepthMode.Minimum,
+        1.5f,
+        0.75f,
+        false,
+        0f)]
+    [InlineData(
+        NekoMuonNewtonSchulzDepthMode.Fixed,
+        1.5f,
+        0.75f,
+        false,
+        0f)]
+    public void ResolvesConfiguredNewtonSchulzDepth(
+        NekoMuonNewtonSchulzDepthMode mode,
+        float configuredDepth,
+        float confidence,
+        bool runNewtonSchulz,
+        float expectedDepth)
+    {
+        var options = new NekoMuonOptions
+        {
+            MaxNewtonSchulzSteps = 4,
+            NewtonSchulzDepthMode = mode,
+            NewtonSchulzDepth = configuredDepth,
+        };
+
+        float actual = NekoMuon.ResolveNewtonSchulzDepth(
+            options,
+            confidence,
+            runNewtonSchulz);
+
+        Assert.Equal(expectedDepth, actual);
+    }
+
+    [Fact]
+    public void ForceFullNewtonSchulzKeepsTheOrdinaryConfidenceEma()
+    {
+        Parameter adaptiveParameter = CreateParameter(
+            [0f, 0f, 0f, 0f],
+            [2, 2],
+            WeightDecayPolicy.Exclude);
+        Parameter forcedParameter = CreateParameter(
+            [0f, 0f, 0f, 0f],
+            [2, 2],
+            WeightDecayPolicy.Exclude);
+        var options = new NekoMuonOptions
+        {
+            LearningRate = 1f,
+            BetaFast = 0f,
+            BetaSlow = 0f,
+            Rho = 0.5f,
+            Epsilon = 1e-12f,
+            MaxNewtonSchulzSteps = 1,
+            NewtonSchulzInterval = 1,
+            WeightDecay = 0f,
+        };
+        var adaptive = new NekoMuon([adaptiveParameter], options);
+        var forced = new NekoMuon([forcedParameter], options)
+        {
+            ForceFullNewtonSchulz = true,
+        };
+        float[] gradient = [1f, 0f, 0f, 1f];
+        gradient.AsSpan().CopyTo(adaptiveParameter.T.MutableGrad);
+        gradient.AsSpan().CopyTo(forcedParameter.T.MutableGrad);
+
+        adaptive.Step();
+        forced.Step();
+
+        NekoMuonParameterState adaptiveState =
+            adaptive.CaptureState().ParameterStates[0];
+        NekoMuonParameterState forcedState =
+            forced.CaptureState().ParameterStates[0];
+        Assert.Equal(0.5f, adaptiveState.Confidence);
+        Assert.Equal(adaptiveState.Confidence, forcedState.Confidence);
+        AssertClose(adaptiveState.FastMoment, forcedState.FastMoment);
+        AssertClose(adaptiveState.SlowMoment, forcedState.SlowMoment);
+        Assert.True(
+            MathF.Abs(forcedParameter.T.Data[0])
+                > MathF.Abs(adaptiveParameter.T.Data[0]));
+        Assert.Equal(1f, forced.GetDiagnostics().MeanNewtonSchulzDepth);
+    }
+
+    [Fact]
+    public void FixedMaximumDepthMatchesDiagnosticForceFullOnCpu()
+    {
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cpu;
+            float[] initial = [0.2f, -0.1f, 0.3f, 0.4f];
+            float[] gradient = [0.7f, -0.2f, 0.1f, 0.5f];
+            Parameter fixedParameter = CreateParameter(
+                initial.ToArray(),
+                [2, 2],
+                WeightDecayPolicy.Exclude);
+            Parameter diagnosticParameter = CreateParameter(
+                initial.ToArray(),
+                [2, 2],
+                WeightDecayPolicy.Exclude);
+            var options = new NekoMuonOptions
+            {
+                LearningRate = 0.03f,
+                BetaFast = 0.7f,
+                BetaSlow = 0.9f,
+                Rho = 0.6f,
+                Epsilon = 1e-8f,
+                MaxNewtonSchulzSteps = 2,
+                NewtonSchulzInterval = 1,
+                WeightDecay = 0f,
+            };
+            var fixedDepth = new NekoMuon([fixedParameter], options);
+            fixedDepth.SetNewtonSchulzDepthPolicy(
+                NekoMuonNewtonSchulzDepthMode.Fixed,
+                options.MaxNewtonSchulzSteps);
+            var diagnostic = new NekoMuon([diagnosticParameter], options)
+            {
+                ForceFullNewtonSchulz = true,
+            };
+            gradient.AsSpan().CopyTo(fixedParameter.T.MutableGrad);
+            gradient.AsSpan().CopyTo(diagnosticParameter.T.MutableGrad);
+
+            fixedDepth.Step();
+            diagnostic.Step();
+
+            NekoMuonParameterState fixedState =
+                fixedDepth.CaptureState().ParameterStates[0];
+            NekoMuonParameterState diagnosticState =
+                diagnostic.CaptureState().ParameterStates[0];
+            AssertClose(
+                fixedParameter.T.Data,
+                diagnosticParameter.T.Data,
+                1e-6f);
+            AssertClose(
+                fixedState.FastMoment,
+                diagnosticState.FastMoment,
+                1e-7f);
+            AssertClose(
+                fixedState.SlowMoment,
+                diagnosticState.SlowMoment,
+                1e-7f);
+            Assert.Equal(
+                fixedState.Confidence,
+                diagnosticState.Confidence);
+            Assert.Equal(
+                fixedDepth.GetDiagnostics().MeanNewtonSchulzDepth,
+                diagnostic.GetDiagnostics().MeanNewtonSchulzDepth);
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
         }
     }
 

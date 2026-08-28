@@ -45,6 +45,8 @@ public sealed class Lion : IOptimizer, ILearningRateAdjustable
     public LionState CaptureState()
         => CloneState(_state);
 
+    internal LionState CaptureStateForStreaming() => _state;
+
     public float LearningRate => _state.Options.LearningRate;
 
     public void SetLearningRate(float learningRate)
@@ -64,11 +66,17 @@ public sealed class Lion : IOptimizer, ILearningRateAdjustable
     }
 
     public void RestoreState(LionState state)
+        => RestoreState(state, takeOwnership: false);
+
+    private void RestoreState(LionState state, bool takeOwnership)
     {
         ArgumentNullException.ThrowIfNull(state);
         ValidateState(state);
-        _state = CloneState(state);
+        _state = takeOwnership ? state : CloneState(state);
     }
+
+    internal void RestoreStateOwned(LionState state)
+        => RestoreState(state, takeOwnership: true);
 
     internal void ZeroGrad()
     {
@@ -202,7 +210,7 @@ public sealed class Lion : IOptimizer, ILearningRateAdjustable
     public void load_state_dict(OptimizerStateDictionary state)
     {
         ArgumentNullException.ThrowIfNull(state);
-        RestoreState(state.Read<LionState>("Lion"));
+        RestoreStateOwned(state.Read<LionState>("Lion"));
     }
 
     private static LionState CreateInitialState(

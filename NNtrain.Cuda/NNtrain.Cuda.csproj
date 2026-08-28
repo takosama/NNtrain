@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <NNtrainArchitectureLayer>Cuda</NNtrainArchitectureLayer>
+    <NNtrainAllowedProjectReferences>NNtrain.Runtime</NNtrainAllowedProjectReferences>
+    <CudaNativePayloadPath>$(MSBuildThisFileDirectory)runtimes\win-x64\native\NNtrain.CudaKernels.dll</CudaNativePayloadPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NNtrain.Runtime\NNtrain.Runtime.csproj" />
+  </ItemGroup>
+
+  <!-- NNtrain.Cuda is the sole owner of CUDA source and of the versioned
+       native gateway payload. CopyToOutputDirectory is intentionally kept on
+       this project item: SDK project-reference traversal propagates it to
+       Core, Training, CLI and test output directories without teaching those
+       higher layers where the payload is built. -->
+  <ItemGroup>
+    <None Remove="native\**\*.cu" />
+    <NativeCudaSource Include="native\**\*.cu" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(CudaNativePayloadPath)')">
+    <Content Include="$(CudaNativePayloadPath)"
+             Link="NNtrain.CudaKernels.dll"
+             TargetPath="NNtrain.CudaKernels.dll"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             Pack="true"
+             PackagePath="runtimes\win-x64\native" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NtvLibs.cuda12.cublas64_12.runtime.win-x64" Version="12.8.1" />
+    <PackageReference Include="NtvLibs.cuda12.cublasLt64_12.runtime.win-x64" Version="12.8.1" />
+  </ItemGroup>
+
+</Project>

@@ -57,7 +57,10 @@ public static class optim
         int newton_schulz_steps = 5,
         int newton_schulz_interval = 5,
         float weight_decay = 1e-2f,
-        bool decay_1d = false)
+        bool decay_1d = false,
+        NekoMuonNewtonSchulzDepthMode newton_schulz_depth_mode =
+            NekoMuonNewtonSchulzDepthMode.Adaptive,
+        float newton_schulz_depth = 0f)
         => new NNtrain.NekoMuon(
             parameters,
             new NekoMuonOptions
@@ -69,6 +72,8 @@ public static class optim
                 Epsilon = eps,
                 MaxNewtonSchulzSteps = newton_schulz_steps,
                 NewtonSchulzInterval = newton_schulz_interval,
+                NewtonSchulzDepthMode = newton_schulz_depth_mode,
+                NewtonSchulzDepth = newton_schulz_depth,
                 WeightDecay = weight_decay,
                 Decay1D = decay_1d,
             });

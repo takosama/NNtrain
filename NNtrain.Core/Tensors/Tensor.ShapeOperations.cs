@@ -19,6 +19,13 @@ partial class Tensor
         int sourceOffset = checked((sequence - 1) * width);
         if (ExecutionDevice == TensorDevice.Cuda)
         {
+            if (DType == TensorDType.Bfp8)
+            {
+                return CopyBfp8RangeCuda(
+                    sourceOffset,
+                    width,
+                    [1, width]);
+            }
             if (DType == TensorDType.BFloat16)
             {
                 var bfloat16Buffer =
@@ -31,8 +38,18 @@ partial class Tensor
                     [this],
                     TensorDType.BFloat16);
                 bfloat16Result.Node.BackwardAction = () =>
-                    TensorCudaKernels.AccumulateGradientRangeResident(
-                        bfloat16Result, this, sourceOffset);
+                {
+                    if (!TryAccumulateBFloat16GradientRangeCuda(
+                            bfloat16Result,
+                            this,
+                            sourceOffset: 0,
+                            destinationOffset: sourceOffset,
+                            length: width))
+                    {
+                        TensorCudaKernels.AccumulateGradientRangeResident(
+                            bfloat16Result, this, sourceOffset);
+                    }
+                };
                 return bfloat16Result;
             }
             var buffer = TensorCudaKernels.CopyRangeForwardResident(
@@ -65,6 +82,31 @@ partial class Tensor
 
         if (ExecutionDevice == TensorDevice.Cuda)
         {
+            if (DType == TensorDType.Bfp8)
+            {
+                int deviceIndex = CudaDeviceIndex;
+                CudaBfp8BufferView source =
+                    EnsureCudaBfp8Buffer(deviceIndex);
+                NativeCudaDevice accelerator =
+                    ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+                using CudaBfp8OwnedBuffers output =
+                    CudaBfp8OwnedBuffers.Allocate(
+                        accelerator,
+                        Numel,
+                        source.Descriptor);
+                source.Payload.View.CopyTo(output.Payload.View);
+                source.Scales.View.CopyTo(output.Scales.View);
+                Tensor bfp8Result = FromCudaBfp8Result(
+                    output,
+                    deviceIndex,
+                    newShape,
+                    [this]);
+                bfp8Result.Node.BackwardAction = () =>
+                    TensorCudaKernels.AccumulateGradientResident(
+                        bfp8Result,
+                        this);
+                return bfp8Result;
+            }
             if (DType == TensorDType.BFloat16)
             {
                 var bfloat16Buffer =
@@ -76,9 +118,19 @@ partial class Tensor
                     [this],
                     TensorDType.BFloat16);
                 bfloat16Result.Node.BackwardAction = () =>
-                    TensorCudaKernels.AccumulateGradientResident(
-                        bfloat16Result,
-                        this);
+                {
+                    if (!TryAccumulateBFloat16GradientRangeCuda(
+                            bfloat16Result,
+                            this,
+                            sourceOffset: 0,
+                            destinationOffset: 0,
+                            length: Numel))
+                    {
+                        TensorCudaKernels.AccumulateGradientResident(
+                            bfloat16Result,
+                            this);
+                    }
+                };
                 return bfloat16Result;
             }
             var cudaBuffer = TensorCudaKernels.CopyForwardResident(this);
@@ -105,8 +157,86 @@ partial class Tensor
         return t;
     }
 
+    /// <summary>
+    /// Copies a contiguous BFP8 range without widening it on the host. A
+    /// tensor-wide scale and block-aligned ranges can be copied exactly. The
+    /// uncommon unaligned block range is decoded and requantized on CUDA so
+    /// its new block boundaries remain mathematically valid.
+    /// </summary>
+    private Tensor CopyBfp8RangeCuda(
+        int sourceOffset,
+        int length,
+        int[] outputShape)
+    {
+        int deviceIndex = CudaDeviceIndex;
+        CudaBfp8BufferView source = EnsureCudaBfp8Buffer(deviceIndex);
+        Bfp8QuantizationDescriptor descriptor = source.Descriptor;
+        NativeCudaDevice accelerator =
+            ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+        using CudaBfp8OwnedBuffers output = CudaBfp8OwnedBuffers.Allocate(
+            accelerator,
+            length,
+            descriptor);
+
+        if (descriptor.Granularity == Bfp8ScaleGranularity.Tensor)
+        {
+            source.Payload.View
+                .SubView(sourceOffset, length)
+                .CopyTo(output.Payload.View);
+            source.Scales.View.CopyTo(output.Scales.View);
+        }
+        else if (sourceOffset % descriptor.BlockSize == 0)
+        {
+            source.Payload.View
+                .SubView(sourceOffset, length)
+                .CopyTo(output.Payload.View);
+            int scaleOffset = sourceOffset / descriptor.BlockSize;
+            source.Scales.View
+                .SubView(scaleOffset, checked((int)output.Scales.Length))
+                .CopyTo(output.Scales.View);
+        }
+        else
+        {
+            NativeCudaBuffer<ushort> decodedRange =
+                RentCudaBFloat16Buffer(deviceIndex, length);
+            using CudaBfp8BFloat16Lease sourceDecode =
+                AcquireCudaBfp8BFloat16Buffer(deviceIndex);
+            try
+            {
+                sourceDecode.Buffer.View
+                    .SubView(sourceOffset, length)
+                    .CopyTo(decodedRange.View);
+                CudaBfp8Native.QuantizeBFloat16(
+                    deviceIndex,
+                    decodedRange,
+                    output.Payload,
+                    output.Scales,
+                    descriptor);
+            }
+            finally
+            {
+                ReturnCudaBFloat16Buffer(accelerator, decodedRange);
+            }
+        }
+
+        Tensor result = FromCudaBfp8Result(
+            output,
+            deviceIndex,
+            outputShape,
+            [this]);
+        result.Node.BackwardAction = () =>
+            TensorCudaKernels.AccumulateGradientRangeResident(
+                result,
+                this,
+                sourceOffset);
+        return result;
+    }
+
     public Tensor Slice(int dim, int start, int length)
     {
+        if (ExecutionDevice == TensorDevice.Cuda)
+            return SliceCuda(dim, start, length);
+        ThrowIfCudaHostFallback(nameof(Slice));
         if (Rank == 1)
         {
             if (dim != 0)
@@ -354,6 +484,9 @@ partial class Tensor
                 throw new ArgumentException("All tensors passed to Concat must have the same rank.", nameof(xs));
 
         TensorDType resultDType = TensorDTypeContract.Promote(xs);
+        if (ExecutionDevice == TensorDevice.Cuda)
+            return ConcatCuda(dim, xs);
+        ThrowIfCudaHostFallback(nameof(Concat));
 
         if (rank == 1)
         {
@@ -726,6 +859,14 @@ partial class Tensor
     public Tensor Transpose()
     {
         CheckRank(2);
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return TransposeCuda();
+        }
+        ThrowIfCudaHostFallback(nameof(Transpose));
 
         int rows = _shape[0];
         int cols = _shape[1];

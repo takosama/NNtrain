@@ -1,13 +1,54 @@
+using NNtrain.Cuda.Execution;
+using NNtrain.Training.Optimization;
+
 namespace NNtrain;
 
 internal static partial class WikiLanguageModelCommand
 {
+    internal static void PreflightCudaOptimizer(
+        WikiTrainingConfiguration config,
+        TensorPrecisionMode precisionMode,
+        Func<int, CudaKernelCapabilities>? capabilityProvider = null)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        if (config.GetExecutionDevice() != TensorDevice.Cuda)
+            return;
+
+        CudaOptimizerCapabilityPreflight.EnsureBeforeAllocation(
+            GetCudaOptimizerKind(config),
+            precisionMode,
+            config.DeviceIndices ?? [config.DeviceIndex],
+            capabilityProvider);
+    }
+
+    private static CudaOptimizerKind GetCudaOptimizerKind(
+        WikiTrainingConfiguration config)
+    {
+        if (config.IsOptimizer(WikiTrainingConfiguration.NekoMuonOptimizer))
+            return CudaOptimizerKind.NekoMuon;
+        if (config.IsOptimizer(WikiTrainingConfiguration.LionOptimizer))
+            return CudaOptimizerKind.Lion;
+        if (config.IsOptimizer(
+            WikiTrainingConfiguration.GainShareAdamWOptimizer))
+        {
+            return CudaOptimizerKind.GainShareAdamW;
+        }
+        return CudaOptimizerKind.AdamW;
+    }
+
     internal static IOptimizer CreateOptimizer(
+        LanguageModel model,
+        WikiTrainingConfiguration config)
+        => CreateOptimizerBundle(model, config).RootOptimizer;
+
+    internal static OptimizerBundle CreateOptimizerBundle(
         LanguageModel model,
         WikiTrainingConfiguration config)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(config);
+        bool useBFloat16Moments =
+            model.PrecisionMode == TensorPrecisionMode.BFloat16;
 
         if (config.IsOptimizer(WikiTrainingConfiguration.NekoMuonOptimizer))
         {
@@ -16,7 +57,11 @@ internal static partial class WikiLanguageModelCommand
                 lr: config.LearningRate,
                 newton_schulz_interval:
                     config.NekoMuonNewtonSchulzInterval,
-                weight_decay: config.WeightDecay);
+                weight_decay: config.WeightDecay,
+                newton_schulz_depth_mode:
+                    config.GetNekoMuonNewtonSchulzDepthMode(),
+                newton_schulz_depth:
+                    config.GetNekoMuonNewtonSchulzDepth());
             IOptimizer auxiliaryAdamW = optim.AdamW(
                 model.AuxiliaryParameters,
                 lr: config.AuxiliaryLearningRate,
@@ -24,15 +69,19 @@ internal static partial class WikiLanguageModelCommand
                 beta2: 0.95f,
                 eps: 1e-8f,
                 weight_decay: config.WeightDecay,
-                bf16_first_moment: config.AdamWUseBFloat16FirstMoment,
-                bf16_second_moment: config.AdamWUseBFloat16SecondMoment);
-            return optim.Composite(nekoMuon, auxiliaryAdamW);
+                bf16_first_moment: useBFloat16Moments,
+                bf16_second_moment: useBFloat16Moments);
+            return new OptimizerBundle(
+            [
+                new OptimizerGroup("hidden", nekoMuon),
+                new OptimizerGroup("auxiliary", auxiliaryAdamW),
+            ]);
         }
 
         if (config.IsOptimizer(
             WikiTrainingConfiguration.GainShareAdamWOptimizer))
         {
-            return optim.GainShareAdamW(
+            IOptimizer optimizer = optim.GainShareAdamW(
                 model.make_gainshare_parameter_groups(
                     config.GainShareBlockDepth),
                 lr: config.LearningRate,
@@ -44,22 +93,25 @@ internal static partial class WikiLanguageModelCommand
                 min_scale: config.GainShareMinScale,
                 max_scale: config.GainShareMaxScale,
                 weight_decay: config.WeightDecay);
+            return OptimizerBundle.Wrap(optimizer, ["all"]);
         }
 
         if (config.IsOptimizer(WikiTrainingConfiguration.LionOptimizer))
         {
-            return optim.Lion(
+            IOptimizer optimizer = optim.Lion(
                 model.parameters(),
                 lr: config.LearningRate,
                 weight_decay: config.WeightDecay);
+            return OptimizerBundle.Wrap(optimizer, ["all"]);
         }
 
-        return optim.AdamW(
+        IOptimizer adamW = optim.AdamW(
             model.parameters(),
             lr: config.LearningRate,
             weight_decay: config.WeightDecay,
-            bf16_first_moment: config.AdamWUseBFloat16FirstMoment,
-            bf16_second_moment: config.AdamWUseBFloat16SecondMoment);
+            bf16_first_moment: useBFloat16Moments,
+            bf16_second_moment: useBFloat16Moments);
+        return OptimizerBundle.Wrap(adamW, ["all"]);
     }
 
     private static void WriteOptimizerSummary(
@@ -73,10 +125,12 @@ internal static partial class WikiLanguageModelCommand
                 $"optimizer = NekoMuon " +
                 $"({model.HiddenWeightParameters.Count} matrix parameters, " +
                 $"lr {config.LearningRate:G}, Newton-Schulz every " +
-                $"{config.NekoMuonNewtonSchulzInterval} steps) + AdamW " +
+                $"{config.NekoMuonNewtonSchulzInterval} steps, " +
+                $"{FormatNekoMuonNewtonSchulzDepthPolicy(config)}) + " +
+                "AdamW " +
                 $"({model.AuxiliaryParameters.Count} auxiliary parameters, " +
                 $"lr {config.AuxiliaryLearningRate:G}, moments " +
-                $"{GetAdamWMomentStorage(config)})");
+                $"{GetAdamWMomentStorage(model)})");
         }
         else if (config.IsOptimizer(
             WikiTrainingConfiguration.GainShareAdamWOptimizer))
@@ -105,16 +159,47 @@ internal static partial class WikiLanguageModelCommand
             output.WriteLine(
                 $"optimizer = AdamW ({model.parameters().Count()} " +
                 $"parameters, lr {config.LearningRate:G}, moments " +
-                $"{GetAdamWMomentStorage(config)})");
+                $"{GetAdamWMomentStorage(model)})");
         }
-        output.WriteLine(
-            $"learning-rate schedule = linear warmup " +
-            $"{config.WarmupPercent:G}% of total training, then cosine " +
-            "decay");
+        output.WriteLine(config.WarmupPercent == 0f
+            ? "learning-rate schedule = no warmup; cosine decay from the " +
+                "first update"
+            : $"learning-rate schedule = linear warmup " +
+                $"{config.WarmupPercent:G}% of total training, then " +
+                "cosine decay");
+    }
+
+    private static string FormatNekoMuonNewtonSchulzDepthPolicy(
+        WikiTrainingConfiguration config)
+    {
+        NekoMuonNewtonSchulzDepthMode mode =
+            config.GetNekoMuonNewtonSchulzDepthMode();
+        return mode == NekoMuonNewtonSchulzDepthMode.Adaptive
+            ? "adaptive depth"
+            : $"{mode.ToString().ToLowerInvariant()} depth " +
+                $"{config.GetNekoMuonNewtonSchulzDepth():G}";
     }
 
     private static string GetAdamWMomentStorage(
-        WikiTrainingConfiguration config)
-        => $"{(config.AdamWUseBFloat16FirstMoment ? "bf16" : "f32")}/" +
-            $"{(config.AdamWUseBFloat16SecondMoment ? "bf16" : "f32")}";
+        LanguageModel model)
+        => model.PrecisionMode == TensorPrecisionMode.BFloat16
+            ? "bf16/bf16"
+            : "f32/f32";
+
+    private static string FormatOptimizerDiagnostics(IOptimizer optimizer)
+    {
+        NekoMuon? nekoMuon = OptimizerBundle
+            .GetCheckpointLeafOptimizers(optimizer)
+            .OfType<NekoMuon>()
+            .FirstOrDefault();
+        if (nekoMuon is null)
+            return string.Empty;
+
+        NekoMuonDiagnostics diagnostics = nekoMuon.GetDiagnostics();
+        return $", neko confidence = {diagnostics.MeanConfidence:G4} " +
+            $"[{diagnostics.MinimumConfidence:G4}-" +
+            $"{diagnostics.MaximumConfidence:G4}], NS depth = " +
+            $"{diagnostics.MeanNewtonSchulzDepth:G4}/" +
+            $"{diagnostics.MaximumNewtonSchulzDepth}";
+    }
 }

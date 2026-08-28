@@ -89,7 +89,8 @@ public static class nn
         int num_classes,
         float dropout = 0f,
         float init_scale = 0.02f,
-        Random? generator = null)
+        Random? generator = null,
+        TensorDType dtype = TensorDType.Float32)
         => new(
             seqLen: seq_len,
             dModel: d_model,
@@ -99,7 +100,8 @@ public static class nn
             numClasses: num_classes,
             rng: generator ?? torch.generator(),
             initScale: init_scale,
-            dropout: dropout);
+            dropout: dropout,
+            dtype: dtype);
 
     public static Dropout dropout(
         float p = 0.5f,

@@ -1,6 +1,6 @@
 namespace NNtrain;
 
-public sealed class CompositeOptimizer : IOptimizer
+public sealed class CompositeOptimizer : IOptimizerContainer
 {
     private readonly IOptimizer[] _optimizers;
 
@@ -59,8 +59,24 @@ public sealed class CompositeOptimizer : IOptimizer
 
     internal IReadOnlyList<Parameter> Parameters { get; }
 
+    public void prepare()
+    {
+        foreach (IOptimizer optimizer in _optimizers)
+            optimizer.prepare();
+    }
+
     internal void ZeroGrad()
     {
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            // The composite already owns a deduplicated parameter list. Avoid
+            // starting a separate parallel traversal for NekoMuon followed by
+            // a second AdamW traversal; CUDA gradient arenas collapse these
+            // calls to one clear per bucket through their dirty gates.
+            foreach (Parameter parameter in Parameters)
+                parameter.T.ClearGradient();
+            return;
+        }
         foreach (IOptimizer optimizer in _optimizers)
             optimizer.zero_grad();
     }
@@ -69,8 +85,29 @@ public sealed class CompositeOptimizer : IOptimizer
 
     internal void Step()
     {
-        foreach (IOptimizer optimizer in _optimizers)
-            optimizer.step();
+        if (Tensor.ExecutionDevice != TensorDevice.Cuda)
+        {
+            foreach (IOptimizer optimizer in _optimizers)
+                optimizer.step();
+            return;
+        }
+
+        using CudaOptimizerStepBatch.Scope batch =
+            CudaOptimizerStepBatch.Enter(Tensor.CudaDeviceIndices);
+        try
+        {
+            foreach (IOptimizer optimizer in _optimizers)
+                optimizer.step();
+            batch.Complete();
+        }
+        catch (Exception exception)
+        {
+            Exception drained = batch.DrainAfterFailure(exception);
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                .Capture(drained)
+                .Throw();
+            throw;
+        }
     }
 
     public void step() => Step();

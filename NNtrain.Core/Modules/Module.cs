@@ -12,6 +12,7 @@ public abstract class Module
     {
         TensorDTypeContract.ValidateImplemented(dtype, nameof(dtype));
         DType = dtype;
+        PrecisionMode = dtype.ToPrecisionMode();
     }
 
     public bool IsTraining { get; private set; } = true;
@@ -20,7 +21,63 @@ public abstract class Module
     /// Gets the physical storage dtype selected for this module's parameters.
     /// Stateless modules propagate this contract to their inputs and children.
     /// </summary>
-    public TensorDType DType { get; }
+    public TensorDType DType { get; private set; }
+
+    /// <summary>Gets the model-level numeric contract for this module.</summary>
+    public TensorPrecisionMode PrecisionMode { get; private set; }
+
+    /// <summary>
+    /// Applies a model-level numeric contract to this module and all of its
+    /// registered children. The selected mode must use the module's physical
+    /// parameter storage dtype.
+    /// </summary>
+    public void SetPrecisionMode(TensorPrecisionMode precisionMode)
+    {
+        TensorDType expectedStorage = precisionMode.ToStorageDType();
+        bool legacyMixedStorage = precisionMode == TensorPrecisionMode.Mix16_32
+            && DType == TensorDType.Float16;
+        if (DType != expectedStorage
+            && !legacyMixedStorage
+            && _directParameters.Count != 0)
+        {
+            throw new InvalidOperationException(
+                $"Precision mode '{TensorPrecisionModeNames.Format(precisionMode)}' " +
+                $"requires storage dtype '{expectedStorage}', but module " +
+                $"'{GetType().Name}' uses '{DType}'.");
+        }
+        if (expectedStorage == TensorDType.Bfp8)
+        {
+            Bfp8ScaleGranularity expectedGranularity =
+                precisionMode == TensorPrecisionMode.Bfp8
+                    ? Bfp8ScaleGranularity.Tensor
+                    : Bfp8ScaleGranularity.Block;
+            Parameter? incompatible = _directParameters.FirstOrDefault(
+                parameter => parameter.T.Bfp8Quantization?.Granularity
+                    != expectedGranularity);
+            if (incompatible is not null)
+            {
+                throw new InvalidOperationException(
+                    $"Precision mode " +
+                    $"'{TensorPrecisionModeNames.Format(precisionMode)}' " +
+                    $"requires {expectedGranularity.ToString().ToLowerInvariant()} " +
+                    $"BFP8 scaling, but parameter '{incompatible.Name}' in " +
+                    $"module '{GetType().Name}' uses " +
+                    $"'{FormatBfp8Descriptor(incompatible.T.Bfp8Quantization)}'. " +
+                    "Use model.to(...) to convert the scaling contract.");
+            }
+        }
+        PrecisionMode = precisionMode;
+        foreach (Module module in _directModules)
+            module.SetPrecisionMode(precisionMode);
+    }
+
+    private static string FormatBfp8Descriptor(
+        Bfp8QuantizationDescriptor? descriptor)
+        => descriptor is null
+            ? "none"
+            : descriptor.Granularity == Bfp8ScaleGranularity.Tensor
+                ? "tensor"
+                : $"block:{descriptor.BlockSize}";
 
     protected Parameter RegisterParameter(Parameter parameter)
     {
@@ -82,18 +139,211 @@ public abstract class Module
 
     internal Module To(TensorDevice device)
     {
-        foreach (Parameter parameter in Parameters())
-            parameter.T.To(device);
-        return this;
+        return device switch
+        {
+            TensorDevice.Cpu => MoveToCpu(),
+            TensorDevice.Cuda => MoveToConfiguredCudaDevices(),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(device), device, "Unknown tensor device."),
+        };
     }
 
     public Module to(TensorDevice device) => To(device);
 
     public Module to(TorchDevice device)
     {
+        if (device.Type == TensorDevice.Cpu)
+            return MoveToCpu();
+
+        if (!Tensor.IsCudaAvailable(device.Index))
+        {
+            throw new InvalidOperationException(
+                $"CUDA device {device.Index} is not available.");
+        }
         foreach (Parameter parameter in Parameters())
             parameter.T.to(device);
+        TensorExecutionContext.Device = device;
         return this;
+    }
+
+    /// <summary>
+    /// Converts parameter storage in place while preserving Parameter,
+    /// Tensor, autograd, and optimizer references.
+    /// </summary>
+    public Module to(TensorPrecisionMode precisionMode)
+        => ToPrecision(precisionMode, Bfp8QuantizationDescriptor.DefaultBlockSize);
+
+    /// <summary>
+    /// Converts parameter storage in place. The block size is used only by
+    /// <see cref="TensorPrecisionMode.Mix8_32"/>.
+    /// </summary>
+    public Module to(
+        TensorPrecisionMode precisionMode,
+        int bfp8_block_size)
+        => ToPrecision(precisionMode, bfp8_block_size);
+
+    /// <summary>
+    /// Converts a module to a pure storage dtype. Mixed policies use the
+    /// <see cref="TensorPrecisionMode"/> overload instead.
+    /// </summary>
+    public Module to(TensorDType dtype)
+        => dtype switch
+        {
+            TensorDType.Float32 => ToPrecision(
+                TensorPrecisionMode.Float32,
+                Bfp8QuantizationDescriptor.DefaultBlockSize),
+            TensorDType.BFloat16 => ToPrecision(
+                TensorPrecisionMode.BFloat16,
+                Bfp8QuantizationDescriptor.DefaultBlockSize),
+            TensorDType.Bfp8 => ToPrecision(
+                TensorPrecisionMode.Bfp8,
+                Bfp8QuantizationDescriptor.DefaultBlockSize),
+            _ => throw new NotSupportedException(
+                $"Module conversion to dtype '{dtype}' is not supported. " +
+                "Use TensorPrecisionMode.Mix16_32 or Mix8_32 for mixed precision."),
+        };
+
+    /// <summary>
+    /// PyTorch-style string conversion for device and precision targets.
+    /// Supported aliases include fp16_32 for mix16_32.
+    /// </summary>
+    public Module to(string target)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(target);
+        string normalized = target.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "cpu" => MoveToCpu(),
+            "cuda" => MoveToConfiguredCudaDevices(),
+            "auto" => MoveToAutomaticallySelectedDevice(),
+            "float32" => to(TensorPrecisionMode.Float32),
+            "bfloat16" => to(TensorPrecisionMode.BFloat16),
+            "mix16_32" or "fp16_32" => to(TensorPrecisionMode.Mix16_32),
+            "bfp8" => to(TensorPrecisionMode.Bfp8),
+            "mix8_32" => to(TensorPrecisionMode.Mix8_32),
+            _ when normalized.StartsWith("cuda:", StringComparison.Ordinal)
+                => to(TorchDevice.Parse(normalized)),
+            _ => throw new ArgumentException(
+                $"Unsupported module conversion target '{target}'. " +
+                "Supported targets are cpu, cuda, cuda:N, auto, float32, " +
+                "bfloat16, mix16_32 (fp16_32), bfp8, and mix8_32.",
+                nameof(target)),
+        };
+    }
+
+    private Module ToPrecision(
+        TensorPrecisionMode precisionMode,
+        int bfp8BlockSize)
+    {
+        if (!Enum.IsDefined(precisionMode))
+            throw new ArgumentOutOfRangeException(nameof(precisionMode));
+        if (precisionMode == TensorPrecisionMode.Mix8_32
+            && bfp8BlockSize <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(bfp8BlockSize),
+                "Mix8_32 requires a positive BFP8 block size.");
+        }
+
+        TensorDType storageDType = precisionMode.ToStorageDType();
+        Bfp8QuantizationDescriptor? quantization = precisionMode switch
+        {
+            TensorPrecisionMode.Bfp8 =>
+                Bfp8QuantizationDescriptor.TensorWide,
+            TensorPrecisionMode.Mix8_32 =>
+                Bfp8QuantizationDescriptor.Block(bfp8BlockSize),
+            _ => null,
+        };
+        bool preserveMaster = precisionMode is TensorPrecisionMode.Mix16_32
+            or TensorPrecisionMode.Mix8_32;
+
+        foreach (Parameter parameter in Parameters())
+        {
+            parameter.T.ConvertStorageInPlace(
+                storageDType,
+                quantization,
+                preserveMaster);
+        }
+        SetNumericContractRecursively(
+            precisionMode,
+            storageDType,
+            new HashSet<Module>(ReferenceEqualityComparer.Instance));
+        return this;
+    }
+
+    private Module MoveToConfiguredCudaDevices()
+    {
+        int[] devices = Tensor.CudaDeviceIndices.ToArray();
+        if (devices.Length == 0)
+            throw new InvalidOperationException("No CUDA devices are configured.");
+        foreach (int deviceIndex in devices)
+        {
+            if (!Tensor.IsCudaAvailable(deviceIndex))
+            {
+                throw new InvalidOperationException(
+                    $"CUDA device {deviceIndex} is not available.");
+            }
+        }
+
+        Parameter[] parameters = Parameters().ToArray();
+        foreach (Parameter parameter in parameters)
+        {
+            foreach (int deviceIndex in devices)
+            {
+                parameter.T.to(
+                    new TorchDevice(TensorDevice.Cuda, deviceIndex));
+            }
+            // The first configured adapter is authoritative for unsharded
+            // operations; the remaining resident replicas stay allocated.
+            parameter.T.to(new TorchDevice(TensorDevice.Cuda, devices[0]));
+        }
+        TensorExecutionContext.Device = new TorchDevice(
+            TensorDevice.Cuda,
+            devices[0]);
+        return this;
+    }
+
+    private Module MoveToAutomaticallySelectedDevice()
+    {
+        int[] available = Tensor.CudaDeviceIndices
+            .Where(Tensor.IsCudaAvailable)
+            .ToArray();
+        if (available.Length == 0)
+            return MoveToCpu();
+        if (!available.SequenceEqual(Tensor.CudaDeviceIndices))
+            Tensor.CudaDeviceIndices = available;
+        return MoveToConfiguredCudaDevices();
+    }
+
+    private Module MoveToCpu()
+    {
+        foreach (Parameter parameter in Parameters())
+        {
+            if (parameter.T.HasGradientBuffer)
+                parameter.T.EnsureHostGradientStorage();
+            parameter.T.to(new TorchDevice(TensorDevice.Cpu));
+            // An explicit model.to(cpu) is a move, so release accelerator
+            // replicas after their authoritative values have been copied.
+            parameter.T.InvalidateCudaBuffers();
+        }
+        TensorExecutionContext.Device = new TorchDevice(TensorDevice.Cpu);
+        return this;
+    }
+
+    private void SetNumericContractRecursively(
+        TensorPrecisionMode precisionMode,
+        TensorDType dtype,
+        HashSet<Module> visited)
+    {
+        if (!visited.Add(this))
+        {
+            throw new InvalidOperationException(
+                $"Module '{GetType().Name}' is registered through multiple paths.");
+        }
+        PrecisionMode = precisionMode;
+        DType = dtype;
+        foreach (Module child in _directModules)
+            child.SetNumericContractRecursively(precisionMode, dtype, visited);
     }
 
     internal ModuleState CaptureState()
@@ -152,10 +402,20 @@ public abstract class Module
 
         for (int index = 0; index < parameters.Length; index++)
         {
-            using Tensor.DataMutation mutation =
-                parameters[index].BeginUpdate();
             ModuleParameterState parameterState = state.Parameters[index];
-            parameterState.Values.AsSpan().CopyTo(mutation.Values);
+            if (parameters[index].T.DType == TensorDType.Bfp8)
+            {
+                parameters[index].T.RestoreBfp8ValuesInPlace(
+                    parameterState.Values,
+                    preserveFloat32Master:
+                        PrecisionMode == TensorPrecisionMode.Mix8_32);
+            }
+            else
+            {
+                using Tensor.DataMutation mutation =
+                    parameters[index].BeginUpdate();
+                parameterState.Values.AsSpan().CopyTo(mutation.Values);
+            }
         }
     }
 
@@ -294,6 +554,7 @@ public abstract class Module
                 || parameterState.DType is not TensorDType.Float32
                     and not TensorDType.Float16
                     and not TensorDType.BFloat16
+                    and not TensorDType.Bfp8
                 || parameterState.StorageMetadata is { IsRaw: false })
             {
                 throw new ArgumentException(

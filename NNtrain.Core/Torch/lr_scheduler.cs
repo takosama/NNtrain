@@ -357,9 +357,9 @@ internal sealed class SchedulerOptimizerGroups
     private static IEnumerable<ILearningRateAdjustable> Flatten(
         IOptimizer optimizer)
     {
-        if (optimizer is CompositeOptimizer composite)
+        if (optimizer is IOptimizerContainer container)
         {
-            foreach (IOptimizer child in composite.Optimizers)
+            foreach (IOptimizer child in container.Optimizers)
             {
                 foreach (ILearningRateAdjustable group in Flatten(child))
                     yield return group;

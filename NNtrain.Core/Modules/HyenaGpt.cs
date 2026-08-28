@@ -211,8 +211,8 @@ public sealed class HyenaGpt : LanguageModel
                         .ToArray();
                     Tensor logits = Forward(context, 1, sequenceLength);
                     int offset = (sequenceLength - 1) * VocabularySize;
-                    int nextToken = Sample(
-                        logits.Data,
+                    int nextToken = SampleLogits(
+                        logits,
                         offset,
                         VocabularySize,
                         temperature,

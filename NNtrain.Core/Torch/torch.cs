@@ -14,6 +14,10 @@ public static class torch
     public const TensorDType float16 = TensorDType.Float16;
     public const TensorDType half = TensorDType.Float16;
     public const TensorDType bfloat16 = TensorDType.BFloat16;
+    public const TensorDType bfp8 = TensorDType.Bfp8;
+    public const TensorPrecisionMode mix16_32 = TensorPrecisionMode.Mix16_32;
+    public const TensorPrecisionMode fp16_32 = TensorPrecisionMode.Mix16_32;
+    public const TensorPrecisionMode mix8_32 = TensorPrecisionMode.Mix8_32;
 
     public static class utils
     {
@@ -158,6 +162,19 @@ public static class torch
         return JsonSerializer.Deserialize<T>(stream, SerializationOptions)
             ?? throw new InvalidDataException(
                 $"Serialized torch object '{path}' was JSON null.");
+    }
+
+    /// <summary>
+    /// Writes one JSON value with the exact options used by torch.save. This
+    /// is an internal composition point for checkpoint writers that stream a
+    /// large tensor property between ordinary serialized properties.
+    /// </summary>
+    internal static void SerializeJsonValue<T>(
+        Utf8JsonWriter writer,
+        T value)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        JsonSerializer.Serialize(writer, value, SerializationOptions);
     }
 
     public static void save_safetensors(ModuleState state, string path)

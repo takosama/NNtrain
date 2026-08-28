@@ -132,6 +132,37 @@ public sealed class ModuleDTypeTests
         Assert.All(logits.Data, value => Assert.True(float.IsFinite(value)));
     }
 
+    [Theory]
+    [InlineData(TensorDType.Float16)]
+    [InlineData(TensorDType.BFloat16)]
+    public void TransformerClassifierSupports16BitDTypes(
+        TensorDType dtype)
+    {
+        var model = new TransformerClassifier(
+            seqLen: 2,
+            dModel: 4,
+            numHeads: 1,
+            dHidden: 8,
+            numLayers: 1,
+            numClasses: 3,
+            rng: new Random(59),
+            dtype: dtype);
+
+        Assert.Equal(dtype, model.DType);
+        Assert.All(
+            model.Parameters(),
+            parameter => Assert.Equal(dtype, parameter.T.DType));
+
+        var input = new Tensor(
+            Enumerable.Range(0, 8).Select(index => index * 0.01f).ToArray(),
+            [2, 4],
+            dtype: dtype);
+        Tensor logits = model.Forward(input);
+
+        Assert.Equal(dtype, logits.DType);
+        Assert.All(logits.Data, value => Assert.True(float.IsFinite(value)));
+    }
+
     [Fact]
     public void ForgetMemoryV2DefaultsToFloat16ThroughoutModelAndForward()
     {

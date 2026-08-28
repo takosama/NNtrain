@@ -32,6 +32,43 @@ partial class Tensor
 
         BinaryBroadcastPlan plan = BinaryBroadcastPlan.Create(left, right);
         if (ExecutionDevice == TensorDevice.Cuda
+            && left.DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8
+            && right.DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return ApplyBinaryElementwiseCuda(
+                left,
+                right,
+                plan,
+                operation);
+        }
+        if (ExecutionDevice == TensorDevice.Cuda
+            && operation == BinaryOperation.Add
+            && (left.DType == TensorDType.Bfp8
+                || right.DType == TensorDType.Bfp8))
+        {
+            if (left.DType != TensorDType.Bfp8
+                || right.DType != TensorDType.Bfp8)
+            {
+                throw new InvalidOperationException(
+                    "CUDA BFP8 addition requires both operands to use BFP8 " +
+                    "storage; implicit host fallback is forbidden.");
+            }
+            if (plan.LeftIsScalar
+                || plan.RightIsScalar
+                || left.Numel != plan.ElementCount
+                || right.Numel != plan.ElementCount)
+            {
+                throw new PlatformNotSupportedException(
+                    "Broadcast BFP8 addition has no resident CUDA kernel. " +
+                    "CPU fallback is forbidden.");
+            }
+            return AddBfp8Cuda(left, right, plan.ResultShape);
+        }
+        if (ExecutionDevice == TensorDevice.Cuda
             && operation == BinaryOperation.Add
             && !plan.LeftIsScalar
             && !plan.RightIsScalar)
@@ -71,6 +108,7 @@ partial class Tensor
                     right);
             return cudaResult;
         }
+        ThrowIfCudaHostFallback($"Elementwise {operation}");
         float[] resultData = new float[plan.ElementCount];
 
         if (!TryApplyBinaryForwardSimd(

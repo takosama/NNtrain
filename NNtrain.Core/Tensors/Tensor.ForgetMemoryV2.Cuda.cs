@@ -1,7 +1,4 @@
-using ILGPU;
-using ILGPU.Algorithms;
-using ILGPU.Runtime;
-using ILGPU.Runtime.Cuda;
+using NNtrain.Cuda.Memory;
 
 namespace NNtrain;
 
@@ -13,9 +10,9 @@ namespace NNtrain;
 /// </summary>
 internal static class ForgetMemoryV2Cuda
 {
-    private static readonly object Sync = new();
-    private static Context? _context;
-    private static readonly Dictionary<int, CudaAccelerator> Accelerators = [];
+    private static readonly Lazy<int> CachedDeviceCount = new(
+        () => NativeCudaRuntime.DeviceCount,
+        LazyThreadSafetyMode.ExecutionAndPublication);
 
     internal static ResidentForwardResult ForwardResident(
         Tensor projected,
@@ -27,77 +24,126 @@ internal static class ForgetMemoryV2Cuda
         float retentionFloor,
         bool bfloat16Compute,
         bool useV3,
-        bool useDrn)
+        bool useDrn,
+        NativeCudaBuffer<float>? recurrentState = null)
     {
         int deviceIndex = Tensor.CudaDeviceIndex;
-        CudaAccelerator accelerator = GetAccelerator(deviceIndex);
+        NativeCudaDevice accelerator = GetAccelerator(deviceIndex);
         int matrixSize = checked(keyWidth * valueWidth);
-        ArrayView<float> projectedFloat32 = default;
-        ArrayView<ushort> projectedBFloat16 = default;
-        MemoryBuffer1D<float, Stride1D.Dense>? outputFloat32 = null;
-        MemoryBuffer1D<ushort, Stride1D.Dense>? outputBFloat16 = null;
+        NativeCudaBuffer<float>? outputFloat32 = null;
+        NativeCudaBuffer<ushort>? outputBFloat16 = null;
         int outputLength = checked(batch * sequence * valueWidth);
         if (projected.DType == TensorDType.BFloat16)
         {
-            projectedBFloat16 = projected
-                .EnsureCudaBFloat16Buffer(deviceIndex).View;
+            projected.EnsureCudaBFloat16Buffer(deviceIndex);
             outputBFloat16 = Tensor.RentCudaBFloat16Buffer(
                 deviceIndex,
                 outputLength);
         }
         else
         {
-            projectedFloat32 = projected
-                .EnsureCudaFloat32Buffer(deviceIndex).View;
+            projected.EnsureCudaFloat32Buffer(deviceIndex);
             outputFloat32 = Tensor.RentCudaFloatBuffer(
                 deviceIndex,
                 outputLength);
         }
         var statesBuffer = accelerator.Allocate1D<float>(
-            checked(batch * sequence * matrixSize));
-        using var stateBuffer = accelerator.Allocate1D<float>(
-            checked(batch * matrixSize));
-        stateBuffer.MemSetToZero();
-        var kernel = accelerator.LoadAutoGroupedStreamKernel<
-            Index1D,
-            ArrayView<float>,
-            ArrayView<ushort>,
-            ArrayView<float>,
-            ArrayView<ushort>,
-            ArrayView<float>,
-            ArrayView<float>,
-            int,
-            int,
-            int,
-            int,
-            float,
-            int,
-            int>(ForwardKernel);
-        kernel(
-            checked(batch * valueWidth),
-            projectedFloat32,
-            projectedBFloat16,
-            outputFloat32?.View ?? default,
-            outputBFloat16?.View ?? default,
-            statesBuffer.View,
-            stateBuffer.View,
-            sequence,
-            projectionWidth,
-            keyWidth,
-            valueWidth,
-            retentionFloor,
-            useDrn ? 2 : useV3 ? 1 : 0,
-            bfloat16Compute ? 1 : 0);
-        accelerator.Synchronize();
-        return outputBFloat16 is not null
-            ? new ResidentForwardResult(
-                deviceIndex,
-                outputBFloat16,
-                statesBuffer)
-            : new ResidentForwardResult(
-                deviceIndex,
-                outputFloat32!,
-                statesBuffer);
+            checked(batch * sequence * matrixSize),
+            CudaMemoryKind.Transient);
+        NativeCudaBuffer<float>? ownedStateBuffer = null;
+        NativeCudaBuffer<float> stateBuffer;
+        if (recurrentState is null)
+        {
+            ownedStateBuffer = accelerator.Allocate1D<float>(
+                checked(batch * matrixSize),
+                CudaMemoryKind.Transient);
+            ownedStateBuffer.MemSetToZero();
+            stateBuffer = ownedStateBuffer;
+        }
+        else
+        {
+            if (recurrentState.Device.Index != deviceIndex
+                || recurrentState.Length != checked(batch * matrixSize))
+            {
+                statesBuffer.Dispose();
+                outputBFloat16?.Dispose();
+                outputFloat32?.Dispose();
+                throw new ArgumentException(
+                    "Recurrent state must match the CUDA device and batch memory size.",
+                    nameof(recurrentState));
+            }
+            stateBuffer = recurrentState;
+        }
+        int memoryVariant = useDrn ? 2 : useV3 ? 1 : 0;
+        try
+        {
+            bool tensorCore = outputBFloat16 is not null
+                && CudaForgetMemoryTensorCore.TryForward(
+                    accelerator,
+                    projected.EnsureCudaBFloat16Buffer(deviceIndex),
+                    outputBFloat16,
+                    statesBuffer,
+                    stateBuffer,
+                    batch,
+                    sequence,
+                    projectionWidth,
+                    keyWidth,
+                    valueWidth,
+                    retentionFloor,
+                    memoryVariant);
+            if (!tensorCore)
+            {
+                CudaForgetMemoryNative.Forward(
+                    accelerator,
+                    projected.DType == TensorDType.BFloat16
+                        ? 0
+                        : projected.EnsureCudaFloat32Buffer(deviceIndex).NativePtr,
+                    projected.DType == TensorDType.BFloat16
+                        ? projected.EnsureCudaBFloat16Buffer(deviceIndex).NativePtr
+                        : 0,
+                    outputFloat32?.NativePtr ?? 0,
+                    outputBFloat16?.NativePtr ?? 0,
+                    statesBuffer.NativePtr,
+                    stateBuffer.NativePtr,
+                    batch,
+                    sequence,
+                    projectionWidth,
+                    keyWidth,
+                    valueWidth,
+                    retentionFloor,
+                    memoryVariant,
+                    bfloat16Compute);
+            }
+            // A session lane owns one ordered compute stream.  All buffers
+            // above are either retained by the result/recurrent state or
+            // returned to the lane's event-fenced pool.
+            if (!TensorExecutionContext.TryGetCudaStreamLane(
+                    deviceIndex,
+                    out _))
+            {
+                accelerator.Synchronize();
+            }
+            return outputBFloat16 is not null
+                ? new ResidentForwardResult(
+                    deviceIndex,
+                    outputBFloat16,
+                    statesBuffer)
+                : new ResidentForwardResult(
+                    deviceIndex,
+                    outputFloat32!,
+                    statesBuffer);
+        }
+        catch
+        {
+            statesBuffer.Dispose();
+            outputBFloat16?.Dispose();
+            outputFloat32?.Dispose();
+            throw;
+        }
+        finally
+        {
+            ownedStateBuffer?.Dispose();
+        }
     }
 
     internal static void BackwardResident(
@@ -114,63 +160,146 @@ internal static class ForgetMemoryV2Cuda
         bool useV3,
         bool useDrn)
     {
-        CudaAccelerator accelerator = GetAccelerator(forward.DeviceIndex);
+        NativeCudaDevice accelerator = GetAccelerator(forward.DeviceIndex);
         int matrixSize = checked(keyWidth * valueWidth);
-        ArrayView<float> projectedFloat32 = default;
-        ArrayView<ushort> projectedBFloat16 = default;
         if (projected.DType == TensorDType.BFloat16)
         {
-            projectedBFloat16 = projected
-                .EnsureCudaBFloat16Buffer(forward.DeviceIndex).View;
+            projected.EnsureCudaBFloat16Buffer(forward.DeviceIndex);
         }
         else
         {
-            projectedFloat32 = projected
-                .EnsureCudaFloat32Buffer(forward.DeviceIndex).View;
+            projected.EnsureCudaFloat32Buffer(forward.DeviceIndex);
         }
+
+        if (projected.DType == TensorDType.BFloat16
+            && TensorExecutionContext.UsesBFloat16GradientStorage)
+        {
+            NativeCudaBuffer<float>? decodedOutputGradient = null;
+            NativeCudaBuffer<float>? projectedContribution = null;
+            try
+            {
+                using CudaBFloat16GradientSource outputGradientSource =
+                    CudaBFloat16GradientSource.Acquire(
+                        output,
+                        forward.DeviceIndex);
+                using var targets =
+                    new CudaPureBFloat16GradientTargetSet(
+                        forward.DeviceIndex);
+                CudaPureBFloat16GradientTarget projectedGradientTarget =
+                    targets.Get(projected);
+                decodedOutputGradient = Tensor.RentCudaFloatBuffer(
+                    forward.DeviceIndex,
+                    output.Numel);
+                projectedContribution = Tensor.RentCudaFloatBuffer(
+                    forward.DeviceIndex,
+                    projected.Numel);
+                projectedContribution.MemSetToZero();
+                CudaTensorNative.DecodeBFloat16(
+                    forward.DeviceIndex,
+                    outputGradientSource.Buffer.NativePtr,
+                    decodedOutputGradient.NativePtr,
+                    output.Numel);
+                using var pureStateGradient = accelerator.Allocate1D<float>(
+                    checked(batch * matrixSize),
+                    CudaMemoryKind.Transient);
+                using var purePreviousGradient = accelerator.Allocate1D<float>(
+                    checked(batch * matrixSize),
+                    CudaMemoryKind.Transient);
+                pureStateGradient.MemSetToZero();
+                purePreviousGradient.MemSetToZero();
+                CudaForgetMemoryNative.Backward(
+                    accelerator,
+                    0,
+                    projected.EnsureCudaBFloat16Buffer(forward.DeviceIndex)
+                        .NativePtr,
+                    projectedContribution.NativePtr,
+                    decodedOutputGradient.NativePtr,
+                    forward.States.NativePtr,
+                    pureStateGradient.NativePtr,
+                    purePreviousGradient.NativePtr,
+                    batch,
+                    sequence,
+                    projectionWidth,
+                    keyWidth,
+                    valueWidth,
+                    retentionFloor,
+                    useDrn ? 2 : useV3 ? 1 : 0,
+                    bfloat16Compute);
+                projectedGradientTarget.AccumulateFloat32(
+                    projectedContribution,
+                    projected.Numel);
+                targets.CommitAll();
+                if (!TensorExecutionContext.TryGetCudaStreamLane(
+                        forward.DeviceIndex,
+                        out _))
+                {
+                    accelerator.Synchronize();
+                }
+            }
+            finally
+            {
+                if (projectedContribution is not null)
+                {
+                    Tensor.ReturnCudaFloatBuffer(
+                        accelerator,
+                        projectedContribution);
+                }
+                if (decodedOutputGradient is not null)
+                {
+                    Tensor.ReturnCudaFloatBuffer(
+                        accelerator,
+                        decodedOutputGradient);
+                }
+            }
+            return;
+        }
+
         var projectedGradientBuffer = projected.EnsureCudaGradientBuffer(
             forward.DeviceIndex);
         var outputGradientBuffer = output.EnsureCudaGradientBuffer(
             forward.DeviceIndex);
         using var stateGradientBuffer = accelerator.Allocate1D<float>(
-            checked(batch * matrixSize));
+            checked(batch * matrixSize),
+            CudaMemoryKind.Transient);
         using var previousGradientBuffer = accelerator.Allocate1D<float>(
-            checked(batch * matrixSize));
+            checked(batch * matrixSize),
+            CudaMemoryKind.Transient);
         stateGradientBuffer.MemSetToZero();
         previousGradientBuffer.MemSetToZero();
-        var kernel = accelerator.LoadAutoGroupedStreamKernel<
-            Index1D,
-            ArrayView<float>,
-            ArrayView<ushort>,
-            ArrayView<float>,
-            ArrayView<float>,
-            ArrayView<float>,
-            ArrayView<float>,
-            ArrayView<float>,
-            int,
-            int,
-            int,
-            int,
-            float,
-            int,
-            int>(BackwardKernel);
-        kernel(
-            checked(batch * valueWidth),
-            projectedFloat32,
-            projectedBFloat16,
-            projectedGradientBuffer.View,
-            outputGradientBuffer.View,
-            forward.States.View,
-            stateGradientBuffer.View,
-            previousGradientBuffer.View,
+        CudaForgetMemoryNative.Backward(
+            accelerator,
+            projected.DType == TensorDType.BFloat16
+                ? 0
+                : projected.EnsureCudaFloat32Buffer(forward.DeviceIndex)
+                    .NativePtr,
+            projected.DType == TensorDType.BFloat16
+                ? projected.EnsureCudaBFloat16Buffer(forward.DeviceIndex)
+                    .NativePtr
+                : 0,
+            projectedGradientBuffer.NativePtr,
+            outputGradientBuffer.NativePtr,
+            forward.States.NativePtr,
+            stateGradientBuffer.NativePtr,
+            previousGradientBuffer.NativePtr,
+            batch,
             sequence,
             projectionWidth,
             keyWidth,
             valueWidth,
             retentionFloor,
             useDrn ? 2 : useV3 ? 1 : 0,
-            bfloat16Compute ? 1 : 0);
-        accelerator.Synchronize();
+            bfloat16Compute);
+        // Backward is queued on the lane's ordered compute stream.  The next
+        // consumer (gradient reduction/optimizer) observes the same stream
+        // order, and transient state buffers may safely be reused only by a
+        // later launch on that lane.  Do not serialize every ForgetMemory layer
+        // with a device-wide wait in the hot training path.
+        if (!TensorExecutionContext.TryGetCudaStreamLane(
+                forward.DeviceIndex,
+                out _))
+        {
+            accelerator.Synchronize();
+        }
         projected.MarkCudaGradientMutated(forward.DeviceIndex);
     }
 
@@ -179,8 +308,8 @@ internal static class ForgetMemoryV2Cuda
         private bool _disposed;
         internal ResidentForwardResult(
             int deviceIndex,
-            MemoryBuffer1D<float, Stride1D.Dense> output,
-            MemoryBuffer1D<float, Stride1D.Dense> states)
+            NativeCudaBuffer<float> output,
+            NativeCudaBuffer<float> states)
         {
             DeviceIndex = deviceIndex;
             OutputFloat32 = output;
@@ -189,8 +318,8 @@ internal static class ForgetMemoryV2Cuda
 
         internal ResidentForwardResult(
             int deviceIndex,
-            MemoryBuffer1D<ushort, Stride1D.Dense> output,
-            MemoryBuffer1D<float, Stride1D.Dense> states)
+            NativeCudaBuffer<ushort> output,
+            NativeCudaBuffer<float> states)
         {
             DeviceIndex = deviceIndex;
             OutputBFloat16 = output;
@@ -198,9 +327,9 @@ internal static class ForgetMemoryV2Cuda
         }
 
         internal int DeviceIndex { get; }
-        internal MemoryBuffer1D<float, Stride1D.Dense>? OutputFloat32 { get; }
-        internal MemoryBuffer1D<ushort, Stride1D.Dense>? OutputBFloat16 { get; }
-        internal MemoryBuffer1D<float, Stride1D.Dense> States { get; }
+        internal NativeCudaBuffer<float>? OutputFloat32 { get; }
+        internal NativeCudaBuffer<ushort>? OutputBFloat16 { get; }
+        internal NativeCudaBuffer<float> States { get; }
 
         internal void Dispose()
         {
@@ -264,7 +393,7 @@ internal static class ForgetMemoryV2Cuda
     }
 
     private static (float[] Output, ShardContext Context) ForwardSingle(
-        CudaAccelerator accelerator,
+        NativeCudaDevice accelerator,
         float[] projected,
         int batch,
         int sequence,
@@ -279,46 +408,32 @@ internal static class ForgetMemoryV2Cuda
         int matrixSize = checked(keyWidth * valueWidth);
         var output = new float[checked(batch * sequence * valueWidth)];
 
-        MemoryBuffer1D<float, Stride1D.Dense> projectedBuffer =
+        NativeCudaBuffer<float> projectedBuffer =
             accelerator.Allocate1D(projected);
-        using MemoryBuffer1D<float, Stride1D.Dense> outputBuffer =
+        using NativeCudaBuffer<float> outputBuffer =
             accelerator.Allocate1D<float>(output.Length);
-        MemoryBuffer1D<float, Stride1D.Dense> statesBuffer =
+        NativeCudaBuffer<float> statesBuffer =
             accelerator.Allocate1D<float>(checked(batch * sequence * matrixSize));
-        using MemoryBuffer1D<float, Stride1D.Dense> stateBuffer =
+        using NativeCudaBuffer<float> stateBuffer =
             accelerator.Allocate1D<float>(checked(batch * matrixSize));
         stateBuffer.MemSetToZero();
 
-        var kernel = accelerator.LoadAutoGroupedStreamKernel<
-            Index1D,
-            ArrayView<float>,
-            ArrayView<ushort>,
-            ArrayView<float>,
-            ArrayView<ushort>,
-            ArrayView<float>,
-            ArrayView<float>,
-            int,
-            int,
-            int,
-            int,
-            float,
-            int,
-            int>(ForwardKernel);
-        kernel(
-            checked(batch * valueWidth),
-            projectedBuffer.View,
-            default,
-            outputBuffer.View,
-            default,
-            statesBuffer.View,
-            stateBuffer.View,
+        CudaForgetMemoryNative.Forward(
+            accelerator,
+            projectedBuffer.NativePtr,
+            0,
+            outputBuffer.NativePtr,
+            0,
+            statesBuffer.NativePtr,
+            stateBuffer.NativePtr,
+            batch,
             sequence,
             projectionWidth,
             keyWidth,
             valueWidth,
             retentionFloor,
             useDrn ? 2 : useV3 ? 1 : 0,
-            bfloat16Compute ? 1 : 0);
+            bfloat16: false);
         accelerator.Synchronize();
         outputBuffer.CopyToCPU(output);
         return (output, new ShardContext(
@@ -371,55 +486,40 @@ internal static class ForgetMemoryV2Cuda
         bool useV3,
         bool useDrn)
     {
-        CudaAccelerator accelerator = context.Accelerator;
+        NativeCudaDevice accelerator = context.Accelerator;
         int batch = context.Batch;
         int matrixSize = checked(keyWidth * valueWidth);
         var projectedGradient = new float[checked(batch * sequence * projectionWidth)];
 
-        using MemoryBuffer1D<float, Stride1D.Dense> outputGradientBuffer =
+        using NativeCudaBuffer<float> outputGradientBuffer =
             accelerator.Allocate1D(outputGradient);
-        using MemoryBuffer1D<float, Stride1D.Dense> projectedGradientBuffer =
+        using NativeCudaBuffer<float> projectedGradientBuffer =
             accelerator.Allocate1D<float>(projectedGradient.Length);
-        using MemoryBuffer1D<float, Stride1D.Dense> stateGradientBuffer =
+        using NativeCudaBuffer<float> stateGradientBuffer =
             accelerator.Allocate1D<float>(checked(batch * matrixSize));
-        using MemoryBuffer1D<float, Stride1D.Dense> previousGradientBuffer =
+        using NativeCudaBuffer<float> previousGradientBuffer =
             accelerator.Allocate1D<float>(checked(batch * matrixSize));
         projectedGradientBuffer.MemSetToZero();
         stateGradientBuffer.MemSetToZero();
         previousGradientBuffer.MemSetToZero();
 
-        var kernel = accelerator.LoadAutoGroupedStreamKernel<
-            Index1D,
-            ArrayView<float>,
-            ArrayView<ushort>,
-            ArrayView<float>,
-            ArrayView<float>,
-            ArrayView<float>,
-            ArrayView<float>,
-            ArrayView<float>,
-            int,
-            int,
-            int,
-            int,
-            float,
-            int,
-            int>(BackwardKernel);
-        kernel(
-            checked(batch * valueWidth),
-            context.Projected.View,
-            default,
-            projectedGradientBuffer.View,
-            outputGradientBuffer.View,
-            context.States.View,
-            stateGradientBuffer.View,
-            previousGradientBuffer.View,
+        CudaForgetMemoryNative.Backward(
+            accelerator,
+            context.Projected.NativePtr,
+            0,
+            projectedGradientBuffer.NativePtr,
+            outputGradientBuffer.NativePtr,
+            context.States.NativePtr,
+            stateGradientBuffer.NativePtr,
+            previousGradientBuffer.NativePtr,
+            batch,
             sequence,
             projectionWidth,
             keyWidth,
             valueWidth,
             retentionFloor,
             useDrn ? 2 : useV3 ? 1 : 0,
-            bfloat16Compute ? 1 : 0);
+            bfloat16: false);
         accelerator.Synchronize();
         projectedGradientBuffer.CopyToCPU(projectedGradient);
         return projectedGradient;
@@ -449,9 +549,9 @@ internal static class ForgetMemoryV2Cuda
     internal sealed class ShardContext : IDisposable
     {
         internal ShardContext(
-            CudaAccelerator accelerator,
-            MemoryBuffer1D<float, Stride1D.Dense> projected,
-            MemoryBuffer1D<float, Stride1D.Dense> states,
+            NativeCudaDevice accelerator,
+            NativeCudaBuffer<float> projected,
+            NativeCudaBuffer<float> states,
             int batch)
         {
             Accelerator = accelerator;
@@ -460,9 +560,9 @@ internal static class ForgetMemoryV2Cuda
             Batch = batch;
         }
 
-        internal CudaAccelerator Accelerator { get; }
-        internal MemoryBuffer1D<float, Stride1D.Dense> Projected { get; }
-        internal MemoryBuffer1D<float, Stride1D.Dense> States { get; }
+        internal NativeCudaDevice Accelerator { get; }
+        internal NativeCudaBuffer<float> Projected { get; }
+        internal NativeCudaBuffer<float> States { get; }
         internal int Batch { get; }
         internal int BatchStart { get; set; }
 
@@ -484,8 +584,7 @@ internal static class ForgetMemoryV2Cuda
         {
             try
             {
-                EnsureContext();
-                return _context!.GetCudaDevices().Count;
+                return CachedDeviceCount.Value;
             }
             catch
             {
@@ -499,8 +598,7 @@ internal static class ForgetMemoryV2Cuda
         ArgumentOutOfRangeException.ThrowIfNegative(deviceIndex);
         try
         {
-            using Context context = Context.Create(builder => builder.Cuda());
-            return deviceIndex < context.GetCudaDevices().Count;
+            return deviceIndex < CachedDeviceCount.Value;
         }
         catch
         {
@@ -508,462 +606,25 @@ internal static class ForgetMemoryV2Cuda
         }
     }
 
-    internal static CudaAccelerator GetAccelerator()
+    internal static NativeCudaDevice GetAccelerator()
         => GetAccelerator(Tensor.CudaDeviceIndex);
 
-    internal static CudaAccelerator GetAccelerator(int requestedIndex)
+    internal static NativeCudaDevice GetAccelerator(int requestedIndex)
     {
-        lock (Sync)
+        int deviceCount = CachedDeviceCount.Value;
+        if ((uint)requestedIndex >= (uint)deviceCount)
         {
-            EnsureContext();
-            Context.DeviceCollection<CudaDevice> devices =
-                _context!.GetCudaDevices();
-            if ((uint)requestedIndex >= (uint)devices.Count)
-            {
-                throw new InvalidOperationException(
-                    $"CUDA device index {requestedIndex} is unavailable; " +
-                    $"detected {devices.Count} CUDA device(s).");
-            }
-            if (!Accelerators.TryGetValue(requestedIndex, out CudaAccelerator? accelerator))
-            {
-                accelerator = devices[requestedIndex]
-                    .CreateCudaAccelerator(_context!);
-                Accelerators.Add(requestedIndex, accelerator);
-            }
-            return accelerator;
+            throw new InvalidOperationException(
+                $"CUDA device index {requestedIndex} is unavailable; " +
+                $"detected {deviceCount} CUDA device(s).");
         }
+        // NativeCudaRuntime owns the single process-level wrapper per
+        // validated physical device. Do not add a second static cache here;
+        // lane/session resources are owned below that canonical wrapper.
+        NativeCudaDevice accelerator = NativeCudaRuntime.GetDevice(
+            requestedIndex);
+        accelerator.Bind();
+        return accelerator;
     }
 
-    private static void EnsureContext()
-    {
-        if (_context is null)
-        {
-            _context = Context.Create(
-                builder => builder.Cuda().EnableAlgorithms());
-        }
-    }
-
-    private static void ForwardKernel(
-        Index1D batchIndex,
-        ArrayView<float> projected,
-        ArrayView<ushort> projectedBFloat16,
-        ArrayView<float> output,
-        ArrayView<ushort> outputBFloat16,
-        ArrayView<float> states,
-        ArrayView<float> state,
-        int sequence,
-        int projectionWidth,
-        int keyWidth,
-        int valueWidth,
-        float retentionFloor,
-        int memoryVariant,
-        int bfloat16Compute)
-    {
-        int useV3 = memoryVariant == 1 ? 1 : 0;
-        int useDrn = memoryVariant == 2 ? 1 : 0;
-        int worker = batchIndex;
-        int batch = worker / valueWidth;
-        int valueIndex = worker - batch * valueWidth;
-        int matrixSize = keyWidth * valueWidth;
-        int projectedBatchOffset = batch * sequence * projectionWidth;
-        int outputBatchOffset = batch * sequence * valueWidth;
-        int stateBatchOffset = batch * matrixSize;
-        int statesBatchOffset = batch * sequence * matrixSize;
-        float inverseSqrtKeyWidth = 1f / XMath.Sqrt((float)keyWidth);
-
-        for (int time = 0; time < sequence; time++)
-        {
-            int projectedOffset = projectedBatchOffset + time * projectionWidth;
-            int keyOffset = projectedOffset + keyWidth;
-            int valueOffset = keyOffset + keyWidth;
-            int gateOffset = valueOffset + valueWidth;
-            int betaOffset = gateOffset + valueWidth;
-
-            int row = stateBatchOffset + valueIndex * keyWidth;
-            float gate = Sigmoid(ReadProjected(
-                projected, projectedBFloat16, gateOffset + valueIndex,
-                bfloat16Compute));
-            float retention = useDrn != 0
-                ? gate
-                : retentionFloor + (1f - retentionFloor) * gate;
-            float beta = Sigmoid(ReadProjected(
-                projected, projectedBFloat16, betaOffset + valueIndex,
-                bfloat16Compute));
-            float write = useV3 != 0 || useDrn != 0
-                ? beta
-                : (1f - retention) * beta;
-            float value = XMath.Tanh(ReadProjected(
-                projected, projectedBFloat16, valueOffset + valueIndex,
-                bfloat16Compute));
-            float keySquaredNorm = useDrn != 0 ? 1e-8f : 1e-6f;
-            float querySquaredNorm = 1e-8f;
-            if (useV3 != 0 || useDrn != 0)
-            {
-                for (int key = 0; key < keyWidth; key++)
-                {
-                    float keyTanh = XMath.Tanh(ReadProjected(
-                        projected, projectedBFloat16, keyOffset + key,
-                        bfloat16Compute));
-                    keySquaredNorm += keyTanh * keyTanh;
-                    if (useDrn != 0)
-                    {
-                        float queryTanh = XMath.Tanh(ReadProjected(
-                            projected, projectedBFloat16,
-                            projectedOffset + key, bfloat16Compute));
-                        querySquaredNorm += queryTanh * queryTanh;
-                    }
-                }
-            }
-            float keyScale = useV3 != 0 || useDrn != 0
-                ? 1f / XMath.Sqrt(keySquaredNorm)
-                : inverseSqrtKeyWidth;
-            float queryScale = useDrn != 0
-                ? 1f / XMath.Sqrt(querySquaredNorm)
-                : inverseSqrtKeyWidth;
-
-            if (useDrn != 0)
-            {
-                float recalledBeforeWrite = 0f;
-                for (int key = 0; key < keyWidth; key++)
-                {
-                    float normalizedQuery = XMath.Tanh(ReadProjected(
-                        projected, projectedBFloat16,
-                        projectedOffset + key, bfloat16Compute)) * queryScale;
-                    recalledBeforeWrite += state[row + key]
-                        * normalizedQuery;
-                }
-                WriteOutput(
-                    output,
-                    outputBFloat16,
-                    outputBatchOffset + time * valueWidth + valueIndex,
-                    recalledBeforeWrite,
-                    bfloat16Compute);
-            }
-            float predicted = 0f;
-            for (int key = 0; key < keyWidth; key++)
-            {
-                float normalizedKey = XMath.Tanh(ReadProjected(
-                    projected, projectedBFloat16, keyOffset + key,
-                    bfloat16Compute)) * keyScale;
-                predicted += state[row + key] * normalizedKey;
-            }
-            if (useV3 != 0)
-                predicted *= retention;
-            float delta = write * (value - predicted);
-            for (int key = 0; key < keyWidth; key++)
-            {
-                float normalizedKey = XMath.Tanh(ReadProjected(
-                    projected, projectedBFloat16, keyOffset + key,
-                    bfloat16Compute)) * keyScale;
-                state[row + key] = retention * state[row + key]
-                    + delta * normalizedKey;
-            }
-
-            if (useDrn == 0)
-            {
-                float recalled = 0f;
-                for (int key = 0; key < keyWidth; key++)
-                {
-                    float normalizedQuery = XMath.Tanh(ReadProjected(
-                        projected, projectedBFloat16,
-                        projectedOffset + key, bfloat16Compute)) * queryScale;
-                    recalled += state[row + key] * normalizedQuery;
-                }
-                WriteOutput(
-                    output,
-                    outputBFloat16,
-                    outputBatchOffset + time * valueWidth + valueIndex,
-                    recalled,
-                    bfloat16Compute);
-            }
-
-            int stateTimeOffset = statesBatchOffset + time * matrixSize;
-            int rowOffset = valueIndex * keyWidth;
-            for (int key = 0; key < keyWidth; key++)
-            {
-                states[stateTimeOffset + rowOffset + key] =
-                    state[stateBatchOffset + rowOffset + key];
-            }
-        }
-    }
-
-    private static void BackwardKernel(
-        Index1D batchIndex,
-        ArrayView<float> projected,
-        ArrayView<ushort> projectedBFloat16,
-        ArrayView<float> projectedGradient,
-        ArrayView<float> outputGradient,
-        ArrayView<float> states,
-        ArrayView<float> stateGradient,
-        ArrayView<float> previousGradient,
-        int sequence,
-        int projectionWidth,
-        int keyWidth,
-        int valueWidth,
-        float retentionFloor,
-        int memoryVariant,
-        int bfloat16Compute)
-    {
-        int useV3 = memoryVariant == 1 ? 1 : 0;
-        int useDrn = memoryVariant == 2 ? 1 : 0;
-        int worker = batchIndex;
-        int batch = worker / valueWidth;
-        int valueIndex = worker - batch * valueWidth;
-        int matrixSize = keyWidth * valueWidth;
-        int projectedBatchOffset = batch * sequence * projectionWidth;
-        int outputBatchOffset = batch * sequence * valueWidth;
-        int statesBatchOffset = batch * sequence * matrixSize;
-        int gradientBatchOffset = batch * matrixSize;
-        float inverseSqrtKeyWidth = 1f / XMath.Sqrt((float)keyWidth);
-
-        for (int time = sequence - 1; time >= 0; time--)
-        {
-            int projectedOffset = projectedBatchOffset + time * projectionWidth;
-            int queryOffset = projectedOffset;
-            int keyOffset = queryOffset + keyWidth;
-            int valueOffset = keyOffset + keyWidth;
-            int gateOffset = valueOffset + valueWidth;
-            int betaOffset = gateOffset + valueWidth;
-            int currentStateOffset = statesBatchOffset + time * matrixSize;
-            int previousStateOffset = statesBatchOffset + (time - 1) * matrixSize;
-
-            int row = valueIndex * keyWidth;
-            int gradientRow = gradientBatchOffset + row;
-            for (int key = 0; key < keyWidth; key++)
-                previousGradient[gradientRow + key] = 0f;
-
-            float recalledGradient = outputGradient[
-                outputBatchOffset + time * valueWidth + valueIndex];
-            if (useDrn != 0)
-            {
-                float querySquaredNorm = 1e-8f;
-                for (int key = 0; key < keyWidth; key++)
-                {
-                    float queryTanh = XMath.Tanh(ReadProjected(
-                        projected, projectedBFloat16, queryOffset + key,
-                        bfloat16Compute));
-                    querySquaredNorm += queryTanh * queryTanh;
-                }
-                float queryScale = 1f / XMath.Sqrt(querySquaredNorm);
-                float queryTanhDotGradient = 0f;
-                for (int key = 0; key < keyWidth; key++)
-                {
-                    float previous = time == 0
-                        ? 0f
-                        : states[previousStateOffset + row + key];
-                    float queryGradient = previous * recalledGradient;
-                    queryTanhDotGradient +=
-                        XMath.Tanh(ReadProjected(
-                            projected, projectedBFloat16, queryOffset + key,
-                            bfloat16Compute))
-                        * queryGradient;
-                }
-                for (int key = 0; key < keyWidth; key++)
-                {
-                    float previous = time == 0
-                        ? 0f
-                        : states[previousStateOffset + row + key];
-                    float queryTanh = XMath.Tanh(ReadProjected(
-                        projected, projectedBFloat16, queryOffset + key,
-                        bfloat16Compute));
-                    float queryGradient = previous * recalledGradient;
-                    float tanhGradient = queryGradient * queryScale
-                        - queryTanh * queryTanhDotGradient
-                            * queryScale * queryScale * queryScale;
-                    Atomic.Add(
-                        ref projectedGradient[queryOffset + key],
-                        tanhGradient * (1f - queryTanh * queryTanh));
-                    previousGradient[gradientRow + key] +=
-                        queryTanh * queryScale * recalledGradient;
-                }
-            }
-            else
-            {
-                for (int key = 0; key < keyWidth; key++)
-                {
-                    float queryTanh = XMath.Tanh(ReadProjected(
-                        projected, projectedBFloat16, queryOffset + key,
-                        bfloat16Compute));
-                    float normalizedQuery = queryTanh * inverseSqrtKeyWidth;
-                    float queryDerivative =
-                        (1f - queryTanh * queryTanh) * inverseSqrtKeyWidth;
-                    Atomic.Add(
-                        ref projectedGradient[queryOffset + key],
-                        states[currentStateOffset + row + key]
-                        * recalledGradient * queryDerivative);
-                    stateGradient[gradientRow + key] +=
-                        normalizedQuery * recalledGradient;
-                }
-            }
-
-            float gate = Sigmoid(ReadProjected(
-                projected, projectedBFloat16, gateOffset + valueIndex,
-                bfloat16Compute));
-            float retention = useDrn != 0
-                ? gate
-                : retentionFloor + (1f - retentionFloor) * gate;
-            float beta = Sigmoid(ReadProjected(
-                projected, projectedBFloat16, betaOffset + valueIndex,
-                bfloat16Compute));
-            float write = useV3 != 0 || useDrn != 0
-                ? beta
-                : (1f - retention) * beta;
-            float value = XMath.Tanh(ReadProjected(
-                projected, projectedBFloat16, valueOffset + valueIndex,
-                bfloat16Compute));
-            float keySquaredNorm = useDrn != 0 ? 1e-8f : 1e-6f;
-            if (useV3 != 0 || useDrn != 0)
-            {
-                for (int key = 0; key < keyWidth; key++)
-                {
-                    float keyTanh = XMath.Tanh(ReadProjected(
-                        projected, projectedBFloat16, keyOffset + key,
-                        bfloat16Compute));
-                    keySquaredNorm += keyTanh * keyTanh;
-                }
-            }
-            float keyNorm = useV3 != 0 || useDrn != 0
-                ? XMath.Sqrt(keySquaredNorm)
-                : XMath.Sqrt((float)keyWidth);
-            float keyScale = 1f / keyNorm;
-            float predicted = 0f;
-            float stateGradientDotKey = 0f;
-            float retentionGradient = 0f;
-            for (int key = 0; key < keyWidth; key++)
-            {
-                float previous = time == 0
-                    ? 0f
-                    : states[previousStateOffset + row + key];
-                float gradient = stateGradient[gradientRow + key];
-                float keyValue = XMath.Tanh(ReadProjected(
-                    projected, projectedBFloat16, keyOffset + key,
-                    bfloat16Compute)) * keyScale;
-                predicted += previous * keyValue;
-                stateGradientDotKey += gradient * keyValue;
-                retentionGradient += gradient * previous;
-            }
-
-            float retainedPrediction = useV3 != 0
-                ? retention * predicted
-                : predicted;
-            float error = value - retainedPrediction;
-            float writeGradient = error * stateGradientDotKey;
-            float errorGradient = write * stateGradientDotKey;
-            if (useV3 != 0)
-                retentionGradient -= errorGradient * predicted;
-            else if (useDrn == 0)
-                retentionGradient -= writeGradient * beta;
-            projectedGradient[valueOffset + valueIndex] +=
-                errorGradient * (1f - value * value);
-            projectedGradient[gateOffset + valueIndex] +=
-                retentionGradient
-                    * (useDrn != 0 ? 1f : 1f - retentionFloor) *
-                gate * (1f - gate);
-            projectedGradient[betaOffset + valueIndex] +=
-                writeGradient
-                    * (useV3 != 0 || useDrn != 0 ? 1f : 1f - retention)
-                    * beta * (1f - beta);
-
-            float keyTanhDotGradient = 0f;
-            if (useV3 != 0 || useDrn != 0)
-            {
-                for (int key = 0; key < keyWidth; key++)
-                {
-                    float previous = time == 0
-                        ? 0f
-                        : states[previousStateOffset + row + key];
-                    float gradient = stateGradient[gradientRow + key];
-                    float keyGradient = gradient * write * error
-                        - previous * errorGradient
-                            * (useV3 != 0 ? retention : 1f);
-                    keyTanhDotGradient +=
-                        XMath.Tanh(ReadProjected(
-                            projected, projectedBFloat16, keyOffset + key,
-                            bfloat16Compute)) * keyGradient;
-                }
-            }
-
-            for (int key = 0; key < keyWidth; key++)
-            {
-                float previous = time == 0
-                    ? 0f
-                    : states[previousStateOffset + row + key];
-                float gradient = stateGradient[gradientRow + key];
-                float keyTanh = XMath.Tanh(ReadProjected(
-                    projected, projectedBFloat16, keyOffset + key,
-                    bfloat16Compute));
-                float keyValue = keyTanh * keyScale;
-                float keyGradient = gradient * write * error
-                    - previous * errorGradient
-                        * (useV3 != 0 ? retention : 1f);
-                float tanhGradient = useV3 != 0 || useDrn != 0
-                    ? keyGradient * keyScale
-                        - keyTanh * keyTanhDotGradient
-                            * keyScale * keyScale * keyScale
-                    : keyGradient * keyScale;
-                Atomic.Add(
-                    ref projectedGradient[keyOffset + key],
-                    tanhGradient * (1f - keyTanh * keyTanh));
-                float recurrentPreviousGradient = useV3 != 0
-                    ? retention * (gradient - keyValue * errorGradient)
-                    : gradient * retention - keyValue * errorGradient;
-                if (useDrn != 0)
-                {
-                    previousGradient[gradientRow + key] +=
-                        recurrentPreviousGradient;
-                }
-                else
-                {
-                    previousGradient[gradientRow + key] =
-                        recurrentPreviousGradient;
-                }
-            }
-
-            for (int key = 0; key < keyWidth; key++)
-            {
-                stateGradient[gradientRow + key] =
-                    previousGradient[gradientRow + key];
-            }
-        }
-    }
-
-    private static float Sigmoid(float value)
-        => value >= 0f
-            ? 1f / (1f + XMath.Exp(-value))
-            : XMath.Exp(value) / (1f + XMath.Exp(value));
-
-    private static float ReadProjected(
-        ArrayView<float> projected,
-        ArrayView<ushort> projectedBFloat16,
-        int index,
-        int bfloat16Compute)
-        => bfloat16Compute != 0
-            ? Interop.IntAsFloat((uint)projectedBFloat16[index] << 16)
-            : projected[index];
-
-    private static void WriteOutput(
-        ArrayView<float> output,
-        ArrayView<ushort> outputBFloat16,
-        int index,
-        float value,
-        int bfloat16Compute)
-    {
-        if (bfloat16Compute != 0)
-        {
-            uint bits = Interop.FloatAsInt(value);
-            uint roundingBias = 0x7FFFu + ((bits >> 16) & 1u);
-            outputBFloat16[index] = (ushort)((bits + roundingBias) >> 16);
-        }
-        else
-        {
-            output[index] = value;
-        }
-    }
-
-    private static float RoundBFloat16(float value)
-    {
-        uint bits = Interop.FloatAsInt(value);
-        uint roundingBias = 0x7FFFu + ((bits >> 16) & 1u);
-        return Interop.IntAsFloat((bits + roundingBias) & 0xFFFF0000u);
-    }
 }

@@ -23,6 +23,9 @@ partial class Tensor
                 "[rows, input], [output, input], and [output].");
         }
 
+        if (ExecutionDevice == TensorDevice.Cuda)
+            return LinearLastDim(other, rowBias, applyRelu: true);
+
         float[] output = new float[checked(rows * outputWidth)];
         // A Float16 weight stays packed. Expanding the full matrix into the
         // Float32 transpose cache would erase its storage/cache advantage, so
@@ -180,6 +183,17 @@ partial class Tensor
         {
             throw new ArgumentException(
                 $"LayerNorm parameters must have shape [{columns}].");
+        }
+
+        if (ExecutionDevice == TensorDevice.Cuda)
+        {
+            return AddDropoutLayerNormLastDim(
+                residual,
+                gamma,
+                beta,
+                probability: 0f,
+                random: null,
+                eps);
         }
 
         float[] output = new float[Numel];

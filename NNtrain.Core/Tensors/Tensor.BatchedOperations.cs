@@ -18,6 +18,17 @@ partial class Tensor
         if (matrix._shape[0] != rows || matrix._shape[1] != columns)
             throw ShapeMismatch(this, matrix, "Batch-wise addition");
 
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType == matrix.DType
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return BroadcastAddCuda(matrix, checked(rows * columns));
+        }
+
+        ThrowIfCudaHostFallback(nameof(AddBatchWise));
+
         int matrixLength = rows * columns;
         float[] output = new float[Numel];
         _data.CopyTo(output);

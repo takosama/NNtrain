@@ -5,6 +5,16 @@ namespace NNtrain;
 
 public interface IOptimizer
 {
+    /// <summary>
+    /// Materializes reusable optimizer resources before the guarded training
+    /// hot path begins. Implementations must be idempotent. Optimizers which
+    /// do not need preparation retain source and binary compatibility through
+    /// this default no-op.
+    /// </summary>
+    void prepare()
+    {
+    }
+
     void zero_grad();
 
     void step();
@@ -16,6 +26,16 @@ public interface IOptimizer
     void load_state_dict(OptimizerStateDictionary state)
         => throw new NotSupportedException(
             $"Optimizer '{GetType().Name}' does not expose serializable state.");
+}
+
+/// <summary>
+/// An optimizer that owns an ordered collection of child optimizers.
+/// Streaming checkpoints flatten this collection depth-first, preserving the
+/// declared order without depending on concrete optimizer types.
+/// </summary>
+public interface IOptimizerContainer : IOptimizer
+{
+    IReadOnlyList<IOptimizer> Optimizers { get; }
 }
 
 /// <summary>

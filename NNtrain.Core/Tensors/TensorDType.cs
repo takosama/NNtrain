@@ -19,6 +19,12 @@ public enum TensorDType
     Float4 = 4,
     Float2 = 5,
     Ternary1Bit58 = 6,
+
+    /// <summary>
+    /// Signed Int8 payload with symmetric Float32 scaling metadata.
+    /// The scaling granularity is carried by the storage descriptor.
+    /// </summary>
+    Bfp8 = 8,
 }
 
 internal static class TensorDTypeContract
@@ -26,7 +32,8 @@ internal static class TensorDTypeContract
     internal static bool IsImplemented(TensorDType dtype)
         => dtype is TensorDType.Float32
             or TensorDType.Float16
-            or TensorDType.BFloat16;
+            or TensorDType.BFloat16
+            or TensorDType.Bfp8;
 
     internal static void ValidateImplemented(
         TensorDType dtype,

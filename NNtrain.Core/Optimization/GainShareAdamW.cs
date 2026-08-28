@@ -105,12 +105,22 @@ public sealed class GainShareAdamW : IOptimizer, ILearningRateAdjustable
 
     public GainShareAdamWState CaptureState() => CloneState(_state);
 
+    internal GainShareAdamWState CaptureStateForStreaming() => _state;
+
     public void RestoreState(GainShareAdamWState state)
+        => RestoreState(state, takeOwnership: false);
+
+    private void RestoreState(
+        GainShareAdamWState state,
+        bool takeOwnership)
     {
         ArgumentNullException.ThrowIfNull(state);
         ValidateState(state);
-        _state = CloneState(state);
+        _state = takeOwnership ? state : CloneState(state);
     }
+
+    internal void RestoreStateOwned(GainShareAdamWState state)
+        => RestoreState(state, takeOwnership: true);
 
     internal void ZeroGrad()
     {
@@ -360,7 +370,8 @@ public sealed class GainShareAdamW : IOptimizer, ILearningRateAdjustable
     public void load_state_dict(OptimizerStateDictionary state)
     {
         ArgumentNullException.ThrowIfNull(state);
-        RestoreState(state.Read<GainShareAdamWState>("GainShareAdamW"));
+        RestoreStateOwned(
+            state.Read<GainShareAdamWState>("GainShareAdamW"));
     }
 
     private static void AccumulateAlignmentAndEnergy(

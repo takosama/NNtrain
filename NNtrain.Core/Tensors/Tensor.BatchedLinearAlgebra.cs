@@ -18,6 +18,18 @@ partial class Tensor
             throw ShapeMismatch(this, other, "BatchedMatMul");
         int n = other._shape[2];
 
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType == other.DType
+            && (DType == TensorDType.Float32
+                || DType == TensorDType.BFloat16
+                || DType == TensorDType.Bfp8))
+        {
+            return MatMulCuda(other, batch, m, k, n, [batch, m, n]);
+        }
+
+
+        ThrowIfCudaHostFallback(nameof(BatchedMatMul));
+
         float[] output = new float[checked(batch * m * n)];
 
         void ForwardBatch(int batchIndex)
@@ -110,6 +122,23 @@ partial class Tensor
                 "BatchedMatMulTransposedRight");
         }
         int n = other._shape[1];
+
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType == other.DType
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return MatMulTransposedRightCuda(
+                other,
+                batch,
+                m,
+                k,
+                n,
+                [batch, m, n]);
+        }
+
+        ThrowIfCudaHostFallback(nameof(BatchedMatMulTransposedRight));
 
         float[] output = new float[checked(batch * m * n)];
 

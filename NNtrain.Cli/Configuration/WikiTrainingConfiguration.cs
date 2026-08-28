@@ -19,9 +19,12 @@ sealed record WikiTrainingConfiguration
     internal const string ForgetMemoryV2ArchitectureAlias = "frogetmemoryv2";
     internal const string ForgetMemoryV3Architecture = "forgetmemoryv3";
     internal const string ForgetMemoryDrnArchitecture = "forgetmemorydrn";
-    internal const string Float16ModelDType = "float16";
-    internal const string BFloat16ModelDType = "bfloat16";
-    internal const string Float32ModelDType = "float32";
+    internal const string Float32PrecisionMode = TensorPrecisionModeNames.Float32;
+    internal const string BFloat16PrecisionMode = TensorPrecisionModeNames.BFloat16;
+    internal const string Mix16_32PrecisionMode = TensorPrecisionModeNames.Mix16_32;
+    internal const string Bfp8PrecisionMode = TensorPrecisionModeNames.Bfp8;
+    internal const string Mix8_32PrecisionMode = TensorPrecisionModeNames.Mix8_32;
+    internal const string LegacyFloat16ModelDType = "float16";
     internal const string CpuDevice = "cpu";
     internal const string CudaDevice = "cuda";
     internal const string AutoHyenaConvolution = "auto";
@@ -66,11 +69,12 @@ sealed record WikiTrainingConfiguration
     public int MaxDocumentTokens { get; init; } = 4096;
 
     /// <summary>
-    /// Documents held back to randomize reading order. Zero reads the corpus
-    /// in file order. A larger buffer mixes further but costs memory, because
-    /// the held documents are raw text: roughly 2.7 KB per Japanese Wikipedia
-    /// article, so the default holds on the order of 700 MB and delays the
-    /// first training step until the buffer is full.
+    /// Documents held back to randomize reading order. Zero reads the globally
+    /// shuffled Parquet row groups without additional document mixing. A
+    /// larger buffer mixes individual documents further but costs memory,
+    /// because the held documents are raw text: roughly 2.7 KB per Japanese
+    /// Wikipedia article, so the default holds on the order of 700 MB and
+    /// delays the first training step until the buffer is full.
     /// </summary>
     public int ShuffleBufferSize { get; init; } = 262_144;
 
@@ -93,6 +97,33 @@ sealed record WikiTrainingConfiguration
     public string ModelArchitecture { get; init; } =
         ForgetMemoryV3Architecture;
 
+    /// <summary>
+    /// Numeric execution contract: float32, bfloat16, mix16_32 (fp16_32
+    /// alias), bfp8, or mix8_32.
+    /// </summary>
+    public string? PrecisionMode { get; init; }
+
+    /// <summary>Canonical numeric execution setting.</summary>
+    public string? Precision { get; init; }
+
+    private int _bfp8BlockSize =
+        Bfp8QuantizationDescriptor.DefaultBlockSize;
+    private bool _bfp8BlockSizeWasSet;
+
+    [JsonPropertyName("bfp8_block_size")]
+    public int Bfp8BlockSize
+    {
+        get => _bfp8BlockSize;
+        init
+        {
+            _bfp8BlockSize = value;
+            _bfp8BlockSizeWasSet = true;
+        }
+    }
+
+    internal bool HasExplicitBfp8BlockSize => _bfp8BlockSizeWasSet;
+
+    /// <summary>Legacy physical-storage setting. Use precisionMode.</summary>
     public string? ModelDType { get; init; }
 
     public bool TieWordEmbeddings { get; init; }
@@ -102,6 +133,20 @@ sealed record WikiTrainingConfiguration
     public int DeviceIndex { get; init; }
 
     public int[]? DeviceIndices { get; init; }
+
+    public bool AdaptiveCudaSharding { get; init; } = true;
+
+    public double CudaShardEmaAlpha { get; init; } = 0.2d;
+
+    public double CudaMinimumRelativeShardSize { get; init; } = 0.5d;
+
+    public int CudaMaximumBatchAdjustmentPerStep { get; init; } = 1;
+
+    /// <summary>
+    /// Upper bound for cached compiled CUDA Graph allocations. The active
+    /// shape is retained; older completed shapes are retired first.
+    /// </summary>
+    public int CudaGraphCacheBudgetMiB { get; init; } = 512;
 
     public int ForgetMemoryKeyWidth { get; init; } = 16;
 
@@ -128,6 +173,10 @@ sealed record WikiTrainingConfiguration
 
     public int NekoMuonNewtonSchulzInterval { get; init; } = 5;
 
+    public string? NekoMuonNewtonSchulzDepthMode { get; init; }
+
+    public float? NekoMuonNewtonSchulzDepth { get; init; }
+
     public int GainShareBlockDepth { get; init; } = 1;
 
     public float GainShareBeta1 { get; init; } = 0.9f;
@@ -148,10 +197,6 @@ sealed record WikiTrainingConfiguration
 
     public float WeightDecay { get; init; } = 0.01f;
 
-    public bool AdamWUseBFloat16FirstMoment { get; init; }
-
-    public bool AdamWUseBFloat16SecondMoment { get; init; }
-
     public WikiOptimizationConfiguration? Optimization { get; init; }
 
     public int Seed { get; init; } = 1234;
@@ -162,7 +207,7 @@ sealed record WikiTrainingConfiguration
 
     public int GraphUpdateSteps { get; init; } = 100;
 
-    public int DatasetSampleEverySteps { get; init; } = 1000;
+    public int DatasetSampleEverySteps { get; init; } = 2000;
 
     public int DatasetSamplePoolSize { get; init; } = 32;
 
@@ -222,6 +267,17 @@ sealed record WikiTrainingConfiguration
         string json = File.ReadAllText(fullPath);
         TrainingConfigurationV2.NormalizedConfiguration normalized =
             TrainingConfigurationV2.Normalize(json);
+        return LoadNormalized(fullPath, normalized);
+    }
+
+    internal static WikiTrainingConfiguration LoadNormalized(
+        string path,
+        TrainingConfigurationV2.NormalizedConfiguration normalized)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(normalized);
+
+        string fullPath = Path.GetFullPath(path);
         if (normalized.IsV2
             && !string.Equals(
                 normalized.TaskType,
@@ -232,7 +288,7 @@ sealed record WikiTrainingConfiguration
                 $"Configuration task '{normalized.TaskType}' is not a " +
                 "wiki-language-model task.");
         }
-        json = normalized.Json;
+        string json = normalized.Json;
         using JsonDocument document = JsonDocument.Parse(
             json,
             new JsonDocumentOptions
@@ -309,6 +365,8 @@ sealed record WikiTrainingConfiguration
             "auxiliaryLearningRate",
             "weightDecay",
             "nekoMuonNewtonSchulzInterval",
+            "nekoMuonNewtonSchulzDepthMode",
+            "nekoMuonNewtonSchulzDepth",
             "warmupPercent",
             "adamWUseBFloat16FirstMoment",
             "adamWUseBFloat16SecondMoment");
@@ -341,6 +399,10 @@ sealed record WikiTrainingConfiguration
             WeightDecay = optimizer.WeightDecay,
             NekoMuonNewtonSchulzInterval =
                 optimizer.NekoMuonNewtonSchulzInterval,
+            NekoMuonNewtonSchulzDepthMode =
+                optimizer.NekoMuonNewtonSchulzDepthMode,
+            NekoMuonNewtonSchulzDepth =
+                optimizer.NekoMuonNewtonSchulzDepth,
             GainShareBlockDepth = optimizer.GainShareBlockDepth,
             GainShareBeta1 = optimizer.GainShareBeta1,
             GainShareBeta2 = optimizer.GainShareBeta2,
@@ -349,10 +411,6 @@ sealed record WikiTrainingConfiguration
             GainShareGamma = optimizer.GainShareGamma,
             GainShareMinScale = optimizer.GainShareMinScale,
             GainShareMaxScale = optimizer.GainShareMaxScale,
-            AdamWUseBFloat16FirstMoment =
-                optimizer.AdamWUseBFloat16FirstMoment,
-            AdamWUseBFloat16SecondMoment =
-                optimizer.AdamWUseBFloat16SecondMoment,
             WarmupPercent = scheduler.WarmupPercent,
         };
     }
@@ -477,6 +535,28 @@ sealed record WikiTrainingConfiguration
                 "deviceIndices must contain unique, non-negative indices.",
                 nameof(DeviceIndices));
         }
+        if (!double.IsFinite(CudaShardEmaAlpha)
+            || CudaShardEmaAlpha <= 0d
+            || CudaShardEmaAlpha > 1d)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(CudaShardEmaAlpha),
+                "cudaShardEmaAlpha must be in (0, 1].");
+        }
+        if (!double.IsFinite(CudaMinimumRelativeShardSize)
+            || CudaMinimumRelativeShardSize <= 0d
+            || CudaMinimumRelativeShardSize > 1d)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(CudaMinimumRelativeShardSize),
+                "cudaMinimumRelativeShardSize must be in (0, 1].");
+        }
+        ValidatePositive(
+            CudaMaximumBatchAdjustmentPerStep,
+            nameof(CudaMaximumBatchAdjustmentPerStep));
+        ValidatePositive(
+            CudaGraphCacheBudgetMiB,
+            nameof(CudaGraphCacheBudgetMiB));
         ValidatePositive(
             ForgetMemoryKeyWidth,
             nameof(ForgetMemoryKeyWidth));
@@ -486,9 +566,13 @@ sealed record WikiTrainingConfiguration
         ValidatePositive(HyenaFilterWidth, nameof(HyenaFilterWidth));
         ValidatePositive(LogEveryBatches, nameof(LogEveryBatches));
         ValidatePositive(GraphUpdateSteps, nameof(GraphUpdateSteps));
-        ValidatePositive(
-            DatasetSampleEverySteps,
-            nameof(DatasetSampleEverySteps));
+        if (DatasetSampleEverySteps < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(DatasetSampleEverySteps),
+                DatasetSampleEverySteps,
+                "Dataset sample interval must be zero (disabled) or positive.");
+        }
         ValidatePositive(DatasetSamplePoolSize, nameof(DatasetSamplePoolSize));
         ValidatePositive(MaxNewTokens, nameof(MaxNewTokens));
 
@@ -520,16 +604,24 @@ sealed record WikiTrainingConfiguration
                 $"'{ForgetMemoryDrnArchitecture}'.",
                 nameof(ModelArchitecture));
         }
+        if (Bfp8BlockSize <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(Bfp8BlockSize),
+                Bfp8BlockSize,
+                "BFP8 block size must be positive.");
+        }
         TensorDType? explicitModelDType = GetExplicitModelDType();
         if (explicitModelDType is TensorDType.Float16
                 or TensorDType.BFloat16
+                or TensorDType.Bfp8
             && !IsForgetMemoryArchitecture()
             && !IsArchitecture(TransformerArchitecture))
         {
             throw new ArgumentException(
-                "16-bit model dtypes are currently supported only for the " +
+                "Reduced-precision modes are currently supported only for the " +
                 "Transformer and ForgetMemory architectures.",
-                nameof(ModelDType));
+                nameof(PrecisionMode));
         }
         _ = GetExecutionDevice();
         if (!float.IsFinite(ForgetMemoryRetentionMinimum)
@@ -582,6 +674,19 @@ sealed record WikiTrainingConfiguration
                 $"'{GainShareAdamWOptimizer}', and '{LionOptimizer}'.",
                 nameof(Optimizer));
         }
+        TensorPrecisionMode selectedPrecision = GetPrecisionMode();
+        if ((selectedPrecision is TensorPrecisionMode.Bfp8
+                or TensorPrecisionMode.Mix8_32)
+            && (IsOptimizer(GainShareAdamWOptimizer)
+                || IsOptimizer(LionOptimizer)))
+        {
+            throw new ArgumentException(
+                $"Optimizer '{Optimizer}' does not have a resident CUDA " +
+                $"{TensorPrecisionModeNames.Format(selectedPrecision)} " +
+                "update path. Use 'adamw' or 'nekomuon' so BFP8 weights, " +
+                "gradients, and optimizer state are not materialized on the host.",
+                nameof(Optimizer));
+        }
         ValidateGainShareSettings();
         if (!float.IsFinite(LearningRate) || LearningRate <= 0f)
             throw new ArgumentOutOfRangeException(nameof(LearningRate));
@@ -594,6 +699,7 @@ sealed record WikiTrainingConfiguration
         ValidatePositive(
             NekoMuonNewtonSchulzInterval,
             nameof(NekoMuonNewtonSchulzInterval));
+        ValidateNekoMuonNewtonSchulzDepthPolicy();
         if (!float.IsFinite(WarmupPercent)
             || WarmupPercent < 0f
             || WarmupPercent >= 100f)
@@ -689,6 +795,74 @@ sealed record WikiTrainingConfiguration
         }
     }
 
+    private void ValidateNekoMuonNewtonSchulzDepthPolicy()
+    {
+        if (NekoMuonNewtonSchulzDepthMode is null)
+        {
+            if (NekoMuonNewtonSchulzDepth.HasValue)
+            {
+                throw new ArgumentException(
+                    "nekoMuonNewtonSchulzDepth requires " +
+                    "nekoMuonNewtonSchulzDepthMode.",
+                    nameof(NekoMuonNewtonSchulzDepth));
+            }
+            return;
+        }
+
+        if (!IsOptimizer(NekoMuonOptimizer))
+        {
+            throw new ArgumentException(
+                "NekoMuon Newton-Schulz depth policy can only be used with " +
+                "the NekoMuon optimizer.",
+                nameof(NekoMuonNewtonSchulzDepthMode));
+        }
+
+        if (!Enum.TryParse(
+                NekoMuonNewtonSchulzDepthMode,
+                ignoreCase: true,
+                out global::NNtrain.NekoMuonNewtonSchulzDepthMode mode)
+            || !Enum.IsDefined(mode))
+        {
+            throw new ArgumentException(
+                $"Unsupported NekoMuon Newton-Schulz depth mode " +
+                $"'{NekoMuonNewtonSchulzDepthMode}'. Expected adaptive, " +
+                "minimum, or fixed.",
+                nameof(NekoMuonNewtonSchulzDepthMode));
+        }
+
+        if (mode
+            == global::NNtrain.NekoMuonNewtonSchulzDepthMode.Adaptive)
+        {
+            if (NekoMuonNewtonSchulzDepth.HasValue)
+            {
+                throw new ArgumentException(
+                    "Adaptive NekoMuon Newton-Schulz depth must not specify " +
+                    "nekoMuonNewtonSchulzDepth.",
+                    nameof(NekoMuonNewtonSchulzDepth));
+            }
+            return;
+        }
+
+        if (!NekoMuonNewtonSchulzDepth.HasValue)
+        {
+            throw new ArgumentException(
+                $"NekoMuon Newton-Schulz depth mode '{mode}' requires " +
+                "nekoMuonNewtonSchulzDepth.",
+                nameof(NekoMuonNewtonSchulzDepth));
+        }
+
+        float depth = NekoMuonNewtonSchulzDepth.Value;
+        int maximumDepth = new NekoMuonOptions().MaxNewtonSchulzSteps;
+        if (!float.IsFinite(depth) || depth < 0f || depth > maximumDepth)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(NekoMuonNewtonSchulzDepth),
+                depth,
+                $"NekoMuon Newton-Schulz depth must be finite and in " +
+                $"[0, {maximumDepth}].");
+        }
+    }
+
     private static void ValidateGainShareUnitInterval(
         float value,
         string parameterName,
@@ -708,6 +882,20 @@ sealed record WikiTrainingConfiguration
             Optimizer,
             expectedOptimizer,
             StringComparison.OrdinalIgnoreCase);
+
+    internal bool HasNekoMuonNewtonSchulzDepthPolicyOverride
+        => NekoMuonNewtonSchulzDepthMode is not null;
+
+    internal global::NNtrain.NekoMuonNewtonSchulzDepthMode
+        GetNekoMuonNewtonSchulzDepthMode()
+        => NekoMuonNewtonSchulzDepthMode is null
+            ? global::NNtrain.NekoMuonNewtonSchulzDepthMode.Adaptive
+            : Enum.Parse<global::NNtrain.NekoMuonNewtonSchulzDepthMode>(
+                NekoMuonNewtonSchulzDepthMode,
+                ignoreCase: true);
+
+    internal float GetNekoMuonNewtonSchulzDepth()
+        => NekoMuonNewtonSchulzDepth ?? 0f;
 
     internal bool IsArchitecture(string expectedArchitecture)
         => string.Equals(
@@ -730,45 +918,62 @@ sealed record WikiTrainingConfiguration
             || IsForgetMemoryV3Architecture()
             || IsForgetMemoryDrnArchitecture();
 
-    internal TensorDType? GetExplicitModelDType()
+    internal TensorPrecisionMode? GetExplicitPrecisionMode()
     {
-        if (ModelDType is null)
+        int configuredNames = (Precision is null ? 0 : 1)
+            + (PrecisionMode is null ? 0 : 1)
+            + (ModelDType is null ? 0 : 1);
+        if (configuredNames > 1)
+        {
+            throw new ArgumentException(
+                "precision, precisionMode, and the legacy modelDType " +
+                "setting cannot be combined.",
+                nameof(Precision));
+        }
+
+        string? configured = Precision ?? PrecisionMode ?? ModelDType;
+        if (configured is null)
             return null;
 
-        if (string.Equals(
-            ModelDType,
-            Float16ModelDType,
-            StringComparison.OrdinalIgnoreCase))
+        if (ModelDType is not null
+            && string.Equals(
+                configured,
+                LegacyFloat16ModelDType,
+                StringComparison.OrdinalIgnoreCase))
         {
-            return TensorDType.Float16;
-        }
-        if (string.Equals(
-            ModelDType,
-            BFloat16ModelDType,
-            StringComparison.OrdinalIgnoreCase))
-        {
-            return TensorDType.BFloat16;
-        }
-        if (string.Equals(
-            ModelDType,
-            Float32ModelDType,
-            StringComparison.OrdinalIgnoreCase))
-        {
-            return TensorDType.Float32;
+            return TensorPrecisionMode.Mix16_32;
         }
 
-        throw new ArgumentException(
-            $"Unsupported modelDType '{ModelDType}'. Supported values are " +
-            $"'{BFloat16ModelDType}', '{Float16ModelDType}', and " +
-            $"'{Float32ModelDType}'.",
-            nameof(ModelDType));
+        try
+        {
+            return TensorPrecisionModeNames.Parse(configured);
+        }
+        catch (ArgumentException exception)
+        {
+            string parameterName = Precision is not null
+                ? nameof(Precision)
+                : PrecisionMode is not null
+                    ? nameof(PrecisionMode)
+                    : nameof(ModelDType);
+            throw new ArgumentException(
+                $"Unsupported precision mode '{configured}'. Supported values " +
+                $"are {TensorPrecisionModeNames.SupportedValuesDescription}.",
+                parameterName,
+                exception);
+        }
     }
 
-    internal TensorDType GetModelDType()
-        => GetExplicitModelDType()
+    internal TensorDType? GetExplicitModelDType()
+        => GetExplicitPrecisionMode()?.ToStorageDType();
+
+    internal TensorPrecisionMode GetPrecisionMode()
+        => GetExplicitPrecisionMode()
             ?? (IsForgetMemoryArchitecture()
-                ? TensorDType.Float16
-                : TensorDType.Float32);
+                ? TensorPrecisionMode.Mix16_32
+                : TensorPrecisionMode.Float32);
+
+    internal TensorDType GetModelDType()
+        => GetPrecisionMode().ToStorageDType();
 
     internal TensorDevice GetExecutionDevice()
     {

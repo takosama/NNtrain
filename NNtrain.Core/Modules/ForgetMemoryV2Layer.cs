@@ -136,7 +136,9 @@ public sealed class ForgetMemoryV2Layer : Module
     /// <paramref name="state"/>. Everything except the memory recurrence is
     /// identical to <see cref="Forward"/>.
     /// </summary>
-    internal Tensor Continue(Tensor input, float[] state)
+    internal Tensor Continue(
+        Tensor input,
+        ForgetMemoryRecurrentMemory state)
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(state);

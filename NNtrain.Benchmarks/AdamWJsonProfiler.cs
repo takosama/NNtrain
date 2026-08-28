@@ -25,7 +25,7 @@ internal static class AdamWJsonProfiler
                 StringComparison.OrdinalIgnoreCase)
             && !string.Equals(
                 architecture,
-                "forgetmemoryv2",
+                "frogetmemoryv2",
                 StringComparison.OrdinalIgnoreCase))
         {
             throw new NotSupportedException(
@@ -46,9 +46,16 @@ internal static class AdamWJsonProfiler
             root,
             "forgetMemoryRetentionMaximum");
         float initializationScale = ReadSingle(root, "initializationScale");
-        float learningRate = ReadSingle(root, "learningRate");
-        float weightDecay = ReadSingle(root, "weightDecay");
+        JsonElement optimizerConfiguration =
+            root.TryGetProperty("optimization", out JsonElement optimization)
+                ? optimization.GetProperty("optimizer")
+                : root;
+        float learningRate = ReadSingle(
+            optimizerConfiguration, "learningRate");
+        float weightDecay = ReadSingle(
+            optimizerConfiguration, "weightDecay");
         int seed = ReadInt(root, "seed");
+        TensorPrecisionMode precisionMode = PrecisionModeConfiguration.Read(root);
 
         Tensor.SimdEnabled = simdOverride
             ?? root.GetProperty("useSimd").GetBoolean();
@@ -68,7 +75,9 @@ internal static class AdamWJsonProfiler
             retentionMaximum,
             new Random(seed),
             initializationScale,
-            dropout: 0f);
+            dropout: 0f,
+            dtype: precisionMode.ToStorageDType());
+        model.SetPrecisionMode(precisionMode);
         Parameter[] parameters = model.Parameters().ToArray();
         long elementCount = parameters.Sum(parameter => (long)parameter.T.Numel);
         var random = new Random(seed ^ 0x41D3);
@@ -79,14 +88,9 @@ internal static class AdamWJsonProfiler
                 gradient[index] = (float)(random.NextDouble() * 2d - 1d);
         }
 
-        bool useBFloat16FirstMoment = root.TryGetProperty(
-            "adamWUseBFloat16FirstMoment",
-            out JsonElement useBFloat16First)
-            && useBFloat16First.GetBoolean();
-        bool useBFloat16SecondMoment = root.TryGetProperty(
-            "adamWUseBFloat16SecondMoment",
-            out JsonElement useBFloat16Second)
-            && useBFloat16Second.GetBoolean();
+        bool useBFloat16FirstMoment =
+            precisionMode == TensorPrecisionMode.BFloat16;
+        bool useBFloat16SecondMoment = useBFloat16FirstMoment;
         var optimizer = new AdamW(
             parameters,
             new AdamWOptions
@@ -102,7 +106,8 @@ internal static class AdamWJsonProfiler
         Console.WriteLine($"configuration = {path}");
         Console.WriteLine(
             $"AdamW JSON shape = {architecture}, width {width}, hidden " +
-            $"{hidden}, layers {layers}, vocabulary {vocabulary}");
+            $"{hidden}, layers {layers}, vocabulary {vocabulary}, precision " +
+            $"{TensorPrecisionModeNames.Format(precisionMode)}");
         Console.WriteLine(
             $"parameters = {parameters.Length:N0}, elements = " +
             $"{elementCount:N0}, SIMD = {Tensor.SimdEnabled}, workers = " +

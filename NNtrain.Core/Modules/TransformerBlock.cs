@@ -35,14 +35,45 @@ class TransformerBlock : Module
 
     public Tensor Forward(Tensor x) // (T, D)
     {
-        // Keep CUDA-resident gradients in the regular add/layer-norm kernels.
-        // The fused residual-layer-norm CPU backward assumes host gradient
-        // buffers and is therefore not valid for a CUDA-resident branch.
-        var h1 = Ln1.Forward(
-            AttnDropout.AddResidual(x, Attn.Forward(x)));
-        var h2 = Ln2.Forward(
-            FfnDropout.AddResidual(h1, Ffn.Forward(h1)));
+        var h1 = Ln1.ForwardResidualDropout(
+            x,
+            Attn.Forward(x),
+            AttnDropout);
+        var h2 = Ln2.ForwardResidualDropout(
+            h1,
+            Ffn.Forward(h1),
+            FfnDropout);
         return h2;
+    }
+
+    internal Tensor ForwardIncremental(
+        Tensor x,
+        CudaAttentionKvCache cache,
+        int position)
+    {
+        Tensor h1 = Ln1.ForwardResidualDropout(
+            x,
+            Attn.ForwardIncremental(x, cache, position),
+            AttnDropout);
+        return Ln2.ForwardResidualDropout(
+            h1,
+            Ffn.Forward(h1),
+            FfnDropout);
+    }
+
+    internal Tensor ForwardPrefill(
+        Tensor x,
+        CudaAttentionKvCache cache,
+        int sequence)
+    {
+        Tensor h1 = Ln1.ForwardResidualDropout(
+            x,
+            Attn.ForwardPrefill(x, cache, sequence),
+            AttnDropout);
+        return Ln2.ForwardResidualDropout(
+            h1,
+            Ffn.Forward(h1),
+            FfnDropout);
     }
 
 }

@@ -28,21 +28,26 @@ public class AdamWJsonBenchmarks
         Tensor.MaxDegreeOfParallelism = root
             .GetProperty("maxDegreeOfParallelism")
             .GetInt32();
+        JsonElement optimizerConfiguration =
+            root.TryGetProperty("optimization", out JsonElement optimization)
+                ? optimization.GetProperty("optimizer")
+                : root;
+        TensorPrecisionMode precisionMode = PrecisionModeConfiguration.Read(root);
+        bool useBFloat16Moments =
+            precisionMode == TensorPrecisionMode.BFloat16;
         AdamWOptions options = new()
         {
-            LearningRate = ReadSingle(root, "learningRate"),
+            LearningRate = ReadSingle(
+                optimizerConfiguration, "learningRate"),
             Beta1 = 0.9f,
             Beta2 = 0.95f,
-            WeightDecay = ReadSingle(root, "weightDecay"),
-            UseBFloat16FirstMoment = ReadBoolean(
-                root,
-                "adamWUseBFloat16FirstMoment"),
-            UseBFloat16SecondMoment = ReadBoolean(
-                root,
-                "adamWUseBFloat16SecondMoment"),
+            WeightDecay = ReadSingle(
+                optimizerConfiguration, "weightDecay"),
+            UseBFloat16FirstMoment = useBFloat16Moments,
+            UseBFloat16SecondMoment = useBFloat16Moments,
         };
-        Parameter[] parameters = CreateParameters(root);
-        Parameter[] referenceParameters = CreateParameters(root);
+        Parameter[] parameters = CreateParameters(root, precisionMode);
+        Parameter[] referenceParameters = CreateParameters(root, precisionMode);
 
         _firstParameter = parameters[0];
         _optimizer = new AdamW(parameters, options);
@@ -80,7 +85,9 @@ public class AdamWJsonBenchmarks
         return _firstParameter.T.Grad[0];
     }
 
-    private static Parameter[] CreateParameters(JsonElement root)
+    private static Parameter[] CreateParameters(
+        JsonElement root,
+        TensorPrecisionMode precisionMode)
     {
         var model = new ForgetMemoryV2Gpt(
             vocabularySize: ReadInt(root, "vocabularySize"),
@@ -98,7 +105,9 @@ public class AdamWJsonBenchmarks
                 "forgetMemoryRetentionMaximum"),
             random: new Random(ReadInt(root, "seed")),
             initializationScale: ReadSingle(root, "initializationScale"),
-            dropout: 0f);
+            dropout: 0f,
+            dtype: precisionMode.ToStorageDType());
+        model.SetPrecisionMode(precisionMode);
         Parameter[] parameters = model.Parameters().ToArray();
         var random = new Random(ReadInt(root, "seed") ^ 0x41D3);
         foreach (Parameter parameter in parameters)
@@ -129,7 +138,7 @@ public class AdamWJsonBenchmarks
             {
                 string candidate = Path.Combine(
                     directory.FullName,
-                    "training.wiki-jp.json");
+                    "training.forgetmemoryv2-wiki-jp.json");
                 if (File.Exists(candidate))
                     return candidate;
                 directory = directory.Parent;
@@ -137,7 +146,7 @@ public class AdamWJsonBenchmarks
         }
 
         throw new FileNotFoundException(
-            "training.wiki-jp.json was not found. Set " +
+            "training.forgetmemoryv2-wiki-jp.json was not found. Set " +
             "NNTRAIN_ADAMW_CONFIG to an absolute path.");
     }
 
@@ -147,7 +156,4 @@ public class AdamWJsonBenchmarks
     private static float ReadSingle(JsonElement root, string name)
         => root.GetProperty(name).GetSingle();
 
-    private static bool ReadBoolean(JsonElement root, string name)
-        => root.TryGetProperty(name, out JsonElement value)
-            && value.GetBoolean();
 }

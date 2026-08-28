@@ -40,4 +40,22 @@ public sealed class Dropout : Module
             ? residual.AddDropout(branch, Probability, _random)
             : residual + branch;
     }
+
+    internal Tensor AddResidualLayerNorm(
+        Tensor residual,
+        Tensor branch,
+        Tensor gamma,
+        Tensor beta,
+        float epsilon)
+    {
+        ArgumentNullException.ThrowIfNull(residual);
+        ArgumentNullException.ThrowIfNull(branch);
+        return residual.AddDropoutLayerNormLastDim(
+            branch,
+            gamma,
+            beta,
+            IsTraining ? Probability : 0f,
+            _random,
+            epsilon);
+    }
 }

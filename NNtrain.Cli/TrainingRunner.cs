@@ -65,6 +65,26 @@ internal static class TrainingRunner
                 (values[swapIndex], values[index]);
         }
     }
+
+    /// <summary>
+    /// Combines training seeds without <see cref="HashCode"/>'s randomized
+    /// per-process salt. Checkpoint resume must reconstruct the same order in
+    /// a new process.
+    /// </summary>
+    internal static int CombineSeed(int first, int second)
+    {
+        uint hash = 2_166_136_261u;
+        hash = unchecked((hash ^ (uint)first) * 16_777_619u);
+        hash = unchecked((hash ^ (uint)second) * 16_777_619u);
+        return unchecked((int)hash);
+    }
+
+    internal static int CombineSeed(int first, int second, int third)
+    {
+        uint hash = unchecked((uint)CombineSeed(first, second));
+        hash = unchecked((hash ^ (uint)third) * 16_777_619u);
+        return unchecked((int)hash);
+    }
 }
 
 internal sealed class NoGcTrainingWindow : IDisposable

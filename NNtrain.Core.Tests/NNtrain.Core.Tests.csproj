@@ -18,6 +18,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\NNtrain.Core\NNtrain.Core.csproj" />
+    <ProjectReference Include="..\NNtrain.Runtime\NNtrain.Runtime.csproj" />
+    <ProjectReference Include="..\NNtrain.Cuda\NNtrain.Cuda.csproj" />
+    <ProjectReference Include="..\NNtrain.Training\NNtrain.Training.csproj" />
   </ItemGroup>
 
 </Project>

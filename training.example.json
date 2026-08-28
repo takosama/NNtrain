@@ -21,6 +21,7 @@
     "hiddenSize": 1152,
     "layers": 16,
     "modelArchitecture": "forgetmemoryv3",
+    "precisionMode": "mix16_32",
     "forgetMemoryKeyWidth": 16,
     "forgetMemoryValueWidth": 16,
     "forgetMemoryRetentionMinimum": 0.5,
@@ -54,9 +55,7 @@
       "learningRate": 0.0003,
       "auxiliaryLearningRate": 0.0003,
       "nekoMuonNewtonSchulzInterval": 5,
-      "weightDecay": 0.01,
-      "adamWUseBFloat16FirstMoment": false,
-      "adamWUseBFloat16SecondMoment": false
+      "weightDecay": 0.01
     },
     "scheduler": {
       "type": "warmupCosineProgress",

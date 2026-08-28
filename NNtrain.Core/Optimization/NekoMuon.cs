@@ -10,8 +10,28 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
 
     private readonly List<Parameter> _parameters;
     private readonly long _totalElements;
-    private readonly NekoMuonWorkspace[] _workspaces;
+    private readonly NekoMuonWorkspace?[] _workspaces;
     private readonly CudaOptimizerKernels.NekoMuonResidentState?[] _cudaStates;
+    private readonly CudaOptimizerKernels.NekoMuonBFloat16ResidentState?[]
+        _cudaBFloat16States;
+    private readonly CudaOptimizerKernels.NekoMuonBfp8ResidentState?[]
+        _cudaBfp8States;
+    private readonly int _cudaBatchCapacity;
+    private readonly long _cudaScratchBudgetBytes;
+    private readonly Dictionary<int, CudaOptimizerKernels.NekoMuonDeviceScratch>
+        _cudaScratch = [];
+    private readonly Dictionary<int, CudaOptimizerKernels.NekoMuonStatsBatch>
+        _cudaStatsBatches = [];
+    private readonly Dictionary<int,
+        CudaOptimizerKernels.NekoMuonBFloat16StatsBatch>
+        _cudaBFloat16StatsBatches = [];
+    private readonly Dictionary<int,
+        CudaOptimizerKernels.NekoMuonBfp8StatsBatch> _cudaBfp8StatsBatches = [];
+    private readonly Dictionary<int, NativeCudaBuffer<int>>
+        _cudaBfp8FiniteStatus = [];
+    private readonly Dictionary<int, CudaOptimizerFiniteStatusReadback>
+        _cudaBfp8FiniteReadbacks = [];
+    private readonly CudaDispatchPolicy _cudaDispatchPolicy;
     private NekoMuonState _state;
 
     internal IReadOnlyList<Parameter> Parameters => _parameters;
@@ -20,11 +40,30 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
 
     public NekoMuonStepProfile LastStepProfile { get; private set; }
 
+    /// <summary>
+    /// Diagnostic-only switch used by the convergence profiler to compare
+    /// adaptive depth with an exact full five-step Newton-Schulz update. It is
+    /// intentionally not serialized and therefore cannot silently change a
+    /// resumed training run.
+    /// </summary>
+    internal bool ForceFullNewtonSchulz { get; set; }
+
     public NekoMuon(
         IEnumerable<Parameter> parameters,
         NekoMuonOptions? options = null)
+        : this(parameters, options, CudaDispatchPolicy.Current)
+    {
+    }
+
+    internal NekoMuon(
+        IEnumerable<Parameter> parameters,
+        NekoMuonOptions? options,
+        CudaDispatchPolicy cudaDispatchPolicy)
     {
         ArgumentNullException.ThrowIfNull(parameters);
+        _cudaDispatchPolicy = (cudaDispatchPolicy
+            ?? throw new ArgumentNullException(nameof(cudaDispatchPolicy)))
+            .Validate();
 
         _parameters = [];
         var seenParameters =
@@ -56,28 +95,140 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         NekoMuonOptions effectiveOptions = options ?? new NekoMuonOptions();
         ValidateOptions(effectiveOptions, nameof(options));
         _state = CreateInitialState(_parameters, effectiveOptions);
-        _workspaces = _parameters.Select(CreateWorkspace).ToArray();
+        // CUDA never consumes the managed Newton-Schulz work arrays.  Keep
+        // them lazy so constructing a CUDA optimizer does not retain another
+        // six full-size host arrays for every matrix parameter.
+        _workspaces = new NekoMuonWorkspace?[_parameters.Count];
         _cudaStates = new CudaOptimizerKernels.NekoMuonResidentState?[
             _parameters.Count];
+        _cudaBFloat16States = new CudaOptimizerKernels
+            .NekoMuonBFloat16ResidentState?[_parameters.Count];
+        _cudaBfp8States = new CudaOptimizerKernels
+            .NekoMuonBfp8ResidentState?[_parameters.Count];
+        _cudaScratchBudgetBytes = ResolveCudaScratchBudgetBytes();
+        _cudaBatchCapacity = ResolveCudaBatchCapacity(
+            _cudaScratchBudgetBytes);
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
             CudaOptimizerKernels.PrewarmNekoMuon(Tensor.CudaDeviceIndices);
     }
 
     public NekoMuonState CaptureState()
+        => CloneState(CaptureStateForStreaming());
+
+    /// <summary>
+    /// Returns scalar optimizer diagnostics without copying the large moment
+    /// arrays. This is safe to query after <see cref="step"/> for training
+    /// telemetry and makes adaptive Newton-Schulz depth observable.
+    /// </summary>
+    public NekoMuonDiagnostics GetDiagnostics()
+    {
+        NekoMuonParameterState[] states = _state.ParameterStates;
+        if (states.Length == 0)
+        {
+            return new NekoMuonDiagnostics(
+                _state.Step,
+                0f,
+                0f,
+                0f,
+                0f,
+                _state.Options.MaxNewtonSchulzSteps);
+        }
+
+        float minimum = float.PositiveInfinity;
+        float maximum = float.NegativeInfinity;
+        double sum = 0d;
+        double depthSum = 0d;
+        bool runNewtonSchulz =
+            _state.Step % _state.Options.NewtonSchulzInterval == 0;
+        foreach (NekoMuonParameterState state in states)
+        {
+            minimum = MathF.Min(minimum, state.Confidence);
+            maximum = MathF.Max(maximum, state.Confidence);
+            sum += state.Confidence;
+            depthSum += ForceFullNewtonSchulz && runNewtonSchulz
+                ? _state.Options.MaxNewtonSchulzSteps
+                : ResolveNewtonSchulzDepth(
+                    _state.Options,
+                    state.Confidence,
+                    runNewtonSchulz);
+        }
+        float mean = (float)(sum / states.Length);
+        return new NekoMuonDiagnostics(
+            _state.Step,
+            minimum,
+            mean,
+            maximum,
+            (float)(depthSum / states.Length),
+            _state.Options.MaxNewtonSchulzSteps);
+    }
+
+    internal NekoMuonState CaptureStateForStreaming()
     {
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
         {
             int primaryDevice = Tensor.CudaDeviceIndex;
-            foreach (CudaOptimizerKernels.NekoMuonResidentState? state
-                in _cudaStates)
+            for (int index = 0; index < _cudaStates.Length; index++)
             {
+                CudaOptimizerKernels.NekoMuonResidentState? state =
+                    _cudaStates[index];
                 state?.SynchronizeHost(primaryDevice);
+                // Generic Float32/BF16 CUDA computes confidence from the
+                // gathered host statistics and stores it in _state below the
+                // step. Its device Confidence slot is only authoritative for
+                // mix8_32's device-control path. Do not overwrite a current
+                // host value with the generic slot's construction-time zero.
+                if (state is not null
+                    && state.IsDeviceConfidenceAuthoritative)
+                {
+                    NekoMuonParameterState parameterState =
+                        _state.ParameterStates[index];
+                    _state.ParameterStates[index] = parameterState with
+                    {
+                        Confidence = state.SynchronizeConfidence(primaryDevice),
+                    };
+                }
+            }
+            for (int index = 0; index < _cudaBFloat16States.Length; index++)
+            {
+                CudaOptimizerKernels.NekoMuonBFloat16ResidentState? state =
+                    _cudaBFloat16States[index];
+                state?.SynchronizeHost(primaryDevice);
+                if (state is not null
+                    && state.IsDeviceConfidenceAuthoritative)
+                {
+                    NekoMuonParameterState parameterState =
+                        _state.ParameterStates[index];
+                    _state.ParameterStates[index] = parameterState with
+                    {
+                        Confidence = state.SynchronizeConfidence(primaryDevice),
+                    };
+                }
+            }
+            for (int index = 0; index < _cudaBfp8States.Length; index++)
+            {
+                CudaOptimizerKernels.NekoMuonBfp8ResidentState? state =
+                    _cudaBfp8States[index];
+                state?.SynchronizeHost(primaryDevice);
+                if (state is not null)
+                {
+                    NekoMuonParameterState parameterState =
+                        _state.ParameterStates[index];
+                    _state.ParameterStates[index] = parameterState with
+                    {
+                        Confidence = state.SynchronizeConfidence(primaryDevice),
+                    };
+                }
             }
         }
-        return CloneState(_state);
+        return _state;
     }
 
     public float LearningRate => _state.Options.LearningRate;
+
+    public NekoMuonNewtonSchulzDepthMode NewtonSchulzDepthMode =>
+        _state.Options.NewtonSchulzDepthMode;
+
+    public float NewtonSchulzDepth => _state.Options.NewtonSchulzDepth;
 
     public void SetLearningRate(float learningRate)
     {
@@ -95,18 +246,39 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         };
     }
 
+    /// <summary>
+    /// Selects how confidence controls Newton-Schulz depth. This intentionally
+    /// updates optimizer state so the selected runtime policy is preserved by
+    /// the next checkpoint.
+    /// </summary>
+    public void SetNewtonSchulzDepthPolicy(
+        NekoMuonNewtonSchulzDepthMode mode,
+        float depth = 0f)
+    {
+        NekoMuonOptions options = _state.Options with
+        {
+            NewtonSchulzDepthMode = mode,
+            NewtonSchulzDepth = depth,
+        };
+        ValidateOptions(options, nameof(depth));
+        _state = _state with { Options = options };
+    }
+
     public void RestoreState(NekoMuonState state)
+        => RestoreState(state, takeOwnership: false);
+
+    private void RestoreState(
+        NekoMuonState state,
+        bool takeOwnership)
     {
         ArgumentNullException.ThrowIfNull(state);
         ValidateState(state);
-        foreach (CudaOptimizerKernels.NekoMuonResidentState? cudaState
-            in _cudaStates)
-        {
-            cudaState?.Dispose();
-        }
-        Array.Clear(_cudaStates);
-        _state = CloneState(state);
+        DisposeCudaResources();
+        _state = takeOwnership ? state : CloneState(state);
     }
+
+    internal void RestoreStateOwned(NekoMuonState state)
+        => RestoreState(state, takeOwnership: true);
 
     internal void ZeroGrad()
     {
@@ -131,6 +303,13 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         {
             throw new InvalidOperationException(
                 "NekoMuon cannot advance beyond Int32.MaxValue steps.");
+        }
+
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            CudaGradientOptimizerGuard.ValidateAndConsume(
+                _parameters,
+                Tensor.CudaDeviceIndices);
         }
 
         _state = _state with { Step = _state.Step + 1 };
@@ -159,7 +338,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
             float[] gradientBuffer = parameter.T.GradientBuffer;
             float[] fast = parameterState.FastMoment;
             float[] slow = parameterState.SlowMoment;
-            NekoMuonWorkspace workspace = _workspaces[parameterIndex];
+            NekoMuonWorkspace workspace = _workspaces[parameterIndex]
+                ??= CreateWorkspace(parameter);
             float[] fastHat = workspace.FastHat;
             float[] slowHat = workspace.SlowHat;
 
@@ -196,9 +376,12 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
             // Moments and weights still advance on the intervening steps.
             // They use the normalized current momentum matrix; only the
             // expensive orthogonalization is cadence-limited.
-            float depth = runNewtonSchulz
-                ? options.MaxNewtonSchulzSteps * confidence
-                : 0f;
+            float depth = ForceFullNewtonSchulz && runNewtonSchulz
+                ? options.MaxNewtonSchulzSteps
+                : ResolveNewtonSchulzDepth(
+                    options,
+                    confidence,
+                    runNewtonSchulz);
             int wholeSteps = Math.Min(
                 options.MaxNewtonSchulzSteps,
                 (int)MathF.Floor(depth));
@@ -235,6 +418,7 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                     gramSquared,
                     rows,
                     columns,
+                    parameter.T.DType == TensorDType.BFloat16,
                     profileTicks);
                 (x, next) = (next, x);
             }
@@ -248,6 +432,7 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                     gramSquared,
                     rows,
                     columns,
+                    parameter.T.DType == TensorDType.BFloat16,
                     profileTicks);
                 InterpolateInPlace(x, next, fraction);
             }
@@ -304,7 +489,12 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
     public void load_state_dict(OptimizerStateDictionary state)
     {
         ArgumentNullException.ThrowIfNull(state);
-        RestoreState(state.Read<NekoMuonState>("NekoMuon"));
+        // Read<T> creates a private object graph from serialized JSON. Taking
+        // ownership avoids immediately cloning every moment array during a
+        // checkpoint restore, which otherwise doubles the resume peak.
+        RestoreState(
+            state.Read<NekoMuonState>("NekoMuon"),
+            takeOwnership: true);
     }
 
     private void StepCuda(
@@ -312,59 +502,158 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         float fastCorrection,
         float slowCorrection)
     {
+        if (_parameters.Count == 0)
+            return;
+
         int[] devices = Tensor.CudaDeviceIndices.ToArray();
+        bool pureBFloat16 = UsesPureBFloat16OptimizerState();
+        if (TensorExecutionContext.ActivePrecisionPolicy?.OptimizerState
+                == NNtrain.Runtime.Execution.NumericFormat.BFloat16
+            && !pureBFloat16)
+        {
+            throw new InvalidOperationException(
+                "The pure BFloat16 NekoMuon contract requires every " +
+                "parameter to use physical BFloat16 storage.");
+        }
+        if (pureBFloat16)
+        {
+            StepCudaBFloat16(
+                options, fastCorrection, slowCorrection, devices);
+            return;
+        }
+        TransitionFromCudaBFloat16State(devices[0]);
+        bool pureBfp8 = _parameters.All(parameter =>
+            UsesPureBfp8OptimizerState(parameter.T));
+        bool anyMix8 = _parameters.Any(parameter =>
+            UsesMix8Parameter(parameter.T));
+        bool mix8 = _parameters.All(parameter =>
+            UsesMix8Parameter(parameter.T));
+        if (anyMix8 && !mix8)
+        {
+            throw new InvalidOperationException(
+                "The mix8_32 NekoMuon contract cannot mix block-scaled " +
+                "BFP8 parameters with another storage format.");
+        }
+        if (anyMix8)
+            ValidateMix8OptimizerContract();
+        if (TensorExecutionContext.ActivePrecisionPolicy?.OptimizerState
+                == NNtrain.Runtime.Execution.NumericFormat.Bfp8
+            && !pureBfp8)
+        {
+            throw new InvalidOperationException(
+                "The pure BFP8 NekoMuon contract requires every parameter " +
+                "to use tensor-wide BFP8 storage.");
+        }
+        if (pureBfp8)
+        {
+            StepCudaBfp8(options, fastCorrection, slowCorrection, devices);
+            return;
+        }
+        if (TensorExecutionContext.ActivePrecisionPolicy?.Mode
+                == NNtrain.Runtime.Execution.PrecisionMode.Mix8_32
+            && !mix8)
+        {
+            throw new InvalidOperationException(
+                "The mix8_32 NekoMuon contract requires every parameter " +
+                "to use block-scaled BFP8 storage.");
+        }
+        bool runNewtonSchulz =
+            _state.Step % options.NewtonSchulzInterval == 0;
+        bool deviceOnlyFixedFive = runNewtonSchulz
+            && options.MaxNewtonSchulzSteps == 5
+            && (ForceFullNewtonSchulz
+                || options.NewtonSchulzDepthMode
+                    == NekoMuonNewtonSchulzDepthMode.Fixed
+                && options.NewtonSchulzDepth == 5f);
+        if (_cudaBfp8States.Any(state => state is not null))
+        {
+            int primaryDevice = devices[0];
+            for (int index = 0; index < _cudaBfp8States.Length; index++)
+            {
+                CudaOptimizerKernels.NekoMuonBfp8ResidentState? state =
+                    _cudaBfp8States[index];
+                if (state is null)
+                    continue;
+                state.SynchronizeHost(primaryDevice);
+                NekoMuonParameterState parameterState =
+                    _state.ParameterStates[index];
+                _state.ParameterStates[index] = parameterState with
+                {
+                    Confidence = state.SynchronizeConfidence(primaryDevice),
+                };
+                state.Dispose();
+                _cudaBfp8States[index] = null;
+            }
+            foreach (CudaOptimizerKernels.NekoMuonBfp8StatsBatch batch
+                in _cudaBfp8StatsBatches.Values)
+            {
+                batch.Dispose();
+            }
+            _cudaBfp8StatsBatches.Clear();
+        }
+        int maximumLength = _parameters.Max(parameter => parameter.T.Numel);
+        int maximumGramLength = 0;
+        foreach (Parameter parameter in _parameters)
+        {
+            GetMatrixShape(parameter, out int shapeRows, out int shapeColumns);
+            int rows = Math.Min(shapeRows, shapeColumns);
+            maximumGramLength = Math.Max(
+                maximumGramLength,
+                checked(rows * rows));
+        }
+
+        CudaOptimizerKernels.NekoMuonDeviceScratch GetCudaScratch(
+            int deviceIndex)
+        {
+            lock (_cudaScratch)
+            {
+                if (!_cudaScratch.TryGetValue(
+                    deviceIndex,
+                    out CudaOptimizerKernels.NekoMuonDeviceScratch? scratch))
+                {
+                    scratch = new CudaOptimizerKernels.NekoMuonDeviceScratch(
+                        deviceIndex,
+                        maximumLength,
+                        maximumGramLength,
+                        _cudaBatchCapacity,
+                        !_cudaDispatchPolicy.DisableTensorCoreNekoMuon);
+                    _cudaScratch.Add(deviceIndex, scratch);
+                }
+                return scratch;
+            }
+        }
+
+        // Materialize one reusable work area per device before moment kernels
+        // are queued.  Each device has a single ordered stream, so subsequent
+        // parameter updates can safely reuse it without a host-side wait.
+        var deviceScratch = new CudaOptimizerKernels.NekoMuonDeviceScratch[
+            devices.Length];
+        for (int deviceSlot = 0; deviceSlot < devices.Length; deviceSlot++)
+            deviceScratch[deviceSlot] = GetCudaScratch(devices[deviceSlot]);
+        NativeCudaBuffer<int>[]? deviceFiniteStatus = null;
+        if (mix8 || deviceOnlyFixedFive)
+        {
+            deviceFiniteStatus = new NativeCudaBuffer<int>[devices.Length];
+            for (int deviceSlot = 0;
+                deviceSlot < devices.Length;
+                deviceSlot++)
+            {
+                deviceFiniteStatus[deviceSlot] =
+                    GetOrCreateBfp8FiniteStatus(devices[deviceSlot]);
+                deviceFiniteStatus[deviceSlot].MemSetToZero();
+            }
+        }
+
         CudaOptimizerKernels.NekoMuonResidentState GetCudaState(
             int parameterIndex)
         {
-            Parameter parameter = _parameters[parameterIndex];
-            GetMatrixShape(parameter, out int originalRows, out int originalColumns);
-            int rows = Math.Min(originalRows, originalColumns);
             NekoMuonParameterState parameterState =
                 _state.ParameterStates[parameterIndex];
             return _cudaStates[parameterIndex] ??=
                 new CudaOptimizerKernels.NekoMuonResidentState(
                     parameterState.FastMoment,
                     parameterState.SlowMoment,
-                    checked(rows * rows));
-        }
-
-        float QueueParameterUpdate(int parameterIndex, int deviceIndex)
-        {
-            Parameter parameter = _parameters[parameterIndex];
-            NekoMuonParameterState parameterState =
-                _state.ParameterStates[parameterIndex];
-            GetMatrixShape(
-                parameter,
-                out int originalRows,
-                out int originalColumns);
-            CudaOptimizerKernels.NekoMuonResidentState cudaState =
-                GetCudaState(parameterIndex);
-            bool applyWeightDecay =
-                parameter.WeightDecay == WeightDecayPolicy.Apply
-                || (options.Decay1D && parameter.T.Rank == 1);
-            bool runNewtonSchulz =
-                _state.Step % options.NewtonSchulzInterval == 0;
-            return CudaOptimizerKernels.NekoMuonFinishStepResident(
-                parameter.T,
-                deviceIndex,
-                cudaState,
-                originalRows,
-                originalColumns,
-                options.BetaFast,
-                options.BetaSlow,
-                fastCorrection,
-                slowCorrection,
-                options.Epsilon,
-                parameterState.Confidence,
-                options.Rho,
-                options.MaxNewtonSchulzSteps,
-                runNewtonSchulz,
-                NewtonSchulzA,
-                NewtonSchulzB,
-                NewtonSchulzC,
-                options.LearningRate,
-                options.WeightDecay,
-                applyWeightDecay);
+                    parameterState.Confidence);
         }
 
         // Queue every moment/statistics update before waiting. Previously the
@@ -376,20 +665,53 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
             {
                 CudaOptimizerKernels.NekoMuonResidentState cudaState =
                     GetCudaState(index);
-                foreach (int deviceIndex in devices)
+                for (int deviceSlot = 0;
+                    deviceSlot < devices.Length;
+                    deviceSlot++)
                 {
-                    CudaOptimizerKernels.NekoMuonPrepareStatsResident(
-                        _parameters[index].T,
-                        deviceIndex,
-                        cudaState,
-                        options.BetaFast,
-                        options.BetaSlow,
-                        fastCorrection,
-                        slowCorrection);
+                    int deviceIndex = devices[deviceSlot];
+                    if (mix8)
+                    {
+                        CudaOptimizerKernels.NekoMuonPrepareMix8StatsResident(
+                            _parameters[index].T,
+                            deviceIndex,
+                            cudaState,
+                            deviceFiniteStatus![deviceSlot],
+                            options.BetaFast,
+                            options.BetaSlow,
+                            fastCorrection,
+                            slowCorrection,
+                            options.Epsilon,
+                            options.Rho);
+                    }
+                    else if (deviceOnlyFixedFive)
+                    {
+                        CudaOptimizerKernels
+                            .NekoMuonPrepareFixedFiveStatsResident(
+                                _parameters[index].T,
+                                deviceIndex,
+                                cudaState,
+                                deviceFiniteStatus![deviceSlot],
+                                options.BetaFast,
+                                options.BetaSlow,
+                                fastCorrection,
+                                slowCorrection,
+                                options.Epsilon,
+                                options.Rho);
+                    }
+                    else
+                    {
+                        CudaOptimizerKernels.NekoMuonPrepareStatsResident(
+                            _parameters[index].T,
+                            deviceIndex,
+                            cudaState,
+                            options.BetaFast,
+                            options.BetaSlow,
+                            fastCorrection,
+                            slowCorrection);
+                    }
                 }
             }
-            foreach (int deviceIndex in devices)
-                ForgetMemoryV2Cuda.GetAccelerator(deviceIndex).Synchronize();
         }
         if (CudaOperationProfiler.IsEnabled)
         {
@@ -405,25 +727,36 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
 
         void ReadStatistics()
         {
-            for (int index = 0; index < _parameters.Count; index++)
+            Parallel.For(0, devices.Length, deviceSlot =>
             {
-                CudaOptimizerKernels.NekoMuonResidentState cudaState =
-                    GetCudaState(index);
-                foreach (int deviceIndex in devices)
+                int deviceIndex = devices[deviceSlot];
+                CudaOptimizerKernels.NekoMuonStatsBatch batch;
+                lock (_cudaStatsBatches)
                 {
-                    CudaOptimizerKernels.NekoMuonReadStatsResident(
-                        deviceIndex, cudaState);
+                    if (!_cudaStatsBatches.TryGetValue(
+                        deviceIndex,
+                        out batch!))
+                    {
+                        var states = new CudaOptimizerKernels
+                            .NekoMuonResidentState[_parameters.Count];
+                        for (int index = 0; index < states.Length; ++index)
+                            states[index] = GetCudaState(index);
+                        batch = new CudaOptimizerKernels.NekoMuonStatsBatch(
+                            deviceIndex, states);
+                        _cudaStatsBatches[deviceIndex] = batch;
+                    }
                 }
-            }
+                batch.GatherAndRead();
+            });
         }
-        if (CudaOperationProfiler.IsEnabled)
+        if (!deviceOnlyFixedFive && CudaOperationProfiler.IsEnabled)
         {
             CudaOperationProfiler.MeasureDevices(
                 "optimizer.nekomuon.stats_d2h",
                 devices,
                 ReadStatistics);
         }
-        else
+        else if (!deviceOnlyFixedFive)
         {
             ReadStatistics();
         }
@@ -431,18 +764,118 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         // Give every CUDA device its own host dispatch loop. This avoids the
         // parameter-major GPU0/GPU1 alternation and keeps both default streams
         // populated during Newton-Schulz and weight publication.
-        var confidences = new float[devices.Length, _parameters.Count];
+        float[,]? confidences = deviceOnlyFixedFive
+            ? null
+            : new float[devices.Length, _parameters.Count];
         void FinishUpdates()
         {
             Parallel.For(0, devices.Length, deviceSlot =>
             {
                 int deviceIndex = devices[deviceSlot];
+                CudaOptimizerKernels.NekoMuonDeviceScratch scratch =
+                    deviceScratch[deviceSlot];
+                if (deviceOnlyFixedFive)
+                {
+                    var fixedBatchItems = new CudaOptimizerKernels
+                        .NekoMuonBatchItem[_parameters.Count];
+                    for (int parameterIndex = 0;
+                        parameterIndex < _parameters.Count;
+                        parameterIndex++)
+                    {
+                        Parameter parameter = _parameters[parameterIndex];
+                        GetMatrixShape(
+                            parameter,
+                            out int originalRows,
+                            out int originalColumns);
+                        bool applyWeightDecay =
+                            parameter.WeightDecay == WeightDecayPolicy.Apply
+                            || (options.Decay1D && parameter.T.Rank == 1);
+                        fixedBatchItems[parameterIndex] =
+                            new CudaOptimizerKernels.NekoMuonBatchItem(
+                                parameter.T,
+                                GetCudaState(parameterIndex),
+                                originalRows,
+                                originalColumns,
+                                PreviousConfidence: 0f,
+                                ApplyWeightDecay: applyWeightDecay);
+                    }
+                    CudaOptimizerKernels
+                        .NekoMuonFinishFixedFiveGroupedDeviceResident(
+                            deviceIndex,
+                            fixedBatchItems,
+                            scratch,
+                            deviceFiniteStatus![deviceSlot],
+                            fastCorrection,
+                            options.Epsilon,
+                            NewtonSchulzA,
+                            NewtonSchulzB,
+                            NewtonSchulzC,
+                            options.LearningRate,
+                            options.WeightDecay,
+                            publishMix8: mix8);
+                    return;
+                }
+                var batchItems = new CudaOptimizerKernels
+                    .NekoMuonBatchItem[_parameters.Count];
                 for (int parameterIndex = 0;
                     parameterIndex < _parameters.Count;
                     parameterIndex++)
                 {
-                    confidences[deviceSlot, parameterIndex] =
-                        QueueParameterUpdate(parameterIndex, deviceIndex);
+                    Parameter parameter = _parameters[parameterIndex];
+                    NekoMuonParameterState parameterState =
+                        _state.ParameterStates[parameterIndex];
+                    GetMatrixShape(
+                        parameter,
+                        out int originalRows,
+                        out int originalColumns);
+                    bool applyWeightDecay =
+                        parameter.WeightDecay == WeightDecayPolicy.Apply
+                        || (options.Decay1D && parameter.T.Rank == 1);
+                    batchItems[parameterIndex] = new CudaOptimizerKernels
+                        .NekoMuonBatchItem(
+                            parameter.T,
+                            GetCudaState(parameterIndex),
+                            originalRows,
+                            originalColumns,
+                            parameterState.Confidence,
+                            applyWeightDecay);
+                }
+                float[] deviceConfidences = CudaOptimizerKernels
+                    .NekoMuonFinishStepGrouped(
+                        deviceIndex,
+                        batchItems,
+                        scratch,
+                        fastCorrection,
+                        slowCorrection,
+                        options.Epsilon,
+                        options.Rho,
+                        options.MaxNewtonSchulzSteps,
+                        options.NewtonSchulzDepthMode,
+                        options.NewtonSchulzDepth,
+                        runNewtonSchulz,
+                        NewtonSchulzA,
+                        NewtonSchulzB,
+                        NewtonSchulzC,
+                        options.LearningRate,
+                        options.WeightDecay,
+                        ForceFullNewtonSchulz,
+                        mix8 ? deviceFiniteStatus![deviceSlot] : null);
+                for (int parameterIndex = 0;
+                    parameterIndex < deviceConfidences.Length;
+                    parameterIndex++)
+                {
+                    confidences![deviceSlot, parameterIndex] =
+                        deviceConfidences[parameterIndex];
+                }
+                if (mix8)
+                {
+                    foreach (Parameter parameter in _parameters)
+                    {
+                        CudaOptimizerKernels.PublishMix8Master(
+                            parameter.T,
+                            deviceIndex,
+                            deviceFiniteStatus![deviceSlot]);
+                    }
                 }
             });
         }
@@ -457,22 +890,453 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         {
             FinishUpdates();
         }
-
         int primarySlot = Array.IndexOf(devices, Tensor.CudaDeviceIndex);
         if (primarySlot < 0)
             primarySlot = 0;
+        int finalPrimarySlot = primarySlot;
+        CudaOptimizerFiniteStatusReadback[]? mix8Readbacks = mix8
+            ? devices.Select(GetOrCreateBfp8FiniteReadback).ToArray()
+            : null;
+        CudaOptimizerStepBatch.CompleteAfterSynchronization(
+            devices,
+            "NekoMuon update",
+            queueReadback: mix8
+                ? () =>
+                {
+                    for (int deviceSlot = 0;
+                        deviceSlot < devices.Length;
+                        deviceSlot++)
+                    {
+                            mix8Readbacks![deviceSlot].Begin(
+                            deviceFiniteStatus![deviceSlot]);
+                    }
+                }
+                : null,
+            finalize: () =>
+            {
+                if (mix8)
+                {
+                    ThrowIfMix8PublicationNonFinite(
+                        mix8Readbacks!,
+                        devices,
+                        _state.Step);
+                }
+
+                for (int parameterIndex = 0;
+                    parameterIndex < _parameters.Count;
+                    parameterIndex++)
+                {
+                    NekoMuonParameterState parameterState =
+                        _state.ParameterStates[parameterIndex];
+                    if (!deviceOnlyFixedFive)
+                    {
+                        _state.ParameterStates[parameterIndex] =
+                            parameterState with
+                            {
+                                Confidence = confidences![
+                                    finalPrimarySlot,
+                                    parameterIndex],
+                            };
+                    }
+                    _parameters[parameterIndex].T
+                        .MarkCudaDataReplicasSynchronized(devices);
+                }
+            });
+    }
+
+    private void StepCudaBfp8(
+        NekoMuonOptions options,
+        float fastCorrection,
+        float slowCorrection,
+        int[] devices)
+    {
+        if (devices.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "Pure BFP8 NekoMuon requires at least one CUDA device.");
+        }
+
+        int primaryDevice = devices[0];
+        bool runNewtonSchulz =
+            _state.Step % options.NewtonSchulzInterval == 0;
+        bool deviceOnlyFixedFive = runNewtonSchulz
+            && options.MaxNewtonSchulzSteps == 5
+            && (ForceFullNewtonSchulz
+                || options.NewtonSchulzDepthMode
+                    == NekoMuonNewtonSchulzDepthMode.Fixed
+                && options.NewtonSchulzDepth == 5f);
+        if (_cudaStates.Any(state => state is not null))
+        {
+            for (int index = 0; index < _cudaStates.Length; index++)
+            {
+                CudaOptimizerKernels.NekoMuonResidentState? state =
+                    _cudaStates[index];
+                if (state is null)
+                    continue;
+                state.SynchronizeHost(primaryDevice);
+                NekoMuonParameterState parameterState =
+                    _state.ParameterStates[index];
+                if (state.IsDeviceConfidenceAuthoritative)
+                {
+                    _state.ParameterStates[index] = parameterState with
+                    {
+                        Confidence = state.SynchronizeConfidence(primaryDevice),
+                    };
+                }
+                state.Dispose();
+                _cudaStates[index] = null;
+            }
+            foreach (CudaOptimizerKernels.NekoMuonStatsBatch batch
+                in _cudaStatsBatches.Values)
+            {
+                batch.Dispose();
+            }
+            _cudaStatsBatches.Clear();
+        }
+
+        int maximumLength = _parameters.Max(parameter => parameter.T.Numel);
+        int maximumGramLength = 0;
+        foreach (Parameter parameter in _parameters)
+        {
+            GetMatrixShape(parameter, out int shapeRows, out int shapeColumns);
+            int rows = Math.Min(shapeRows, shapeColumns);
+            maximumGramLength = Math.Max(
+                maximumGramLength,
+                checked(rows * rows));
+        }
+
+        var scratch = new CudaOptimizerKernels
+            .NekoMuonDeviceScratch[devices.Length];
+        var statuses = new NativeCudaBuffer<int>[devices.Length];
+        for (int deviceSlot = 0; deviceSlot < devices.Length; deviceSlot++)
+        {
+            int deviceIndex = devices[deviceSlot];
+            lock (_cudaScratch)
+            {
+                if (!_cudaScratch.TryGetValue(
+                        deviceIndex,
+                        out CudaOptimizerKernels.NekoMuonDeviceScratch?
+                            deviceScratch))
+                {
+                    deviceScratch = new CudaOptimizerKernels
+                        .NekoMuonDeviceScratch(
+                            deviceIndex,
+                            maximumLength,
+                            maximumGramLength,
+                            _cudaBatchCapacity,
+                            !_cudaDispatchPolicy.DisableTensorCoreNekoMuon);
+                    _cudaScratch.Add(deviceIndex, deviceScratch);
+                }
+                scratch[deviceSlot] = deviceScratch;
+            }
+            statuses[deviceSlot] = GetOrCreateBfp8FiniteStatus(deviceIndex);
+            statuses[deviceSlot].MemSetToZero();
+        }
+
+        var states = new CudaOptimizerKernels
+            .NekoMuonBfp8ResidentState[_parameters.Count];
         for (int parameterIndex = 0;
             parameterIndex < _parameters.Count;
             parameterIndex++)
         {
             NekoMuonParameterState parameterState =
                 _state.ParameterStates[parameterIndex];
-            _state.ParameterStates[parameterIndex] = parameterState with
+            CudaOptimizerKernels.NekoMuonBfp8ResidentState state =
+                _cudaBfp8States[parameterIndex] ??=
+                    new CudaOptimizerKernels.NekoMuonBfp8ResidentState(
+                        parameterState.FastMoment,
+                        parameterState.SlowMoment,
+                        parameterState.Confidence);
+            states[parameterIndex] = state;
+            foreach (int deviceIndex in devices)
+                state.GetOrCreate(deviceIndex);
+        }
+
+        Parallel.For(0, devices.Length, deviceSlot =>
+        {
+            int deviceIndex = devices[deviceSlot];
+            for (int parameterIndex = 0;
+                parameterIndex < _parameters.Count;
+                parameterIndex++)
             {
-                Confidence = confidences[primarySlot, parameterIndex],
-            };
-            _parameters[parameterIndex].T.MarkCudaDataMutated(
-                devices[primarySlot]);
+                CudaOptimizerKernels.NekoMuonPrepareBfp8StatsResident(
+                    _parameters[parameterIndex].T,
+                    deviceIndex,
+                    states[parameterIndex],
+                    scratch[deviceSlot],
+                    statuses[deviceSlot],
+                    options.BetaFast,
+                    options.BetaSlow,
+                    fastCorrection,
+                    slowCorrection,
+                    options.Epsilon,
+                    options.Rho);
+            }
+        });
+
+        if (!deviceOnlyFixedFive)
+        {
+            Parallel.For(0, devices.Length, deviceSlot =>
+            {
+                int deviceIndex = devices[deviceSlot];
+                CudaOptimizerKernels.NekoMuonBfp8StatsBatch batch;
+                lock (_cudaBfp8StatsBatches)
+                {
+                    if (!_cudaBfp8StatsBatches.TryGetValue(
+                            deviceIndex,
+                            out batch!))
+                    {
+                        batch = new CudaOptimizerKernels
+                            .NekoMuonBfp8StatsBatch(
+                                deviceIndex,
+                                states);
+                        _cudaBfp8StatsBatches.Add(deviceIndex, batch);
+                    }
+                }
+                batch.GatherAndRead();
+            });
+        }
+
+        var confidences = new float[devices.Length, _parameters.Count];
+        Parallel.For(0, devices.Length, deviceSlot =>
+        {
+            int deviceIndex = devices[deviceSlot];
+            for (int parameterIndex = 0;
+                parameterIndex < _parameters.Count;
+                parameterIndex++)
+            {
+                Parameter parameter = _parameters[parameterIndex];
+                NekoMuonParameterState parameterState =
+                    _state.ParameterStates[parameterIndex];
+                GetMatrixShape(
+                    parameter,
+                    out int originalRows,
+                    out int originalColumns);
+                bool applyWeightDecay =
+                    parameter.WeightDecay == WeightDecayPolicy.Apply
+                    || (options.Decay1D && parameter.T.Rank == 1);
+                confidences[deviceSlot, parameterIndex] =
+                    CudaOptimizerKernels.NekoMuonFinishBfp8StepResident(
+                        parameter.T,
+                        deviceIndex,
+                        states[parameterIndex],
+                        scratch[deviceSlot],
+                        statuses[deviceSlot],
+                        originalRows,
+                        originalColumns,
+                        fastCorrection,
+                        options.Epsilon,
+                        parameterState.Confidence,
+                        options.Rho,
+                        options.MaxNewtonSchulzSteps,
+                        options.NewtonSchulzDepthMode,
+                        options.NewtonSchulzDepth,
+                        runNewtonSchulz,
+                        NewtonSchulzA,
+                        NewtonSchulzB,
+                        NewtonSchulzC,
+                        options.LearningRate,
+                        options.WeightDecay,
+                        applyWeightDecay,
+                        deviceOnlyFixedFive,
+                        ForceFullNewtonSchulz);
+            }
+        });
+
+        int primarySlot = Array.IndexOf(devices, Tensor.CudaDeviceIndex);
+        if (primarySlot < 0)
+            primarySlot = 0;
+        int finalPrimarySlot = primarySlot;
+        CudaOptimizerFiniteStatusReadback[] readbacks = devices
+            .Select(GetOrCreateBfp8FiniteReadback)
+            .ToArray();
+        CudaOptimizerStepBatch.CompleteAfterSynchronization(
+            devices,
+            "pure BFP8 NekoMuon update",
+            queueReadback: () =>
+            {
+                for (int deviceSlot = 0;
+                    deviceSlot < devices.Length;
+                    deviceSlot++)
+                {
+                    readbacks[deviceSlot].Begin(statuses[deviceSlot]);
+                }
+            },
+            finalize: () =>
+            {
+                int nonFiniteDevice = -1;
+                for (int deviceSlot = 0;
+                    deviceSlot < devices.Length;
+                    deviceSlot++)
+                {
+                    int finite =
+                        readbacks[deviceSlot].ReadAfterSynchronization();
+                    if (finite != 0 && nonFiniteDevice < 0)
+                        nonFiniteDevice = devices[deviceSlot];
+                }
+                if (nonFiniteDevice >= 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Non-finite CUDA value detected while publishing " +
+                        $"pure BFP8 NekoMuon state on device " +
+                        $"{nonFiniteDevice} at optimizer step " +
+                        $"{_state.Step}.");
+                }
+
+                for (int parameterIndex = 0;
+                    parameterIndex < _parameters.Count;
+                    parameterIndex++)
+                {
+                    NekoMuonParameterState parameterState =
+                        _state.ParameterStates[parameterIndex];
+                    if (!deviceOnlyFixedFive)
+                    {
+                        _state.ParameterStates[parameterIndex] =
+                            parameterState with
+                            {
+                                Confidence = confidences[
+                                    finalPrimarySlot,
+                                    parameterIndex],
+                            };
+                    }
+                    _parameters[parameterIndex].T
+                        .MarkCudaBfp8DataReplicasSynchronized(devices);
+                }
+            });
+    }
+
+    private static bool UsesPureBfp8OptimizerState(Tensor tensor)
+    {
+        NNtrain.Runtime.Execution.PrecisionPolicy? policy =
+            TensorExecutionContext.ActivePrecisionPolicy;
+        if (policy is not null
+            && policy.OptimizerState
+                != NNtrain.Runtime.Execution.NumericFormat.Bfp8)
+        {
+            return false;
+        }
+        return tensor.DType == TensorDType.Bfp8
+            && tensor.Bfp8Quantization
+                == Bfp8QuantizationDescriptor.TensorWide;
+    }
+
+    private NativeCudaBuffer<int> GetOrCreateBfp8FiniteStatus(int deviceIndex)
+    {
+        if (_cudaBfp8FiniteStatus.TryGetValue(
+                deviceIndex,
+                out NativeCudaBuffer<int>? status))
+        {
+            return status;
+        }
+        status = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex)
+            .Allocate1D<int>(1);
+        _cudaBfp8FiniteStatus.Add(deviceIndex, status);
+        return status;
+    }
+
+    private CudaOptimizerFiniteStatusReadback
+        GetOrCreateBfp8FiniteReadback(int deviceIndex)
+    {
+        if (_cudaBfp8FiniteReadbacks.TryGetValue(
+                deviceIndex,
+                out CudaOptimizerFiniteStatusReadback? readback))
+        {
+            return readback;
+        }
+        readback = new CudaOptimizerFiniteStatusReadback(deviceIndex);
+        _cudaBfp8FiniteReadbacks.Add(deviceIndex, readback);
+        return readback;
+    }
+
+    internal (CudaBfp8BufferView Fast, CudaBfp8BufferView Slow)
+        GetCudaBfp8Moments(int parameterIndex, int deviceIndex)
+    {
+        CudaOptimizerKernels.NekoMuonBfp8ResidentState state =
+            _cudaBfp8States[parameterIndex]
+            ?? throw new InvalidOperationException(
+                "The NekoMuon parameter has no resident BFP8 state.");
+        return (state.GetFast(deviceIndex), state.GetSlow(deviceIndex));
+    }
+
+    internal (NativeCudaBuffer<ushort> Fast, NativeCudaBuffer<ushort> Slow)
+        GetCudaBFloat16Moments(int parameterIndex, int deviceIndex)
+    {
+        CudaOptimizerKernels.NekoMuonBFloat16ResidentState state =
+            _cudaBFloat16States[parameterIndex]
+            ?? throw new InvalidOperationException(
+                "The NekoMuon parameter has no resident BF16 state.");
+        return (state.GetFast(deviceIndex), state.GetSlow(deviceIndex));
+    }
+
+    internal void DisposeCudaResources()
+    {
+        List<Exception>? failures = null;
+        for (int index = 0; index < _cudaStates.Length; index++)
+        {
+            if (_cudaStates[index] is IDisposable floatState)
+                TryDisposeCudaResource(floatState, ref failures);
+            if (_cudaBFloat16States[index] is IDisposable bfloat16State)
+                TryDisposeCudaResource(bfloat16State, ref failures);
+            if (_cudaBfp8States[index] is IDisposable bfp8State)
+                TryDisposeCudaResource(bfp8State, ref failures);
+            _cudaStates[index] = null;
+            _cudaBFloat16States[index] = null;
+            _cudaBfp8States[index] = null;
+        }
+        foreach (CudaOptimizerKernels.NekoMuonStatsBatch batch
+            in _cudaStatsBatches.Values)
+        {
+            TryDisposeCudaResource(batch, ref failures);
+        }
+        _cudaStatsBatches.Clear();
+        foreach (CudaOptimizerKernels.NekoMuonBFloat16StatsBatch batch
+            in _cudaBFloat16StatsBatches.Values)
+        {
+            TryDisposeCudaResource(batch, ref failures);
+        }
+        _cudaBFloat16StatsBatches.Clear();
+        foreach (CudaOptimizerKernels.NekoMuonBfp8StatsBatch batch
+            in _cudaBfp8StatsBatches.Values)
+        {
+            TryDisposeCudaResource(batch, ref failures);
+        }
+        _cudaBfp8StatsBatches.Clear();
+        foreach (CudaOptimizerKernels.NekoMuonDeviceScratch scratch
+            in _cudaScratch.Values)
+        {
+            TryDisposeCudaResource(scratch, ref failures);
+        }
+        _cudaScratch.Clear();
+        foreach (CudaOptimizerFiniteStatusReadback readback
+            in _cudaBfp8FiniteReadbacks.Values)
+        {
+            TryDisposeCudaResource(readback, ref failures);
+        }
+        _cudaBfp8FiniteReadbacks.Clear();
+        foreach (NativeCudaBuffer<int> status
+            in _cudaBfp8FiniteStatus.Values)
+        {
+            TryDisposeCudaResource(status, ref failures);
+        }
+        _cudaBfp8FiniteStatus.Clear();
+        if (failures is not null)
+        {
+            throw new AggregateException(
+                "NekoMuon CUDA resource cleanup failed.", failures);
+        }
+    }
+
+    private static void TryDisposeCudaResource(
+        IDisposable resource,
+        ref List<Exception>? failures)
+    {
+        try
+        {
+            resource.Dispose();
+        }
+        catch (Exception exception)
+        {
+            (failures ??= []).Add(exception);
         }
     }
 
@@ -490,6 +1354,45 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
 
     private static double TicksToMilliseconds(long ticks)
         => ticks * 1000d / Stopwatch.Frequency;
+
+    internal static float ResolveNewtonSchulzDepth(
+        NekoMuonOptions options,
+        float confidence,
+        bool runNewtonSchulz)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return ResolveNewtonSchulzDepth(
+            options.MaxNewtonSchulzSteps,
+            options.NewtonSchulzDepthMode,
+            options.NewtonSchulzDepth,
+            confidence,
+            runNewtonSchulz);
+    }
+
+    internal static float ResolveNewtonSchulzDepth(
+        int maxNewtonSchulzSteps,
+        NekoMuonNewtonSchulzDepthMode mode,
+        float configuredDepth,
+        float confidence,
+        bool runNewtonSchulz)
+    {
+        if (!runNewtonSchulz)
+            return 0f;
+
+        float adaptiveDepth = maxNewtonSchulzSteps * confidence;
+        float depth = mode switch
+        {
+            NekoMuonNewtonSchulzDepthMode.Adaptive => adaptiveDepth,
+            NekoMuonNewtonSchulzDepthMode.Minimum =>
+                MathF.Max(adaptiveDepth, configuredDepth),
+            NekoMuonNewtonSchulzDepthMode.Fixed => configuredDepth,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(mode),
+                mode,
+                "NekoMuon Newton-Schulz depth mode is invalid."),
+        };
+        return Math.Clamp(depth, 0f, maxNewtonSchulzSteps);
+    }
 
     private static void InitializeMuonMatrix(
         float[] source,
@@ -542,6 +1445,7 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         float[] gramSquared,
         int rows,
         int columns,
+        bool bfloat16MatrixOperands,
         long[]? profileTicks)
     {
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
@@ -566,14 +1470,52 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         long phaseStart = profileTicks is null
             ? 0L
             : Stopwatch.GetTimestamp();
-        ComputeSymmetricGram(source, gram, rows, columns);
+        ComputeSymmetricGram(
+            source, gram, rows, columns, bfloat16MatrixOperands);
         AddProfileTicks(profileTicks, 6, phaseStart);
 
         phaseStart = profileTicks is null ? 0L : Stopwatch.GetTimestamp();
-        ComputeSymmetricGram(gram, gramSquared, rows, rows);
+        ComputeSymmetricGram(
+            gram, gramSquared, rows, rows, bfloat16MatrixOperands);
         AddProfileTicks(profileTicks, 7, phaseStart);
 
         phaseStart = profileTicks is null ? 0L : Stopwatch.GetTimestamp();
+        if (bfloat16MatrixOperands)
+        {
+            // The CUDA Tensor Core path performs three BF16-operand/FP32-
+            // accumulate GEMMs: X*X^T, G*G, and P*X.  Mirror those operand
+            // boundaries on CPU while retaining FP32 reductions and output
+            // storage, as required by PrecisionPolicy.
+            for (int bfOutputRow = 0; bfOutputRow < rows; bfOutputRow++)
+            {
+                int coefficientOffset = bfOutputRow * rows;
+                int destinationOffset = bfOutputRow * columns;
+                for (int column = 0; column < columns; column++)
+                {
+                    float sum = 0f;
+                    for (int inner = 0; inner < rows; inner++)
+                    {
+                        float coefficient = MathF.FusedMultiplyAdd(
+                            NewtonSchulzC,
+                            gramSquared[coefficientOffset + inner],
+                            NewtonSchulzB
+                                * gram[coefficientOffset + inner]);
+                        if (bfOutputRow == inner)
+                            coefficient += NewtonSchulzA;
+                        coefficient = TensorStorageCodec.RoundToBFloat16(
+                            coefficient);
+                        float sourceValue = TensorStorageCodec.RoundToBFloat16(
+                            source[inner * columns + column]);
+                        sum = MathF.FusedMultiplyAdd(
+                            coefficient, sourceValue, sum);
+                    }
+                    destination[destinationOffset + column] = sum;
+                }
+            }
+            AddProfileTicks(profileTicks, 8, phaseStart);
+            return;
+        }
+
         Scale(source, destination, NewtonSchulzA);
         int outputRow = 0;
         for (; outputRow + 7 < rows; outputRow += 8)
@@ -691,8 +1633,33 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         float[] source,
         float[] destination,
         int rows,
-        int columns)
+        int columns,
+        bool bfloat16MatrixOperands = false)
     {
+        if (bfloat16MatrixOperands)
+        {
+            for (int row = 0; row < rows; row++)
+            {
+                int rowOffset = row * columns;
+                for (int other = 0; other <= row; other++)
+                {
+                    int otherOffset = other * columns;
+                    float dot = 0f;
+                    for (int column = 0; column < columns; column++)
+                    {
+                        float left = TensorStorageCodec.RoundToBFloat16(
+                            source[rowOffset + column]);
+                        float right = TensorStorageCodec.RoundToBFloat16(
+                            source[otherOffset + column]);
+                        dot = MathF.FusedMultiplyAdd(left, right, dot);
+                    }
+                    destination[row * rows + other] = dot;
+                    destination[other * rows + row] = dot;
+                }
+            }
+            return;
+        }
+
         if (!Tensor.SimdEnabled
             || !Vector256.IsHardwareAccelerated
             || rows % 4 != 0
@@ -1163,6 +2130,14 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
     }
 
 }
+
+public readonly record struct NekoMuonDiagnostics(
+    int Step,
+    float MinimumConfidence,
+    float MeanConfidence,
+    float MaximumConfidence,
+    float MeanNewtonSchulzDepth,
+    int MaximumNewtonSchulzDepth);
 
 public readonly record struct NekoMuonStepProfile(
     double UpdateMomentsMilliseconds,

@@ -70,6 +70,31 @@ partial class Tensor
                 "Unknown Hyena convolution algorithm.");
         }
 
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            bool useParallelLong = convolutionAlgorithm switch
+            {
+                HyenaConvolutionAlgorithm.Fft => true,
+                HyenaConvolutionAlgorithm.Direct => false,
+                _ => sequence >= (AutogradContext.IsRecordingEnabled
+                    ? HyenaFftTrainingThreshold
+                    : HyenaFftInferenceThreshold),
+            };
+            return HyenaCuda(
+                shortFilter,
+                longFilter,
+                diagonalBias,
+                batch,
+                sequence,
+                width,
+                useParallelLong);
+        }
+
+        ThrowIfCudaHostFallback(nameof(FusedCausalHyenaOrder2));
+
         bool useFft = convolutionAlgorithm switch
         {
             HyenaConvolutionAlgorithm.Fft => true,

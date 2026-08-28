@@ -1,11 +1,62 @@
+using System.Runtime.CompilerServices;
+
 namespace NNtrain;
 
-/// <summary>CUDA data-parallel forward/backward for language-model batches.</summary>
+/// <summary>
+/// Backward-compatible static facade for CUDA data parallelism. New training
+/// sessions should own a <see cref="CudaDataParallelEngine"/> explicitly.
+/// </summary>
 public static class CudaDataParallel
 {
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
-        LanguageModel,
-        FlatGradientPlanCache> FlatGradientPlans = new();
+    private static readonly ConditionalWeakTable<LanguageModel, CompatibilitySlot>
+        CompatibilityEngines = new();
+    private static CompatibilityConfiguration _configuration = new(
+        Version: 0,
+        Options: new CudaAdaptiveShardingOptions());
+
+    /// <summary>
+    /// Configures EMA-based CUDA batch balancing for compatibility engines.
+    /// Explicit engines receive their options in their constructor.
+    /// </summary>
+    public static void ConfigureAdaptiveSharding(
+        CudaAdaptiveShardingOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        options.Validate();
+        CompatibilityConfiguration previous = Volatile.Read(ref _configuration);
+        Volatile.Write(
+            ref _configuration,
+            new CompatibilityConfiguration(
+                checked(previous.Version + 1),
+                options));
+    }
+
+    /// <summary>Returns the last per-device batch allocation for a model.</summary>
+    public static IReadOnlyList<int> GetLastShardBatchSizes(LanguageModel model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        if (!CompatibilityEngines.TryGetValue(model, out CompatibilitySlot? slot))
+            return [];
+        CompatibilityConfiguration configuration =
+            Volatile.Read(ref _configuration);
+        return slot.GetLastShardBatchSizes(
+            configuration,
+            Tensor.CudaDeviceIndices);
+    }
+
+    /// <summary>
+    /// Deterministically releases the model-specific compatibility engine.
+    /// Explicitly owned engines do not need this method.
+    /// </summary>
+    public static void Release(LanguageModel model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        if (CompatibilityEngines.TryGetValue(model, out CompatibilitySlot? slot)
+            && CompatibilityEngines.Remove(model))
+        {
+            slot.Dispose();
+        }
+    }
 
     public static float ForwardBackward(
         LanguageModel model,
@@ -14,76 +65,13 @@ public static class CudaDataParallel
         int batchSize,
         int sequenceLength,
         int ignoreIndex = Tensor.DefaultCrossEntropyIgnoreIndex)
-    {
-        ArgumentNullException.ThrowIfNull(model);
-        ArgumentNullException.ThrowIfNull(input);
-        ArgumentNullException.ThrowIfNull(target);
-        if (Tensor.ExecutionDevice != TensorDevice.Cuda)
-            throw new InvalidOperationException("CUDA execution must be selected.");
-        if (input.Length != target.Length
-            || input.Length != checked(batchSize * sequenceLength))
-        {
-            throw new ArgumentException("Input and target must match the batch shape.");
-        }
+        => GetCompatibilityEngine(model).ForwardBackward(
+            input,
+            target,
+            batchSize,
+            sequenceLength,
+            ignoreIndex);
 
-        int[] devices = Tensor.CudaDeviceIndices
-            .Take(Math.Min(batchSize, Tensor.CudaDeviceIndices.Count))
-            .ToArray();
-        if (devices.Length == 1)
-        {
-            using IDisposable scope = TensorExecutionContext.Push(
-                new TorchDevice(TensorDevice.Cuda, devices[0]));
-            Tensor logits = model.Forward(input, batchSize, sequenceLength);
-            Tensor loss = logits.CrossEntropyWithLogits(target, ignoreIndex: ignoreIndex);
-            float value = loss.item();
-            loss.BackwardAndRelease();
-            return value;
-        }
-
-        Parameter[] parameters = model.Parameters().ToArray();
-        foreach (Parameter parameter in parameters)
-            parameter.T.PrepareCudaGradientBuffers(devices);
-
-        int totalValid = target.Count(value => value != ignoreIndex);
-        if (totalValid == 0)
-            throw new ArgumentException("At least one target must be valid.", nameof(target));
-        var weightedLosses = new double[devices.Length];
-        Parallel.For(0, devices.Length, shard =>
-        {
-            int batchStart = batchSize * shard / devices.Length;
-            int batchEnd = batchSize * (shard + 1) / devices.Length;
-            int shardBatch = batchEnd - batchStart;
-            int elementStart = batchStart * sequenceLength;
-            int elementCount = shardBatch * sequenceLength;
-            int[] shardInput = input.AsSpan(elementStart, elementCount).ToArray();
-            int[] shardTarget = target.AsSpan(elementStart, elementCount).ToArray();
-            int shardValid = shardTarget.Count(value => value != ignoreIndex);
-
-            using IDisposable scope = TensorExecutionContext.Push(
-                new TorchDevice(TensorDevice.Cuda, devices[shard]));
-            Tensor logits = model.Forward(
-                shardInput,
-                shardBatch,
-                sequenceLength);
-            Tensor loss = logits.CrossEntropyWithLogits(
-                shardTarget,
-                ignoreIndex: ignoreIndex);
-            float weight = (float)shardValid / totalValid;
-            weightedLosses[shard] = loss.item() * shardValid;
-            loss.BackwardAndRelease([weight]);
-        });
-
-        FlatGradientPlanCache cache = FlatGradientPlans.GetValue(
-            model, _ => new FlatGradientPlanCache());
-        TensorCudaKernels.FlatGradientPlan plan = cache.Get(parameters, devices);
-        TensorCudaKernels.AllReduceGradientsResident(parameters, devices, plan);
-        return (float)(weightedLosses.Sum() / totalValid);
-    }
-
-    /// <summary>
-    /// Diagnostic variant that synchronizes CUDA after every major phase.
-    /// This is intentionally separate from the normal asynchronous path.
-    /// </summary>
     internal static CudaDataParallelProfile ForwardBackwardProfiled(
         LanguageModel model,
         int[] input,
@@ -91,120 +79,83 @@ public static class CudaDataParallel
         int batchSize,
         int sequenceLength,
         int ignoreIndex = Tensor.DefaultCrossEntropyIgnoreIndex)
+        => GetCompatibilityEngine(model).ForwardBackwardProfiled(
+            input,
+            target,
+            batchSize,
+            sequenceLength,
+            ignoreIndex);
+
+    private static CudaDataParallelEngine GetCompatibilityEngine(
+        LanguageModel model)
     {
         ArgumentNullException.ThrowIfNull(model);
-        ArgumentNullException.ThrowIfNull(input);
-        ArgumentNullException.ThrowIfNull(target);
-        if (Tensor.ExecutionDevice != TensorDevice.Cuda)
-            throw new InvalidOperationException("CUDA execution must be selected.");
-        if (input.Length != target.Length
-            || input.Length != checked(batchSize * sequenceLength))
-        {
-            throw new ArgumentException("Input and target must match the batch shape.");
-        }
-
-        int[] devices = Tensor.CudaDeviceIndices
-            .Take(Math.Min(batchSize, Tensor.CudaDeviceIndices.Count))
-            .ToArray();
-        void SynchronizeAll()
-        {
-            foreach (int device in devices)
-                ForgetMemoryV2Cuda.GetAccelerator(device).Synchronize();
-        }
-
-        SynchronizeAll();
-        var totalTimer = System.Diagnostics.Stopwatch.StartNew();
-        var prepareTimer = System.Diagnostics.Stopwatch.StartNew();
-        Parameter[] parameters = model.Parameters().ToArray();
-        foreach (Parameter parameter in parameters)
-            parameter.T.PrepareCudaGradientBuffers(devices);
-        SynchronizeAll();
-        prepareTimer.Stop();
-
-        int totalValid = target.Count(value => value != ignoreIndex);
-        if (totalValid == 0)
-            throw new ArgumentException("At least one target must be valid.", nameof(target));
-
-        var weightedLosses = new double[devices.Length];
-        var shards = new CudaShardProfile[devices.Length];
-        Parallel.For(0, devices.Length, shard =>
-        {
-            var shardTimer = System.Diagnostics.Stopwatch.StartNew();
-            int batchStart = batchSize * shard / devices.Length;
-            int batchEnd = batchSize * (shard + 1) / devices.Length;
-            int shardBatch = batchEnd - batchStart;
-            int elementStart = batchStart * sequenceLength;
-            int elementCount = shardBatch * sequenceLength;
-            int[] shardInput = input.AsSpan(elementStart, elementCount).ToArray();
-            int[] shardTarget = target.AsSpan(elementStart, elementCount).ToArray();
-            int shardValid = shardTarget.Count(value => value != ignoreIndex);
-            double dataPreparation = shardTimer.Elapsed.TotalMilliseconds;
-
-            using IDisposable scope = TensorExecutionContext.Push(
-                new TorchDevice(TensorDevice.Cuda, devices[shard]));
-            var accelerator = ForgetMemoryV2Cuda.GetAccelerator(devices[shard]);
-
-            var phaseTimer = System.Diagnostics.Stopwatch.StartNew();
-            Tensor logits = model.Forward(shardInput, shardBatch, sequenceLength);
-            accelerator.Synchronize();
-            double forward = phaseTimer.Elapsed.TotalMilliseconds;
-
-            phaseTimer.Restart();
-            Tensor loss = logits.CrossEntropyWithLogits(
-                shardTarget,
-                ignoreIndex: ignoreIndex);
-            weightedLosses[shard] = loss.item() * shardValid;
-            accelerator.Synchronize();
-            double lossMilliseconds = phaseTimer.Elapsed.TotalMilliseconds;
-
-            phaseTimer.Restart();
-            float weight = (float)shardValid / totalValid;
-            loss.BackwardAndRelease([weight]);
-            accelerator.Synchronize();
-            double backward = phaseTimer.Elapsed.TotalMilliseconds;
-            shards[shard] = new CudaShardProfile(
-                devices[shard],
-                shardBatch,
-                dataPreparation,
-                forward,
-                lossMilliseconds,
-                backward);
-        });
-
-        var allReduceTimer = System.Diagnostics.Stopwatch.StartNew();
-        FlatGradientPlanCache cache = FlatGradientPlans.GetValue(
-            model, _ => new FlatGradientPlanCache());
-        TensorCudaKernels.FlatGradientPlan plan = cache.Get(parameters, devices);
-        TensorCudaKernels.AllReduceGradientsResident(parameters, devices, plan);
-        SynchronizeAll();
-        allReduceTimer.Stop();
-        totalTimer.Stop();
-        return new CudaDataParallelProfile(
-            (float)(weightedLosses.Sum() / totalValid),
-            prepareTimer.Elapsed.TotalMilliseconds,
-            allReduceTimer.Elapsed.TotalMilliseconds,
-            totalTimer.Elapsed.TotalMilliseconds,
-            shards);
+        CompatibilityConfiguration configuration =
+            Volatile.Read(ref _configuration);
+        int[] devices = Tensor.CudaDeviceIndices.ToArray();
+        return CompatibilityEngines
+            .GetValue(model, static _ => new CompatibilitySlot())
+            .Get(model, configuration, devices);
     }
 
-    private sealed class FlatGradientPlanCache
+    private sealed record CompatibilityConfiguration(
+        int Version,
+        CudaAdaptiveShardingOptions Options);
+
+    private sealed class CompatibilitySlot : IDisposable
     {
         private readonly object _sync = new();
-        private TensorCudaKernels.FlatGradientPlan? _plan;
+        private CudaDataParallelEngine? _engine;
+        private int _configurationVersion = -1;
 
-        internal TensorCudaKernels.FlatGradientPlan Get(
-            IReadOnlyList<Parameter> parameters,
-            IReadOnlyList<int> devices)
+        internal CudaDataParallelEngine Get(
+            LanguageModel model,
+            CompatibilityConfiguration configuration,
+            IReadOnlyList<int> cudaDeviceIndices)
         {
             lock (_sync)
             {
-                if (_plan is null || !_plan.Matches(parameters, devices))
+                if (_engine is null
+                    || _configurationVersion != configuration.Version
+                    || !_engine.UsesCudaDevices(cudaDeviceIndices))
                 {
-                    _plan?.Dispose();
-                    _plan = new TensorCudaKernels.FlatGradientPlan(
-                        parameters, devices);
+                    _engine?.Dispose();
+                    _engine = new CudaDataParallelEngine(
+                        model,
+                        cudaDeviceIndices,
+                        configuration.Options);
+                    _configurationVersion = configuration.Version;
                 }
-                return _plan;
+                return _engine;
+            }
+        }
+
+        internal IReadOnlyList<int> GetLastShardBatchSizes(
+            CompatibilityConfiguration configuration,
+            IReadOnlyList<int> cudaDeviceIndices)
+        {
+            lock (_sync)
+            {
+                if (_engine is null)
+                    return [];
+                if (_configurationVersion != configuration.Version
+                    || !_engine.UsesCudaDevices(cudaDeviceIndices))
+                {
+                    _engine.Dispose();
+                    _engine = null;
+                    _configurationVersion = configuration.Version;
+                    return [];
+                }
+                return _engine.LastShardBatchSizes;
+            }
+        }
+
+        public void Dispose()
+        {
+            lock (_sync)
+            {
+                _engine?.Dispose();
+                _engine = null;
             }
         }
     }

@@ -19,6 +19,8 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
     private float[]? _float32;
     private Half[]? _float16;
     private ushort[]? _bfloat16;
+    private Bfp8EncodedStorage? _bfp8;
+    private readonly Bfp8QuantizationDescriptor? _bfp8Descriptor;
 
     private TensorStorage(float[] values)
     {
@@ -41,13 +43,37 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
         Count = values.Length;
     }
 
-    private TensorStorage(int count, TensorDType dtype)
+    private TensorStorage(Bfp8EncodedStorage values)
+    {
+        _bfp8 = values;
+        _bfp8Descriptor = values.Descriptor;
+        DType = TensorDType.Bfp8;
+        Count = values.Count;
+    }
+
+    private TensorStorage(
+        int count,
+        TensorDType dtype,
+        Bfp8QuantizationDescriptor? bfp8Descriptor = null)
     {
         Count = count;
         DType = dtype;
+        if (dtype == TensorDType.Bfp8)
+        {
+            _bfp8Descriptor = bfp8Descriptor
+                ?? Bfp8QuantizationDescriptor.TensorWide;
+        }
+        else if (bfp8Descriptor is not null)
+        {
+            throw new ArgumentException(
+                "A BFP8 descriptor requires BFP8 storage.",
+                nameof(bfp8Descriptor));
+        }
     }
 
     internal TensorDType DType { get; }
+
+    internal Bfp8QuantizationDescriptor? Bfp8Descriptor => _bfp8Descriptor;
 
     public int Count { get; }
 
@@ -55,11 +81,25 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
 
     internal int Length => Count;
 
+    internal TensorStorageDescriptor StorageDescriptor
+    {
+        get
+        {
+            EnsureBacking();
+            return _bfp8?.StorageDescriptor
+                ?? new TensorStorageDescriptor(DType);
+        }
+    }
+
     internal int ByteLength => DType switch
     {
         TensorDType.Float32 => checked(Count * sizeof(float)),
         TensorDType.Float16 => checked(Count * sizeof(ushort)),
         TensorDType.BFloat16 => checked(Count * sizeof(ushort)),
+        TensorDType.Bfp8 => checked(
+            Count * sizeof(sbyte)
+            + (_bfp8?.Scales.Length
+                ?? _bfp8Descriptor!.GetScaleCount(Count)) * sizeof(float)),
         _ => throw UnsupportedDType(),
     };
 
@@ -78,6 +118,7 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
                 TensorDType.Float16 => (float)_float16![index],
                 TensorDType.BFloat16 =>
                     TensorStorageCodec.DecodeBFloat16(_bfloat16![index]),
+                TensorDType.Bfp8 => DecodeBfp8Value(index),
                 _ => throw UnsupportedDType(),
             };
         }
@@ -100,9 +141,23 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
             return new TensorStorage(half);
         }
 
-        var bfloat16 = new ushort[values.Length];
-        TensorStorageCodec.EncodeBFloat16(values, bfloat16);
-        return new TensorStorage(bfloat16);
+        if (dtype == TensorDType.BFloat16)
+        {
+            var bfloat16 = new ushort[values.Length];
+            TensorStorageCodec.EncodeBFloat16(values, bfloat16);
+            return new TensorStorage(bfloat16);
+        }
+
+        return CreateBfp8(values, Bfp8QuantizationDescriptor.TensorWide);
+    }
+
+    internal static TensorStorage CreateBfp8(
+        ReadOnlySpan<float> values,
+        Bfp8QuantizationDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        return new TensorStorage(
+            Bfp8QuantizationCodec.Default.Encode(values, descriptor));
     }
 
     internal static TensorStorage FromOwnedFloat32(float[] values)
@@ -128,6 +183,9 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
             TensorDType.Float32 => new TensorStorage(new float[length]),
             TensorDType.Float16 => new TensorStorage(new Half[length]),
             TensorDType.BFloat16 => new TensorStorage(new ushort[length]),
+            TensorDType.Bfp8 => CreateBfp8(
+                new float[length],
+                Bfp8QuantizationDescriptor.TensorWide),
             _ => throw new NotSupportedException(
                 $"Tensor storage dtype '{dtype}' is not implemented."),
         };
@@ -142,16 +200,32 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
         return new TensorStorage(length, dtype);
     }
 
+    internal static TensorStorage CreateDeviceBfp8Placeholder(
+        int length,
+        Bfp8QuantizationDescriptor descriptor)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        ArgumentNullException.ThrowIfNull(descriptor);
+        return new TensorStorage(length, TensorDType.Bfp8, descriptor);
+    }
+
     private void EnsureBacking()
     {
-        if (_float32 is not null || _float16 is not null || _bfloat16 is not null)
+        if (_float32 is not null || _float16 is not null
+            || _bfloat16 is not null || _bfp8 is not null)
             return;
         if (DType == TensorDType.Float32)
             _float32 = new float[Count];
         else if (DType == TensorDType.Float16)
             _float16 = new Half[Count];
-        else
+        else if (DType == TensorDType.BFloat16)
             _bfloat16 = new ushort[Count];
+        else if (DType == TensorDType.Bfp8)
+            _bfp8 = Bfp8QuantizationCodec.Default.Encode(
+                new float[Count],
+                _bfp8Descriptor!);
+        else
+            throw UnsupportedDType();
     }
 
     internal TensorStorage Clone()
@@ -165,6 +239,7 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
                 (Half[])_float16!.Clone()),
             TensorDType.BFloat16 => new TensorStorage(
                 (ushort[])_bfloat16!.Clone()),
+            TensorDType.Bfp8 => new TensorStorage(_bfp8!.Clone()),
             _ => throw UnsupportedDType(),
         };
     }
@@ -178,8 +253,10 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
         var result = new float[Count];
         if (_float16 is not null)
             TensorStorageCodec.DecodeFloat16(_float16, result);
-        else
+        else if (_bfloat16 is not null)
             TensorStorageCodec.DecodeBFloat16(_bfloat16!, result);
+        else
+            DecodeBfp8(_bfp8!, result);
         return result;
     }
 
@@ -201,8 +278,10 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
 
         if (_float16 is not null)
             TensorStorageCodec.DecodeFloat16(_float16, destination);
-        else
+        else if (_bfloat16 is not null)
             TensorStorageCodec.DecodeBFloat16(_bfloat16!, destination);
+        else
+            DecodeBfp8(_bfp8!, destination[..Count]);
     }
 
     internal void CopyRangeTo(
@@ -229,11 +308,15 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
                 _float16.AsSpan(sourceOffset, destination.Length),
                 destination);
         }
-        else
+        else if (_bfloat16 is not null)
         {
             TensorStorageCodec.DecodeBFloat16(
                 _bfloat16!.AsSpan(sourceOffset, destination.Length),
                 destination);
+        }
+        else
+        {
+            DecodeBfp8Range(sourceOffset, destination);
         }
     }
 
@@ -347,6 +430,20 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
             return;
         }
 
+        if (_bfp8 is not null)
+        {
+            float[] source = ToFloat32Array();
+            var transposed = new float[Count];
+            for (int row = 0; row < rows; row++)
+            {
+                int sourceRow = row * columns;
+                for (int column = 0; column < columns; column++)
+                    transposed[column * rows + row] = source[sourceRow + column];
+            }
+            destination.CopyFrom(transposed);
+            return;
+        }
+
         if (_float16 is null)
         {
             ushort[] bfloatOutput = destination._bfloat16!;
@@ -402,25 +499,46 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
 
         if (_float16 is not null)
             TensorStorageCodec.EncodeFloat16(source, _float16);
-        else
+        else if (_bfloat16 is not null)
             TensorStorageCodec.EncodeBFloat16(source, _bfloat16!);
+        else
+            _bfp8 = Bfp8QuantizationCodec.Default.Encode(
+                source,
+                _bfp8Descriptor!);
     }
 
-    private void CopyRangeFromFloat32(
+    internal void CopyRangeFromFloat32(
         ReadOnlySpan<float> source,
         int destinationOffset)
     {
         EnsureBacking();
+        if ((uint)destinationOffset > (uint)Count
+            || source.Length > Count - destinationOffset)
+        {
+            throw new ArgumentOutOfRangeException(nameof(destinationOffset));
+        }
+
         if (_float32 is not null)
             source.CopyTo(_float32.AsSpan(destinationOffset));
         else if (_float16 is not null)
             TensorStorageCodec.EncodeFloat16(
                 source,
                 _float16.AsSpan(destinationOffset));
-        else
+        else if (_bfloat16 is not null)
             TensorStorageCodec.EncodeBFloat16(
                 source,
                 _bfloat16!.AsSpan(destinationOffset));
+        else
+        {
+            // A partial write can change a shared scale. Decode and requantize
+            // the logical tensor so untouched values never retain codes from
+            // an obsolete scale.
+            float[] logical = ToFloat32Array();
+            source.CopyTo(logical.AsSpan(destinationOffset));
+            _bfp8 = Bfp8QuantizationCodec.Default.Encode(
+                logical,
+                _bfp8Descriptor!);
+        }
     }
 
     internal float[] GetMutableFloat32Buffer()
@@ -445,6 +563,39 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
         return _float16 is not null;
     }
 
+    internal bool TryGetBfp8Buffers(
+        out sbyte[] payload,
+        out float[] scales,
+        out Bfp8QuantizationDescriptor descriptor)
+    {
+        EnsureBacking();
+        if (_bfp8 is null)
+        {
+            payload = null!;
+            scales = null!;
+            descriptor = null!;
+            return false;
+        }
+        payload = _bfp8.PayloadArray;
+        scales = _bfp8.ScaleArray;
+        descriptor = _bfp8.Descriptor;
+        return true;
+    }
+
+    internal void CopyFromBfp8Encoded(
+        ReadOnlySpan<sbyte> payload,
+        ReadOnlySpan<float> scales)
+    {
+        if (DType != TensorDType.Bfp8)
+            throw new InvalidOperationException("Storage dtype must be BFP8.");
+        if (payload.Length != Count)
+            throw new ArgumentException("BFP8 payload length must match storage.", nameof(payload));
+        _bfp8 = new Bfp8EncodedStorage(
+            payload,
+            scales,
+            _bfp8Descriptor!);
+    }
+
     internal Vector256<float> LoadVector256(int offset)
     {
         EnsureBacking();
@@ -455,7 +606,17 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
             return Vector256.LoadUnsafe(ref _float32[offset]);
         if (_float16 is not null)
             return TensorStorageCodec.LoadFloat16Vector256(_float16, offset);
-        return TensorStorageCodec.LoadBFloat16Vector256(_bfloat16!, offset);
+        if (_bfloat16 is not null)
+            return TensorStorageCodec.LoadBFloat16Vector256(_bfloat16, offset);
+        return Vector256.Create(
+            DecodeBfp8Value(offset),
+            DecodeBfp8Value(offset + 1),
+            DecodeBfp8Value(offset + 2),
+            DecodeBfp8Value(offset + 3),
+            DecodeBfp8Value(offset + 4),
+            DecodeBfp8Value(offset + 5),
+            DecodeBfp8Value(offset + 6),
+            DecodeBfp8Value(offset + 7));
     }
 
     internal Vector128<float> LoadVector128(int offset)
@@ -468,7 +629,13 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
             return Vector128.LoadUnsafe(ref _float32[offset]);
         if (_float16 is not null)
             return TensorStorageCodec.LoadFloat16Vector128(_float16, offset);
-        return TensorStorageCodec.LoadBFloat16Vector128(_bfloat16!, offset);
+        if (_bfloat16 is not null)
+            return TensorStorageCodec.LoadBFloat16Vector128(_bfloat16, offset);
+        return Vector128.Create(
+            DecodeBfp8Value(offset),
+            DecodeBfp8Value(offset + 1),
+            DecodeBfp8Value(offset + 2),
+            DecodeBfp8Value(offset + 3));
     }
 
     public IEnumerator<float> GetEnumerator()
@@ -506,6 +673,29 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
     public bool Remove(float item) => throw ReadOnlyMutation();
 
     public void RemoveAt(int index) => throw ReadOnlyMutation();
+
+    private float DecodeBfp8Value(int index)
+    {
+        Bfp8EncodedStorage encoded = _bfp8
+            ?? throw new InvalidOperationException("BFP8 storage has no backing payload.");
+        int scaleIndex = encoded.Descriptor.GetScaleIndex(index, Count);
+        return encoded.PayloadArray[index] * encoded.ScaleArray[scaleIndex];
+    }
+
+    private void DecodeBfp8Range(int sourceOffset, Span<float> destination)
+    {
+        for (int index = 0; index < destination.Length; index++)
+            destination[index] = DecodeBfp8Value(sourceOffset + index);
+    }
+
+    private static void DecodeBfp8(
+        Bfp8EncodedStorage encoded,
+        Span<float> destination)
+        => Bfp8QuantizationCodec.Default.Decode(
+            encoded.Payload.Span,
+            encoded.Scales.Span,
+            encoded.Descriptor,
+            destination);
 
     private static NotSupportedException ReadOnlyMutation()
         => new("Tensor data views are read-only.");
