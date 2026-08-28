@@ -21,6 +21,64 @@ internal static class StreamingModuleStateJsonReader
         ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
         ArgumentNullException.ThrowIfNull(model);
 
+        Parameter[] parameters = model.parameters().ToArray();
+        if (!parameters.Any(
+                parameter =>
+                    parameter.T.RequiresTwoPassBfp8CheckpointRestore))
+        {
+            RestorePass(
+                path,
+                propertyName,
+                parameters,
+                Bfp8RestorePass.None,
+                bfp8Writers: null);
+            return;
+        }
+
+        var bfp8Writers = new Tensor.Bfp8CheckpointRestoreWriter?[
+            parameters.Length];
+        try
+        {
+            for (int index = 0; index < parameters.Length; index++)
+            {
+                if (parameters[index].T.RequiresTwoPassBfp8CheckpointRestore)
+                {
+                    bfp8Writers[index] =
+                        parameters[index].T.BeginBfp8CheckpointRestore();
+                }
+            }
+            RestorePass(
+                path,
+                propertyName,
+                parameters,
+                Bfp8RestorePass.AccumulateScale,
+                bfp8Writers);
+            foreach (Tensor.Bfp8CheckpointRestoreWriter? writer in bfp8Writers)
+                writer?.PrepareEncoding();
+            RestorePass(
+                path,
+                propertyName,
+                parameters,
+                Bfp8RestorePass.Encode,
+                bfp8Writers);
+            foreach (Tensor.Bfp8CheckpointRestoreWriter? writer in bfp8Writers)
+                writer?.Complete();
+        }
+        finally
+        {
+            foreach (Tensor.Bfp8CheckpointRestoreWriter? writer in bfp8Writers)
+                writer?.Dispose();
+        }
+    }
+
+    private static void RestorePass(
+        string path,
+        string propertyName,
+        Parameter[] parameters,
+        Bfp8RestorePass bfp8Pass,
+        Tensor.Bfp8CheckpointRestoreWriter?[]? bfp8Writers)
+    {
+
         using var stream = new FileStream(
             Path.GetFullPath(path),
             FileMode.Open,
@@ -38,7 +96,6 @@ internal static class StreamingModuleStateJsonReader
             leaveOpen: false);
         using var staging = new CheckpointFloatStagingBuffer();
         var json = new JsonCursor(text);
-        Parameter[] parameters = model.parameters().ToArray();
 
         json.BeginObject();
         bool first = true;
@@ -51,7 +108,12 @@ internal static class StreamingModuleStateJsonReader
                 continue;
             }
 
-            RestoreModuleState(json, parameters, staging);
+            RestoreModuleState(
+                json,
+                parameters,
+                staging,
+                bfp8Pass,
+                bfp8Writers);
             restored = true;
             break;
         }
@@ -65,7 +127,9 @@ internal static class StreamingModuleStateJsonReader
     private static void RestoreModuleState(
         JsonCursor json,
         IReadOnlyList<Parameter> parameters,
-        CheckpointFloatStagingBuffer staging)
+        CheckpointFloatStagingBuffer staging,
+        Bfp8RestorePass bfp8Pass,
+        Tensor.Bfp8CheckpointRestoreWriter?[]? bfp8Writers)
     {
         json.BeginObject();
         bool first = true;
@@ -79,7 +143,9 @@ internal static class StreamingModuleStateJsonReader
                 restoredParameters = RestoreParameters(
                     json,
                     parameters,
-                    staging);
+                    staging,
+                    bfp8Pass,
+                    bfp8Writers);
             else
                 json.SkipValue();
         }
@@ -95,7 +161,9 @@ internal static class StreamingModuleStateJsonReader
     private static int RestoreParameters(
         JsonCursor json,
         IReadOnlyList<Parameter> parameters,
-        CheckpointFloatStagingBuffer staging)
+        CheckpointFloatStagingBuffer staging,
+        Bfp8RestorePass bfp8Pass,
+        Tensor.Bfp8CheckpointRestoreWriter?[]? bfp8Writers)
     {
         json.BeginArray();
         bool first = true;
@@ -107,7 +175,13 @@ internal static class StreamingModuleStateJsonReader
                 throw new JsonException(
                     "Checkpoint has more parameters than the model.");
             }
-            RestoreParameter(json, parameters[index], index, staging);
+            RestoreParameter(
+                json,
+                parameters[index],
+                index,
+                staging,
+                bfp8Pass,
+                bfp8Writers?[index]);
             index++;
         }
         return index;
@@ -117,7 +191,9 @@ internal static class StreamingModuleStateJsonReader
         JsonCursor json,
         Parameter parameter,
         int expectedIndex,
-        CheckpointFloatStagingBuffer staging)
+        CheckpointFloatStagingBuffer staging,
+        Bfp8RestorePass bfp8Pass,
+        Tensor.Bfp8CheckpointRestoreWriter? bfp8Writer)
     {
         json.BeginObject();
         bool first = true;
@@ -153,7 +229,12 @@ internal static class StreamingModuleStateJsonReader
                         $"Checkpoint parameter slot {expectedIndex} is " +
                         "incompatible with the model.");
                 }
-                RestoreValues(json, parameter, staging);
+                RestoreValues(
+                    json,
+                    parameter,
+                    staging,
+                    bfp8Pass,
+                    bfp8Writer);
                 restored = true;
             }
             else
@@ -187,7 +268,9 @@ internal static class StreamingModuleStateJsonReader
     private static void RestoreValues(
         JsonCursor json,
         Parameter parameter,
-        CheckpointFloatStagingBuffer staging)
+        CheckpointFloatStagingBuffer staging,
+        Bfp8RestorePass bfp8Pass,
+        Tensor.Bfp8CheckpointRestoreWriter? bfp8Writer)
     {
         json.BeginArray();
         bool first = true;
@@ -197,8 +280,10 @@ internal static class StreamingModuleStateJsonReader
         Span<float> chunk = staging.GetManagedSpan(capacity);
         int chunkCount = 0;
         int totalCount = 0;
-        using Tensor.CheckpointRestoreWriter destination =
-            parameter.T.BeginCheckpointRestore();
+        using Tensor.CheckpointRestoreWriter? destination = bfp8Writer is null
+            && bfp8Pass != Bfp8RestorePass.AccumulateScale
+                ? parameter.T.BeginCheckpointRestore()
+                : null;
         while (json.TryReadArrayValue(ref first))
         {
             float value = json.ReadSingle();
@@ -217,18 +302,54 @@ internal static class StreamingModuleStateJsonReader
             totalCount++;
             if (chunkCount == chunk.Length)
             {
-                destination.WriteNext(chunk);
+                WriteChunk(
+                    destination,
+                    bfp8Writer,
+                    bfp8Pass,
+                    chunk);
                 chunkCount = 0;
             }
         }
         if (chunkCount > 0)
-            destination.WriteNext(chunk[..chunkCount]);
+        {
+            WriteChunk(
+                destination,
+                bfp8Writer,
+                bfp8Pass,
+                chunk[..chunkCount]);
+        }
         if (totalCount != parameter.T.Numel)
         {
             throw new JsonException(
                 "Checkpoint tensor value count does not match its shape.");
         }
-        destination.Complete();
+        destination?.Complete();
+    }
+
+    private static void WriteChunk(
+        Tensor.CheckpointRestoreWriter? destination,
+        Tensor.Bfp8CheckpointRestoreWriter? bfp8Writer,
+        Bfp8RestorePass bfp8Pass,
+        ReadOnlySpan<float> values)
+    {
+        if (bfp8Writer is null)
+        {
+            destination?.WriteNext(values);
+            return;
+        }
+        if (bfp8Pass == Bfp8RestorePass.AccumulateScale)
+            bfp8Writer.AccumulateScale(values);
+        else if (bfp8Pass == Bfp8RestorePass.Encode)
+            bfp8Writer.WriteNext(values);
+        else
+            throw new InvalidOperationException("Invalid BFP8 restore pass.");
+    }
+
+    private enum Bfp8RestorePass
+    {
+        None,
+        AccumulateScale,
+        Encode,
     }
 
     private sealed class JsonCursor(StreamReader reader)

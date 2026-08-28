@@ -5,6 +5,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <NNtrainArchitectureLayer>Cli</NNtrainArchitectureLayer>
+    <NNtrainAllowedProjectReferences>NNtrain.Core;NNtrain.Data;NNtrain.Training</NNtrainAllowedProjectReferences>
   </PropertyGroup>
 
   <ItemGroup>

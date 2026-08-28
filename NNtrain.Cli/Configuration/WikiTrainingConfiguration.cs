@@ -98,16 +98,30 @@ sealed record WikiTrainingConfiguration
         ForgetMemoryV3Architecture;
 
     /// <summary>
-    /// Numeric execution contract: float32, bfloat16, or mix16_32.
+    /// Numeric execution contract: float32, bfloat16, mix16_32 (fp16_32
+    /// alias), bfp8, or mix8_32.
     /// </summary>
     public string? PrecisionMode { get; init; }
 
     /// <summary>Canonical numeric execution setting.</summary>
     public string? Precision { get; init; }
 
-    [JsonPropertyName("bfp8_block_size")]
-    public int Bfp8BlockSize { get; init; } =
+    private int _bfp8BlockSize =
         Bfp8QuantizationDescriptor.DefaultBlockSize;
+    private bool _bfp8BlockSizeWasSet;
+
+    [JsonPropertyName("bfp8_block_size")]
+    public int Bfp8BlockSize
+    {
+        get => _bfp8BlockSize;
+        init
+        {
+            _bfp8BlockSize = value;
+            _bfp8BlockSizeWasSet = true;
+        }
+    }
+
+    internal bool HasExplicitBfp8BlockSize => _bfp8BlockSizeWasSet;
 
     /// <summary>Legacy physical-storage setting. Use precisionMode.</summary>
     public string? ModelDType { get; init; }
@@ -127,6 +141,12 @@ sealed record WikiTrainingConfiguration
     public double CudaMinimumRelativeShardSize { get; init; } = 0.5d;
 
     public int CudaMaximumBatchAdjustmentPerStep { get; init; } = 1;
+
+    /// <summary>
+    /// Upper bound for cached compiled CUDA Graph allocations. The active
+    /// shape is retained; older completed shapes are retired first.
+    /// </summary>
+    public int CudaGraphCacheBudgetMiB { get; init; } = 512;
 
     public int ForgetMemoryKeyWidth { get; init; } = 16;
 
@@ -535,6 +555,9 @@ sealed record WikiTrainingConfiguration
             CudaMaximumBatchAdjustmentPerStep,
             nameof(CudaMaximumBatchAdjustmentPerStep));
         ValidatePositive(
+            CudaGraphCacheBudgetMiB,
+            nameof(CudaGraphCacheBudgetMiB));
+        ValidatePositive(
             ForgetMemoryKeyWidth,
             nameof(ForgetMemoryKeyWidth));
         ValidatePositive(
@@ -649,6 +672,19 @@ sealed record WikiTrainingConfiguration
                 $"Unsupported optimizer '{Optimizer}'. Supported optimizers " +
                 $"are '{NekoMuonOptimizer}', '{AdamWOptimizer}', " +
                 $"'{GainShareAdamWOptimizer}', and '{LionOptimizer}'.",
+                nameof(Optimizer));
+        }
+        TensorPrecisionMode selectedPrecision = GetPrecisionMode();
+        if ((selectedPrecision is TensorPrecisionMode.Bfp8
+                or TensorPrecisionMode.Mix8_32)
+            && (IsOptimizer(GainShareAdamWOptimizer)
+                || IsOptimizer(LionOptimizer)))
+        {
+            throw new ArgumentException(
+                $"Optimizer '{Optimizer}' does not have a resident CUDA " +
+                $"{TensorPrecisionModeNames.Format(selectedPrecision)} " +
+                "update path. Use 'adamw' or 'nekomuon' so BFP8 weights, " +
+                "gradients, and optimizer state are not materialized on the host.",
                 nameof(Optimizer));
         }
         ValidateGainShareSettings();
@@ -899,45 +935,7 @@ sealed record WikiTrainingConfiguration
         if (configured is null)
             return null;
 
-        if (Precision is not null)
-            return TensorPrecisionModeNames.Parse(configured);
-
-        if (string.Equals(
-            configured,
-            Mix16_32PrecisionMode,
-            StringComparison.OrdinalIgnoreCase))
-        {
-            return TensorPrecisionMode.Mix16_32;
-        }
-        if (string.Equals(
-            configured,
-            BFloat16PrecisionMode,
-            StringComparison.OrdinalIgnoreCase))
-        {
-            return TensorPrecisionMode.BFloat16;
-        }
-        if (string.Equals(
-            configured,
-            Float32PrecisionMode,
-            StringComparison.OrdinalIgnoreCase))
-        {
-            return TensorPrecisionMode.Float32;
-        }
-        if (string.Equals(
-            configured,
-            Bfp8PrecisionMode,
-            StringComparison.OrdinalIgnoreCase))
-        {
-            return TensorPrecisionMode.Bfp8;
-        }
-        if (string.Equals(
-            configured,
-            Mix8_32PrecisionMode,
-            StringComparison.OrdinalIgnoreCase))
-        {
-            return TensorPrecisionMode.Mix8_32;
-        }
-        if (PrecisionMode is null
+        if (ModelDType is not null
             && string.Equals(
                 configured,
                 LegacyFloat16ModelDType,
@@ -946,12 +944,23 @@ sealed record WikiTrainingConfiguration
             return TensorPrecisionMode.Mix16_32;
         }
 
-        throw new ArgumentException(
-            $"Unsupported precision mode '{configured}'. Supported values " +
-            $"are '{Float32PrecisionMode}', '{BFloat16PrecisionMode}', " +
-            $"'{Mix16_32PrecisionMode}', '{Bfp8PrecisionMode}', and " +
-            $"'{Mix8_32PrecisionMode}'.",
-            PrecisionMode is null ? nameof(ModelDType) : nameof(PrecisionMode));
+        try
+        {
+            return TensorPrecisionModeNames.Parse(configured);
+        }
+        catch (ArgumentException exception)
+        {
+            string parameterName = Precision is not null
+                ? nameof(Precision)
+                : PrecisionMode is not null
+                    ? nameof(PrecisionMode)
+                    : nameof(ModelDType);
+            throw new ArgumentException(
+                $"Unsupported precision mode '{configured}'. Supported values " +
+                $"are {TensorPrecisionModeNames.SupportedValuesDescription}.",
+                parameterName,
+                exception);
+        }
     }
 
     internal TensorDType? GetExplicitModelDType()

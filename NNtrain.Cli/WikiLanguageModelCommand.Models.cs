@@ -22,6 +22,19 @@ internal static partial class WikiLanguageModelCommand
         int vocabularySize,
         TensorPrecisionMode precisionMode,
         TensorDType storageDType)
+        => CreateModel(
+            config,
+            vocabularySize,
+            precisionMode,
+            storageDType,
+            config.Bfp8BlockSize);
+
+    internal static LanguageModel CreateModel(
+        WikiTrainingConfiguration config,
+        int vocabularySize,
+        TensorPrecisionMode precisionMode,
+        TensorDType storageDType,
+        int bfp8BlockSize)
     {
         bool validStorage = storageDType == precisionMode.ToStorageDType()
             || precisionMode == TensorPrecisionMode.Mix16_32
@@ -40,7 +53,7 @@ internal static partial class WikiLanguageModelCommand
             vocabularySize,
             bfp8Mode ? TensorDType.Float32 : storageDType);
         if (bfp8Mode)
-            model.to(precisionMode, config.Bfp8BlockSize);
+            model.to(precisionMode, bfp8BlockSize);
         else
             model.SetPrecisionMode(precisionMode);
         return model;
@@ -51,6 +64,24 @@ internal static partial class WikiLanguageModelCommand
         int vocabularySize,
         TensorDType modelDType)
     {
+        var generator = new CheckpointableRandom(config.Seed);
+        LanguageModel model = CreateModel(
+            config,
+            vocabularySize,
+            modelDType,
+            generator);
+        generator.BeginRuntime();
+        model.AttachTrainingRandom(generator);
+        return model;
+    }
+
+    private static LanguageModel CreateModel(
+        WikiTrainingConfiguration config,
+        int vocabularySize,
+        TensorDType modelDType,
+        Random generator)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
         if (config.IsForgetMemoryDrnArchitecture())
         {
             return nn.forget_memory_drn_lm(
@@ -63,7 +94,7 @@ internal static partial class WikiLanguageModelCommand
                 value_width: config.ForgetMemoryValueWidth,
                 retention_min: config.ForgetMemoryRetentionMinimum,
                 retention_max: config.ForgetMemoryRetentionMaximum,
-                generator: new Random(config.Seed),
+                generator: generator,
                 init_scale: config.InitializationScale,
                 dropout: config.Dropout,
                 dtype: modelDType);
@@ -81,7 +112,7 @@ internal static partial class WikiLanguageModelCommand
                 value_width: config.ForgetMemoryValueWidth,
                 retention_min: config.ForgetMemoryRetentionMinimum,
                 retention_max: config.ForgetMemoryRetentionMaximum,
-                generator: new Random(config.Seed),
+                generator: generator,
                 init_scale: config.InitializationScale,
                 dropout: config.Dropout,
                 dtype: modelDType);
@@ -99,7 +130,7 @@ internal static partial class WikiLanguageModelCommand
                 value_width: config.ForgetMemoryValueWidth,
                 retention_min: config.ForgetMemoryRetentionMinimum,
                 retention_max: config.ForgetMemoryRetentionMaximum,
-                generator: new Random(config.Seed),
+                generator: generator,
                 init_scale: config.InitializationScale,
                 dropout: config.Dropout,
                 dtype: modelDType);
@@ -115,7 +146,7 @@ internal static partial class WikiLanguageModelCommand
                 d_model: config.ModelWidth,
                 dim_feedforward: config.HiddenSize,
                 num_layers: config.Layers,
-                generator: new Random(config.Seed),
+                generator: generator,
                 init_scale: config.InitializationScale,
                 dropout: config.Dropout);
         }
@@ -129,7 +160,7 @@ internal static partial class WikiLanguageModelCommand
                 d_model: config.ModelWidth,
                 dim_feedforward: config.HiddenSize,
                 num_layers: config.Layers,
-                generator: new Random(config.Seed),
+                generator: generator,
                 init_scale: config.InitializationScale,
                 dropout: config.Dropout,
                 filter_width: config.HyenaFilterWidth,
@@ -143,7 +174,7 @@ internal static partial class WikiLanguageModelCommand
             num_heads: config.Heads,
             dim_feedforward: config.HiddenSize,
             num_layers: config.Layers,
-            generator: new Random(config.Seed),
+            generator: generator,
             init_scale: config.InitializationScale,
             dropout: config.Dropout,
             dtype: modelDType,
@@ -245,7 +276,9 @@ internal static partial class WikiLanguageModelCommand
                 ? TensorDType.Float32
                 : GetCheckpointModelDType(checkpoint));
         if (bfp8Mode)
-            model.to(precisionMode, bfp8BlockSize);
+            model.to(
+                precisionMode,
+                checkpoint.Bfp8BlockSize ?? bfp8BlockSize);
         else
             model.SetPrecisionMode(precisionMode);
         return model;

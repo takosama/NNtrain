@@ -120,6 +120,23 @@ public sealed class OptimizerBundle : IOptimizerContainer
     public IReadOnlyList<IOptimizer> Optimizers => _leafOptimizers;
 
     /// <summary>
+    /// Returns the frozen checkpoint-leaf sequence for an optimizer. A
+    /// production bundle keeps its already-frozen authority; compatibility
+    /// callers are wrapped without replacing their original root optimizer.
+    /// </summary>
+    public static IReadOnlyList<IOptimizer> GetCheckpointLeafOptimizers(
+        IOptimizer optimizer)
+        => Wrap(optimizer).LeafOptimizers;
+
+    /// <summary>
+    /// Selects leaves by optimizer contract without depending on the concrete
+    /// shape of the root container.
+    /// </summary>
+    public IEnumerable<TOptimizer> LeavesOfType<TOptimizer>()
+        where TOptimizer : class, IOptimizer
+        => _leafOptimizers.OfType<TOptimizer>();
+
+    /// <summary>
     /// Wraps an optimizer without replacing it. Composite children become
     /// stable positional groups named group-0000, group-0001, and so on.
     /// A single optimizer uses the name default.
@@ -171,6 +188,8 @@ public sealed class OptimizerBundle : IOptimizerContainer
         return new OptimizerBundle(
             new BundleConstruction(optimizer, groups));
     }
+
+    public void prepare() => RootOptimizer.prepare();
 
     public void zero_grad() => RootOptimizer.zero_grad();
 

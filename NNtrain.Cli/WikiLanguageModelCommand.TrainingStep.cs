@@ -6,7 +6,7 @@ namespace NNtrain;
 internal static partial class WikiLanguageModelCommand
 {
     private abstract class WikiTrainingStepOperations
-        : ITrainingStepOperations
+        : ITrainingTaskAdapter<WikiTrainingBatch>
     {
         private readonly LanguageModel _model;
         private readonly IOptimizer _optimizer;
@@ -14,18 +14,33 @@ internal static partial class WikiLanguageModelCommand
         private readonly CudaDataParallelEngine? _dataParallelEngine;
         private LanguageBatch _batch;
         private Tensor? _loss;
+        private NativeCudaScalarReadback? _lossReadback;
 
         protected WikiTrainingStepOperations(
             LanguageModel model,
             IOptimizer optimizer,
             Parameter[] trainingParameters,
             CudaDataParallelEngine? dataParallelEngine,
+            int preparedBatchSize,
+            int preparedSequenceLength,
             long globalStep)
         {
             _model = model;
             _optimizer = optimizer;
             _trainingParameters = trainingParameters;
             _dataParallelEngine = dataParallelEngine;
+            if (preparedBatchSize <= 0)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(preparedBatchSize));
+            }
+            if (preparedSequenceLength <= 0)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(preparedSequenceLength));
+            }
+            BatchSize = preparedBatchSize;
+            SequenceLength = preparedSequenceLength;
             GlobalStep = globalStep;
         }
 
@@ -35,9 +50,13 @@ internal static partial class WikiLanguageModelCommand
                     .FusedForwardBackwardReduced
                 : TrainingGradientExecutionMode.Separate;
 
-        internal int BatchSize { get; set; }
+        internal int BatchSize { get; private set; }
 
-        internal int SequenceLength { get; set; }
+        internal int SequenceLength { get; private set; }
+
+        internal int BatchIndex { get; private set; }
+
+        internal long DocumentsProcessed { get; private set; }
 
         internal long GlobalStep { get; set; }
 
@@ -53,9 +72,19 @@ internal static partial class WikiLanguageModelCommand
 
         protected LanguageBatch Batch => _batch;
 
-        public void AcquireBatch()
+        public void Prepare()
         {
-            _batch = CreateBatch();
+            _dataParallelEngine?.PrepareForTraining(BatchSize);
+            _optimizer.prepare();
+        }
+
+        public void AcceptBatch(WikiTrainingBatch batch)
+        {
+            _batch = batch.Values;
+            BatchIndex = batch.BatchIndex;
+            BatchSize = batch.BatchSize;
+            SequenceLength = batch.SequenceLength;
+            DocumentsProcessed = batch.DocumentsProcessed;
             if (_batch.Input.Length != checked(BatchSize * SequenceLength)
                 || _batch.Target.Length != _batch.Input.Length)
             {
@@ -72,12 +101,27 @@ internal static partial class WikiLanguageModelCommand
 
         public void Forward()
         {
-            Tensor logits = _model.forward(
+            _loss = _model.forward_loss(
                 _batch.Input,
+                _batch.Target,
                 BatchSize,
                 SequenceLength);
-            _loss = nn.functional.cross_entropy(logits, _batch.Target);
-            LossValue = _loss.item();
+            if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+            {
+                int deviceIndex = Tensor.CudaDeviceIndex;
+                NativeCudaDevice accelerator =
+                    ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+                NativeCudaScalarReadback readback =
+                    NativeCudaScalarReadback.Rent(deviceIndex);
+                readback.Begin(
+                    _loss.EnsureCudaFloat32Buffer(deviceIndex).NativePtr,
+                    accelerator.DefaultStream);
+                _lossReadback = readback;
+            }
+            else
+            {
+                LossValue = _loss.item();
+            }
         }
 
         public void Backward()
@@ -85,10 +129,50 @@ internal static partial class WikiLanguageModelCommand
             Tensor loss = _loss
                 ?? throw new InvalidOperationException(
                     "Backward requires a completed forward phase.");
-            if (Tensor.ExecutionDevice == TensorDevice.Cuda)
-                loss.BackwardAndRelease();
-            else
-                loss.backward();
+            Exception? backwardFailure = null;
+            try
+            {
+                if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+                    loss.BackwardAndRelease();
+                else
+                    loss.backward();
+            }
+            catch (Exception exception)
+            {
+                backwardFailure = exception;
+            }
+
+            Exception? readbackFailure = null;
+            try
+            {
+                if (_lossReadback is { } readback)
+                    LossValue = readback.CompleteAndReturn();
+            }
+            catch (Exception exception)
+            {
+                readbackFailure = exception;
+            }
+            finally
+            {
+                _lossReadback = null;
+            }
+            if (backwardFailure is not null && readbackFailure is not null)
+            {
+                throw new AggregateException(
+                    "CUDA backward and its asynchronous loss readback failed.",
+                    backwardFailure,
+                    readbackFailure);
+            }
+            if (backwardFailure is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                    .Capture(backwardFailure).Throw();
+            }
+            if (readbackFailure is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                    .Capture(readbackFailure).Throw();
+            }
         }
 
         public void ReduceGradients()
@@ -106,7 +190,9 @@ internal static partial class WikiLanguageModelCommand
                 _batch.Input,
                 _batch.Target,
                 BatchSize,
-                SequenceLength);
+                SequenceLength,
+                Tensor.DefaultCrossEntropyIgnoreIndex,
+                GlobalStep);
         }
 
         public void ClipGradients()
@@ -120,7 +206,6 @@ internal static partial class WikiLanguageModelCommand
 
         public abstract void CommitMetrics();
 
-        protected abstract LanguageBatch CreateBatch();
     }
 
     private sealed class FixedWikiTrainingStepOperations
@@ -130,10 +215,6 @@ internal static partial class WikiLanguageModelCommand
         private readonly TrainingMetricReporter _metricReporter;
         private readonly int _graphUpdateSteps;
         private readonly long _totalTrainingSteps;
-        private int[] _tokens = [];
-        private int[] _order = [];
-        private int _batchStart;
-        private int _batchIndex;
         private int _batchTotal;
         private int _epoch;
 
@@ -146,12 +227,16 @@ internal static partial class WikiLanguageModelCommand
             TrainingMetricReporter metricReporter,
             int graphUpdateSteps,
             long totalTrainingSteps,
+            int preparedBatchSize,
+            int preparedSequenceLength,
             long globalStep)
             : base(
                 model,
                 optimizer,
                 trainingParameters,
                 dataParallelEngine,
+                preparedBatchSize,
+                preparedSequenceLength,
                 globalStep)
         {
             _scheduler = scheduler;
@@ -188,22 +273,6 @@ internal static partial class WikiLanguageModelCommand
             GraphWindowTargets = 0;
         }
 
-        internal void ConfigureBatch(
-            int[] tokens,
-            int[] order,
-            int batchStart,
-            int batchSize,
-            int sequenceLength,
-            int batchIndex)
-        {
-            _tokens = tokens;
-            _order = order;
-            _batchStart = batchStart;
-            BatchSize = batchSize;
-            SequenceLength = sequenceLength;
-            _batchIndex = batchIndex;
-        }
-
         public override void ApplySchedule()
             => LearningRates = _scheduler.step(
                 (GlobalStep + 1d) / _totalTrainingSteps);
@@ -218,7 +287,7 @@ internal static partial class WikiLanguageModelCommand
             float nextGraphWindowLoss = GraphWindowLoss + contribution;
             int nextGraphWindowTargets = checked(
                 GraphWindowTargets + validTargets);
-            int nextCompletedBatches = _batchIndex + 1;
+            int nextCompletedBatches = BatchIndex + 1;
             bool epochEnd = nextCompletedBatches == _batchTotal;
             bool flushGraph = nextGlobalStep % _graphUpdateSteps == 0
                 && !epochEnd;
@@ -243,14 +312,6 @@ internal static partial class WikiLanguageModelCommand
                 ? 0
                 : nextGraphWindowTargets;
         }
-
-        protected override LanguageBatch CreateBatch()
-            => WikiLanguageModelCommand.CreateBatch(
-                _tokens,
-                _order,
-                _batchStart,
-                BatchSize,
-                SequenceLength);
     }
 
     private sealed class StreamingWikiTrainingStepOperations
@@ -258,12 +319,10 @@ internal static partial class WikiLanguageModelCommand
     {
         private readonly WarmupCosineProgressLRScheduler _scheduler;
         private readonly TrainingMetricReporter _metricReporter;
-        private readonly List<int> _buffer;
         private readonly long _documentsPerEpoch;
         private readonly int _totalEpochs;
         private readonly int _graphUpdateSteps;
         private int _epoch;
-        private long _documentsProcessed;
 
         internal StreamingWikiTrainingStepOperations(
             LanguageModel model,
@@ -272,10 +331,11 @@ internal static partial class WikiLanguageModelCommand
             CudaDataParallelEngine? dataParallelEngine,
             WarmupCosineProgressLRScheduler scheduler,
             TrainingMetricReporter metricReporter,
-            List<int> buffer,
             long documentsPerEpoch,
             int totalEpochs,
             int graphUpdateSteps,
+            int preparedBatchSize,
+            int preparedSequenceLength,
             long globalStep,
             double graphWindowLoss,
             long graphWindowTargets)
@@ -284,11 +344,12 @@ internal static partial class WikiLanguageModelCommand
                 optimizer,
                 trainingParameters,
                 dataParallelEngine,
+                preparedBatchSize,
+                preparedSequenceLength,
                 globalStep)
         {
             _scheduler = scheduler;
             _metricReporter = metricReporter;
-            _buffer = buffer;
             _documentsPerEpoch = documentsPerEpoch;
             _totalEpochs = totalEpochs;
             _graphUpdateSteps = graphUpdateSteps;
@@ -320,23 +381,13 @@ internal static partial class WikiLanguageModelCommand
             CompletedBatches = completedBatches;
         }
 
-        internal void ConfigureBatch(
-            int batchSize,
-            int sequenceLength,
-            long documentsProcessed)
-        {
-            BatchSize = batchSize;
-            SequenceLength = sequenceLength;
-            _documentsProcessed = documentsProcessed;
-        }
-
         public override void ApplySchedule()
         {
             double documentProgress = _documentsPerEpoch == 0
                 ? 0d
                 : Math.Min(
                     1d,
-                    (double)_documentsProcessed / _documentsPerEpoch);
+                    (double)DocumentsProcessed / _documentsPerEpoch);
             OverallProgress =
                 (_epoch - 1d + documentProgress) / _totalEpochs;
             LearningRates = _scheduler.step(OverallProgress);
@@ -360,7 +411,7 @@ internal static partial class WikiLanguageModelCommand
                     ? 0d
                     : Math.Min(
                         1d,
-                        (double)_documentsProcessed / _documentsPerEpoch);
+                        (double)DocumentsProcessed / _documentsPerEpoch);
                 _metricReporter.AppendCommittedLoss(
                     nextGlobalStep,
                     _epoch - 1d + progress,
@@ -377,11 +428,5 @@ internal static partial class WikiLanguageModelCommand
                 ? 0
                 : nextGraphWindowTargets;
         }
-
-        protected override LanguageBatch CreateBatch()
-            => WikiLanguageModelCommand.CreateStreamingBatch(
-                _buffer,
-                BatchSize,
-                SequenceLength);
     }
 }

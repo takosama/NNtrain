@@ -1,4 +1,5 @@
 using NNtrain.Runtime.Execution;
+using NNtrain.Training.Optimization;
 
 namespace NNtrain.Training.Execution;
 
@@ -15,6 +16,7 @@ public sealed class TrainingSession : IDisposable
     private readonly List<IDisposable> _ownedResources = [];
     private TrainingStep? _activeStep;
     private Exception? _failure;
+    private OptimizerBundle? _optimizer;
     private long _lastCommittedStep;
     private int _disposed;
 
@@ -70,6 +72,54 @@ public sealed class TrainingSession : IDisposable
         {
             lock (_sync)
                 return _failure;
+        }
+    }
+
+    /// <summary>
+    /// The immutable optimizer topology bound to this session. Checkpoint,
+    /// scheduler, and step code share this authority instead of rediscovering
+    /// a mutable container tree independently.
+    /// </summary>
+    public OptimizerBundle? Optimizer
+    {
+        get
+        {
+            lock (_sync)
+                return _optimizer;
+        }
+    }
+
+    /// <summary>
+    /// Binds exactly one stable optimizer topology to the session. Rebinding
+    /// the same bundle is idempotent; replacing it is rejected because it
+    /// would invalidate checkpoint leaf order during a run.
+    /// </summary>
+    public OptimizerBundle OwnOptimizer(OptimizerBundle optimizer)
+    {
+        ArgumentNullException.ThrowIfNull(optimizer);
+        ObjectDisposedException.ThrowIf(
+            Volatile.Read(ref _disposed) != 0,
+            this);
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(
+                Volatile.Read(ref _disposed) != 0,
+                this);
+            if (_activeStep is not null)
+            {
+                throw new InvalidOperationException(
+                    "An optimizer cannot be bound while a training step " +
+                    "is active.");
+            }
+            if (_optimizer is not null
+                && !ReferenceEquals(_optimizer, optimizer))
+            {
+                throw new InvalidOperationException(
+                    "This training session already owns a different " +
+                    "optimizer bundle.");
+            }
+            _optimizer = optimizer;
+            return optimizer;
         }
     }
 

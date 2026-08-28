@@ -1,8 +1,47 @@
+using NNtrain.Cuda.Execution;
+using NNtrain.Training.Optimization;
+
 namespace NNtrain;
 
 internal static partial class WikiLanguageModelCommand
 {
+    internal static void PreflightCudaOptimizer(
+        WikiTrainingConfiguration config,
+        TensorPrecisionMode precisionMode,
+        Func<int, CudaKernelCapabilities>? capabilityProvider = null)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        if (config.GetExecutionDevice() != TensorDevice.Cuda)
+            return;
+
+        CudaOptimizerCapabilityPreflight.EnsureBeforeAllocation(
+            GetCudaOptimizerKind(config),
+            precisionMode,
+            config.DeviceIndices ?? [config.DeviceIndex],
+            capabilityProvider);
+    }
+
+    private static CudaOptimizerKind GetCudaOptimizerKind(
+        WikiTrainingConfiguration config)
+    {
+        if (config.IsOptimizer(WikiTrainingConfiguration.NekoMuonOptimizer))
+            return CudaOptimizerKind.NekoMuon;
+        if (config.IsOptimizer(WikiTrainingConfiguration.LionOptimizer))
+            return CudaOptimizerKind.Lion;
+        if (config.IsOptimizer(
+            WikiTrainingConfiguration.GainShareAdamWOptimizer))
+        {
+            return CudaOptimizerKind.GainShareAdamW;
+        }
+        return CudaOptimizerKind.AdamW;
+    }
+
     internal static IOptimizer CreateOptimizer(
+        LanguageModel model,
+        WikiTrainingConfiguration config)
+        => CreateOptimizerBundle(model, config).RootOptimizer;
+
+    internal static OptimizerBundle CreateOptimizerBundle(
         LanguageModel model,
         WikiTrainingConfiguration config)
     {
@@ -32,13 +71,17 @@ internal static partial class WikiLanguageModelCommand
                 weight_decay: config.WeightDecay,
                 bf16_first_moment: useBFloat16Moments,
                 bf16_second_moment: useBFloat16Moments);
-            return optim.Composite(nekoMuon, auxiliaryAdamW);
+            return new OptimizerBundle(
+            [
+                new OptimizerGroup("hidden", nekoMuon),
+                new OptimizerGroup("auxiliary", auxiliaryAdamW),
+            ]);
         }
 
         if (config.IsOptimizer(
             WikiTrainingConfiguration.GainShareAdamWOptimizer))
         {
-            return optim.GainShareAdamW(
+            IOptimizer optimizer = optim.GainShareAdamW(
                 model.make_gainshare_parameter_groups(
                     config.GainShareBlockDepth),
                 lr: config.LearningRate,
@@ -50,22 +93,25 @@ internal static partial class WikiLanguageModelCommand
                 min_scale: config.GainShareMinScale,
                 max_scale: config.GainShareMaxScale,
                 weight_decay: config.WeightDecay);
+            return OptimizerBundle.Wrap(optimizer, ["all"]);
         }
 
         if (config.IsOptimizer(WikiTrainingConfiguration.LionOptimizer))
         {
-            return optim.Lion(
+            IOptimizer optimizer = optim.Lion(
                 model.parameters(),
                 lr: config.LearningRate,
                 weight_decay: config.WeightDecay);
+            return OptimizerBundle.Wrap(optimizer, ["all"]);
         }
 
-        return optim.AdamW(
+        IOptimizer adamW = optim.AdamW(
             model.parameters(),
             lr: config.LearningRate,
             weight_decay: config.WeightDecay,
             bf16_first_moment: useBFloat16Moments,
             bf16_second_moment: useBFloat16Moments);
+        return OptimizerBundle.Wrap(adamW, ["all"]);
     }
 
     private static void WriteOptimizerSummary(
@@ -142,14 +188,10 @@ internal static partial class WikiLanguageModelCommand
 
     private static string FormatOptimizerDiagnostics(IOptimizer optimizer)
     {
-        NekoMuon? nekoMuon = optimizer switch
-        {
-            NekoMuon direct => direct,
-            CompositeOptimizer composite => composite.Optimizers
-                .OfType<NekoMuon>()
-                .FirstOrDefault(),
-            _ => null,
-        };
+        NekoMuon? nekoMuon = OptimizerBundle
+            .GetCheckpointLeafOptimizers(optimizer)
+            .OfType<NekoMuon>()
+            .FirstOrDefault();
         if (nekoMuon is null)
             return string.Empty;
 

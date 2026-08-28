@@ -11,7 +11,7 @@ internal static partial class Program
     /// RNG/augmentation order without buffering an entire update.
     /// </summary>
     private sealed class ClassificationTrainingStepOperations
-        : ITrainingStepOperations
+        : ITrainingTaskAdapter<ClassificationUpdateBatch>
     {
         private readonly TransformerClassifier _model;
         private readonly IOptimizer _optimizer;
@@ -19,19 +19,13 @@ internal static partial class Program
         private readonly TextWriter _output;
         private readonly float _labelSmoothing;
         private readonly int _classCount;
-        private IEnumerator<DataBatch>? _trainingBatches;
         private int _epoch;
-        private int _update;
-        private int _updateTotal;
-        private int _firstMicroBatch;
-        private int _microBatchesInUpdate;
-        private int _microBatchTotal;
-        private int _samplesInUpdate;
         private double _pendingLoss;
         private int _pendingCorrect;
         private int _pendingSamples;
         private bool _schedulePending;
-        private DataBatch? _firstBatch;
+        private ClassificationUpdateBatch _batch;
+        private bool _hasBatch;
 
         internal ClassificationTrainingStepOperations(
             TransformerClassifier model,
@@ -67,14 +61,12 @@ internal static partial class Program
 
         internal void StartEpoch(
             int epoch,
-            IEnumerator<DataBatch> trainingBatches,
             double trainingLossSum,
             int trainingCorrect,
             int trainingSamples,
             bool advanceSchedule)
         {
             _epoch = epoch;
-            _trainingBatches = trainingBatches;
             TrainingLossSum = trainingLossSum;
             TrainingCorrect = trainingCorrect;
             TrainingSamples = trainingSamples;
@@ -82,30 +74,11 @@ internal static partial class Program
             LearningRates = _scheduler.get_last_lr();
         }
 
-        internal void ConfigureUpdate(
-            int update,
-            int updateTotal,
-            int firstMicroBatch,
-            int microBatchesInUpdate,
-            int microBatchTotal,
-            int samplesInUpdate)
-        {
-            _update = update;
-            _updateTotal = updateTotal;
-            _firstMicroBatch = firstMicroBatch;
-            _microBatchesInUpdate = microBatchesInUpdate;
-            _microBatchTotal = microBatchTotal;
-            _samplesInUpdate = samplesInUpdate;
-        }
+        public void Prepare() => _optimizer.prepare();
 
-        public void AcquireBatch()
+        public void AcceptBatch(ClassificationUpdateBatch batch)
         {
-            if (_trainingBatches is null)
-            {
-                throw new InvalidOperationException(
-                    "The classification epoch has no training batch cursor.");
-            }
-            if (_microBatchesInUpdate <= 0 || _samplesInUpdate <= 0)
+            if (batch.MicroBatchCount <= 0 || batch.SampleCount <= 0)
             {
                 throw new InvalidOperationException(
                     "The classification update has no samples.");
@@ -113,13 +86,8 @@ internal static partial class Program
             _pendingLoss = 0d;
             _pendingCorrect = 0;
             _pendingSamples = 0;
-            if (!_trainingBatches.MoveNext())
-            {
-                throw new InvalidOperationException(
-                    "DataLoader ended before the expected training " +
-                    "microbatch count.");
-            }
-            _firstBatch = _trainingBatches.Current;
+            _batch = batch;
+            _hasBatch = true;
         }
 
         public void ClearGradients() => _optimizer.zero_grad();
@@ -138,56 +106,116 @@ internal static partial class Program
 
         public void ForwardBackwardReduced()
         {
-            IEnumerator<DataBatch> trainingBatches = _trainingBatches!;
+            if (!_hasBatch)
+            {
+                throw new InvalidOperationException(
+                    "Classification forward requires an acquired update.");
+            }
+            ClassificationUpdateBatch batch = _batch;
             for (int accumulation = 0;
-                accumulation < _microBatchesInUpdate;
+                accumulation < batch.MicroBatchCount;
                 accumulation++)
             {
-                int microBatch = _firstMicroBatch + accumulation;
-                DataBatch samples;
-                if (accumulation == 0)
-                {
-                    samples = _firstBatch
-                        ?? throw new InvalidOperationException(
-                            "AcquireBatch did not retain the first microbatch.");
-                }
-                else if (trainingBatches.MoveNext())
-                {
-                    samples = trainingBatches.Current;
-                }
-                else
-                {
-                    throw new InvalidOperationException(
-                        "DataLoader ended before the expected training " +
-                        "microbatch count.");
-                }
+                int microBatch = batch.FirstMicroBatch + accumulation;
+                DataBatch samples = batch.AcquireMicroBatch(accumulation);
                 int samplesInMicroBatch = samples.target.Length;
+                if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+                {
+                    samples.input.PrepareCudaBatchInput(
+                        Tensor.CudaDeviceIndex);
+                }
                 Tensor logits = _model.forward(samples.input);
                 Tensor loss = nn.functional.cross_entropy(
                     logits,
                     samples.target,
                     label_smoothing: _labelSmoothing);
-                float microBatchLoss = loss.item();
+                using CudaClassificationCorrectCountReadback?
+                    correctCountReadback = BeginCountCorrect(
+                        logits,
+                        samples.target,
+                        _classCount);
                 float gradientWeight =
-                    (float)samplesInMicroBatch / _samplesInUpdate;
-
-                loss.backward([gradientWeight]);
+                    (float)samplesInMicroBatch / batch.SampleCount;
+                float microBatchLoss = BackwardAndReadLoss(
+                    loss,
+                    gradientWeight);
                 _pendingLoss += microBatchLoss * samplesInMicroBatch;
                 _pendingSamples += samplesInMicroBatch;
-                _pendingCorrect += CountCorrect(
-                    logits.Data,
+                _pendingCorrect += CompleteCountCorrect(
+                    logits,
                     samples.target,
-                    _classCount);
+                    _classCount,
+                    correctCountReadback);
 
                 _output.WriteLine(
                     $"epoch {_epoch}, " +
                     $"microbatch {microBatch + 1}/" +
-                    $"{_microBatchTotal}, accumulation " +
-                    $"{accumulation + 1}/{_microBatchesInUpdate}, " +
-                    $"update {_update + 1}/{_updateTotal}, " +
+                    $"{batch.MicroBatchTotal}, accumulation " +
+                    $"{accumulation + 1}/{batch.MicroBatchCount}, " +
+                    $"update {batch.Update + 1}/{batch.UpdateTotal}, " +
                     $"loss = {microBatchLoss:F6}");
             }
-            _firstBatch = null;
+            _hasBatch = false;
+        }
+
+        private static float BackwardAndReadLoss(
+            Tensor loss,
+            float gradientWeight)
+        {
+            if (Tensor.ExecutionDevice != TensorDevice.Cuda)
+            {
+                float cpuValue = loss.item();
+                loss.backward([gradientWeight]);
+                return cpuValue;
+            }
+
+            int deviceIndex = Tensor.CudaDeviceIndex;
+            NativeCudaDevice accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+            NativeCudaScalarReadback readback =
+                NativeCudaScalarReadback.Rent(deviceIndex);
+            readback.Begin(
+                loss.EnsureCudaFloat32Buffer(deviceIndex).NativePtr,
+                accelerator.DefaultStream);
+
+            Exception? backwardFailure = null;
+            try
+            {
+                loss.BackwardAndRelease([gradientWeight]);
+            }
+            catch (Exception exception)
+            {
+                backwardFailure = exception;
+            }
+
+            float lossValue = 0f;
+            Exception? readbackFailure = null;
+            try
+            {
+                lossValue = readback.CompleteAndReturn();
+            }
+            catch (Exception exception)
+            {
+                readbackFailure = exception;
+            }
+            if (backwardFailure is not null && readbackFailure is not null)
+            {
+                throw new AggregateException(
+                    "CUDA backward and its asynchronous loss readback failed.",
+                    backwardFailure,
+                    readbackFailure);
+            }
+            if (backwardFailure is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                    .Capture(backwardFailure).Throw();
+            }
+            if (readbackFailure is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                    .Capture(readbackFailure).Throw();
+            }
+            return lossValue;
         }
 
         public void ClipGradients()

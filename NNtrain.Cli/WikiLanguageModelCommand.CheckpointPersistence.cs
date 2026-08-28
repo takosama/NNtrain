@@ -1,4 +1,5 @@
 using NNtrain.Training.Persistence;
+using NNtrain.Training.Optimization;
 
 namespace NNtrain;
 
@@ -119,7 +120,7 @@ internal static partial class WikiLanguageModelCommand
                     TensorDType.Float32);
             }
             IReadOnlyList<IOptimizer> leaves =
-                OptimizerStateStream.GetLeafOptimizers(optimizer);
+                OptimizerBundle.GetCheckpointLeafOptimizers(optimizer);
             var optimizerTypes = new string[leaves.Count];
             for (int index = 0; index < leaves.Count; index++)
             {

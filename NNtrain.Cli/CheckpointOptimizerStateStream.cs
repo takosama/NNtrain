@@ -1,12 +1,13 @@
 using System.Text;
+using NNtrain.Training.Optimization;
 
 namespace NNtrain;
 
 /// <summary>
-/// Reads legacy optimizer StateJson values directly from a large Wiki
-/// checkpoint. It deliberately never creates an OptimizerStateDictionary or
-/// JsonElement for the payload; each leaf state is exposed as a bounded stream
-/// and deserialized straight into its typed moment arrays.
+/// Reads legacy optimizer StateJson values directly from Wiki or
+/// classification checkpoints. It deliberately never creates an aggregate
+/// OptimizerStateDictionary or JsonElement for the payload; each leaf state is
+/// exposed as a bounded stream and deserialized into its owned moment arrays.
 /// </summary>
 internal static class CheckpointOptimizerStateStream
 {
@@ -27,7 +28,7 @@ internal static class CheckpointOptimizerStateStream
         ArgumentNullException.ThrowIfNull(output);
 
         IReadOnlyList<IOptimizer> leaves =
-            OptimizerStateStream.GetLeafOptimizers(optimizer);
+            OptimizerBundle.GetCheckpointLeafOptimizers(optimizer);
         if (checkpoint.FormatVersion >= 7)
         {
             return TryLoadArtifacts(
@@ -37,6 +38,28 @@ internal static class CheckpointOptimizerStateStream
                 output);
         }
 
+        return TryLoadLegacyJson(checkpointPath, leaves, output);
+    }
+
+    internal static bool TryLoadLegacyJson(
+        string checkpointPath,
+        IOptimizer optimizer,
+        TextWriter output)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpointPath);
+        ArgumentNullException.ThrowIfNull(optimizer);
+        ArgumentNullException.ThrowIfNull(output);
+        return TryLoadLegacyJson(
+            checkpointPath,
+            OptimizerBundle.GetCheckpointLeafOptimizers(optimizer),
+            output);
+    }
+
+    private static bool TryLoadLegacyJson(
+        string checkpointPath,
+        IReadOnlyList<IOptimizer> leaves,
+        TextWriter output)
+    {
         using var stream = new FileStream(
             Path.GetFullPath(checkpointPath),
             FileMode.Open,

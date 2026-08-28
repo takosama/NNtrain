@@ -1,3 +1,6 @@
+using NNtrain.Runtime.Execution;
+using System.Runtime.CompilerServices;
+
 namespace NNtrain.Training.Execution;
 
 /// <summary>
@@ -18,6 +21,15 @@ public enum TrainingGradientExecutionMode
 public interface ITrainingStepOperations
 {
     TrainingGradientExecutionMode GradientExecutionMode { get; }
+
+    /// <summary>
+    /// Prepares reusable model/optimizer residency before transfer guarding
+    /// begins. Action-based and third-party operations remain compatible via
+    /// the default no-op.
+    /// </summary>
+    void Prepare()
+    {
+    }
 
     void AcquireBatch();
 
@@ -105,6 +117,8 @@ public sealed record TrainingStepOperations(
 public sealed class TrainingStepExecutor
 {
     private readonly TrainingSession _session;
+    private readonly ConditionalWeakTable<object, PreparationMarker>
+        _preparedOperations = new();
     private TrainingStep? _activeStep;
     private TrainingStepState? _lastState;
     private int _executing;
@@ -174,8 +188,16 @@ public sealed class TrainingStepExecutor
         }
 
         TrainingStep? step = null;
+        IDisposable? transferGuard = null;
         try
         {
+            PrepareOnce(operations);
+            if (_session.ExecutionSession.Options.Device
+                == ExecutionDeviceKind.Cuda)
+            {
+                transferGuard = DeviceTransferGuard.EnterTrainingStep(
+                    _session.ExecutionSession.Options.CudaDevices.Count);
+            }
             step = _session.BeginStep(globalStep);
             Volatile.Write(ref _activeStep, step);
             operations.AcquireBatch();
@@ -222,9 +244,31 @@ public sealed class TrainingStepExecutor
         }
         finally
         {
+            transferGuard?.Dispose();
             step?.Dispose();
             Volatile.Write(ref _activeStep, null);
             Volatile.Write(ref _executing, 0);
+        }
+    }
+
+    private void PrepareOnce(ITrainingStepOperations operations)
+    {
+        if (_preparedOperations.TryGetValue(operations, out _))
+            return;
+
+        // Add only after successful preparation. A transient allocation/OOM
+        // failure can therefore be retried without publishing a false
+        // prepared state. Execute's interlocked gate serializes this method.
+        operations.Prepare();
+        _preparedOperations.Add(operations, PreparationMarker.Instance);
+    }
+
+    private sealed class PreparationMarker
+    {
+        internal static PreparationMarker Instance { get; } = new();
+
+        private PreparationMarker()
+        {
         }
     }
 }

@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Text.Json;
+using NNtrain.Runtime.Execution;
 using NNtrain.Training.Execution;
+using NNtrain.Training.Optimization;
 
 namespace NNtrain;
 
@@ -194,6 +196,12 @@ internal static partial class Program
 
             ValidateDatasetCompatibility(trainData, evalData);
             config.Model.ValidateForModelWidth(trainData.Columns);
+            using ExecutionSession executionSession =
+                ProductionTrainingSessionFactory.CreateExecutionSession(
+                    classification.PrecisionMode,
+                    Tensor.ExecutionDevice,
+                    Tensor.CudaDeviceIndices);
+            using IDisposable executionScope = executionSession.Enter();
             TransformerClassifier model = nn.transformer_classifier(
                 seq_len: trainData.Rows,
                 d_model: trainData.Columns,
@@ -207,6 +215,8 @@ internal static partial class Program
             model.to(
                 classification.PrecisionMode,
                 classification.Bfp8BlockSize);
+            if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+                model.to(TensorDevice.Cuda);
             output.WriteLine(
                 $"model = {model.GetType().Name} (image classifier)");
             output.WriteLine(
@@ -217,7 +227,7 @@ internal static partial class Program
                     : classification.PrecisionMode == TensorPrecisionMode.Mix8_32
                         ? $" (block {classification.Bfp8BlockSize})"
                         : string.Empty));
-            IOptimizer optimizer = CreateOptimizer(
+            OptimizerBundle optimizer = CreateOptimizerBundle(
                 model,
                 config);
             ILRScheduler scheduler =
@@ -302,7 +312,7 @@ internal static partial class Program
                     GetCifar100AugmentationDescription(augmentation));
             }
 
-            ModuleState? bestModelState = null;
+            bool hasBestModel = false;
             float bestEvaluationLoss = float.PositiveInfinity;
             float earlyStoppingReferenceLoss = float.PositiveInfinity;
             int bestEpoch = 0;
@@ -333,7 +343,9 @@ internal static partial class Program
                 ClassificationTrainingCheckpoint checkpoint =
                     ClassificationCheckpoint.LoadIntoModel(
                         config.CheckpointPath,
-                        model);
+                        model,
+                        optimizer,
+                        output);
                 bool hasPartialEpoch = checkpoint.CurrentEpoch
                     > checkpoint.CompletedEpoch;
                 if (!hasPartialEpoch
@@ -344,9 +356,8 @@ internal static partial class Program
                         $"{checkpoint.CompletedEpoch}, but configuration " +
                         $"requests only {config.Epochs} epoch(s).");
                 }
-                optimizer.load_state_dict(checkpoint.Optimizer);
                 scheduler.load_state_dict(checkpoint.Scheduler);
-                bestModelState = checkpoint.BestModel;
+                hasBestModel = checkpoint.BestEpoch > 0;
                 bestEpoch = checkpoint.BestEpoch;
                 bestEvaluationLoss = checkpoint.BestEvaluationLoss;
                 earlyStoppingReferenceLoss =
@@ -397,13 +408,13 @@ internal static partial class Program
                 if (openLossGraph)
                     metricReporter.TryOpenHtml(error);
             }
-            using TrainingSession trainingSession =
-                ProductionTrainingSessionFactory.Create(
-                    classification.PrecisionMode,
-                    globalStep);
-            using IDisposable executionScope =
-                trainingSession.ExecutionSession.Enter();
+            using TrainingSession trainingSession = new(
+                executionSession,
+                ownsExecutionSession: false,
+                lastCommittedStep: globalStep);
+            trainingSession.OwnOptimizer(optimizer);
             var stepExecutor = new TrainingStepExecutor(trainingSession);
+            var batchCursor = new ClassificationTrainingDataCursor();
             var stepOperations =
                 new ClassificationTrainingStepOperations(
                     model,
@@ -413,6 +424,10 @@ internal static partial class Program
                     config.LabelSmoothing,
                     trainData.ClassCount,
                     globalStep);
+            var cursorStepOperations =
+                new CursorTrainingStepOperations<ClassificationUpdateBatch>(
+                    batchCursor,
+                    stepOperations);
 
             foreach (TrainingEpoch epochRun in TrainingRunner.Epochs(
                 firstEpoch,
@@ -464,20 +479,11 @@ internal static partial class Program
                 int microBatchesToSkip = Math.Min(
                     microBatchTotal,
                     resumeUpdate * config.MicroBatchCount);
-                for (int skipped = 0;
-                    skipped < microBatchesToSkip;
-                    skipped++)
-                {
-                    if (!trainingBatches.MoveNext())
-                    {
-                        throw new InvalidDataException(
-                            "DataLoader ended while restoring checkpoint " +
-                        "position.");
-                    }
-                }
+                batchCursor.StartEpoch(
+                    trainingBatches,
+                    microBatchesToSkip);
                 stepOperations.StartEpoch(
                     epoch,
-                    trainingBatches,
                     trainLoss,
                     trainCorrect,
                     completedTrainingSamples,
@@ -495,7 +501,7 @@ internal static partial class Program
                     int samplesInUpdate = Math.Min(
                         config.EffectiveBatchSize,
                         trainData.Count - updateStart);
-                    stepOperations.ConfigureUpdate(
+                    batchCursor.ConfigureNext(
                         update,
                         updateTotal,
                         firstMicroBatch,
@@ -504,7 +510,7 @@ internal static partial class Program
                         samplesInUpdate);
                     TrainingStepState committedStep = stepExecutor.Execute(
                         checked(globalStep + 1),
-                        stepOperations);
+                        cursorStepOperations);
                     globalStep = committedStep.GlobalStep;
                     trainLoss = stepOperations.TrainingLossSum;
                     trainCorrect = stepOperations.TrainingCorrect;
@@ -529,21 +535,20 @@ internal static partial class Program
                         ClassificationCheckpoint.Save(
                             config.CheckpointPath,
                             model,
+                            optimizer,
                             CreateClassificationCheckpoint(
                                 completedEpoch: epoch - 1,
                                 currentEpoch: epoch,
                                 completedUpdates,
-                                model,
-                                optimizer,
                                 scheduler,
-                                bestModelState,
                                 bestEpoch,
                                 bestEvaluationLoss,
                                 earlyStoppingReferenceLoss,
                                 epochsWithoutImprovement,
                                 trainLoss,
                                 trainCorrect,
-                                completedTrainingSamples));
+                                completedTrainingSamples),
+                            publishCurrentAsBest: false);
                         output.WriteLine(
                             $"training checkpoint = " +
                             $"{config.CheckpointPath} at epoch " +
@@ -576,11 +581,17 @@ internal static partial class Program
                         Tensor loss = nn.functional.cross_entropy(
                             logits,
                             samples.target);
+                        using CudaClassificationCorrectCountReadback?
+                            correctCountReadback = BeginCountCorrect(
+                                logits,
+                                samples.target,
+                                evalData.ClassCount);
                         evalLoss += loss.item() * samplesInBatch;
-                        evalCorrectCount += CountCorrect(
-                            logits.Data,
+                        evalCorrectCount += CompleteCountCorrect(
+                            logits,
                             samples.target,
-                            evalData.ClassCount);
+                            evalData.ClassCount,
+                            correctCountReadback);
 
                         completedEvaluationSamples += samplesInBatch;
                         int evalPercent =
@@ -601,12 +612,13 @@ internal static partial class Program
                 float averageTrainingLoss =
                     (float)(trainLoss / completedTrainingSamples);
                 float averageEvaluationLoss = evalLoss / evalData.Count;
-                if (bestModelState is null
-                    || averageEvaluationLoss < bestEvaluationLoss)
+                bool publishCurrentAsBest = !hasBestModel
+                    || averageEvaluationLoss < bestEvaluationLoss;
+                if (publishCurrentAsBest)
                 {
                     bestEvaluationLoss = averageEvaluationLoss;
                     bestEpoch = epoch;
-                    bestModelState = model.state_dict();
+                    hasBestModel = true;
                 }
 
                 bool meaningfulImprovement =
@@ -646,21 +658,20 @@ internal static partial class Program
                 ClassificationCheckpoint.Save(
                     config.CheckpointPath,
                     model,
+                    optimizer,
                     CreateClassificationCheckpoint(
                         completedEpoch: epoch,
                         currentEpoch: 0,
                         completedUpdatesInEpoch: 0,
-                        model,
-                        optimizer,
                         scheduler,
-                        bestModelState,
                         bestEpoch,
                         bestEvaluationLoss,
                         earlyStoppingReferenceLoss,
                         epochsWithoutImprovement,
                         currentTrainingLossSum: 0d,
                         currentTrainingCorrect: 0,
-                        currentTrainingSamples: 0));
+                        currentTrainingSamples: 0),
+                    publishCurrentAsBest);
                 output.WriteLine(
                     $"training checkpoint = {config.CheckpointPath}");
 
@@ -676,9 +687,11 @@ internal static partial class Program
                 }
             }
 
-            if (bestModelState is not null)
+            if (hasBestModel)
             {
-                model.load_state_dict(bestModelState);
+                ClassificationCheckpoint.LoadBestModel(
+                    config.CheckpointPath,
+                    model);
                 string checkpointPath = config.Checkpoint is null
                     ? Path.ChangeExtension(
                         Path.GetFullPath(configurationPath),
@@ -688,13 +701,7 @@ internal static partial class Program
                     checkpointPath,
                     bestEpoch,
                     bestEvaluationLoss,
-                    bestModelState);
-                safetensors.torch.save_file(
-                    ClassificationCheckpoint.GetSafeTensorArtifactState(
-                        bestModelState),
-                    Path.ChangeExtension(
-                        checkpointPath,
-                        ".safetensors"));
+                    model);
                 output.WriteLine(
                     $"best model = epoch {bestEpoch}, " +
                     $"eval loss {bestEvaluationLoss:F6}");
@@ -754,10 +761,7 @@ internal static partial class Program
             int completedEpoch,
             int currentEpoch,
             int completedUpdatesInEpoch,
-            TransformerClassifier model,
-            IOptimizer optimizer,
             ILRScheduler scheduler,
-            ModuleState? bestModelState,
             int bestEpoch,
             float bestEvaluationLoss,
             float earlyStoppingReferenceLoss,
@@ -769,9 +773,9 @@ internal static partial class Program
             ClassificationTrainingCheckpoint.CurrentFormatVersion,
             completedEpoch,
             new ModuleState(ModuleState.CurrentFormatVersion, []),
-            optimizer.state_dict(),
+            new OptimizerStateDictionary("ArtifactStream", null, []),
             scheduler.state_dict(),
-            bestModelState,
+            null,
             bestEpoch,
             bestEvaluationLoss,
             earlyStoppingReferenceLoss,
@@ -795,6 +799,11 @@ internal static partial class Program
     internal static IOptimizer CreateOptimizer(
         TransformerClassifier model,
         TrainingConfiguration configuration)
+        => CreateOptimizerBundle(model, configuration).RootOptimizer;
+
+    internal static OptimizerBundle CreateOptimizerBundle(
+        TransformerClassifier model,
+        TrainingConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -802,7 +811,7 @@ internal static partial class Program
         if (configuration.IsOptimizer(
             TrainingConfiguration.GainShareAdamWOptimizer))
         {
-            return optim.GainShareAdamW(
+            IOptimizer optimizer = optim.GainShareAdamW(
                 model.make_gainshare_parameter_groups(
                     configuration.GainShareBlockDepth),
                 lr: configuration.LearningRate,
@@ -814,6 +823,7 @@ internal static partial class Program
                 min_scale: configuration.GainShareMinScale,
                 max_scale: configuration.GainShareMaxScale,
                 weight_decay: configuration.WeightDecay);
+            return OptimizerBundle.Wrap(optimizer, ["all"]);
         }
 
         if (configuration.IsOptimizer(
@@ -830,39 +840,92 @@ internal static partial class Program
                 beta2: 0.95f,
                 eps: 1e-8f,
                 weight_decay: configuration.WeightDecay);
-            return optim.Composite(nekoMuon, auxiliaryAdamW);
+            return new OptimizerBundle(
+            [
+                new OptimizerGroup("hidden", nekoMuon),
+                new OptimizerGroup("auxiliary", auxiliaryAdamW),
+            ]);
         }
 
         if (configuration.IsOptimizer(TrainingConfiguration.LionOptimizer))
         {
-            return optim.Lion(
+            IOptimizer optimizer = optim.Lion(
                 model.parameters(),
                 lr: configuration.LearningRate,
                 weight_decay: configuration.WeightDecay);
+            return OptimizerBundle.Wrap(optimizer, ["all"]);
         }
 
-        return optim.AdamW(
+        IOptimizer adamW = optim.AdamW(
             model.parameters(),
             lr: configuration.LearningRate,
             weight_decay: configuration.WeightDecay);
+        return OptimizerBundle.Wrap(adamW, ["all"]);
     }
 
     private static void SaveModelCheckpoint(
         string path,
         int epoch,
         float evaluationLoss,
-        ModuleState modelState)
+        Module model)
     {
         string fullPath = Path.GetFullPath(path);
-        string? directory = Path.GetDirectoryName(fullPath);
-        if (!string.IsNullOrEmpty(directory))
-            Directory.CreateDirectory(directory);
-        var checkpoint = new ModelCheckpoint(
-            ModelCheckpoint.CurrentFormatVersion,
-            epoch,
-            evaluationLoss,
-            modelState);
-        torch.save(checkpoint, fullPath);
+        var repository = new NNtrain.Training.Persistence.CheckpointRepository(
+            fullPath);
+        using NNtrain.Training.Persistence.CheckpointWriteTransaction
+            transaction = repository.BeginWrite();
+        transaction.PublishArtifact(
+            Path.ChangeExtension(fullPath, ".safetensors"),
+            stagingPath => SafeTensorFile.SaveModel(
+                model,
+                stagingPath,
+                artifactDTypeOverride:
+                    model.PrecisionMode is TensorPrecisionMode.Mix16_32
+                            or TensorPrecisionMode.Mix8_32
+                            or TensorPrecisionMode.Bfp8
+                        ? TensorDType.Float32
+                        : null));
+        transaction.CommitManifest(
+            stagingPath => SaveModelCheckpointManifest(
+                stagingPath,
+                epoch,
+                evaluationLoss,
+                model));
+    }
+
+    private static void SaveModelCheckpointManifest(
+        string path,
+        int epoch,
+        float evaluationLoss,
+        Module model)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            bufferSize: 1024 * 1024,
+            FileOptions.SequentialScan);
+        using var writer = new Utf8JsonWriter(stream);
+        using var staging = new CheckpointFloatStagingBuffer();
+        writer.WriteStartObject();
+        StreamingModuleStateJsonWriter.WriteProperty(
+            writer,
+            nameof(ModelCheckpoint.FormatVersion),
+            ModelCheckpoint.CurrentFormatVersion);
+        StreamingModuleStateJsonWriter.WriteProperty(
+            writer,
+            nameof(ModelCheckpoint.Epoch),
+            epoch);
+        StreamingModuleStateJsonWriter.WriteProperty(
+            writer,
+            nameof(ModelCheckpoint.EvaluationLoss),
+            evaluationLoss);
+        writer.WritePropertyName(nameof(ModelCheckpoint.Model));
+        StreamingModuleStateJsonWriter.Write(writer, model, staging);
+        writer.WriteEndObject();
+        writer.Flush();
+        stream.Flush(flushToDisk: true);
     }
 
     internal static string GetBestModelCheckpointPath(
@@ -1041,6 +1104,42 @@ internal static partial class Program
         }
 
         return correct;
+    }
+
+    private static CudaClassificationCorrectCountReadback?
+        BeginCountCorrect(
+            Tensor logits,
+            int[] answers,
+            int classCount)
+        => Tensor.ExecutionDevice == TensorDevice.Cuda
+            ? logits.BeginCudaClassificationCorrectCount(
+                answers,
+                classCount)
+            : null;
+
+    private static int CompleteCountCorrect(
+        Tensor logits,
+        IReadOnlyList<int> answers,
+        int classCount,
+        CudaClassificationCorrectCountReadback? readback)
+        => readback is not null
+            ? readback.CompleteAndReturn()
+            : CountCorrect(logits.Data, answers, classCount);
+
+    internal static int CountCorrectForMetrics(
+        Tensor logits,
+        int[] answers,
+        int classCount)
+    {
+        ArgumentNullException.ThrowIfNull(logits);
+        ArgumentNullException.ThrowIfNull(answers);
+        using CudaClassificationCorrectCountReadback? readback =
+            BeginCountCorrect(logits, answers, classCount);
+        return CompleteCountCorrect(
+            logits,
+            answers,
+            classCount,
+            readback);
     }
 
     private static int ArgMax(

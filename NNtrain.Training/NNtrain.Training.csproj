@@ -4,6 +4,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <NNtrainArchitectureLayer>Training</NNtrainArchitectureLayer>
+    <NNtrainAllowedProjectReferences>NNtrain.Core;NNtrain.Runtime</NNtrainAllowedProjectReferences>
   </PropertyGroup>
 
   <ItemGroup>

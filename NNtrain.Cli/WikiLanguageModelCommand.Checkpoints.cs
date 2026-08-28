@@ -1,4 +1,5 @@
 using NNtrain.Training.Persistence;
+using NNtrain.Training.Optimization;
 
 namespace NNtrain;
 
@@ -60,7 +61,7 @@ internal static partial class WikiLanguageModelCommand
                 "Wiki model checkpoint has an unsupported format.");
         }
         _ = GetCheckpointModelDType(checkpoint);
-        _ = GetCheckpointPrecisionMode(checkpoint);
+        ValidateBfp8BlockMetadata(checkpoint);
         return checkpoint;
     }
 
@@ -207,7 +208,8 @@ internal static partial class WikiLanguageModelCommand
             TensorPrecisionMode newRunMode = config.GetPrecisionMode();
             return new WikiPrecisionSelection(
                 newRunMode,
-                newRunMode.ToStorageDType());
+                newRunMode.ToStorageDType(),
+                config.Bfp8BlockSize);
         }
         if (!File.Exists(config.CheckpointPath))
         {
@@ -227,6 +229,15 @@ internal static partial class WikiLanguageModelCommand
                 "Checkpoint model architecture does not match the current " +
                 "Wiki training configuration.");
         }
+        if (checkpoint.TrainingSeed is int checkpointSeed
+            && checkpointSeed != config.Seed)
+        {
+            throw new InvalidDataException(
+                $"Configured training seed '{config.Seed}' does not match " +
+                $"checkpoint seed '{checkpointSeed}'. Restore the original " +
+                "seed so the mid-epoch shuffle and stochastic operations " +
+                "remain reproducible.");
+        }
 
         TensorPrecisionMode checkpointMode =
             GetCheckpointPrecisionMode(checkpoint);
@@ -240,9 +251,26 @@ internal static partial class WikiLanguageModelCommand
                 $"'{FormatPrecisionMode(checkpointMode)}'. Remove precisionMode " +
                 "to inherit the checkpoint mode, or use a matching value.");
         }
+
+        int bfp8BlockSize = config.Bfp8BlockSize;
+        if (checkpointMode == TensorPrecisionMode.Mix8_32
+            && checkpoint.Bfp8BlockSize is int checkpointBlockSize)
+        {
+            if (config.HasExplicitBfp8BlockSize
+                && config.Bfp8BlockSize != checkpointBlockSize)
+            {
+                throw new InvalidDataException(
+                    $"Configured bfp8_block_size '{config.Bfp8BlockSize}' " +
+                    $"does not match checkpoint BFP8 block size " +
+                    $"'{checkpointBlockSize}'. Remove bfp8_block_size to " +
+                    "inherit the checkpoint value, or use a matching value.");
+            }
+            bfp8BlockSize = checkpointBlockSize;
+        }
         return new WikiPrecisionSelection(
             checkpointMode,
-            GetCheckpointModelDType(checkpoint));
+            GetCheckpointModelDType(checkpoint),
+            bfp8BlockSize);
     }
 
     internal static WikiResumePosition RestoreTrainingCheckpoint(
@@ -277,6 +305,15 @@ internal static partial class WikiLanguageModelCommand
                 "Checkpoint model architecture does not match the current " +
                 "Wiki training configuration.");
         }
+        if (checkpoint.TrainingSeed is int checkpointSeed
+            && checkpointSeed != config.Seed)
+        {
+            throw new InvalidDataException(
+                $"Configured training seed '{config.Seed}' does not match " +
+                $"checkpoint seed '{checkpointSeed}'. Restore the original " +
+                "seed so the mid-epoch shuffle and stochastic operations " +
+                "remain reproducible.");
+        }
         TensorPrecisionMode checkpointMode =
             GetCheckpointPrecisionMode(checkpoint);
         if (model is Module module && module.PrecisionMode != checkpointMode)
@@ -304,6 +341,7 @@ internal static partial class WikiLanguageModelCommand
                 checkpoint.CurrentModel ?? checkpoint.Model;
             model.load_state_dict(currentModel);
         }
+        model.RestoreTrainingRandomState(checkpoint.TrainingRandomState);
 
         LRSchedulerStateDictionary? schedulerState = checkpoint.Scheduler;
         // Stop the returned checkpoint shell from retaining the duplicate
@@ -371,7 +409,8 @@ internal static partial class WikiLanguageModelCommand
             hasPartialEpoch ? checkpoint.CurrentLossSum : 0d,
             hasPartialEpoch ? checkpoint.CurrentTargetCount : 0,
             hasPartialEpoch ? checkpoint.CompletedDocumentsInEpoch : 0,
-            hasPartialEpoch ? checkpoint.CurrentTokenBuffer ?? [] : []);
+            hasPartialEpoch ? checkpoint.CurrentTokenBuffer ?? [] : [],
+            checkpoint.AdaptiveCudaShardState);
     }
 
     internal static void ApplyNekoMuonNewtonSchulzDepthPolicyOverride(
@@ -386,8 +425,8 @@ internal static partial class WikiLanguageModelCommand
             config.GetNekoMuonNewtonSchulzDepthMode();
         float depth = config.GetNekoMuonNewtonSchulzDepth();
         int applied = 0;
-        foreach (NekoMuon nekoMuon in OptimizerStateStream
-            .GetLeafOptimizers(optimizer)
+        foreach (NekoMuon nekoMuon in OptimizerBundle
+            .GetCheckpointLeafOptimizers(optimizer)
             .OfType<NekoMuon>())
         {
             nekoMuon.SetNewtonSchulzDepthPolicy(mode, depth);
@@ -427,6 +466,7 @@ internal static partial class WikiLanguageModelCommand
         long completedDocumentsInEpoch = 0,
         int[]? currentTokenBuffer = null,
         ModuleState? currentStateOverride = null,
+        CudaAdaptiveShardState? adaptiveCudaShardState = null,
         ICheckpointFaultInjector? checkpointFaultInjector = null)
     {
         Module? currentModelSource = currentStateOverride is null
@@ -470,7 +510,11 @@ internal static partial class WikiLanguageModelCommand
                 config.TieWordEmbeddings,
                 model is Module precisionModule
                     ? precisionModule.PrecisionMode
-                    : config.GetPrecisionMode()),
+                    : config.GetPrecisionMode(),
+                 Bfp8BlockSize: GetCheckpointBfp8BlockSize(model, config),
+                 TrainingSeed: config.Seed,
+                 TrainingRandomState: model.CaptureTrainingRandomState(),
+                 AdaptiveCudaShardState: adaptiveCudaShardState),
             optimizer,
             currentModelSource,
             checkpointFaultInjector);
@@ -637,6 +681,55 @@ internal static partial class WikiLanguageModelCommand
         return BitConverter.UInt32BitsToSingle((rounded >> 16) << 16);
     }
 
+    private static int? GetCheckpointBfp8BlockSize(
+        LanguageModel model,
+        WikiTrainingConfiguration config)
+    {
+        TensorPrecisionMode precisionMode = model is Module module
+            ? module.PrecisionMode
+            : config.GetPrecisionMode();
+        if (precisionMode != TensorPrecisionMode.Mix8_32)
+            return null;
+
+        int? blockSize = null;
+        foreach (Parameter parameter in model.parameters())
+        {
+            Bfp8QuantizationDescriptor? descriptor =
+                parameter.T.Bfp8Quantization;
+            if (descriptor is not
+                { Granularity: Bfp8ScaleGranularity.Block })
+            {
+                throw new InvalidOperationException(
+                    "A mix8_32 checkpoint requires block-scaled BFP8 " +
+                    "parameter storage.");
+            }
+            if (blockSize is int existing
+                && existing != descriptor.BlockSize)
+            {
+                throw new InvalidOperationException(
+                    "A mix8_32 checkpoint cannot contain multiple BFP8 " +
+                    "parameter block sizes.");
+            }
+            blockSize = descriptor.BlockSize;
+        }
+        return blockSize ?? config.Bfp8BlockSize;
+    }
+
+    private static void ValidateBfp8BlockMetadata(
+        WikiModelCheckpoint checkpoint)
+    {
+        TensorPrecisionMode precisionMode =
+            GetCheckpointPrecisionMode(checkpoint);
+        if (checkpoint.Bfp8BlockSize is null)
+            return;
+        if (checkpoint.Bfp8BlockSize <= 0
+            || precisionMode != TensorPrecisionMode.Mix8_32)
+        {
+            throw new InvalidDataException(
+                "Wiki checkpoint BFP8 block-size metadata is invalid.");
+        }
+    }
+
     private static void ValidateCheckpoint(
         WikiModelCheckpoint checkpoint,
         bool requireArtifactMetadata = true)
@@ -650,7 +743,7 @@ internal static partial class WikiLanguageModelCommand
         }
 
         TensorDType modelDType = GetCheckpointModelDType(checkpoint);
-        _ = GetCheckpointPrecisionMode(checkpoint);
+        ValidateBfp8BlockMetadata(checkpoint);
         if (checkpoint.FormatVersion >= 7 && requireArtifactMetadata)
         {
             if (checkpoint.ArtifactSlot is < 0 or > 1
@@ -738,11 +831,13 @@ internal static partial class WikiLanguageModelCommand
         double LossSum,
         long TargetCount,
         long CompletedDocuments,
-        int[] TokenBuffer);
+        int[] TokenBuffer,
+        CudaAdaptiveShardState? AdaptiveCudaShardState = null);
 
     internal readonly record struct WikiPrecisionSelection(
         TensorPrecisionMode Mode,
-        TensorDType StorageDType);
+        TensorDType StorageDType,
+        int Bfp8BlockSize);
 
     /// <summary>
     /// Scalar-only view of a Wiki checkpoint. System.Text.Json skips the
@@ -780,7 +875,11 @@ internal static partial class WikiLanguageModelCommand
         TensorPrecisionMode? PrecisionMode = null,
         int ArtifactSlot = -1,
         int BestArtifactSlot = -1,
-        string[]? OptimizerStateTypes = null)
+        string[]? OptimizerStateTypes = null,
+        int? Bfp8BlockSize = null,
+        int? TrainingSeed = null,
+        TrainingRandomState? TrainingRandomState = null,
+        CudaAdaptiveShardState? AdaptiveCudaShardState = null)
     {
         internal WikiModelCheckpoint ToCheckpointShell()
             => new(
@@ -818,7 +917,11 @@ internal static partial class WikiLanguageModelCommand
                 PrecisionMode,
                 ArtifactSlot,
                 BestArtifactSlot,
-                OptimizerStateTypes);
+                 OptimizerStateTypes,
+                 Bfp8BlockSize,
+                 TrainingSeed,
+                 TrainingRandomState,
+                 AdaptiveCudaShardState);
     }
 
     /// <summary>
@@ -859,7 +962,11 @@ internal static partial class WikiLanguageModelCommand
         TensorPrecisionMode? PrecisionMode = null,
         int ArtifactSlot = -1,
         int BestArtifactSlot = -1,
-        string[]? OptimizerStateTypes = null)
+        string[]? OptimizerStateTypes = null,
+        int? Bfp8BlockSize = null,
+        int? TrainingSeed = null,
+        TrainingRandomState? TrainingRandomState = null,
+        CudaAdaptiveShardState? AdaptiveCudaShardState = null)
     {
         internal WikiModelCheckpoint ToCheckpointShell()
             => new(
@@ -897,7 +1004,11 @@ internal static partial class WikiLanguageModelCommand
                 PrecisionMode,
                 ArtifactSlot,
                 BestArtifactSlot,
-                OptimizerStateTypes);
+                 OptimizerStateTypes,
+                 Bfp8BlockSize,
+                 TrainingSeed,
+                 TrainingRandomState,
+                 AdaptiveCudaShardState);
 
         internal WikiModelCheckpoint ToCheckpoint(ModuleState currentModel)
             => ToCheckpoint(EmptyModuleState(), currentModel);
@@ -940,7 +1051,11 @@ internal static partial class WikiLanguageModelCommand
                 PrecisionMode,
                 ArtifactSlot,
                 BestArtifactSlot,
-                OptimizerStateTypes);
+                 OptimizerStateTypes,
+                 Bfp8BlockSize,
+                 TrainingSeed,
+                 TrainingRandomState,
+                 AdaptiveCudaShardState);
     }
 
     internal sealed record WikiModelCheckpoint(
@@ -978,5 +1093,9 @@ internal static partial class WikiLanguageModelCommand
         TensorPrecisionMode? PrecisionMode = null,
         int ArtifactSlot = -1,
         int BestArtifactSlot = -1,
-        string[]? OptimizerStateTypes = null);
+        string[]? OptimizerStateTypes = null,
+        int? Bfp8BlockSize = null,
+        int? TrainingSeed = null,
+        TrainingRandomState? TrainingRandomState = null,
+        CudaAdaptiveShardState? AdaptiveCudaShardState = null);
 }

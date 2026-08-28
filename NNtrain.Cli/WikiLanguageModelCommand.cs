@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using NNtrain.Runtime.Execution;
 using NNtrain.Training.Execution;
 using NNtrain.Training.Metrics;
+using NNtrain.Training.Optimization;
 
 namespace NNtrain;
 
@@ -160,11 +162,15 @@ internal static partial class WikiLanguageModelCommand
                 config.CudaMinimumRelativeShardSize,
             MaximumBatchAdjustmentPerStep =
                 config.CudaMaximumBatchAdjustmentPerStep,
+            GraphCacheBudgetBytes = checked(
+                (long)config.CudaGraphCacheBudgetMiB * 1024L * 1024L),
         };
 
     internal static TrainingSession? CreateCudaDataParallelSession(
         WikiTrainingConfiguration config,
-        TensorPrecisionMode precisionMode)
+        TensorPrecisionMode precisionMode,
+        Func<int, NNtrain.Runtime.Execution.IExecutionLane>?
+            cudaLaneFactory = null)
     {
         if (Tensor.ExecutionDevice != TensorDevice.Cuda
             || Tensor.CudaDeviceIndices.Count <= 1
@@ -175,7 +181,10 @@ internal static partial class WikiLanguageModelCommand
 
         return ProductionTrainingSessionFactory.Create(
             precisionMode,
-            lastCommittedStep: -1);
+            lastCommittedStep: -1,
+            config.GetExecutionDevice(),
+            config.DeviceIndices ?? [config.DeviceIndex],
+            cudaLaneFactory);
     }
 
     private static int Train(
@@ -190,7 +199,12 @@ internal static partial class WikiLanguageModelCommand
         WikiPrecisionSelection precision =
             ResolvePrecisionForTraining(config);
         TensorPrecisionMode precisionMode = precision.Mode;
-        WriteEffectiveTrainingConfiguration(config, precisionMode, output);
+        PreflightCudaOptimizer(config, precisionMode);
+        WriteEffectiveTrainingConfiguration(
+            config,
+            precisionMode,
+            precision.Bfp8BlockSize,
+            output);
         if (!Directory.Exists(config.DataPath))
         {
             throw new DirectoryNotFoundException(
@@ -280,17 +294,24 @@ internal static partial class WikiLanguageModelCommand
             $"{config.DatasetSampleEverySteps:N0} steps, sample pool " +
             $"{corpus.SampleDocuments.Length}");
 
+        using ExecutionSession executionSession =
+            ProductionTrainingSessionFactory.CreateExecutionSession(
+                precisionMode,
+                config.GetExecutionDevice(),
+                config.DeviceIndices ?? [config.DeviceIndex]);
+        using IDisposable executionScope = executionSession.Enter();
         LanguageModel model = CreateModel(
             config,
             tokenizer.VocabularySize,
             precisionMode,
-            precision.StorageDType);
+            precision.StorageDType,
+            precision.Bfp8BlockSize);
         if (Tensor.ExecutionDevice == TensorDevice.Cuda
             && model is Module modelModule)
         {
             modelModule.to(TensorDevice.Cuda);
         }
-        IOptimizer optimizer = CreateOptimizer(model, config);
+        OptimizerBundle optimizer = CreateOptimizerBundle(model, config);
         Parameter[] trainingParameters = model.parameters().ToArray();
         WarmupCosineProgressLRScheduler scheduler =
             lr_scheduler.WarmupCosineProgressLR(
@@ -348,22 +369,33 @@ internal static partial class WikiLanguageModelCommand
             if (openLossGraph)
                 metricReporter.TryOpenHtml(error);
         }
-        using TrainingSession trainingSession =
-            ProductionTrainingSessionFactory.Create(
-                precisionMode,
-                globalStep);
-        using IDisposable executionScope =
-            trainingSession.ExecutionSession.Enter();
+        using TrainingSession trainingSession = new(
+            executionSession,
+            ownsExecutionSession: false,
+            lastCommittedStep: globalStep);
+        trainingSession.OwnOptimizer(optimizer);
         CudaDataParallelEngine? dataParallelEngine =
             Tensor.ExecutionDevice == TensorDevice.Cuda
-                && Tensor.CudaDeviceIndices.Count > 1
+                && Tensor.CudaDeviceIndices.Count > 0
                 && config.BatchSize > 1
                 ? trainingSession.OwnCudaDataParallel(
                     model,
                     Tensor.CudaDeviceIndices,
                     CreateCudaAdaptiveShardingOptions(config))
                 : null;
+        if (dataParallelEngine is not null
+            && resume.AdaptiveCudaShardState is { } fixedShardState)
+        {
+            dataParallelEngine.RestoreAdaptiveShardingState(fixedShardState);
+            output.WriteLine(
+                "resume CUDA shard EMA = restored from checkpoint");
+        }
         var stepExecutor = new TrainingStepExecutor(trainingSession);
+        var batchCursor = new FixedWikiTrainingDataCursor(
+            tokens,
+            order,
+            config.BatchSize,
+            config.ContextLength);
         var stepOperations = new FixedWikiTrainingStepOperations(
             model,
             optimizer,
@@ -373,7 +405,13 @@ internal static partial class WikiLanguageModelCommand
             metricReporter,
             config.GraphUpdateSteps,
             totalTrainingSteps,
+            config.BatchSize,
+            config.ContextLength,
             globalStep);
+        var cursorStepOperations =
+            new CursorTrainingStepOperations<WikiTrainingBatch>(
+                batchCursor,
+                stepOperations);
         var runProgress = new TrainingProgress();
 
         using NoGcTrainingWindow noGcWindow =
@@ -396,6 +434,7 @@ internal static partial class WikiLanguageModelCommand
                 : 0;
             int batchTotal = batchesPerEpoch;
             int firstBatch = epochRun.ResumeUnit;
+            batchCursor.StartEpoch(firstBatch);
             stepOperations.StartEpoch(
                 epoch,
                 batchTotal,
@@ -406,19 +445,9 @@ internal static partial class WikiLanguageModelCommand
 
             for (int batch = firstBatch; batch < batchTotal; batch++)
             {
-                int count = Math.Min(
-                    config.BatchSize,
-                    trainingSequences - batch * config.BatchSize);
-                stepOperations.ConfigureBatch(
-                    tokens,
-                    order,
-                    batch * config.BatchSize,
-                    count,
-                    config.ContextLength,
-                    batch);
                 TrainingStepState committedStep = stepExecutor.Execute(
                     checked(globalStep + 1),
-                    stepOperations);
+                    cursorStepOperations);
                 globalStep = committedStep.GlobalStep;
                 noGcWindow.Pulse();
                 float lossValue = stepOperations.LossValue;
@@ -450,7 +479,9 @@ internal static partial class WikiLanguageModelCommand
                         completedBatchesInEpoch: completedBatches,
                         currentLossSum: stepOperations.TotalLoss,
                         currentTargetCount:
-                            stepOperations.CompletedTargets);
+                            stepOperations.CompletedTargets,
+                        adaptiveCudaShardState: dataParallelEngine?
+                            .CaptureAdaptiveShardingState());
                     bestState = null;
                     output.WriteLine(
                         $"training checkpoint = {config.CheckpointPath} " +
@@ -542,9 +573,11 @@ internal static partial class WikiLanguageModelCommand
                 bestLoss,
                 bestEpoch,
                 model,
-                optimizer,
-                scheduler,
-                globalStep);
+                 optimizer,
+                 scheduler,
+                 globalStep,
+                 adaptiveCudaShardState: dataParallelEngine?
+                     .CaptureAdaptiveShardingState());
             bestState = null;
             string epochSnapshotPath = CheckpointSnapshot.Save(
                 config.CheckpointPath,
@@ -618,6 +651,12 @@ internal static partial class WikiLanguageModelCommand
         bool configuredPrecisionDiffers =
             config.GetPrecisionMode() != checkpointMode;
 
+        using ExecutionSession executionSession =
+            ProductionTrainingSessionFactory.CreateExecutionSession(
+                checkpointMode,
+                config.GetExecutionDevice(),
+                config.DeviceIndices ?? [config.DeviceIndex]);
+        using IDisposable executionScope = executionSession.Enter();
         LanguageModel model = CreateModel(
             checkpoint,
             config.Seed,
@@ -626,6 +665,11 @@ internal static partial class WikiLanguageModelCommand
             checkpoint,
             config.CheckpointPath,
             model);
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda
+            && model is Module modelModule)
+        {
+            modelModule.to(TensorDevice.Cuda);
+        }
         output.WriteLine(
             $"checkpoint = epoch {checkpoint.Epoch}, validation loss " +
             $"{checkpoint.ValidationLoss:F6}");
@@ -667,12 +711,24 @@ internal static partial class WikiLanguageModelCommand
             $"streaming corpus = {documentsPerEpoch:N0} documents/epoch, " +
             $"{FormatDocumentTokenLimit(config.MaxDocumentTokens)}");
 
+        using ExecutionSession executionSession =
+            ProductionTrainingSessionFactory.CreateExecutionSession(
+                precisionMode,
+                config.GetExecutionDevice(),
+                config.DeviceIndices ?? [config.DeviceIndex]);
+        using IDisposable executionScope = executionSession.Enter();
         LanguageModel model = CreateModel(
             config,
             tokenizer.VocabularySize,
             precisionMode,
-            precision.StorageDType);
-        IOptimizer optimizer = CreateOptimizer(model, config);
+            precision.StorageDType,
+            precision.Bfp8BlockSize);
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda
+            && model is Module modelModule)
+        {
+            modelModule.to(TensorDevice.Cuda);
+        }
+        OptimizerBundle optimizer = CreateOptimizerBundle(model, config);
         Parameter[] trainingParameters = model.parameters().ToArray();
         WarmupCosineProgressLRScheduler scheduler =
             lr_scheduler.WarmupCosineProgressLR(
@@ -728,21 +784,28 @@ internal static partial class WikiLanguageModelCommand
             if (openLossGraph)
                 metricReporter.TryOpenHtml(error);
         }
-        using TrainingSession trainingSession =
-            ProductionTrainingSessionFactory.Create(
-                precisionMode,
-                globalStep);
-        using IDisposable executionScope =
-            trainingSession.ExecutionSession.Enter();
+        using TrainingSession trainingSession = new(
+            executionSession,
+            ownsExecutionSession: false,
+            lastCommittedStep: globalStep);
+        trainingSession.OwnOptimizer(optimizer);
         CudaDataParallelEngine? dataParallelEngine =
             Tensor.ExecutionDevice == TensorDevice.Cuda
-                && Tensor.CudaDeviceIndices.Count > 1
+                && Tensor.CudaDeviceIndices.Count > 0
                 && config.BatchSize > 1
                 ? trainingSession.OwnCudaDataParallel(
                     model,
                     Tensor.CudaDeviceIndices,
                     CreateCudaAdaptiveShardingOptions(config))
                 : null;
+        if (dataParallelEngine is not null
+            && resume.AdaptiveCudaShardState is { } streamingShardState)
+        {
+            dataParallelEngine.RestoreAdaptiveShardingState(
+                streamingShardState);
+            output.WriteLine(
+                "resume CUDA shard EMA = restored from checkpoint");
+        }
         var stepExecutor = new TrainingStepExecutor(trainingSession);
         var runProgress = new TrainingProgress();
         // Keep the fixed-step graph window continuous across epoch
@@ -779,6 +842,8 @@ internal static partial class WikiLanguageModelCommand
                 : 0;
             int completedBatchesInEpoch = epochRun.ResumeUnit;
             var timer = Stopwatch.StartNew();
+            var batchCursor = new StreamingWikiTrainingDataCursor(buffer);
+            batchCursor.StartEpoch(completedBatchesInEpoch);
             var stepOperations = new StreamingWikiTrainingStepOperations(
                 model,
                 optimizer,
@@ -786,13 +851,18 @@ internal static partial class WikiLanguageModelCommand
                 dataParallelEngine,
                 scheduler,
                 metricReporter,
-                buffer,
                 documentsPerEpoch,
                 config.Epochs,
                 config.GraphUpdateSteps,
+                config.BatchSize,
+                config.ContextLength,
                 globalStep,
                 graphWindowLoss,
                 graphWindowTargets);
+            var cursorStepOperations =
+                new CursorTrainingStepOperations<WikiTrainingBatch>(
+                    batchCursor,
+                    stepOperations);
             stepOperations.StartEpoch(
                 epoch,
                 totalLoss,
@@ -803,13 +873,13 @@ internal static partial class WikiLanguageModelCommand
                 int batchSize,
                 int sequenceLength)
             {
-                stepOperations.ConfigureBatch(
+                batchCursor.ConfigureNext(
                     batchSize,
                     sequenceLength,
                     documentsProcessed);
                 TrainingStepState committedStep = stepExecutor.Execute(
                     checked(globalStep + 1),
-                    stepOperations);
+                    cursorStepOperations);
                 globalStep = committedStep.GlobalStep;
                 noGcWindow.Pulse();
                 totalLoss = stepOperations.TotalLoss;
@@ -919,7 +989,9 @@ internal static partial class WikiLanguageModelCommand
                         currentLossSum: totalLoss,
                         currentTargetCount: completedTargets,
                         completedDocumentsInEpoch: documentsProcessed,
-                        currentTokenBuffer: buffer.ToArray());
+                        currentTokenBuffer: buffer.ToArray(),
+                        adaptiveCudaShardState: dataParallelEngine?
+                            .CaptureAdaptiveShardingState());
                     bestState = null;
                     output.WriteLine(
                         $"training checkpoint = {config.CheckpointPath} " +
@@ -1041,9 +1113,11 @@ internal static partial class WikiLanguageModelCommand
                 bestLoss,
                 bestEpoch,
                 model,
-                optimizer,
-                scheduler,
-                globalStep);
+                 optimizer,
+                 scheduler,
+                 globalStep,
+                 adaptiveCudaShardState: dataParallelEngine?
+                     .CaptureAdaptiveShardingState());
             bestState = null;
             string epochSnapshotPath = CheckpointSnapshot.Save(
                 config.CheckpointPath,
@@ -1185,6 +1259,7 @@ internal static partial class WikiLanguageModelCommand
     private static void WriteEffectiveTrainingConfiguration(
         WikiTrainingConfiguration config,
         TensorPrecisionMode precisionMode,
+        int bfp8BlockSize,
         TextWriter output)
     {
         string architectureDetails = config.IsForgetMemoryArchitecture()
@@ -1217,7 +1292,7 @@ internal static partial class WikiLanguageModelCommand
             (precisionMode == TensorPrecisionMode.Bfp8
                 ? " (tensor scale)"
                 : precisionMode == TensorPrecisionMode.Mix8_32
-                    ? $" (block {config.Bfp8BlockSize})"
+                    ? $" (block {bfp8BlockSize})"
                     : string.Empty) +
             (config.ResumeFromCheckpoint
                 ? " (checkpoint)"
