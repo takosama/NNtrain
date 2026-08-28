@@ -35,8 +35,12 @@ public static class TensorPrecisionModeNames
     public const string Float32 = "float32";
     public const string BFloat16 = "bfloat16";
     public const string Mix16_32 = "mix16_32";
+    public const string Fp16_32Alias = "fp16_32";
     public const string Bfp8 = "bfp8";
     public const string Mix8_32 = "mix8_32";
+    public const string SupportedValuesDescription =
+        $"'{Float32}', '{BFloat16}', '{Mix16_32}' (alias " +
+        $"'{Fp16_32Alias}'), '{Bfp8}', and '{Mix8_32}'";
 
     public static TensorPrecisionMode Parse(string value)
     {
@@ -45,7 +49,11 @@ public static class TensorPrecisionModeNames
             return TensorPrecisionMode.Float32;
         if (string.Equals(value, BFloat16, StringComparison.OrdinalIgnoreCase))
             return TensorPrecisionMode.BFloat16;
-        if (string.Equals(value, Mix16_32, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(value, Mix16_32, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(
+                value,
+                Fp16_32Alias,
+                StringComparison.OrdinalIgnoreCase))
             return TensorPrecisionMode.Mix16_32;
         if (string.Equals(value, Bfp8, StringComparison.OrdinalIgnoreCase))
             return TensorPrecisionMode.Bfp8;
@@ -53,8 +61,7 @@ public static class TensorPrecisionModeNames
             return TensorPrecisionMode.Mix8_32;
         throw new ArgumentException(
             $"Unsupported precision mode '{value}'. Supported values are " +
-            $"'{Float32}', '{BFloat16}', '{Mix16_32}', '{Bfp8}', and " +
-            $"'{Mix8_32}'.",
+            $"{SupportedValuesDescription}.",
             nameof(value));
     }
 

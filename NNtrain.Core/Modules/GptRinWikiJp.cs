@@ -139,6 +139,35 @@ public sealed class GptRinWikiJp : LanguageModel
             hidden.Reshape(batchSize * sequenceLength, ModelWidth));
     }
 
+    internal override Tensor ForwardLoss(
+        int[] tokenIds,
+        int[] targetIds,
+        int batchSize,
+        int sequenceLength,
+        int ignoreIndex = Tensor.DefaultCrossEntropyIgnoreIndex)
+    {
+        ArgumentNullException.ThrowIfNull(targetIds);
+        if (targetIds.Length != checked(batchSize * sequenceLength))
+        {
+            throw new ArgumentException(
+                "Target count must equal batchSize * sequenceLength.",
+                nameof(targetIds));
+        }
+
+        Tensor hidden = ForwardHidden(tokenIds, batchSize, sequenceLength);
+        Tensor logits = Tensor.ExecutionDevice == TensorDevice.Cuda
+                && hidden.DType == TensorDType.Bfp8
+                && _languageModelHead.W.T.DType == TensorDType.Bfp8
+                && _languageModelHead.B.T.DType == TensorDType.Bfp8
+            ? hidden.LinearLastDimBFloat16ForLoss(
+                _languageModelHead.W.T,
+                _languageModelHead.B.T)
+            : _languageModelHead.ForwardBatch(hidden);
+        return logits.CrossEntropyWithLogits(
+            targetIds,
+            ignoreIndex: ignoreIndex);
+    }
+
     private Tensor ForwardHidden(
         int[] tokenIds,
         int batchSize,
@@ -251,6 +280,9 @@ public sealed class GptRinWikiJp : LanguageModel
         try
         {
             using (AutogradContext.NoGrad())
+            using (CudaBfp8InferenceComputeScope.Begin(
+                Tensor.ExecutionDevice == TensorDevice.Cuda
+                && _tokenEmbedding.T.DType == TensorDType.Bfp8))
             using (CudaInferenceScope cacheSession = CudaInferenceScope.Begin(
                 resetPool: true,
                 clearPoolOnDispose: true))
@@ -258,14 +290,10 @@ public sealed class GptRinWikiJp : LanguageModel
                 int generated = 0;
                 bool stopped = false;
                 if (Tensor.ExecutionDevice == TensorDevice.Cuda
-                    && DType == TensorDType.BFloat16
+                    && DType is TensorDType.BFloat16 or TensorDType.Bfp8
                     && result.Count <= ContextLength
                     && maxNewTokens > 0
-                    && !string.Equals(
-                        Environment.GetEnvironmentVariable(
-                            "NNTRAIN_DISABLE_KV_CACHE"),
-                        "1",
-                        StringComparison.Ordinal))
+                    && !CudaDispatchPolicy.Current.DisableKvCache)
                 {
                     CudaAttentionKvCache[] caches = _blocks
                         .Select(block => block.Attn.CreateIncrementalCache(
@@ -284,8 +312,8 @@ public sealed class GptRinWikiJp : LanguageModel
                                 result.ToArray(), caches);
                             Tensor logits = _languageModelHead.ForwardBatch(
                                 hidden.SelectLastSequenceToken());
-                            int nextToken = Sample(
-                                logits.Data,
+                            int nextToken = SampleLogits(
+                                logits,
                                 0,
                                 VocabularySize,
                                 temperature,
@@ -310,8 +338,8 @@ public sealed class GptRinWikiJp : LanguageModel
                                 result[^1], position, caches);
                             Tensor logits = _languageModelHead.ForwardBatch(
                                 hidden.SelectLastSequenceToken());
-                            int nextToken = Sample(
-                                logits.Data,
+                            int nextToken = SampleLogits(
+                                logits,
                                 0,
                                 VocabularySize,
                                 temperature,
@@ -350,8 +378,8 @@ public sealed class GptRinWikiJp : LanguageModel
                     Tensor logits = _languageModelHead.ForwardBatch(
                         hidden.SelectLastSequenceToken());
                     const int offset = 0;
-                    int nextToken = Sample(
-                        logits.Data,
+                    int nextToken = SampleLogits(
+                        logits,
                         offset,
                         VocabularySize,
                         temperature,
@@ -422,61 +450,4 @@ public sealed class GptRinWikiJp : LanguageModel
             dtype);
     }
 
-    private static int Sample(
-        IReadOnlyList<float> logits,
-        int offset,
-        int count,
-        float temperature,
-        int topK,
-        Random random)
-    {
-        if (temperature == 0f || topK == 1)
-            return ArgMax(logits, offset, count);
-
-        int candidateCount = topK == 0 ? count : Math.Min(topK, count);
-        int[] candidates = Enumerable.Range(0, count)
-            .OrderByDescending(index => logits[offset + index])
-            .Take(candidateCount)
-            .ToArray();
-        float maximum = candidates.Max(index => logits[offset + index]);
-        var weights = new float[candidateCount];
-        float sum = 0f;
-        for (int index = 0; index < candidateCount; index++)
-        {
-            float weight = MathF.Exp(
-                (logits[offset + candidates[index]] - maximum)
-                / temperature);
-            weights[index] = weight;
-            sum += weight;
-        }
-
-        double threshold = random.NextDouble() * sum;
-        float cumulative = 0f;
-        for (int index = 0; index < candidateCount; index++)
-        {
-            cumulative += weights[index];
-            if (threshold <= cumulative)
-                return candidates[index];
-        }
-        return candidates[^1];
-    }
-
-    private static int ArgMax(
-        IReadOnlyList<float> values,
-        int offset,
-        int count)
-    {
-        int result = 0;
-        float maximum = values[offset];
-        for (int index = 1; index < count; index++)
-        {
-            float value = values[offset + index];
-            if (value > maximum)
-            {
-                maximum = value;
-                result = index;
-            }
-        }
-        return result;
-    }
 }

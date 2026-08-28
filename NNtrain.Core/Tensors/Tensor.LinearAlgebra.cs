@@ -15,6 +15,23 @@ partial class Tensor
             if (other._shape[0] != n)
                 throw ShapeMismatch(this, other, "MatMul");
 
+            if (ExecutionDevice == TensorDevice.Cuda
+                && DType == other.DType
+                && DType is TensorDType.Float32
+                    or TensorDType.BFloat16
+                    or TensorDType.Bfp8)
+            {
+                return MatMulCuda(
+                    other,
+                    batch: 1,
+                    m: 1,
+                    k: n,
+                    n: 1,
+                    outputShape: [1]);
+            }
+
+            ThrowIfCudaHostFallback("MatMul rank1@rank1");
+
             float s = DotProduct(_data, 0, other._data, 0, n);
 
             var t = new Tensor(new[] { s }, new[] { 1 }, new[] { this, other });
@@ -35,6 +52,23 @@ partial class Tensor
             int k = _shape[1];
             if (other._shape[0] != k)
                 throw ShapeMismatch(this, other, "MatMul");
+
+            if (ExecutionDevice == TensorDevice.Cuda
+                && DType == other.DType
+                && DType is TensorDType.Float32
+                    or TensorDType.BFloat16
+                    or TensorDType.Bfp8)
+            {
+                return MatMulCuda(
+                    other,
+                    batch: 1,
+                    m,
+                    k,
+                    n: 1,
+                    outputShape: [m]);
+            }
+
+            ThrowIfCudaHostFallback("MatMul rank2@rank1");
 
             float[] y = new float[m];
             void ForwardRow(int r)
@@ -95,6 +129,8 @@ partial class Tensor
             {
                 return MatMulCuda(other, batch: 1, m, k, n, [m, n]);
             }
+
+            ThrowIfCudaHostFallback("MatMul rank2@rank2");
 
             float[] y = new float[m * n];
 
@@ -275,6 +311,23 @@ partial class Tensor
         if (other._shape[1] != k)
             throw ShapeMismatch(this, other, "MatMulTransposedRight");
 
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType == other.DType
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return MatMulTransposedRightCuda(
+                other,
+                batch: 1,
+                m,
+                k,
+                n,
+                [m, n]);
+        }
+
+        ThrowIfCudaHostFallback(nameof(MatMulTransposedRight));
+
         float[] y = new float[m * n];
 
         void ForwardRow(int r)
@@ -363,6 +416,9 @@ partial class Tensor
                 "MatMulTransposedRightAddRow requires shapes [m, k], " +
                 "[n, k], and [n].");
         }
+
+        if (ExecutionDevice == TensorDevice.Cuda)
+            return LinearLastDim(other, rowBias, applyRelu: false);
 
         float[] y = new float[m * n];
         bool useOutputVectorization = CanUseTransposedRightKernel(k, n);

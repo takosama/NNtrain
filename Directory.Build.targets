@@ -1,0 +1,29 @@
+<Project>
+  <!--
+    Runtime-layer projects declare their allowed first-party references in
+    their own project files.  Validate before reference resolution so an
+    accidental reverse dependency fails the build instead of silently
+    collapsing the Runtime <- Cuda <- Core <- Training <- Cli boundary.
+  -->
+  <Target Name="ValidateNNtrainLayerDependencies"
+          BeforeTargets="ResolveProjectReferences"
+          Condition="'$(NNtrainArchitectureLayer)' != ''">
+    <ItemGroup>
+      <_NNtrainDirectLayerReference
+          Include="@(ProjectReference)"
+          Condition="'%(ProjectReference.DefiningProjectFullPath)' == '$(MSBuildProjectFullPath)'" />
+      <_NNtrainActualLayerReference
+          Include="@(_NNtrainDirectLayerReference-&gt;'%(Filename)')" />
+      <_NNtrainAllowedLayerReference
+          Include="$(NNtrainAllowedProjectReferences)"
+          Condition="'$(NNtrainAllowedProjectReferences)' != ''" />
+      <_NNtrainInvalidLayerReference
+          Include="@(_NNtrainActualLayerReference)" />
+      <_NNtrainInvalidLayerReference
+          Remove="@(_NNtrainAllowedLayerReference)" />
+    </ItemGroup>
+
+    <Error Condition="'@(_NNtrainInvalidLayerReference)' != ''"
+           Text="NNtrain architecture violation in $(MSBuildProjectName) ($(NNtrainArchitectureLayer)): disallowed project reference(s) @(_NNtrainInvalidLayerReference). Allowed: $(NNtrainAllowedProjectReferences)." />
+  </Target>
+</Project>

@@ -59,6 +59,12 @@ public sealed class CompositeOptimizer : IOptimizerContainer
 
     internal IReadOnlyList<Parameter> Parameters { get; }
 
+    public void prepare()
+    {
+        foreach (IOptimizer optimizer in _optimizers)
+            optimizer.prepare();
+    }
+
     internal void ZeroGrad()
     {
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
@@ -79,8 +85,29 @@ public sealed class CompositeOptimizer : IOptimizerContainer
 
     internal void Step()
     {
-        foreach (IOptimizer optimizer in _optimizers)
-            optimizer.step();
+        if (Tensor.ExecutionDevice != TensorDevice.Cuda)
+        {
+            foreach (IOptimizer optimizer in _optimizers)
+                optimizer.step();
+            return;
+        }
+
+        using CudaOptimizerStepBatch.Scope batch =
+            CudaOptimizerStepBatch.Enter(Tensor.CudaDeviceIndices);
+        try
+        {
+            foreach (IOptimizer optimizer in _optimizers)
+                optimizer.step();
+            batch.Complete();
+        }
+        catch (Exception exception)
+        {
+            Exception drained = batch.DrainAfterFailure(exception);
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                .Capture(drained)
+                .Throw();
+            throw;
+        }
     }
 
     public void step() => Step();

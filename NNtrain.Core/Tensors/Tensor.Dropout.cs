@@ -23,18 +23,39 @@ partial class Tensor
         uint dropThreshold = (uint)(probability * (uint.MaxValue + 1d));
         int columns = _shape[^1];
         int rows = Numel / columns;
+        CudaGraphDropoutToken? graphToken =
+            ExecutionDevice == TensorDevice.Cuda
+            && CudaGraphDropoutCaptureScope.TryAcquire(
+                CudaDeviceIndex,
+                out CudaGraphDropoutToken capturedToken)
+                ? capturedToken
+                : null;
 
         if (ExecutionDevice == TensorDevice.Cuda)
         {
+            if (DType == TensorDType.Bfp8)
+            {
+                return DropoutBfp8Cuda(
+                    seed,
+                    dropThreshold,
+                    scale,
+                    graphToken,
+                    probability);
+            }
             if (DType == TensorDType.BFloat16)
             {
+                NativeCudaBuffer<ushort> ForwardBFloat16()
+                    => graphToken is { } token
+                        ? TensorCudaKernels
+                            .DropoutForwardBFloat16GraphResident(
+                                this, token, probability)
+                        : TensorCudaKernels.DropoutForwardBFloat16Resident(
+                            this, seed, dropThreshold, scale);
                 var bfloat16Buffer = CudaOperationProfiler.IsEnabled
                     ? CudaOperationProfiler.Measure(
                         "forward.dropout",
-                        () => TensorCudaKernels.DropoutForwardBFloat16Resident(
-                            this, seed, dropThreshold, scale))
-                    : TensorCudaKernels.DropoutForwardBFloat16Resident(
-                        this, seed, dropThreshold, scale);
+                        ForwardBFloat16)
+                    : ForwardBFloat16();
                 Tensor bfloat16Result = FromCudaResult(
                     bfloat16Buffer,
                     CudaDeviceIndex,
@@ -44,28 +65,59 @@ partial class Tensor
                 if (AutogradContext.IsRecordingEnabled)
                 {
                     bfloat16Result.Node.BackwardAction = () =>
-                        TensorCudaKernels.DropoutBackwardResident(
-                            bfloat16Result,
-                            this,
-                            seed,
-                            dropThreshold,
-                            scale);
+                    {
+                        if (TensorExecutionContext
+                            .UsesBFloat16GradientStorage)
+                        {
+                            if (graphToken is { } pureToken)
+                            {
+                                TensorCudaKernels
+                                    .DropoutBackwardBFloat16GraphResident(
+                                        bfloat16Result,
+                                        this,
+                                        pureToken,
+                                        probability);
+                            }
+                            else
+                            {
+                                TensorCudaKernels
+                                    .DropoutBackwardBFloat16Resident(
+                                        bfloat16Result,
+                                        this,
+                                        seed,
+                                        dropThreshold,
+                                        scale);
+                            }
+                        }
+                        else if (graphToken is { } token)
+                        {
+                            TensorCudaKernels.DropoutBackwardGraphResident(
+                                bfloat16Result, this, token, probability);
+                        }
+                        else
+                        {
+                            TensorCudaKernels.DropoutBackwardResident(
+                                bfloat16Result,
+                                this,
+                                seed,
+                                dropThreshold,
+                                scale);
+                        }
+                    };
                 }
                 return bfloat16Result;
             }
+            NativeCudaBuffer<float> ForwardFloat32()
+                => graphToken is { } token
+                    ? TensorCudaKernels.DropoutForwardGraphResident(
+                        this, token, probability)
+                    : TensorCudaKernels.DropoutForwardResident(
+                        this, seed, dropThreshold, scale);
             var cudaBuffer = CudaOperationProfiler.IsEnabled
                 ? CudaOperationProfiler.Measure(
                     "forward.dropout",
-                    () => TensorCudaKernels.DropoutForwardResident(
-                        this,
-                        seed,
-                        dropThreshold,
-                        scale))
-                : TensorCudaKernels.DropoutForwardResident(
-                    this,
-                    seed,
-                    dropThreshold,
-                    scale);
+                    ForwardFloat32)
+                : ForwardFloat32();
             Tensor cudaResult = FromCudaResult(
                 cudaBuffer,
                 CudaDeviceIndex,
@@ -79,21 +131,29 @@ partial class Tensor
                     {
                         CudaOperationProfiler.Measure(
                             "backward.dropout",
-                            () => TensorCudaKernels.DropoutBackwardResident(
+                            () => Backward());
+                    }
+                    else
+                    {
+                        Backward();
+                    }
+
+                    void Backward()
+                    {
+                        if (graphToken is { } token)
+                        {
+                            TensorCudaKernels.DropoutBackwardGraphResident(
+                                cudaResult, this, token, probability);
+                        }
+                        else
+                        {
+                            TensorCudaKernels.DropoutBackwardResident(
                                 cudaResult,
                                 this,
                                 seed,
                                 dropThreshold,
-                                scale));
-                    }
-                    else
-                    {
-                        TensorCudaKernels.DropoutBackwardResident(
-                            cudaResult,
-                            this,
-                            seed,
-                            dropThreshold,
-                            scale);
+                                scale);
+                        }
                     }
                 };
             }
@@ -186,19 +246,53 @@ partial class Tensor
         uint dropThreshold = (uint)(probability * (uint.MaxValue + 1d));
         int columns = _shape[^1];
         int rows = Numel / columns;
+        CudaGraphDropoutToken? graphToken =
+            ExecutionDevice == TensorDevice.Cuda
+            && CudaGraphDropoutCaptureScope.TryAcquire(
+                CudaDeviceIndex,
+                out CudaGraphDropoutToken capturedToken)
+                ? capturedToken
+                : null;
 
         if (ExecutionDevice == TensorDevice.Cuda)
         {
+            bool anyBfp8 = DType == TensorDType.Bfp8
+                || branch.DType == TensorDType.Bfp8;
+            if (anyBfp8
+                && (DType != TensorDType.Bfp8
+                    || branch.DType != TensorDType.Bfp8))
+            {
+                throw new InvalidOperationException(
+                    "CUDA BFP8 residual dropout requires both operands to " +
+                    "use BFP8 storage; implicit host fallback is forbidden.");
+            }
+            if (DType == TensorDType.Bfp8
+                && branch.DType == TensorDType.Bfp8)
+            {
+                return AddDropoutBfp8Cuda(
+                    branch,
+                    seed,
+                    dropThreshold,
+                    scale,
+                    graphToken,
+                    probability);
+            }
             if (DType == TensorDType.BFloat16
                 && branch.DType == TensorDType.BFloat16)
             {
+                NativeCudaBuffer<ushort> ForwardBFloat16()
+                    => graphToken is { } token
+                        ? TensorCudaKernels
+                            .AddDropoutForwardBFloat16GraphResident(
+                                this, branch, token, probability)
+                        : TensorCudaKernels
+                            .AddDropoutForwardBFloat16Resident(
+                                this, branch, seed, dropThreshold, scale);
                 var bfloat16Buffer = CudaOperationProfiler.IsEnabled
                     ? CudaOperationProfiler.Measure(
                         "forward.residual_dropout",
-                        () => TensorCudaKernels.AddDropoutForwardBFloat16Resident(
-                            this, branch, seed, dropThreshold, scale))
-                    : TensorCudaKernels.AddDropoutForwardBFloat16Resident(
-                        this, branch, seed, dropThreshold, scale);
+                        ForwardBFloat16)
+                    : ForwardBFloat16();
                 Tensor bfloat16Result = FromCudaResult(
                     bfloat16Buffer,
                     CudaDeviceIndex,
@@ -208,32 +302,72 @@ partial class Tensor
                 if (AutogradContext.IsRecordingEnabled)
                 {
                     bfloat16Result.Node.BackwardAction = () =>
-                        TensorCudaKernels.AddDropoutBackwardResident(
-                            bfloat16Result,
-                            this,
-                            branch,
-                            ReferenceEquals(this, branch),
-                            seed,
-                            dropThreshold,
-                            scale);
+                    {
+                        bool sameParent = ReferenceEquals(this, branch);
+                        if (TensorExecutionContext
+                            .UsesBFloat16GradientStorage)
+                        {
+                            if (graphToken is { } pureToken)
+                            {
+                                TensorCudaKernels
+                                    .AddDropoutBackwardBFloat16GraphResident(
+                                        bfloat16Result,
+                                        this,
+                                        branch,
+                                        sameParent,
+                                        pureToken,
+                                        probability);
+                            }
+                            else
+                            {
+                                TensorCudaKernels
+                                    .AddDropoutBackwardBFloat16Resident(
+                                        bfloat16Result,
+                                        this,
+                                        branch,
+                                        sameParent,
+                                        seed,
+                                        dropThreshold,
+                                        scale);
+                            }
+                        }
+                        else if (graphToken is { } token)
+                        {
+                            TensorCudaKernels
+                                .AddDropoutBackwardGraphResident(
+                                    bfloat16Result,
+                                    this,
+                                    branch,
+                                    sameParent,
+                                    token,
+                                    probability);
+                        }
+                        else
+                        {
+                            TensorCudaKernels.AddDropoutBackwardResident(
+                                bfloat16Result,
+                                this,
+                                branch,
+                                sameParent,
+                                seed,
+                                dropThreshold,
+                                scale);
+                        }
+                    };
                 }
                 return bfloat16Result;
             }
+            NativeCudaBuffer<float> ForwardFloat32()
+                => graphToken is { } token
+                    ? TensorCudaKernels.AddDropoutForwardGraphResident(
+                        this, branch, token, probability)
+                    : TensorCudaKernels.AddDropoutForwardResident(
+                        this, branch, seed, dropThreshold, scale);
             var cudaBuffer = CudaOperationProfiler.IsEnabled
                 ? CudaOperationProfiler.Measure(
                     "forward.residual_dropout",
-                    () => TensorCudaKernels.AddDropoutForwardResident(
-                        this,
-                        branch,
-                        seed,
-                        dropThreshold,
-                        scale))
-                : TensorCudaKernels.AddDropoutForwardResident(
-                    this,
-                    branch,
-                    seed,
-                    dropThreshold,
-                    scale);
+                    ForwardFloat32)
+                : ForwardFloat32();
             Tensor cudaResult = FromCudaResult(
                 cudaBuffer,
                 CudaDeviceIndex,
@@ -247,25 +381,38 @@ partial class Tensor
                     {
                         CudaOperationProfiler.Measure(
                             "backward.residual_dropout",
-                            () => TensorCudaKernels.AddDropoutBackwardResident(
-                                cudaResult,
-                                this,
-                                branch,
-                                ReferenceEquals(this, branch),
-                                seed,
-                                dropThreshold,
-                                scale));
+                            () => Backward());
                     }
                     else
                     {
-                        TensorCudaKernels.AddDropoutBackwardResident(
-                            cudaResult,
-                            this,
-                            branch,
-                            ReferenceEquals(this, branch),
-                            seed,
-                            dropThreshold,
-                            scale);
+                        Backward();
+                    }
+
+                    void Backward()
+                    {
+                        bool sameParent = ReferenceEquals(this, branch);
+                        if (graphToken is { } token)
+                        {
+                            TensorCudaKernels
+                                .AddDropoutBackwardGraphResident(
+                                    cudaResult,
+                                    this,
+                                    branch,
+                                    sameParent,
+                                    token,
+                                    probability);
+                        }
+                        else
+                        {
+                            TensorCudaKernels.AddDropoutBackwardResident(
+                                cudaResult,
+                                this,
+                                branch,
+                                sameParent,
+                                seed,
+                                dropThreshold,
+                                scale);
+                        }
                     }
                 };
             }
@@ -310,7 +457,7 @@ partial class Tensor
                 if (directBFloat16BranchGradient
                     && !sameParent
                     && branch.DType == TensorDType.BFloat16
-                    && TensorExecutionContext.ActivePrecisionPolicy is null)
+                    && TensorExecutionContext.UsesBFloat16GradientStorage)
                 {
                     for (int index = 0; index < columns; index++)
                     {

@@ -45,10 +45,118 @@ partial class Tensor
         int headWidth = modelWidth / numHeads;
         float scale = 1f / MathF.Sqrt(headWidth);
         bool directBFloat16Gradients = DType == TensorDType.BFloat16
-            && TensorExecutionContext.ActivePrecisionPolicy is null;
+            && TensorExecutionContext.UsesBFloat16GradientStorage;
         if (ExecutionDevice == TensorDevice.Cuda)
         {
             int deviceIndex = CudaDeviceIndex;
+            if (DType == TensorDType.Bfp8)
+            {
+                Bfp8QuantizationDescriptor outputDescriptor =
+                    SelectBfp8ResultDescriptor(this);
+                var bfp8Context = CudaOperationProfiler.IsEnabled
+                    ? CudaOperationProfiler.Measure(
+                        "forward.attention",
+                        () => TensorCudaKernels
+                            .AttentionForwardBfp8Resident(
+                                this,
+                                outputDescriptor,
+                                batch,
+                                sequence,
+                                modelWidth,
+                                numHeads,
+                                causal))
+                    : TensorCudaKernels.AttentionForwardBfp8Resident(
+                        this,
+                        outputDescriptor,
+                        batch,
+                        sequence,
+                        modelWidth,
+                        numHeads,
+                        causal);
+                int[] bfp8OutputShape = Rank == 3
+                    ? [batch, sequence, modelWidth]
+                    : [sequence, modelWidth];
+                Tensor bfp8Result;
+                try
+                {
+                    using CudaBfp8OwnedBuffers bfp8Output =
+                        bfp8Context.DetachEncodedOutput();
+                    bfp8Result = FromCudaBfp8Result(
+                        bfp8Output,
+                        deviceIndex,
+                        bfp8OutputShape,
+                        [this]);
+                }
+                catch (Exception conversionFailure)
+                {
+                    try
+                    {
+                        bfp8Context.Dispose();
+                    }
+                    catch (Exception cleanupFailure)
+                    {
+                        throw new AggregateException(
+                            "BFP8 attention result construction and " +
+                            "saved-context cleanup failed.",
+                            conversionFailure,
+                            cleanupFailure);
+                    }
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                        .Capture(conversionFailure)
+                        .Throw();
+                    throw;
+                }
+
+                if (AutogradContext.IsRecordingEnabled)
+                {
+                    AutogradLease<TensorCudaKernels
+                        .Bfp8AttentionResidentContext> lease =
+                        AutogradLease<TensorCudaKernels
+                            .Bfp8AttentionResidentContext>.Own(
+                            bfp8Context,
+                            AutogradLeaseMetadata.CudaOwned(
+                                deviceIndex,
+                                TensorDType.Bfp8,
+                                DataVersion),
+                            static saved => saved.Dispose());
+                    bfp8Result.Node.SetBackward(lease, savedContext =>
+                    {
+                        if (CudaOperationProfiler.IsEnabled)
+                        {
+                            CudaOperationProfiler.Measure(
+                                "backward.attention",
+                                () => TensorCudaKernels
+                                    .AttentionBackwardBfp8Resident(
+                                        this,
+                                        bfp8Result,
+                                        savedContext,
+                                        batch,
+                                        sequence,
+                                        modelWidth,
+                                        numHeads,
+                                        causal));
+                        }
+                        else
+                        {
+                            TensorCudaKernels
+                                .AttentionBackwardBfp8Resident(
+                                    this,
+                                    bfp8Result,
+                                    savedContext,
+                                    batch,
+                                    sequence,
+                                    modelWidth,
+                                    numHeads,
+                                    causal);
+                        }
+                    });
+                }
+                else if (!CudaInferenceScope.TrackResource(bfp8Context))
+                {
+                    bfp8Context.Dispose();
+                }
+                return bfp8Result;
+            }
             if (DType == TensorDType.BFloat16)
             {
                 var bfloat16Context = CudaOperationProfiler.IsEnabled

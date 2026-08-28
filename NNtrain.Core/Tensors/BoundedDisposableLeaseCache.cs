@@ -11,14 +11,17 @@ internal sealed class BoundedDisposableLeaseCache<TKey, TValue> : IDisposable
 {
     private readonly int _capacity;
     private readonly object _sync = new();
-    private readonly Dictionary<TKey, Entry> _entries = new();
+    private readonly Dictionary<TKey, Entry> _entries;
     private readonly LinkedList<TKey> _lru = new();
     private bool _disposed;
 
-    internal BoundedDisposableLeaseCache(int capacity)
+    internal BoundedDisposableLeaseCache(
+        int capacity,
+        IEqualityComparer<TKey>? comparer = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(capacity, 1);
         _capacity = capacity;
+        _entries = new Dictionary<TKey, Entry>(comparer);
     }
 
     internal int Capacity => _capacity;
@@ -107,6 +110,32 @@ internal sealed class BoundedDisposableLeaseCache<TKey, TValue> : IDisposable
             throw;
         }
         return lease;
+    }
+
+    /// <summary>
+    /// Retires one cached value. Outstanding leases keep the value alive until
+    /// their work is finished; an idle value is released before this method
+    /// returns.
+    /// </summary>
+    internal bool Remove(TKey key)
+    {
+        TValue? dispose = null;
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_entries.Remove(key, out Entry? entry))
+                return false;
+
+            if (entry.Node is not null)
+                _lru.Remove(entry.Node);
+            entry.Node = null;
+            entry.Retired = true;
+            if (entry.ActiveLeases == 0)
+                dispose = entry.Value;
+        }
+
+        dispose?.Dispose();
+        return true;
     }
 
     public void Dispose()

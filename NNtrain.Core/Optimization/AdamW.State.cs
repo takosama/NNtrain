@@ -1,3 +1,5 @@
+using NNtrain.Runtime.Execution;
+
 namespace NNtrain;
 
 public partial class AdamW
@@ -11,21 +13,44 @@ public partial class AdamW
         for (int index = 0; index < result.Length; index++)
         {
             Parameter parameter = parameters[index];
+            bool bfp8State = UsesPureBfp8OptimizerState(parameter.T);
+            bool mix8State = UsesMix8Parameter(parameter.T);
+            float[] firstMoment = bfp8State
+                    && states[index].FirstMoment.Length != parameter.T.Numel
+                ? new float[parameter.T.Numel]
+                : states[index].FirstMoment;
+            float[] secondMoment = bfp8State
+                    && states[index].SecondMoment.Length != parameter.T.Numel
+                ? new float[parameter.T.Numel]
+                : states[index].SecondMoment;
             result[index] = new AdamWParameterRuntime(
                 parameter,
                 parameter.DataBuffer,
                 parameter.T.GradientBuffer,
-                states[index].FirstMoment,
-                states[index].SecondMoment,
-                options.UseBFloat16FirstMoment
+                firstMoment,
+                secondMoment,
+                options.UseBFloat16FirstMoment && !bfp8State && !mix8State
                     ? new short[parameter.T.Numel]
                     : null,
-                options.UseBFloat16SecondMoment
+                options.UseBFloat16SecondMoment && !bfp8State && !mix8State
                     ? new short[parameter.T.Numel]
                     : null,
                 ShouldApplyWeightDecay(parameter, options));
         }
         return result;
+    }
+
+    private static bool UsesPureBfp8OptimizerState(Tensor tensor)
+    {
+        PrecisionPolicy? policy = TensorExecutionContext.ActivePrecisionPolicy;
+        if (policy is not null
+            && policy.OptimizerState != NumericFormat.Bfp8)
+        {
+            return false;
+        }
+        return tensor.DType == TensorDType.Bfp8
+            && tensor.Bfp8Quantization
+                == Bfp8QuantizationDescriptor.TensorWide;
     }
 
     private void RefreshWeightDecayFlags()
@@ -54,9 +79,11 @@ public partial class AdamW
                     parameter.Name,
                     parameter.T.Shape.ToArray(),
                     options.UseBFloat16FirstMoment
+                        && !UsesMix8Parameter(parameter.T)
                         ? []
                         : new float[parameter.T.Numel],
                     options.UseBFloat16SecondMoment
+                        && !UsesMix8Parameter(parameter.T)
                         ? []
                         : new float[parameter.T.Numel]))
             .ToArray();
@@ -274,6 +301,11 @@ public partial class AdamW
         }
         internal CudaOptimizerKernels.AdamWBFloat16ResidentState?
             CudaBFloat16State
+        {
+            get;
+            set;
+        }
+        internal CudaOptimizerKernels.AdamWBfp8ResidentState? CudaBfp8State
         {
             get;
             set;

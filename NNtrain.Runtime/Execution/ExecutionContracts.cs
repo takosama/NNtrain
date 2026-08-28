@@ -34,6 +34,65 @@ public interface IExecutionLane : IDisposable
     IExecutionProfiler Profiler { get; }
 }
 
+/// <summary>
+/// An execution lane with explicit compute and communication streams. Stream
+/// handles are opaque to the runtime assembly; the owning backend remains
+/// responsible for binding and synchronizing them.
+/// </summary>
+public interface IStreamExecutionLane : IExecutionLane
+{
+    nint ComputeStreamHandle { get; }
+    nint CommunicationStreamHandle { get; }
+
+    /// <summary>
+    /// Makes this lane's device and compute stream current on the calling
+    /// native thread. Implementations must not assume managed asynchronous
+    /// context and native thread-local state are the same thing.
+    /// </summary>
+    void ActivateComputeStream();
+
+    void SynchronizeComputeStream();
+
+    void SynchronizeCommunicationStream();
+
+    /// <summary>
+    /// Transfers a backend resource to the lane. Owned resources are released
+    /// after both streams complete and before the streams/memory owner close.
+    /// </summary>
+    T OwnResource<T>(T resource)
+        where T : class, IDisposable;
+}
+
+/// <summary>Transactional transfer of a newly-created resource to a lane.</summary>
+public static class ExecutionLaneResources
+{
+    public static T Attach<T>(IStreamExecutionLane lane, T resource)
+        where T : class, IDisposable
+    {
+        ArgumentNullException.ThrowIfNull(lane);
+        ArgumentNullException.ThrowIfNull(resource);
+        try
+        {
+            return lane.OwnResource(resource);
+        }
+        catch (Exception attachFailure)
+        {
+            try
+            {
+                resource.Dispose();
+            }
+            catch (Exception cleanupFailure)
+            {
+                throw new AggregateException(
+                    "An execution resource could not be attached or rolled back.",
+                    attachFailure,
+                    cleanupFailure);
+            }
+            throw;
+        }
+    }
+}
+
 /// <summary>A zero-overhead default for sessions without profiling enabled.</summary>
 public sealed class NullExecutionProfiler : IExecutionProfiler
 {

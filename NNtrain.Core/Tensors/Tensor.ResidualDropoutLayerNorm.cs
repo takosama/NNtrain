@@ -44,6 +44,30 @@ partial class Tensor
                 $"LayerNorm parameters must have shape [{columns}].");
         }
 
+        bool bfp8Cuda = ExecutionDevice == TensorDevice.Cuda
+            && DType == TensorDType.Bfp8
+            && branch.DType == TensorDType.Bfp8
+            && gamma.DType == TensorDType.Bfp8
+            && beta.DType == TensorDType.Bfp8;
+        bool anyBfp8Cuda = ExecutionDevice == TensorDevice.Cuda
+            && (DType == TensorDType.Bfp8
+                || branch.DType == TensorDType.Bfp8
+                || gamma.DType == TensorDType.Bfp8
+                || beta.DType == TensorDType.Bfp8);
+        bool mixedBfp8ParameterInference =
+            !AutogradContext.IsRecordingEnabled
+            && CudaBfp8InferenceComputeScope.IsActive
+            && ExecutionDevice == TensorDevice.Cuda
+            && DType == TensorDType.BFloat16
+            && branch.DType == TensorDType.BFloat16
+            && gamma.DType == TensorDType.Bfp8
+            && beta.DType == TensorDType.Bfp8;
+        if (anyBfp8Cuda && !bfp8Cuda && !mixedBfp8ParameterInference)
+        {
+            throw new InvalidOperationException(
+                "CUDA BFP8 residual/dropout/LayerNorm requires every operand " +
+                "to use BFP8 storage; implicit host fallback is forbidden.");
+        }
         bool bfloat16Cuda = ExecutionDevice == TensorDevice.Cuda
             && DType == TensorDType.BFloat16
             && branch.DType == TensorDType.BFloat16
@@ -54,7 +78,10 @@ partial class Tensor
             && branch.DType == TensorDType.Float32
             && gamma.DType == TensorDType.Float32
             && beta.DType == TensorDType.Float32;
-        if (!bfloat16Cuda && !float32Cuda)
+        if (!bfp8Cuda
+            && !bfloat16Cuda
+            && !float32Cuda
+            && !mixedBfp8ParameterInference)
         {
             return probability == 0f
                 ? AddLayerNormLastDim(branch, gamma, beta, eps)
@@ -66,8 +93,23 @@ partial class Tensor
                     .LayerNormLastDim(gamma, beta, eps);
         }
 
+        // A captured fused kernel reads the replay counter on-device. The
+        // exact token is retained by its backward closure, so forward and
+        // backward regenerate the same mask while each replay advances it.
+        CudaGraphDropoutToken? graphToken = null;
+        if (probability > 0f
+            && ExecutionDevice == TensorDevice.Cuda
+            && CudaGraphDropoutCaptureScope.TryAcquire(
+                CudaDeviceIndex,
+                out CudaGraphDropoutToken acquiredToken))
+        {
+            graphToken = acquiredToken;
+        }
+
         random ??= Random.Shared;
-        uint seed = probability == 0f ? 0u : NextDropoutSeed(random);
+        uint seed = probability == 0f || graphToken is not null
+            ? 0u
+            : NextDropoutSeed(random);
         float dropoutScale = probability == 0f
             ? 1f
             : 1f / (1f - probability);
@@ -77,6 +119,72 @@ partial class Tensor
 
         if (ExecutionDevice == TensorDevice.Cuda)
         {
+            if (mixedBfp8ParameterInference)
+            {
+                TensorCudaKernels.BFloat16LayerNormResidentContext context =
+                    CudaOperationProfiler.IsEnabled
+                        ? CudaOperationProfiler.Measure(
+                            "forward.residual_dropout_layer_norm",
+                            () => TensorCudaKernels
+                                .ResidualDropoutLayerNormForwardMixedBFloat16Inference(
+                                    this,
+                                    branch,
+                                    gamma,
+                                    beta,
+                                    rows,
+                                    columns,
+                                    seed,
+                                    dropThreshold,
+                                    dropoutScale,
+                                    eps,
+                                    graphToken))
+                        : TensorCudaKernels
+                            .ResidualDropoutLayerNormForwardMixedBFloat16Inference(
+                                this,
+                                branch,
+                                gamma,
+                                beta,
+                                rows,
+                                columns,
+                                seed,
+                                dropThreshold,
+                                dropoutScale,
+                                eps,
+                                graphToken);
+                Tensor result = FromCudaResult(
+                    context.Output,
+                    CudaDeviceIndex,
+                    _shape,
+                    [this, branch, gamma, beta],
+                    TensorDType.BFloat16);
+                ConfigureBFloat16Backward(
+                    result,
+                    branch,
+                    gamma,
+                    beta,
+                    context,
+                    rows,
+                    columns,
+                    seed,
+                    dropThreshold,
+                    dropoutScale,
+                    graphToken);
+                return result;
+            }
+            if (bfp8Cuda)
+            {
+                return AddDropoutLayerNormLastDimBfp8Cuda(
+                    branch,
+                    gamma,
+                    beta,
+                    rows,
+                    columns,
+                    seed,
+                    dropThreshold,
+                    dropoutScale,
+                    eps,
+                    graphToken);
+            }
             if (bfloat16Cuda)
             {
                 TensorCudaKernels.BFloat16LayerNormResidentContext? context =
@@ -86,11 +194,13 @@ partial class Tensor
                             () => TensorCudaKernels
                                 .TryResidualDropoutLayerNormForwardBFloat16Resident(
                                     this, branch, gamma, beta, rows, columns,
-                                    seed, dropThreshold, dropoutScale, eps))
+                                    seed, dropThreshold, dropoutScale, eps,
+                                    graphToken))
                         : TensorCudaKernels
                             .TryResidualDropoutLayerNormForwardBFloat16Resident(
                                 this, branch, gamma, beta, rows, columns,
-                                seed, dropThreshold, dropoutScale, eps);
+                                seed, dropThreshold, dropoutScale, eps,
+                                graphToken);
                 if (context is not null)
                 {
                     Tensor result = FromCudaResult(
@@ -101,7 +211,7 @@ partial class Tensor
                         TensorDType.BFloat16);
                     ConfigureBFloat16Backward(
                         result, branch, gamma, beta, context, rows, columns,
-                        seed, dropThreshold, dropoutScale);
+                        seed, dropThreshold, dropoutScale, graphToken);
                     return result;
                 }
             }
@@ -114,11 +224,13 @@ partial class Tensor
                             () => TensorCudaKernels
                                 .TryResidualDropoutLayerNormForwardResident(
                                     this, branch, gamma, beta, rows, columns,
-                                    seed, dropThreshold, dropoutScale, eps))
+                                    seed, dropThreshold, dropoutScale, eps,
+                                    graphToken))
                         : TensorCudaKernels
                             .TryResidualDropoutLayerNormForwardResident(
                                 this, branch, gamma, beta, rows, columns,
-                                seed, dropThreshold, dropoutScale, eps);
+                                seed, dropThreshold, dropoutScale, eps,
+                                graphToken);
                 if (context is not null)
                 {
                     Tensor result = FromCudaResult(
@@ -128,7 +240,7 @@ partial class Tensor
                         [this, branch, gamma, beta]);
                     ConfigureFloat32Backward(
                         result, branch, gamma, beta, context, rows, columns,
-                        seed, dropThreshold, dropoutScale);
+                        seed, dropThreshold, dropoutScale, graphToken);
                     return result;
                 }
             }
@@ -154,7 +266,8 @@ partial class Tensor
         int columns,
         uint seed,
         uint dropThreshold,
-        float dropoutScale)
+        float dropoutScale,
+        CudaGraphDropoutToken? graphToken)
     {
         if (!AutogradContext.IsRecordingEnabled)
         {
@@ -178,7 +291,7 @@ partial class Tensor
                 .ResidualDropoutLayerNormBackwardBFloat16Resident(
                     this, branch, gamma, beta, result, savedContext,
                     rows, columns, ReferenceEquals(this, branch),
-                    seed, dropThreshold, dropoutScale);
+                    seed, dropThreshold, dropoutScale, graphToken);
             if (CudaOperationProfiler.IsEnabled)
                 CudaOperationProfiler.Measure(
                     "backward.residual_dropout_layer_norm", Backward);
@@ -197,7 +310,8 @@ partial class Tensor
         int columns,
         uint seed,
         uint dropThreshold,
-        float dropoutScale)
+        float dropoutScale,
+        CudaGraphDropoutToken? graphToken)
     {
         if (!AutogradContext.IsRecordingEnabled)
         {
@@ -220,7 +334,7 @@ partial class Tensor
                 .ResidualDropoutLayerNormBackwardResident(
                     this, branch, gamma, beta, result, savedContext,
                     rows, columns, ReferenceEquals(this, branch),
-                    seed, dropThreshold, dropoutScale);
+                    seed, dropThreshold, dropoutScale, graphToken);
             if (CudaOperationProfiler.IsEnabled)
                 CudaOperationProfiler.Measure(
                     "backward.residual_dropout_layer_norm", Backward);

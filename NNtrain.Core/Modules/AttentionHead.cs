@@ -8,6 +8,9 @@ class AttentionHead : Module
 
     private readonly float _scale;
     private readonly bool _causal;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<
+        TensorDType,
+        Lazy<Tensor>> _scaleTensors = new();
 
     public AttentionHead(
         int dModel,
@@ -34,8 +37,16 @@ class AttentionHead : Module
         Tensor k = Wk.ForwardBatch(x); // (T, Dh)
         Tensor v = Wv.ForwardBatch(x); // (T, Dh)
 
-        Tensor scores = q.MatMulTransposedRight(k)
-            * Tensor.Scalar(_scale, dtype: DType); // (T, T)
+        // This scalar used to be recreated and uploaded on every forward.
+        // Retain one logical tensor per storage dtype; its CUDA replica set is
+        // then reused by every execution lane/device while model.to(...)
+        // remains free to change the module's numeric contract.
+        Tensor scale = _scaleTensors.GetOrAdd(
+            DType,
+            dtype => new Lazy<Tensor>(
+                () => Tensor.Scalar(_scale, dtype: dtype),
+                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+        Tensor scores = q.MatMulTransposedRight(k) * scale; // (T, T)
         if (_causal)
             scores = scores.CausalMask();
 

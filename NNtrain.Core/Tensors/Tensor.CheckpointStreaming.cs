@@ -165,13 +165,17 @@ public partial class Tensor
         CheckpointFloatStagingBuffer staging)
     {
         Span<float> destination = staging.GetCudaPinnedSpan(length);
+        source.Device.Bind();
+        nint stream = source.Device.DefaultStream;
         NativeCudaRuntime.Check(
-            NativeCudaRuntime.CopyDeviceToHostNative(
+            NativeCudaRuntime.CopyDeviceToHostAsyncNative(
                 source.Device.Index,
                 staging.Pointer,
                 source.NativePtr + checked(sourceOffset * sizeof(float)),
-                checked((nuint)length * sizeof(float))),
-            "cudaMemcpy(D2H checkpoint parameter chunk)");
+                checked((nuint)length * sizeof(float)),
+                stream),
+            "cudaMemcpyAsync(D2H checkpoint parameter chunk)");
+        NativeCudaRuntime.SynchronizeComputeStream(source.Device, stream);
         return destination;
     }
 
@@ -183,13 +187,17 @@ public partial class Tensor
     {
         Span<float> destination = staging.GetCudaPinnedSpan(length);
         Span<ushort> encoded = staging.GetEncodedPrefix(length);
+        source.Device.Bind();
+        nint stream = source.Device.DefaultStream;
         NativeCudaRuntime.Check(
-            NativeCudaRuntime.CopyDeviceToHostNative(
+            NativeCudaRuntime.CopyDeviceToHostAsyncNative(
                 source.Device.Index,
                 staging.Pointer,
                 source.NativePtr + checked(sourceOffset * sizeof(ushort)),
-                checked((nuint)length * sizeof(ushort))),
-            "cudaMemcpy(D2H checkpoint BF16 parameter chunk)");
+                checked((nuint)length * sizeof(ushort)),
+                stream),
+            "cudaMemcpyAsync(D2H checkpoint BF16 parameter chunk)");
+        NativeCudaRuntime.SynchronizeComputeStream(source.Device, stream);
 
         // Source and destination intentionally share the same staging block.
         // Expanding from the end prevents a float write from overwriting an
@@ -225,20 +233,27 @@ public partial class Tensor
         nint scalePointer = staging.Pointer + checked(length * sizeof(float));
         var scales = new Span<float>((void*)scalePointer, scaleCount);
 
+        source.Payload.Device.Bind();
+        nint stream = source.Payload.Device.DefaultStream;
         NativeCudaRuntime.Check(
-            NativeCudaRuntime.CopyDeviceToHostNative(
+            NativeCudaRuntime.CopyDeviceToHostAsyncNative(
                 source.Payload.Device.Index,
                 staging.Pointer,
                 source.Payload.NativePtr + sourceOffset,
-                checked((nuint)length)),
-            "cudaMemcpy(D2H checkpoint BFP8 payload chunk)");
+                checked((nuint)length),
+                stream),
+            "cudaMemcpyAsync(D2H checkpoint BFP8 payload chunk)");
         NativeCudaRuntime.Check(
-            NativeCudaRuntime.CopyDeviceToHostNative(
+            NativeCudaRuntime.CopyDeviceToHostAsyncNative(
                 source.Scales.Device.Index,
                 scalePointer,
                 source.Scales.NativePtr + checked(firstScale * sizeof(float)),
-                checked((nuint)scaleCount * sizeof(float))),
-            "cudaMemcpy(D2H checkpoint BFP8 scale chunk)");
+                checked((nuint)scaleCount * sizeof(float)),
+                stream),
+            "cudaMemcpyAsync(D2H checkpoint BFP8 scale chunk)");
+        NativeCudaRuntime.SynchronizeComputeStream(
+            source.Payload.Device,
+            stream);
 
         for (int index = length - 1; index >= 0; index--)
         {

@@ -4,6 +4,14 @@ partial class Tensor
 {
     public Tensor Sin()
     {
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return ApplyUnaryCuda(CudaPublicUnaryOperation.Sin);
+        }
+        ThrowIfCudaHostFallback(nameof(Sin));
         var output = new float[Numel];
         for (int index = 0; index < Numel; index++)
             output[index] = MathF.Sin(_data[index]);
@@ -22,6 +30,14 @@ partial class Tensor
 
     public Tensor Relu()
     {
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return ApplyUnaryCuda(CudaPublicUnaryOperation.Relu);
+        }
+        ThrowIfCudaHostFallback(nameof(Relu));
         float[] y = new float[Numel];
         int i = 0;
         if (CanUseSimd(Numel))
@@ -86,6 +102,94 @@ partial class Tensor
 
         return t;
     }
+
+    /// <summary>Applies the tanh-approximated Gaussian error linear unit.</summary>
+    public Tensor Gelu()
+    {
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return ApplyUnaryCuda(CudaPublicUnaryOperation.Gelu);
+        }
+        ThrowIfCudaHostFallback(nameof(Gelu));
+        const float alpha = 0.7978845608028654f;
+        const float beta = 0.044715f;
+        var output = new float[Numel];
+        for (int index = 0; index < Numel; index++)
+        {
+            float value = _data[index];
+            float inner = alpha * (value + beta * value * value * value);
+            output[index] = 0.5f * value * (1f + MathF.Tanh(inner));
+        }
+        var result = new Tensor(output, _shape, [this]);
+        result.Node.BackwardAction = () =>
+        {
+            for (int index = 0; index < Numel; index++)
+            {
+                float value = _data[index];
+                float square = value * value;
+                float inner = alpha * (value + beta * value * square);
+                float tanh = MathF.Tanh(inner);
+                float derivative = 0.5f * (1f + tanh)
+                    + 0.5f * value * (1f - tanh * tanh)
+                        * alpha * (1f + 3f * beta * square);
+                _grad[index] += derivative * result._grad[index];
+            }
+        };
+        return result;
+    }
+
+    public Tensor Tanh()
+        => ApplyElementaryUnary(
+            CudaPublicUnaryOperation.Tanh,
+            static value => MathF.Tanh(value),
+            static (input, output) => 1f - output * output,
+            nameof(Tanh));
+
+    public Tensor Exp()
+        => ApplyElementaryUnary(
+            CudaPublicUnaryOperation.Exp,
+            static value => MathF.Exp(value),
+            static (_, output) => output,
+            nameof(Exp));
+
+    public Tensor Log()
+        => ApplyElementaryUnary(
+            CudaPublicUnaryOperation.Log,
+            static value => MathF.Log(value),
+            static (input, _) => 1f / input,
+            nameof(Log));
+
+    private Tensor ApplyElementaryUnary(
+        CudaPublicUnaryOperation operation,
+        Func<float, float> forward,
+        Func<float, float, float> derivative,
+        string operationName)
+    {
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return ApplyUnaryCuda(operation);
+        }
+        ThrowIfCudaHostFallback(operationName);
+        var output = new float[Numel];
+        for (int index = 0; index < Numel; index++)
+            output[index] = forward(_data[index]);
+        var result = new Tensor(output, _shape, [this]);
+        result.Node.BackwardAction = () =>
+        {
+            for (int index = 0; index < Numel; index++)
+            {
+                _grad[index] += derivative(_data[index], output[index])
+                    * result._grad[index];
+            }
+        };
+        return result;
+    }
     public Tensor AddRowWise(Tensor rowVec)
     {
         ArgumentNullException.ThrowIfNull(rowVec);
@@ -97,6 +201,17 @@ partial class Tensor
 
         if (rowVec._shape[0] != cols)
             throw ShapeMismatch(this, rowVec, "Row-wise addition");
+
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType == rowVec.DType
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return BroadcastAddCuda(rowVec, cols);
+        }
+
+        ThrowIfCudaHostFallback(nameof(AddRowWise));
 
         float[] y = new float[Numel];
         for (int r = 0; r < rows; r++)
@@ -153,6 +268,14 @@ partial class Tensor
 
     public Tensor SoftmaxLastDim()
     {
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return SoftmaxCuda(logSoftmax: false);
+        }
+        ThrowIfCudaHostFallback(nameof(SoftmaxLastDim));
         if (Rank == 1)
         {
             int n = _shape[0];
@@ -247,6 +370,14 @@ partial class Tensor
 
     public Tensor LogSoftmaxLastDim()
     {
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return SoftmaxCuda(logSoftmax: true);
+        }
+        ThrowIfCudaHostFallback(nameof(LogSoftmaxLastDim));
         if (Rank == 1)
         {
             int n = _shape[0];
@@ -383,6 +514,58 @@ partial class Tensor
                     $"{ShapeText(beta)}.");
             }
             int rows = Numel / columns;
+            bool anyBfp8 = DType == TensorDType.Bfp8
+                || gamma.DType == TensorDType.Bfp8
+                || beta.DType == TensorDType.Bfp8;
+            if (anyBfp8)
+            {
+                if (!AutogradContext.IsRecordingEnabled
+                    && CudaBfp8InferenceComputeScope.IsActive
+                    && DType == TensorDType.BFloat16
+                    && gamma.DType == TensorDType.Bfp8
+                    && beta.DType == TensorDType.Bfp8)
+                {
+                    TensorCudaKernels.BFloat16LayerNormResidentContext
+                        mixedContext = CudaOperationProfiler.IsEnabled
+                            ? CudaOperationProfiler.Measure(
+                                "forward.layer_norm",
+                                () => TensorCudaKernels
+                                    .LayerNormForwardBFloat16ActivationBfp8ParametersInference(
+                                        this,
+                                        gamma,
+                                        beta,
+                                        rows,
+                                        columns,
+                                        eps))
+                            : TensorCudaKernels
+                                .LayerNormForwardBFloat16ActivationBfp8ParametersInference(
+                                    this,
+                                    gamma,
+                                    beta,
+                                    rows,
+                                    columns,
+                                    eps);
+                    Tensor mixedResult = FromCudaResult(
+                        mixedContext.Output,
+                        CudaDeviceIndex,
+                        _shape,
+                        [this, gamma, beta],
+                        TensorDType.BFloat16);
+                    if (!CudaInferenceScope.TrackResource(mixedContext))
+                        mixedContext.Dispose();
+                    return mixedResult;
+                }
+                if (DType != TensorDType.Bfp8
+                    || gamma.DType != TensorDType.Bfp8
+                    || beta.DType != TensorDType.Bfp8)
+                {
+                    throw new InvalidOperationException(
+                        "CUDA BFP8 LayerNorm requires input, gamma, and beta " +
+                        "to use BFP8 storage; implicit host fallback is forbidden.");
+                }
+                return LayerNormLastDimBfp8Cuda(
+                    gamma, beta, rows, columns, eps);
+            }
             if (DType == TensorDType.BFloat16
                 && gamma.DType == TensorDType.BFloat16
                 && beta.DType == TensorDType.BFloat16)
@@ -414,8 +597,17 @@ partial class Tensor
                     TensorDType.BFloat16);
                 if (AutogradContext.IsRecordingEnabled)
                 {
-                    bfloat16Result.Node.RegisterResource(bfloat16Context);
-                    bfloat16Result.Node.BackwardAction = () =>
+                    AutogradLease<TensorCudaKernels
+                        .BFloat16LayerNormResidentContext> lease =
+                        AutogradLease<TensorCudaKernels
+                            .BFloat16LayerNormResidentContext>.Own(
+                            bfloat16Context,
+                            AutogradLeaseMetadata.CudaOwned(
+                                CudaDeviceIndex,
+                                TensorDType.BFloat16,
+                                DataVersion),
+                            static saved => saved.Dispose());
+                    bfloat16Result.Node.SetBackward(lease, savedContext =>
                     {
                         if (CudaOperationProfiler.IsEnabled)
                         {
@@ -427,7 +619,7 @@ partial class Tensor
                                         gamma,
                                         beta,
                                         bfloat16Result,
-                                        bfloat16Context,
+                                        savedContext,
                                         rows,
                                         columns));
                         }
@@ -438,11 +630,11 @@ partial class Tensor
                                 gamma,
                                 beta,
                                 bfloat16Result,
-                                bfloat16Context,
+                                savedContext,
                                 rows,
                                 columns);
                         }
-                    };
+                    });
                 }
                 else if (!CudaInferenceScope.TrackResource(bfloat16Context))
                 {
@@ -475,8 +667,16 @@ partial class Tensor
                 [this, gamma, beta]);
             if (AutogradContext.IsRecordingEnabled)
             {
-                cudaResult.Node.RegisterResource(context);
-                cudaResult.Node.BackwardAction = () =>
+                AutogradLease<TensorCudaKernels.LayerNormResidentContext>
+                    lease = AutogradLease<TensorCudaKernels
+                        .LayerNormResidentContext>.Own(
+                        context,
+                        AutogradLeaseMetadata.CudaOwned(
+                            CudaDeviceIndex,
+                            TensorDType.Float32,
+                            DataVersion),
+                        static saved => saved.Dispose());
+                cudaResult.Node.SetBackward(lease, savedContext =>
                 {
                     if (CudaOperationProfiler.IsEnabled)
                     {
@@ -487,7 +687,7 @@ partial class Tensor
                                 gamma,
                                 beta,
                                 cudaResult,
-                                context,
+                                savedContext,
                                 rows,
                                 columns));
                     }
@@ -498,11 +698,11 @@ partial class Tensor
                             gamma,
                             beta,
                             cudaResult,
-                            context,
+                            savedContext,
                             rows,
                             columns);
                     }
-                };
+                });
             }
             else
             {
@@ -744,6 +944,19 @@ partial class Tensor
 
                 void BackwardParameter(int c)
                 {
+                    if (bfloat16Normalization)
+                    {
+                        AccumulateCudaOrderedLayerNormParameterGradient(
+                            t._grad,
+                            xhat,
+                            gamma._grad,
+                            beta._grad,
+                            rows,
+                            cols,
+                            c);
+                        return;
+                    }
+
                     float gammaGradient = 0f;
                     float betaGradient = 0f;
                     for (int r = 0; r < rows; r++)
@@ -868,6 +1081,68 @@ partial class Tensor
             ReduceCudaLayerNormBlock(secondPartials);
     }
 
+    private static void AccumulateCudaOrderedLayerNormParameterGradient(
+        float[] gradient,
+        float[] normalized,
+        float[] gammaGradient,
+        float[] betaGradient,
+        int rows,
+        int columns,
+        int column)
+    {
+        // Match layer_norm_backward_parameters_tiled followed by
+        // layer_norm_backward_parameters_finalize.  The CUDA kernel assigns
+        // rows to eight lanes inside each 1024-row tile, reduces those lanes
+        // in lane order, then reduces tiles in ascending order.  Preserving
+        // that association matters when the final pure-BF16 gradient lands
+        // exactly on a rounding midpoint.
+        const int parameterRows = 8;
+        const int rowsPerTile = 1024;
+        int rowTiles = (rows + rowsPerTile - 1) / rowsPerTile;
+        float finalGamma = 0f;
+        float finalBeta = 0f;
+        Span<float> gammaPartials = stackalloc float[parameterRows];
+        Span<float> betaPartials = stackalloc float[parameterRows];
+
+        for (int tile = 0; tile < rowTiles; tile++)
+        {
+            int rowStart = tile * rowsPerTile;
+            int rowEnd = Math.Min(rows, rowStart + rowsPerTile);
+            for (int lane = 0; lane < parameterRows; lane++)
+            {
+                float gammaSum = 0f;
+                float betaSum = 0f;
+                for (int row = rowStart + lane;
+                    row < rowEnd;
+                    row += parameterRows)
+                {
+                    int index = row * columns + column;
+                    float value = gradient[index];
+                    betaSum += value;
+                    gammaSum = MathF.FusedMultiplyAdd(
+                        value,
+                        normalized[index],
+                        gammaSum);
+                }
+                gammaPartials[lane] = gammaSum;
+                betaPartials[lane] = betaSum;
+            }
+
+            float tileGamma = 0f;
+            float tileBeta = 0f;
+            for (int lane = 0; lane < parameterRows; lane++)
+            {
+                tileGamma += gammaPartials[lane];
+                tileBeta += betaPartials[lane];
+            }
+            finalGamma += tileGamma;
+            finalBeta += tileBeta;
+        }
+
+        gammaGradient[column] += finalGamma;
+        betaGradient[column] += finalBeta;
+    }
+
     private static void AccumulateCudaOrderedLayerNormInputGradient(
         float[] destination,
         int destinationOffset,
@@ -928,6 +1203,16 @@ partial class Tensor
 
         int rows = _shape[^2];
         int cols = _shape[^1];
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return CausalMaskCuda(rows, cols, fillValue);
+        }
+
+        ThrowIfCudaHostFallback(nameof(CausalMask));
+
         int matrixCount = Numel / (rows * cols);
         float[] y = new float[Numel];
         _data.CopyTo(y);

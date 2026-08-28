@@ -1,13 +1,38 @@
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
+using NNtrain.Cuda.Interop;
+using NNtrain.Cuda.Memory;
+using NNtrain.Runtime.Execution;
 
 namespace NNtrain;
+
+internal readonly record struct CudaBlasLtTelemetrySnapshot(
+    long ForwardTensorCoreExecutions,
+    long DirectBackwardTensorCoreExecutions,
+    long AccumulatingBackwardCublasExecutions,
+    long RejectedNonTensorCoreCandidates,
+    ulong LastForwardNumericalImplementationFlags)
+{
+    public static CudaBlasLtTelemetrySnapshot operator -(
+        CudaBlasLtTelemetrySnapshot left,
+        CudaBlasLtTelemetrySnapshot right)
+        => new(
+            left.ForwardTensorCoreExecutions -
+                right.ForwardTensorCoreExecutions,
+            left.DirectBackwardTensorCoreExecutions -
+                right.DirectBackwardTensorCoreExecutions,
+            left.AccumulatingBackwardCublasExecutions -
+                right.AccumulatingBackwardCublasExecutions,
+            left.RejectedNonTensorCoreCandidates -
+                right.RejectedNonTensorCoreCandidates,
+            left.LastForwardNumericalImplementationFlags);
+}
 
 /// <summary>
 /// Cached cuBLASLt plans for BF16 linear projections with fused epilogues.
 /// </summary>
 internal static unsafe class CudaBlasLt
 {
-    private const string Library = "cublasLt64_12";
     private const int Success = 0;
     private const int OperationNone = 0;
     private const int OperationTranspose = 1;
@@ -19,6 +44,8 @@ internal static unsafe class CudaBlasLt
     private const int DescEpilogue = 7;
     private const int DescBiasPointer = 8;
     private const int PreferenceMaxWorkspaceBytes = 1;
+    private const int AlgorithmNumericalImplementationFlags = 15;
+    private const ulong NumericalImplementationHmma = 0x02UL;
     private const uint EpilogueBias = 4;
     private const uint EpilogueReluBias = 6;
     private const int HeuristicCandidateCount = 16;
@@ -26,26 +53,44 @@ internal static unsafe class CudaBlasLt
     private const int WorkspaceBytes = 32 * 1024 * 1024;
     private const int PlanCacheCapacity = 128;
     private const int BackwardPlanCacheCapacity = 128;
+    private const int FallbackResourceCapacity = 4;
 
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
-        int,
-        Lazy<nint>> Handles = new();
-    private static readonly BoundedDisposableLeaseCache<
-        PlanKey,
-        CachedPlan<Plan>> Plans = new(PlanCacheCapacity);
-    private static readonly BoundedDisposableLeaseCache<
-        BackwardPlanKey,
-        CachedPlan<BackwardPlan>> BackwardPlans =
-            new(BackwardPlanCacheCapacity);
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
-        int,
-        Lazy<NativeCudaBuffer<byte>>> Workspaces = new();
+    private static readonly ResettableBoundedDisposableLeaseCache<
+        StreamKey,
+        LaneResources> FallbackResources =
+            new(FallbackResourceCapacity);
+    private static readonly ConditionalWeakTable<
+        IStreamExecutionLane,
+        Lazy<LaneResources>> LaneResourceTable = new();
+    private static int _activeLaneResourceCount;
     private static int _availability;
     private static int _backwardAvailability;
+    private static long _forwardTensorCoreExecutions;
+    private static long _directBackwardTensorCoreExecutions;
+    private static long _accumulatingBackwardCublasExecutions;
+    private static long _rejectedNonTensorCoreCandidates;
+    private static long _lastForwardNumericalImplementationFlags;
 
     internal static bool BackendActive => Volatile.Read(ref _availability) > 0;
     internal static bool BackwardBackendActive
         => Volatile.Read(ref _backwardAvailability) > 0;
+    internal static int ActiveLaneResourceCount =>
+        Volatile.Read(ref _activeLaneResourceCount);
+    internal static int FallbackResourceCount => FallbackResources.Count;
+    internal static CudaBlasLtTelemetrySnapshot Telemetry => new(
+        Interlocked.Read(ref _forwardTensorCoreExecutions),
+        Interlocked.Read(ref _directBackwardTensorCoreExecutions),
+        Interlocked.Read(ref _accumulatingBackwardCublasExecutions),
+        Interlocked.Read(ref _rejectedNonTensorCoreCandidates),
+        unchecked((ulong)Interlocked.Read(
+            ref _lastForwardNumericalImplementationFlags)));
+
+    internal static void RecordAccumulatingBackwardCublasExecution()
+        => Interlocked.Increment(
+            ref _accumulatingBackwardCublasExecutions);
+
+    internal static void DisposeFallbackResources()
+        => FallbackResources.Dispose();
 
     internal static bool TryLinearForwardBFloat16(
         NativeCudaDevice accelerator,
@@ -59,19 +104,42 @@ internal static unsafe class CudaBlasLt
         int outputWidth,
         bool applyRelu)
     {
-        if (Environment.GetEnvironmentVariable("NNTRAIN_DISABLE_CUBLASLT") == "1"
+        if (CudaDispatchPolicy.Current.DisableCublasLt
             || Volatile.Read(ref _availability) < 0)
             return false;
         try
         {
             accelerator.Bind();
+            nint computeStream = accelerator.DefaultStream;
             PlanKey key = new(deviceIndex, rows, inputWidth, outputWidth,
-                applyRelu);
+                applyRelu)
+            {
+                ComputeStream = computeStream,
+            };
+            LaneResources? laneResources = GetLaneResources(
+                deviceIndex,
+                computeStream);
             using BoundedDisposableLeaseCache<
+                StreamKey,
+                LaneResources>.Lease? fallbackLease = laneResources is null
+                    ? FallbackResources.Acquire(
+                        new StreamKey(deviceIndex, computeStream),
+                        static value => new LaneResources(
+                            value.DeviceIndex,
+                            value.ComputeStream,
+                            laneOwned: false))
+                    : null;
+            LaneResources resources = laneResources
+                ?? fallbackLease?.Value
+                ?? throw new InvalidOperationException(
+                    "cuBLASLt fallback resources could not be created.");
+            BoundedDisposableLeaseCache<
                 PlanKey,
-                CachedPlan<Plan>>.Lease? lease = Plans.Acquire(
+                CachedPlan<Plan>>.Lease? lease = resources.Plans.Acquire(
                     key,
-                    static value => new CachedPlan<Plan>(CreatePlan(value)));
+                    resources.ForwardPlanFactory);
+            using (lease)
+            {
             if (lease is null)
                 return false;
             Plan? plan = lease.Value.Value;
@@ -95,9 +163,26 @@ internal static unsafe class CudaBlasLt
                     plan, accelerator, input, weight, output);
                 if (status != Success)
                     return false;
+                int selected = Volatile.Read(ref plan.SelectedCandidate);
+                if (selected >= 0)
+                {
+                    ulong implementationFlags =
+                        plan.Candidates[selected]
+                            .NumericalImplementationFlags;
+                    Interlocked.Exchange(
+                        ref _lastForwardNumericalImplementationFlags,
+                        unchecked((long)implementationFlags));
+                    if ((implementationFlags &
+                        NumericalImplementationHmma) != 0)
+                    {
+                        Interlocked.Increment(
+                            ref _forwardTensorCoreExecutions);
+                    }
+                }
             }
             Volatile.Write(ref _availability, 1);
             return true;
+            }
         }
         catch (Exception exception) when (exception is DllNotFoundException
             or EntryPointNotFoundException
@@ -173,9 +258,9 @@ internal static unsafe class CudaBlasLt
         nint destination,
         float beta)
     {
-        if (Environment.GetEnvironmentVariable("NNTRAIN_DISABLE_CUBLASLT") == "1"
-            || Environment.GetEnvironmentVariable(
-                "NNTRAIN_DISABLE_CUBLASLT_BACKWARD") == "1"
+        CudaDispatchPolicy dispatch = CudaDispatchPolicy.Current;
+        if (dispatch.DisableCublasLt
+            || dispatch.DisableCublasLtBackward
             || Volatile.Read(ref _availability) < 0)
         {
             return false;
@@ -183,12 +268,37 @@ internal static unsafe class CudaBlasLt
         try
         {
             accelerator.Bind();
+            key = key with
+            {
+                ComputeStream = accelerator.DefaultStream,
+            };
+            LaneResources? laneResources = GetLaneResources(
+                key.DeviceIndex,
+                key.ComputeStream);
             using BoundedDisposableLeaseCache<
+                StreamKey,
+                LaneResources>.Lease? fallbackLease = laneResources is null
+                    ? FallbackResources.Acquire(
+                        new StreamKey(
+                            key.DeviceIndex,
+                            key.ComputeStream),
+                        static value => new LaneResources(
+                            value.DeviceIndex,
+                            value.ComputeStream,
+                            laneOwned: false))
+                    : null;
+            LaneResources resources = laneResources
+                ?? fallbackLease?.Value
+                ?? throw new InvalidOperationException(
+                    "cuBLASLt fallback resources could not be created.");
+            BoundedDisposableLeaseCache<
                 BackwardPlanKey,
-                CachedPlan<BackwardPlan>>.Lease? lease = BackwardPlans.Acquire(
-                    key,
-                    static value => new CachedPlan<BackwardPlan>(
-                        CreateBackwardPlan(value)));
+                CachedPlan<BackwardPlan>>.Lease? lease =
+                    resources.BackwardPlans.Acquire(
+                        key,
+                        resources.BackwardPlanFactory);
+            using (lease)
+            {
             if (lease is null)
                 return false;
             BackwardPlan? plan = lease.Value.Value;
@@ -214,13 +324,20 @@ internal static unsafe class CudaBlasLt
                     (nint)(&algorithm),
                     plan.Workspace.NativePtr,
                     plan.WorkspaceSize,
-                    accelerator.DefaultStream);
+                    plan.ComputeStream);
                 if (status != Success)
                     return false;
+                if ((plan.NumericalImplementationFlags &
+                    NumericalImplementationHmma) != 0)
+                {
+                    Interlocked.Increment(
+                        ref _directBackwardTensorCoreExecutions);
+                }
             }
             Volatile.Write(ref _availability, 1);
             Volatile.Write(ref _backwardAvailability, 1);
             return true;
+            }
         }
         catch (Exception exception) when (exception is DllNotFoundException
             or EntryPointNotFoundException
@@ -231,9 +348,11 @@ internal static unsafe class CudaBlasLt
         }
     }
 
-    private static Plan? CreatePlan(PlanKey key)
+    private static Plan? CreatePlan(
+        PlanKey key,
+        LaneResources resources)
     {
-        nint handle = GetHandle(key.DeviceIndex);
+        nint handle = resources.Handle;
         nint operation = 0;
         if (MatmulDescCreate(
                 out operation,
@@ -288,7 +407,7 @@ internal static unsafe class CudaBlasLt
                 return null;
             }
 
-            NativeCudaBuffer<byte> workspace = GetWorkspace(key.DeviceIndex);
+            NativeCudaBuffer<byte> workspace = resources.Workspace;
             nuint maximumWorkspaceBytes = checked((nuint)workspace.Length);
             if (PreferenceSetAttribute(
                     preference,
@@ -331,14 +450,33 @@ internal static unsafe class CudaBlasLt
                     && candidate.WavesCount > 0f
                         ? candidate.WavesCount
                         : float.MaxValue;
+                _ = TryGetNumericalImplementationFlags(
+                    ref candidate.Algorithm,
+                    out ulong implementationFlags);
                 candidates.Add(new AlgorithmCandidate(
                     candidate.Algorithm,
                     candidate.WorkspaceSize,
-                    waves));
+                    waves,
+                    implementationFlags));
             }
             if (candidates.Count == 0)
                 return null;
-            AlgorithmCandidate[] ordered = candidates
+            AlgorithmCandidate[] tensorCoreCandidates = candidates
+                .Where(candidate =>
+                    (candidate.NumericalImplementationFlags &
+                        NumericalImplementationHmma) != 0)
+                .ToArray();
+            IEnumerable<AlgorithmCandidate> eligible =
+                tensorCoreCandidates.Length > 0
+                    ? tensorCoreCandidates
+                    : candidates;
+            if (tensorCoreCandidates.Length > 0)
+            {
+                Interlocked.Add(
+                    ref _rejectedNonTensorCoreCandidates,
+                    candidates.Count - tensorCoreCandidates.Length);
+            }
+            AlgorithmCandidate[] ordered = eligible
                 .OrderBy(candidate => candidate.EstimatedWaves)
                 .Take(AutotuneCandidateCount)
                 .ToArray();
@@ -349,7 +487,9 @@ internal static unsafe class CudaBlasLt
                 input,
                 output,
                 workspace,
-                ordered);
+                ordered,
+                key.ComputeStream,
+                resources);
             ownershipTransferred = true;
             return plan;
         }
@@ -362,9 +502,11 @@ internal static unsafe class CudaBlasLt
         }
     }
 
-    private static BackwardPlan? CreateBackwardPlan(BackwardPlanKey key)
+    private static BackwardPlan? CreateBackwardPlan(
+        BackwardPlanKey key,
+        LaneResources resources)
     {
-        nint handle = GetHandle(key.DeviceIndex);
+        nint handle = resources.Handle;
         nint operation = 0;
         if (MatmulDescCreate(
                 out operation,
@@ -437,7 +579,7 @@ internal static unsafe class CudaBlasLt
                 return null;
             }
 
-            NativeCudaBuffer<byte> workspace = GetWorkspace(key.DeviceIndex);
+            NativeCudaBuffer<byte> workspace = resources.Workspace;
             nuint maximumWorkspaceBytes = checked((nuint)workspace.Length);
             if (PreferenceSetAttribute(
                     preference,
@@ -465,8 +607,7 @@ internal static unsafe class CudaBlasLt
             if (status != Success || count == 0)
                 return null;
 
-            int selected = -1;
-            float selectedWaves = float.PositiveInfinity;
+            var candidates = new List<AlgorithmCandidate>(count);
             for (int index = 0; index < count; index++)
             {
                 ref HeuristicResult candidate = ref heuristics[index];
@@ -479,15 +620,36 @@ internal static unsafe class CudaBlasLt
                     && candidate.WavesCount > 0f
                         ? candidate.WavesCount
                         : float.MaxValue;
-                if (selected < 0 || waves < selectedWaves)
-                {
-                    selected = index;
-                    selectedWaves = waves;
-                }
+                _ = TryGetNumericalImplementationFlags(
+                    ref candidate.Algorithm,
+                    out ulong implementationFlags);
+                candidates.Add(new AlgorithmCandidate(
+                    candidate.Algorithm,
+                    candidate.WorkspaceSize,
+                    waves,
+                    implementationFlags));
             }
-            if (selected < 0)
+            if (candidates.Count == 0)
                 return null;
-            HeuristicResult heuristic = heuristics[selected];
+            AlgorithmCandidate[] tensorCoreCandidates = candidates
+                .Where(candidate =>
+                    (candidate.NumericalImplementationFlags &
+                        NumericalImplementationHmma) != 0)
+                .ToArray();
+            IEnumerable<AlgorithmCandidate> eligible =
+                tensorCoreCandidates.Length > 0
+                    ? tensorCoreCandidates
+                    : candidates;
+            if (tensorCoreCandidates.Length > 0)
+            {
+                Interlocked.Add(
+                    ref _rejectedNonTensorCoreCandidates,
+                    candidates.Count - tensorCoreCandidates.Length);
+            }
+            AlgorithmCandidate selected = eligible
+                .OrderBy(candidate => candidate.EstimatedWaves)
+                .ThenBy(candidate => candidate.WorkspaceSize)
+                .First();
             var plan = new BackwardPlan(
                 handle,
                 operation,
@@ -495,8 +657,11 @@ internal static unsafe class CudaBlasLt
                 right,
                 destination,
                 workspace,
-                heuristic.Algorithm,
-                heuristic.WorkspaceSize);
+                selected.Algorithm,
+                selected.WorkspaceSize,
+                selected.NumericalImplementationFlags,
+                key.ComputeStream,
+                resources);
             ownershipTransferred = true;
             return plan;
         }
@@ -528,12 +693,46 @@ internal static unsafe class CudaBlasLt
             _ = MatmulDescDestroy(operation);
     }
 
-    private static nint GetHandle(int deviceIndex)
-        => Handles.GetOrAdd(
-            deviceIndex,
-            static _ => new Lazy<nint>(
-                CreateHandle,
+    private static bool TryGetNumericalImplementationFlags(
+        ref MatmulAlgorithm algorithm,
+        out ulong implementationFlags)
+    {
+        ulong flags = 0;
+        nuint bytesWritten = 0;
+        MatmulAlgorithm algorithmCopy = algorithm;
+        int status = MatmulAlgoCapGetAttribute(
+            (nint)(&algorithmCopy),
+            AlgorithmNumericalImplementationFlags,
+            (nint)(&flags),
+            (nuint)sizeof(ulong),
+            (nint)(&bytesWritten));
+        implementationFlags = flags;
+        return status == Success
+            && bytesWritten == (nuint)sizeof(ulong);
+    }
+
+    private static LaneResources? GetLaneResources(
+        int deviceIndex,
+        nint computeStream)
+    {
+        if (!TensorExecutionContext.TryGetCudaStreamLane(
+                deviceIndex,
+                out IStreamExecutionLane lane)
+            || lane.ComputeStreamHandle != computeStream)
+        {
+            return null;
+        }
+        return LaneResourceTable.GetValue(
+            lane,
+            static value => new Lazy<LaneResources>(
+                () => ExecutionLaneResources.Attach(
+                    value,
+                    new LaneResources(
+                        value.DeviceIndex,
+                        value.ComputeStreamHandle,
+                        laneOwned: true)),
                 LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+    }
 
     private static nint CreateHandle()
     {
@@ -541,14 +740,6 @@ internal static unsafe class CudaBlasLt
             throw new InvalidOperationException("cublasLtCreate failed.");
         return handle;
     }
-
-    private static NativeCudaBuffer<byte> GetWorkspace(int deviceIndex)
-        => Workspaces.GetOrAdd(
-            deviceIndex,
-            static index => new Lazy<NativeCudaBuffer<byte>>(
-                () => ForgetMemoryV2Cuda.GetAccelerator(index)
-                    .Allocate1D<byte>(WorkspaceBytes),
-                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
 
     private static int ExecutePlan(
         Plan plan,
@@ -560,7 +751,9 @@ internal static unsafe class CudaBlasLt
         int selected = Volatile.Read(ref plan.SelectedCandidate);
         if (selected < 0)
         {
-            accelerator.Synchronize();
+            NativeCudaRuntime.SynchronizeComputeStream(
+                accelerator,
+                plan.ComputeStream);
             long bestTicks = long.MaxValue;
             int best = -1;
             for (int index = 0;
@@ -571,18 +764,22 @@ internal static unsafe class CudaBlasLt
                 // One untimed launch removes first-use setup from the
                 // shape-specific measurement.
                 int status = ExecuteCandidate(
-                    plan, candidate, accelerator.DefaultStream,
+                    plan, candidate, plan.ComputeStream,
                     input, weight, output);
                 if (status != Success)
                     continue;
-                accelerator.Synchronize();
+                NativeCudaRuntime.SynchronizeComputeStream(
+                    accelerator,
+                    plan.ComputeStream);
                 long started = System.Diagnostics.Stopwatch.GetTimestamp();
                 status = ExecuteCandidate(
-                    plan, candidate, accelerator.DefaultStream,
+                    plan, candidate, plan.ComputeStream,
                     input, weight, output);
                 if (status != Success)
                     continue;
-                accelerator.Synchronize();
+                NativeCudaRuntime.SynchronizeComputeStream(
+                    accelerator,
+                    plan.ComputeStream);
                 long elapsed =
                     System.Diagnostics.Stopwatch.GetTimestamp() - started;
                 if (elapsed < bestTicks)
@@ -599,7 +796,7 @@ internal static unsafe class CudaBlasLt
         return ExecuteCandidate(
             plan,
             plan.Candidates[selected],
-            accelerator.DefaultStream,
+            plan.ComputeStream,
             input,
             weight,
             output);
@@ -640,7 +837,10 @@ internal static unsafe class CudaBlasLt
         int Rows,
         int InputWidth,
         int OutputWidth,
-        bool ApplyRelu);
+        bool ApplyRelu)
+    {
+        internal nint ComputeStream { get; init; }
+    }
 
     private enum BackwardOperation
     {
@@ -654,7 +854,143 @@ internal static unsafe class CudaBlasLt
         int Rows,
         int InputWidth,
         int OutputWidth,
-        BackwardOperation Operation);
+        BackwardOperation Operation)
+    {
+        internal nint ComputeStream { get; init; }
+    }
+
+    private readonly record struct StreamKey(
+        int DeviceIndex,
+        nint ComputeStream);
+
+    private sealed class LaneResources : IDisposable
+    {
+        private readonly Lazy<nint> _handle;
+        private readonly Lazy<NativeCudaBuffer<byte>> _workspace;
+        private readonly bool _laneOwned;
+        private int _disposed;
+
+        internal LaneResources(
+            int deviceIndex,
+            nint computeStream,
+            bool laneOwned)
+        {
+            DeviceIndex = deviceIndex;
+            ComputeStream = computeStream;
+            _laneOwned = laneOwned;
+            _handle = new Lazy<nint>(
+                CreateHandle,
+                LazyThreadSafetyMode.ExecutionAndPublication);
+            _workspace = new Lazy<NativeCudaBuffer<byte>>(
+                () => ForgetMemoryV2Cuda.GetAccelerator(deviceIndex)
+                    .Allocate1D<byte>(
+                        WorkspaceBytes,
+                        CudaMemoryKind.Workspace),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+            Plans = new(PlanCacheCapacity);
+            BackwardPlans = new(BackwardPlanCacheCapacity);
+            ForwardPlanFactory = CreateForwardPlan;
+            BackwardPlanFactory = CreateBackwardPlan;
+            if (laneOwned)
+                Interlocked.Increment(ref _activeLaneResourceCount);
+        }
+
+        internal int DeviceIndex { get; }
+        internal nint ComputeStream { get; }
+        internal nint Handle => _handle.Value;
+        internal NativeCudaBuffer<byte> Workspace => _workspace.Value;
+        internal BoundedDisposableLeaseCache<
+            PlanKey,
+            CachedPlan<Plan>> Plans { get; }
+        internal BoundedDisposableLeaseCache<
+            BackwardPlanKey,
+            CachedPlan<BackwardPlan>> BackwardPlans { get; }
+        internal Func<PlanKey, CachedPlan<Plan>?> ForwardPlanFactory { get; }
+        internal Func<BackwardPlanKey, CachedPlan<BackwardPlan>?>
+            BackwardPlanFactory { get; }
+        internal bool IsDisposing => Volatile.Read(ref _disposed) != 0;
+
+        private CachedPlan<Plan> CreateForwardPlan(PlanKey key)
+            => new(CudaBlasLt.CreatePlan(key, this));
+
+        private CachedPlan<BackwardPlan> CreateBackwardPlan(
+            BackwardPlanKey key)
+            => new(CudaBlasLt.CreateBackwardPlan(key, this));
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            if (!_laneOwned)
+            {
+                NativeCudaRuntime.DisposeAfterStreamFence(
+                    DeviceIndex,
+                    ComputeStream,
+                    DisposeOwnedResources);
+                return;
+            }
+            DisposeOwnedResources();
+        }
+
+        internal void DisposeChildAfterFence(Action dispose)
+        {
+            ArgumentNullException.ThrowIfNull(dispose);
+            if (IsDisposing)
+            {
+                dispose();
+                return;
+            }
+            NativeCudaRuntime.DisposeAfterStreamFence(
+                DeviceIndex,
+                ComputeStream,
+                dispose);
+        }
+
+        private void DisposeOwnedResources()
+        {
+            List<Exception>? failures = null;
+            TryDispose(Plans.Dispose, ref failures);
+            TryDispose(BackwardPlans.Dispose, ref failures);
+            if (_workspace.IsValueCreated)
+                TryDispose(_workspace.Value.Dispose, ref failures);
+            if (_handle.IsValueCreated)
+            {
+                TryDispose(
+                    () =>
+                    {
+                        int status = Destroy(_handle.Value);
+                        if (status != Success)
+                        {
+                            throw new InvalidOperationException(
+                                $"cublasLtDestroy failed with cuBLAS status {status}.");
+                        }
+                    },
+                    ref failures);
+            }
+            if (_laneOwned)
+                Interlocked.Decrement(ref _activeLaneResourceCount);
+            if (failures is not null)
+            {
+                throw new AggregateException(
+                    $"cuBLASLt stream resources failed to dispose on device {DeviceIndex}.",
+                    failures);
+            }
+        }
+
+        private static void TryDispose(
+            Action action,
+            ref List<Exception>? failures)
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+        }
+    }
 
     private sealed class CachedPlan<TPlan>(TPlan? value) : IDisposable
         where TPlan : class, IDisposable
@@ -671,7 +1007,9 @@ internal static unsafe class CudaBlasLt
         nint input,
         nint output,
         NativeCudaBuffer<byte> workspace,
-        AlgorithmCandidate[] candidates) : IDisposable
+        AlgorithmCandidate[] candidates,
+        nint computeStream,
+        LaneResources owner) : IDisposable
     {
         private int _disposed;
 
@@ -682,6 +1020,7 @@ internal static unsafe class CudaBlasLt
         internal nint Output { get; } = output;
         internal NativeCudaBuffer<byte> Workspace { get; } = workspace;
         internal AlgorithmCandidate[] Candidates { get; } = candidates;
+        internal nint ComputeStream { get; } = computeStream;
         internal object ExecutionSync { get; } = new();
         internal int SelectedCandidate = -1;
 
@@ -689,14 +1028,20 @@ internal static unsafe class CudaBlasLt
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
-            DestroyDescriptors(Operation, Weight, Input, Output);
+            owner.DisposeChildAfterFence(
+                () => DestroyDescriptors(
+                    Operation,
+                    Weight,
+                    Input,
+                    Output));
         }
     }
 
     private readonly record struct AlgorithmCandidate(
         MatmulAlgorithm Algorithm,
         nuint WorkspaceSize,
-        float EstimatedWaves);
+        float EstimatedWaves,
+        ulong NumericalImplementationFlags);
 
     private sealed class BackwardPlan(
         nint handle,
@@ -706,7 +1051,10 @@ internal static unsafe class CudaBlasLt
         nint destination,
         NativeCudaBuffer<byte> workspace,
         MatmulAlgorithm algorithm,
-        nuint workspaceSize) : IDisposable
+        nuint workspaceSize,
+        ulong numericalImplementationFlags,
+        nint computeStream,
+        LaneResources owner) : IDisposable
     {
         private int _disposed;
 
@@ -718,13 +1066,21 @@ internal static unsafe class CudaBlasLt
         internal NativeCudaBuffer<byte> Workspace { get; } = workspace;
         internal MatmulAlgorithm Algorithm = algorithm;
         internal nuint WorkspaceSize { get; } = workspaceSize;
+        internal ulong NumericalImplementationFlags { get; } =
+            numericalImplementationFlags;
+        internal nint ComputeStream { get; } = computeStream;
         internal object ExecutionSync { get; } = new();
 
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
-            DestroyDescriptors(Operation, Left, Right, Destination);
+            owner.DisposeChildAfterFence(
+                () => DestroyDescriptors(
+                    Operation,
+                    Left,
+                    Right,
+                    Destination));
         }
     }
 
@@ -744,61 +1100,57 @@ internal static unsafe class CudaBlasLt
         internal fixed int Reserved[4];
     }
 
-    [DllImport(Library, EntryPoint = "cublasLtCreate",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int Create(out nint handle);
+    private static int Create(out nint handle)
+        => CudaNativeGateway.CublasLtCreate(out handle);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatmulDescCreate",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int MatmulDescCreate(
+    private static int Destroy(nint handle)
+        => CudaNativeGateway.CublasLtDestroy(handle);
+
+    private static int MatmulDescCreate(
         out nint descriptor,
         int computeType,
-        int scaleType);
+        int scaleType)
+        => CudaNativeGateway.CublasLtMatmulDescCreate(
+            out descriptor, computeType, scaleType);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatmulDescDestroy",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int MatmulDescDestroy(nint descriptor);
+    private static int MatmulDescDestroy(nint descriptor)
+        => CudaNativeGateway.CublasLtMatmulDescDestroy(descriptor);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatmulDescSetAttribute",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int MatmulDescSetAttribute(
+    private static int MatmulDescSetAttribute(
         nint descriptor,
         int attribute,
         nint value,
-        nuint size);
+        nuint size)
+        => CudaNativeGateway.CublasLtMatmulDescSetAttribute(
+            descriptor, attribute, value, size);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatrixLayoutCreate",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int MatrixLayoutCreate(
+    private static int MatrixLayoutCreate(
         out nint layout,
         int type,
         nuint rows,
         nuint columns,
-        long leadingDimension);
+        long leadingDimension)
+        => CudaNativeGateway.CublasLtMatrixLayoutCreate(
+            out layout, type, rows, columns, leadingDimension);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatrixLayoutDestroy",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int MatrixLayoutDestroy(nint layout);
+    private static int MatrixLayoutDestroy(nint layout)
+        => CudaNativeGateway.CublasLtMatrixLayoutDestroy(layout);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatmulPreferenceCreate",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int PreferenceCreate(out nint preference);
+    private static int PreferenceCreate(out nint preference)
+        => CudaNativeGateway.CublasLtPreferenceCreate(out preference);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatmulPreferenceDestroy",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int PreferenceDestroy(nint preference);
+    private static int PreferenceDestroy(nint preference)
+        => CudaNativeGateway.CublasLtPreferenceDestroy(preference);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatmulPreferenceSetAttribute",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int PreferenceSetAttribute(
+    private static int PreferenceSetAttribute(
         nint preference,
         int attribute,
         nint value,
-        nuint size);
+        nuint size)
+        => CudaNativeGateway.CublasLtPreferenceSetAttribute(
+            preference, attribute, value, size);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatmulAlgoGetHeuristic",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int MatmulAlgoGetHeuristic(
+    private static int MatmulAlgoGetHeuristic(
         nint handle,
         nint operation,
         nint weight,
@@ -808,11 +1160,21 @@ internal static unsafe class CudaBlasLt
         nint preference,
         int requestedCount,
         nint results,
-        nint returnedCount);
+        nint returnedCount)
+        => CudaNativeGateway.CublasLtMatmulAlgoGetHeuristic(
+            handle, operation, weight, input, outputC, outputD, preference,
+            requestedCount, results, returnedCount);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatmul",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int Matmul(
+    private static int MatmulAlgoCapGetAttribute(
+        nint algorithm,
+        int attribute,
+        nint buffer,
+        nuint size,
+        nint sizeWritten)
+        => CudaNativeGateway.CublasLtMatmulAlgoCapGetAttribute(
+            algorithm, attribute, buffer, size, sizeWritten);
+
+    private static int Matmul(
         nint handle,
         nint operation,
         nint alpha,
@@ -828,6 +1190,10 @@ internal static unsafe class CudaBlasLt
         nint algorithm,
         nint workspace,
         nuint workspaceSize,
-        nint stream);
+        nint stream)
+        => CudaNativeGateway.CublasLtMatmul(
+            handle, operation, alpha, weight, weightLayout, input,
+            inputLayout, beta, outputC, outputCLayout, outputD,
+            outputDLayout, algorithm, workspace, workspaceSize, stream);
 
 }

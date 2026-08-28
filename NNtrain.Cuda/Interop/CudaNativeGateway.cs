@@ -7,6 +7,22 @@ namespace NNtrain.Cuda.Interop;
 public readonly record struct CudaAbiVersion(int Major, int Minor)
 {
     public const int SupportedMajor = 1;
+    public const int StreamAwareMemoryMinor = 4;
+    public const int Bfp8EmbeddingMinor = 5;
+    public const int TrainingKernelGatewayMinor = 5;
+    public const int Bfp8ScaleAwareGradientMinor = 6;
+    public const int NekoMuonFiniteStatusMinor = 7;
+    public const int CudaOutputGradientSeedMinor = 8;
+    public const int ReducedEmbeddingBackwardMinor = 9;
+    public const int TensorTopKMinor = 10;
+    public const int CudaGraphMinor = 11;
+    public const int CudaGraphDropoutMinor = 12;
+    public const int PublicTensorOpsMinor = 14;
+    public const int PureBFloat16GradientMinor = 15;
+    public const int ClassificationAccuracyMinor = 16;
+    public const int GraphFusedLayerNormMinor = 17;
+    public const int PureBFloat16OptimizerMinor = 18;
+    public const int ExternalGradientReadyEventMinor = 19;
 
     public uint Packed =>
         ((uint)(ushort)Major << 16) | (ushort)Minor;
@@ -64,6 +80,79 @@ public enum CudaNativeOperation : uint
     Bfp8QuantizeBFloat16 = 29,
     Bfp8RequantizeInt32 = 30,
     Bfp8TransposeInt8 = 31,
+    MemsetAsync = 32,
+    CopyDeviceToDeviceAsync = 33,
+    Bfp8Embedding = 34,
+    Bfp8EmbeddingPositions = 35,
+    LayerNormForward = 36,
+    LayerNormForwardBFloat16 = 37,
+    LayerNormBackward = 38,
+    LayerNormBackwardBFloat16 = 39,
+    ResidualDropoutLayerNormForward = 40,
+    ResidualDropoutLayerNormForwardBFloat16 = 41,
+    ResidualDropoutLayerNormBackward = 42,
+    ResidualDropoutLayerNormBackwardBFloat16 = 43,
+    ResidualDropoutLayerNormBackwardBFloat16BranchGradient = 44,
+    ResidualDropoutLayerNormBackwardBFloat16IoGradient = 45,
+    FlashAttentionForward = 46,
+    FlashAttentionBackward = 47,
+    FlashAttentionForwardBFloat16 = 48,
+    FlashAttentionBackwardBFloat16 = 49,
+    FlashAttentionForwardBFloat16TensorCore = 50,
+    FlashAttentionForwardBFloat16TensorCoreSync = 51,
+    FlashAttentionBackwardBFloat16TensorCore = 52,
+    FlashAttentionBackwardBFloat16TensorCoreParallelDkv = 53,
+    FlashAttentionBackwardBFloat16TensorCoreBFloat16Gradient = 54,
+    FlashAttentionBackwardBFloat16TensorCoreBFloat16IoGradient = 55,
+    FlashAttentionBackwardBFloat16TensorCoreBFloat16IoGradientSync = 56,
+    FlashAttentionIncrementalBFloat16 = 57,
+    FlashAttentionPrefillCacheBFloat16 = 58,
+    ForgetMemoryForward = 59,
+    ForgetMemoryBackward = 60,
+    ForgetMemoryForwardBFloat16TensorCore = 61,
+    Bfp8GradientQuantize = 62,
+    Bfp8GradientReduce = 63,
+    Bfp8GradientBroadcast = 64,
+    Bfp8GradientQuantizeAccumulate = 65,
+    Bfp8GradientSquaredSum = 66,
+    Bfp8GradientScale = 67,
+    NekoMuonMomentsStatsCompact = 68,
+    NekoMuonMomentsStatsCompactFinite = 69,
+    TensorAccumulateScalar = 70,
+    EmbeddingBackwardReduced = 71,
+    EmbeddingPositionsBackwardReduced = 72,
+    TensorTopK = 73,
+    GraphBeginCapture = 74,
+    GraphEndCapture = 75,
+    GraphInstantiate = 76,
+    GraphLaunch = 77,
+    GraphDestroy = 78,
+    GraphExecutableDestroy = 79,
+    GraphRngStep = 80,
+    GraphCounterSet = 81,
+    GraphCounterAdvance = 82,
+    GraphDropoutForward = 83,
+    GraphAddDropoutForward = 84,
+    GraphDropoutBackward = 85,
+    GraphAddDropoutBackward = 86,
+    PublicTensorOps = 87,
+    EmbeddingBackwardBFloat16Gradient = 88,
+    EmbeddingPositionsBackwardBFloat16Gradient = 89,
+    DropoutBackwardBFloat16Gradient = 90,
+    AddDropoutBackwardBFloat16Gradient = 91,
+    LinearBiasBackwardBFloat16Gradient = 92,
+    BFloat16GradientSquaredSum = 93,
+    BFloat16GradientScale = 94,
+    ClassificationCorrectCount = 95,
+    TensorPrimitiveFloat32 = 96,
+    TensorPrimitiveBFloat16 = 97,
+    Optimizer = 98,
+    OptimizerBFloat16 = 99,
+    OptimizerBfp8 = 100,
+    OptimizerNekoMuon = 101,
+    OptimizerNekoMuonBFloat16 = 102,
+    GradientCollective = 103,
+    GradientCollectiveBFloat16 = 104,
 }
 
 /// <summary>
@@ -79,10 +168,25 @@ public readonly record struct CudaNativeErrorInfo(
     CudaNativeOperation Operation);
 
 /// <summary>
+/// Managed mirror of CUDA's native thread-local device and tensor-kernel
+/// stream selection. Generation changes whenever a gateway call changes or
+/// invalidates either selection, allowing cached callers to detect stale
+/// bindings without another native transition.
+/// </summary>
+public readonly record struct CudaNativeThreadContextSnapshot(
+    long Generation,
+    bool HasSelectedDevice,
+    int SelectedDevice,
+    bool HasExternalStream,
+    nint ExternalStream,
+    long SetDeviceCallCount,
+    long UseExternalStreamCallCount);
+
+/// <summary>
 /// Versioned gateway for the CUDA runtime bridge. Runtime, memory, stream,
 /// event, and copy entry points are declared only in this type.
 /// </summary>
-public static class CudaNativeGateway
+public static partial class CudaNativeGateway
 {
     public const string LibraryName = "NNtrain.CudaKernels.dll";
 
@@ -103,12 +207,38 @@ public static class CudaNativeGateway
         LazyThreadSafetyMode.ExecutionAndPublication);
 
     // A native failure is copied immediately after the returning P/Invoke.
-    // This per-managed-caller slot never references the process-wide native
-    // record and exists only until NativeCudaException consumes it.
+    // Legacy kernels that predate the native error ring receive an immutable
+    // managed snapshot with sequence zero. This per-managed-caller slot never
+    // references process-wide mutable state and exists only until
+    // NativeCudaException consumes it.
     [ThreadStatic]
     private static CudaNativeErrorInfo? _capturedFailure;
 
+    [ThreadStatic]
+    private static long _threadContextGeneration;
+    [ThreadStatic]
+    private static bool _threadDeviceKnown;
+    [ThreadStatic]
+    private static int _threadSelectedDevice;
+    [ThreadStatic]
+    private static bool _threadExternalStreamKnown;
+    [ThreadStatic]
+    private static nint _threadExternalStream;
+    [ThreadStatic]
+    private static long _threadSetDeviceCallCount;
+    [ThreadStatic]
+    private static long _threadUseExternalStreamCallCount;
+
     public static CudaAbiVersion AbiVersion => CompatibleAbi.Value;
+
+    public static CudaNativeThreadContextSnapshot CurrentThreadContext => new(
+        _threadContextGeneration,
+        _threadDeviceKnown,
+        _threadSelectedDevice,
+        _threadExternalStreamKnown,
+        _threadExternalStream,
+        _threadSetDeviceCallCount,
+        _threadUseExternalStreamCallCount);
 
     public static void EnsureCompatibleAbi() => _ = CompatibleAbi.Value;
 
@@ -151,6 +281,10 @@ public static class CudaNativeGateway
     public static int SetDevice(int device)
     {
         EnsureCompatibleAbi();
+        unchecked
+        {
+            _threadSetDeviceCallCount++;
+        }
         return Complete(
             NativeMethods.SetDevice(device),
             CudaNativeOperation.SetDevice,
@@ -160,8 +294,20 @@ public static class CudaNativeGateway
     public static int UseExternalStream(nint stream)
     {
         EnsureCompatibleAbi();
+        unchecked
+        {
+            _threadUseExternalStreamCallCount++;
+        }
         int status = NativeMethods.UseExternalStream(stream);
         _capturedFailure = null;
+        if (status == 0)
+        {
+            PublishExternalStream(stream);
+        }
+        else
+        {
+            InvalidateExternalStream();
+        }
         return status;
     }
 
@@ -220,6 +366,27 @@ public static class CudaNativeGateway
             device);
     }
 
+    public static int MemsetAsync(
+        int device,
+        nint destination,
+        int value,
+        nuint bytes,
+        nint stream)
+    {
+        EnsureMinimumAbiMinor(
+            CudaAbiVersion.StreamAwareMemoryMinor,
+            "stream-aware CUDA memory operations");
+        return Complete(
+            NativeMethods.MemsetAsync(
+                device,
+                destination,
+                value,
+                bytes,
+                stream),
+            CudaNativeOperation.MemsetAsync,
+            device);
+    }
+
     public static int CopyHostToDevice(
         int device,
         nint destination,
@@ -237,6 +404,31 @@ public static class CudaNativeGateway
             device);
     }
 
+    /// <summary>
+    /// Enqueues a host-to-device copy. The source storage must remain valid
+    /// until the supplied stream has completed.
+    /// </summary>
+    public static int CopyHostToDeviceAsync(
+        int device,
+        nint destination,
+        nint source,
+        nuint bytes,
+        nint stream)
+    {
+        EnsureMinimumAbiMinor(
+            CudaAbiVersion.StreamAwareMemoryMinor,
+            "stream-aware CUDA memory operations");
+        return Complete(
+            NativeMethods.CopyHostToDeviceAsync(
+                device,
+                destination,
+                source,
+                bytes,
+                stream),
+            CudaNativeOperation.CopyHostToDeviceAsync,
+            device);
+    }
+
     public static int CopyDeviceToHost(
         int device,
         nint destination,
@@ -251,6 +443,31 @@ public static class CudaNativeGateway
                 source,
                 bytes),
             CudaNativeOperation.CopyDeviceToHost,
+            device);
+    }
+
+    /// <summary>
+    /// Enqueues a device-to-host copy. The destination storage must remain
+    /// valid until the supplied stream has completed.
+    /// </summary>
+    public static int CopyDeviceToHostAsync(
+        int device,
+        nint destination,
+        nint source,
+        nuint bytes,
+        nint stream)
+    {
+        EnsureMinimumAbiMinor(
+            CudaAbiVersion.StreamAwareMemoryMinor,
+            "stream-aware CUDA memory operations");
+        return Complete(
+            NativeMethods.CopyDeviceToHostAsync(
+                device,
+                destination,
+                source,
+                bytes,
+                stream),
+            CudaNativeOperation.CopyDeviceToHostAsync,
             device);
     }
 
@@ -397,14 +614,49 @@ public static class CudaNativeGateway
         nuint bytes)
     {
         EnsureCompatibleAbi();
+        int status = NativeMethods.CopyDeviceToDevice(
+            destinationDevice,
+            destination,
+            sourceDevice,
+            source,
+            bytes);
+        // The synchronous peer-copy branch does not call select_device;
+        // same-device copies do. Preserve the exact native TLS mirror.
+        return destinationDevice == sourceDevice
+            ? CompleteSelectingDevice(
+                status,
+                CudaNativeOperation.CopyDeviceToDevice,
+                destinationDevice)
+            : Complete(
+                status,
+                CudaNativeOperation.CopyDeviceToDevice,
+                destinationDevice);
+    }
+
+    /// <summary>
+    /// Enqueues an intra-device or peer copy on a stream owned by the
+    /// destination device.
+    /// </summary>
+    public static int CopyDeviceToDeviceAsync(
+        int destinationDevice,
+        nint destination,
+        int sourceDevice,
+        nint source,
+        nuint bytes,
+        nint stream)
+    {
+        EnsureMinimumAbiMinor(
+            CudaAbiVersion.StreamAwareMemoryMinor,
+            "stream-aware CUDA memory operations");
         return Complete(
-            NativeMethods.CopyDeviceToDevice(
+            NativeMethods.CopyDeviceToDeviceAsync(
                 destinationDevice,
                 destination,
                 sourceDevice,
                 source,
-                bytes),
-            CudaNativeOperation.CopyDeviceToDevice,
+                bytes,
+                stream),
+            CudaNativeOperation.CopyDeviceToDeviceAsync,
             destinationDevice);
     }
 
@@ -439,6 +691,129 @@ public static class CudaNativeGateway
             (CudaKernelFeature)(bitmap & KnownCapabilityMask));
         return status;
     }
+
+    /// <summary>
+    /// Returns the minimum native capability bits advertised by a device
+    /// before a training-kernel operation should be selected.
+    /// </summary>
+    public static CudaKernelFeature RequiredFeatures(
+        CudaNativeOperation operation) => operation switch
+    {
+        CudaNativeOperation.LayerNormForward or
+        CudaNativeOperation.LayerNormBackward or
+        CudaNativeOperation.ResidualDropoutLayerNormForward or
+        CudaNativeOperation.ResidualDropoutLayerNormBackward =>
+            CudaKernelFeature.FusedLayerNorm,
+
+        CudaNativeOperation.LayerNormForwardBFloat16 or
+        CudaNativeOperation.LayerNormBackwardBFloat16 or
+        CudaNativeOperation.ResidualDropoutLayerNormForwardBFloat16 or
+        CudaNativeOperation.ResidualDropoutLayerNormBackwardBFloat16 or
+        CudaNativeOperation
+            .ResidualDropoutLayerNormBackwardBFloat16BranchGradient or
+        CudaNativeOperation
+            .ResidualDropoutLayerNormBackwardBFloat16IoGradient =>
+            CudaKernelFeature.FusedLayerNorm |
+            CudaKernelFeature.BFloat16,
+
+        CudaNativeOperation.FlashAttentionForward or
+        CudaNativeOperation.FlashAttentionBackward =>
+            CudaKernelFeature.FlashAttention,
+
+        CudaNativeOperation.FlashAttentionForwardBFloat16 or
+        CudaNativeOperation.FlashAttentionBackwardBFloat16 or
+        CudaNativeOperation.FlashAttentionIncrementalBFloat16 or
+        CudaNativeOperation.FlashAttentionPrefillCacheBFloat16 =>
+            CudaKernelFeature.FlashAttention |
+            CudaKernelFeature.BFloat16,
+
+        CudaNativeOperation.FlashAttentionForwardBFloat16TensorCore or
+        CudaNativeOperation.FlashAttentionForwardBFloat16TensorCoreSync or
+        CudaNativeOperation.FlashAttentionBackwardBFloat16TensorCore or
+        CudaNativeOperation
+            .FlashAttentionBackwardBFloat16TensorCoreParallelDkv or
+        CudaNativeOperation
+            .FlashAttentionBackwardBFloat16TensorCoreBFloat16Gradient or
+        CudaNativeOperation
+            .FlashAttentionBackwardBFloat16TensorCoreBFloat16IoGradient or
+        CudaNativeOperation
+            .FlashAttentionBackwardBFloat16TensorCoreBFloat16IoGradientSync =>
+            CudaKernelFeature.FlashAttention |
+            CudaKernelFeature.BFloat16 |
+            CudaKernelFeature.TensorCores,
+
+        CudaNativeOperation.ForgetMemoryForward or
+        CudaNativeOperation.ForgetMemoryBackward =>
+            CudaKernelFeature.ForgetMemory,
+
+        CudaNativeOperation.ForgetMemoryForwardBFloat16TensorCore =>
+            CudaKernelFeature.ForgetMemory |
+            CudaKernelFeature.BFloat16 |
+            CudaKernelFeature.TensorCores,
+
+        CudaNativeOperation.Bfp8GradientQuantize or
+        CudaNativeOperation.Bfp8GradientQuantizeAccumulate or
+        CudaNativeOperation.Bfp8GradientSquaredSum or
+        CudaNativeOperation.Bfp8GradientScale =>
+            CudaKernelFeature.Bfp8Quantization,
+
+        CudaNativeOperation.Bfp8GradientReduce or
+        CudaNativeOperation.Bfp8GradientBroadcast =>
+            CudaKernelFeature.Bfp8Quantization |
+            CudaKernelFeature.AsynchronousGradientReduction,
+
+        CudaNativeOperation.NekoMuonMomentsStatsCompact or
+        CudaNativeOperation.NekoMuonMomentsStatsCompactFinite =>
+            CudaKernelFeature.BlockReducedMuon,
+
+        CudaNativeOperation.GraphBeginCapture or
+        CudaNativeOperation.GraphEndCapture or
+        CudaNativeOperation.GraphInstantiate or
+        CudaNativeOperation.GraphLaunch or
+        CudaNativeOperation.GraphDestroy or
+        CudaNativeOperation.GraphExecutableDestroy or
+        CudaNativeOperation.GraphRngStep or
+        CudaNativeOperation.GraphCounterSet or
+        CudaNativeOperation.GraphCounterAdvance or
+        CudaNativeOperation.GraphDropoutForward or
+        CudaNativeOperation.GraphAddDropoutForward or
+        CudaNativeOperation.GraphDropoutBackward or
+        CudaNativeOperation.GraphAddDropoutBackward =>
+            CudaKernelFeature.CudaGraphs,
+
+        CudaNativeOperation.EmbeddingBackwardBFloat16Gradient or
+        CudaNativeOperation.EmbeddingPositionsBackwardBFloat16Gradient or
+        CudaNativeOperation.DropoutBackwardBFloat16Gradient or
+        CudaNativeOperation.AddDropoutBackwardBFloat16Gradient or
+        CudaNativeOperation.LinearBiasBackwardBFloat16Gradient or
+        CudaNativeOperation.BFloat16GradientSquaredSum or
+        CudaNativeOperation.BFloat16GradientScale =>
+            CudaKernelFeature.BFloat16,
+
+        CudaNativeOperation.TensorPrimitiveBFloat16 or
+        CudaNativeOperation.OptimizerBFloat16 =>
+            CudaKernelFeature.BFloat16,
+
+        CudaNativeOperation.OptimizerBfp8 =>
+            CudaKernelFeature.Bfp8Quantization,
+
+        CudaNativeOperation.OptimizerNekoMuon =>
+            CudaKernelFeature.BlockReducedMuon,
+
+        CudaNativeOperation.OptimizerNekoMuonBFloat16 =>
+            CudaKernelFeature.BlockReducedMuon |
+            CudaKernelFeature.BFloat16 |
+            CudaKernelFeature.TensorCores,
+
+        CudaNativeOperation.GradientCollective =>
+            CudaKernelFeature.AsynchronousGradientReduction,
+
+        CudaNativeOperation.GradientCollectiveBFloat16 =>
+            CudaKernelFeature.AsynchronousGradientReduction |
+            CudaKernelFeature.BFloat16,
+
+        _ => CudaKernelFeature.None,
+    };
 
     public static int Bfp8QuantizeFloat32(
         int device,
@@ -607,18 +982,146 @@ public static class CudaNativeGateway
         if (status == 0)
         {
             _capturedFailure = null;
+            if (OperationSelectsDevice(operation))
+                PublishDeviceSelection(device);
             return status;
         }
 
-        _capturedFailure = TryReadErrorSnapshot(
+        if (OperationSelectsDevice(operation))
+            InvalidateDeviceSelection();
+        _capturedFailure = CaptureFailure(status, device, operation);
+        return status;
+    }
+
+    private static int CompleteSelectingDevice(
+        int status,
+        CudaNativeOperation operation,
+        int device)
+    {
+        int completed = Complete(status, operation, device);
+        if (OperationSelectsDevice(operation))
+            return completed;
+        if (completed == 0)
+            PublishDeviceSelection(device);
+        else
+            InvalidateDeviceSelection();
+        return completed;
+    }
+
+    private static bool OperationSelectsDevice(CudaNativeOperation operation)
+        => operation is
+            CudaNativeOperation.SetDevice or
+            CudaNativeOperation.Synchronize or
+            CudaNativeOperation.MemoryInfo or
+            CudaNativeOperation.Allocate or
+            CudaNativeOperation.Free or
+            CudaNativeOperation.Memset or
+            CudaNativeOperation.MemsetAsync or
+            CudaNativeOperation.CopyHostToDevice or
+            CudaNativeOperation.CopyDeviceToHost or
+            CudaNativeOperation.CopyDeviceToHostAsync or
+            CudaNativeOperation.CopyHostToDeviceAsync or
+            CudaNativeOperation.CopyDeviceToDeviceAsync or
+            CudaNativeOperation.StreamCreate or
+            CudaNativeOperation.StreamDestroy or
+            CudaNativeOperation.StreamSynchronize or
+            CudaNativeOperation.EventCreate or
+            CudaNativeOperation.EventDestroy or
+            CudaNativeOperation.EventRecord or
+            CudaNativeOperation.EventQuery or
+            CudaNativeOperation.EventSynchronize or
+            CudaNativeOperation.Capabilities or
+            CudaNativeOperation.Bfp8Quantize or
+            CudaNativeOperation.Bfp8DequantizeFloat32 or
+            CudaNativeOperation.Bfp8DequantizeBFloat16 or
+            CudaNativeOperation.Bfp8QuantizeBFloat16 or
+            CudaNativeOperation.Bfp8RequantizeInt32 or
+            CudaNativeOperation.Bfp8TransposeInt8 or
+            CudaNativeOperation.Bfp8Embedding or
+            CudaNativeOperation.Bfp8EmbeddingPositions or
+            CudaNativeOperation.Bfp8GradientQuantize or
+            CudaNativeOperation.Bfp8GradientReduce or
+            CudaNativeOperation.Bfp8GradientBroadcast or
+            CudaNativeOperation.Bfp8GradientQuantizeAccumulate or
+            CudaNativeOperation.Bfp8GradientSquaredSum or
+            CudaNativeOperation.Bfp8GradientScale or
+            CudaNativeOperation.GraphBeginCapture or
+            CudaNativeOperation.GraphEndCapture or
+            CudaNativeOperation.GraphInstantiate or
+            CudaNativeOperation.GraphLaunch or
+            CudaNativeOperation.GraphDestroy or
+            CudaNativeOperation.GraphExecutableDestroy or
+            CudaNativeOperation.GraphRngStep or
+            CudaNativeOperation.GraphCounterSet or
+            CudaNativeOperation.GraphCounterAdvance or
+            CudaNativeOperation.GraphDropoutForward or
+            CudaNativeOperation.GraphAddDropoutForward or
+            CudaNativeOperation.GraphDropoutBackward or
+            CudaNativeOperation.GraphAddDropoutBackward or
+            CudaNativeOperation.ClassificationCorrectCount;
+
+    private static void PublishDeviceSelection(int device)
+    {
+        if (_threadDeviceKnown && _threadSelectedDevice == device)
+            return;
+        _threadSelectedDevice = device;
+        _threadDeviceKnown = true;
+        AdvanceThreadContextGeneration();
+    }
+
+    private static void PublishExternalStream(nint stream)
+    {
+        if (_threadExternalStreamKnown && _threadExternalStream == stream)
+            return;
+        _threadExternalStream = stream;
+        _threadExternalStreamKnown = true;
+        AdvanceThreadContextGeneration();
+    }
+
+    private static void InvalidateDeviceSelection()
+    {
+        _threadDeviceKnown = false;
+        AdvanceThreadContextGeneration();
+    }
+
+    private static void InvalidateExternalStream()
+    {
+        _threadExternalStreamKnown = false;
+        AdvanceThreadContextGeneration();
+    }
+
+    private static void AdvanceThreadContextGeneration()
+    {
+        unchecked
+        {
+            _threadContextGeneration++;
+        }
+    }
+
+    private static CudaNativeErrorInfo CaptureFailure(
+        int status,
+        int device,
+        CudaNativeOperation operation)
+    {
+        if (TryReadErrorSnapshot(
                 status,
                 device,
                 operation,
                 out CudaNativeErrorInfo error) &&
-            error.Status == status
-                ? error
-                : null;
-        return status;
+            error.Status == status)
+        {
+            return error;
+        }
+
+        // Older tensor/optimizer/collective exports return CUDA status codes
+        // directly and therefore have no entry in the ABI 1.x native ring.
+        // Preserve the same exception contract without a second native call.
+        return new CudaNativeErrorInfo(
+            AbiVersion,
+            Sequence: 0,
+            Status: status,
+            DeviceIndex: device,
+            Operation: operation);
     }
 
     private static bool TryReadErrorSnapshot(
@@ -690,6 +1193,20 @@ public static class CudaNativeGateway
         }
 
         return version;
+    }
+
+    private static void EnsureMinimumAbiMinor(
+        int minimumMinor,
+        string feature)
+    {
+        CudaAbiVersion version = AbiVersion;
+        if (version.Minor < minimumMinor)
+        {
+            throw new CudaNativeAbiMismatchException(
+                $"{feature} requires CUDA native ABI " +
+                $"{CudaAbiVersion.SupportedMajor}.{minimumMinor} or newer, " +
+                $"but {LibraryName} reports {version}.");
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -786,6 +1303,15 @@ public static class CudaNativeGateway
             int value,
             nuint bytes);
 
+        [DllImport(LibraryName, EntryPoint = "nntrain_cuda_memset_async",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int MemsetAsync(
+            int device,
+            nint destination,
+            int value,
+            nuint bytes,
+            nint stream);
+
         [DllImport(LibraryName, EntryPoint = "nntrain_cuda_copy_h2d",
             CallingConvention = CallingConvention.Cdecl)]
         internal static extern int CopyHostToDevice(
@@ -794,6 +1320,15 @@ public static class CudaNativeGateway
             nint source,
             nuint bytes);
 
+        [DllImport(LibraryName, EntryPoint = "nntrain_cuda_copy_h2d_async",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int CopyHostToDeviceAsync(
+            int device,
+            nint destination,
+            nint source,
+            nuint bytes,
+            nint stream);
+
         [DllImport(LibraryName, EntryPoint = "nntrain_cuda_copy_d2h",
             CallingConvention = CallingConvention.Cdecl)]
         internal static extern int CopyDeviceToHost(
@@ -801,6 +1336,15 @@ public static class CudaNativeGateway
             nint destination,
             nint source,
             nuint bytes);
+
+        [DllImport(LibraryName, EntryPoint = "nntrain_cuda_copy_d2h_async",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int CopyDeviceToHostAsync(
+            int device,
+            nint destination,
+            nint source,
+            nuint bytes,
+            nint stream);
 
         [DllImport(LibraryName, EntryPoint = "nntrain_cuda_host_alloc",
             CallingConvention = CallingConvention.Cdecl)]
@@ -879,6 +1423,16 @@ public static class CudaNativeGateway
             int sourceDevice,
             nint source,
             nuint bytes);
+
+        [DllImport(LibraryName, EntryPoint = "nntrain_cuda_copy_d2d_async",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int CopyDeviceToDeviceAsync(
+            int destinationDevice,
+            nint destination,
+            int sourceDevice,
+            nint source,
+            nuint bytes,
+            nint stream);
 
         [DllImport(LibraryName, EntryPoint = "nntrain_cuda_can_access_peer",
             CallingConvention = CallingConvention.Cdecl)]

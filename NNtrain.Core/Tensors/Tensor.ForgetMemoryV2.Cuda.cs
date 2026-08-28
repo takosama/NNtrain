@@ -1,3 +1,4 @@
+using NNtrain.Cuda.Memory;
 
 namespace NNtrain;
 
@@ -12,9 +13,6 @@ internal static class ForgetMemoryV2Cuda
     private static readonly Lazy<int> CachedDeviceCount = new(
         () => NativeCudaRuntime.DeviceCount,
         LazyThreadSafetyMode.ExecutionAndPublication);
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
-        int,
-        Lazy<NativeCudaDevice>> Accelerators = new();
 
     internal static ResidentForwardResult ForwardResident(
         Tensor projected,
@@ -26,7 +24,8 @@ internal static class ForgetMemoryV2Cuda
         float retentionFloor,
         bool bfloat16Compute,
         bool useV3,
-        bool useDrn)
+        bool useDrn,
+        NativeCudaBuffer<float>? recurrentState = null)
     {
         int deviceIndex = Tensor.CudaDeviceIndex;
         NativeCudaDevice accelerator = GetAccelerator(deviceIndex);
@@ -49,58 +48,102 @@ internal static class ForgetMemoryV2Cuda
                 outputLength);
         }
         var statesBuffer = accelerator.Allocate1D<float>(
-            checked(batch * sequence * matrixSize));
-        using var stateBuffer = accelerator.Allocate1D<float>(
-            checked(batch * matrixSize));
-        stateBuffer.MemSetToZero();
-        int memoryVariant = useDrn ? 2 : useV3 ? 1 : 0;
-        bool tensorCore = outputBFloat16 is not null
-            && CudaForgetMemoryTensorCore.TryForward(
-                accelerator,
-                projected.EnsureCudaBFloat16Buffer(deviceIndex),
-                outputBFloat16,
-                statesBuffer,
-                stateBuffer,
-                batch,
-                sequence,
-                projectionWidth,
-                keyWidth,
-                valueWidth,
-                retentionFloor,
-                memoryVariant);
-        if (!tensorCore)
+            checked(batch * sequence * matrixSize),
+            CudaMemoryKind.Transient);
+        NativeCudaBuffer<float>? ownedStateBuffer = null;
+        NativeCudaBuffer<float> stateBuffer;
+        if (recurrentState is null)
         {
-            CudaForgetMemoryNative.Forward(
-                accelerator,
-                projected.DType == TensorDType.BFloat16
-                    ? 0
-                    : projected.EnsureCudaFloat32Buffer(deviceIndex).NativePtr,
-                projected.DType == TensorDType.BFloat16
-                    ? projected.EnsureCudaBFloat16Buffer(deviceIndex).NativePtr
-                    : 0,
-                outputFloat32?.NativePtr ?? 0,
-                outputBFloat16?.NativePtr ?? 0,
-                statesBuffer.NativePtr,
-                stateBuffer.NativePtr,
-                batch,
-                sequence,
-                projectionWidth,
-                keyWidth,
-                valueWidth,
-                retentionFloor,
-                memoryVariant,
-                bfloat16Compute);
+            ownedStateBuffer = accelerator.Allocate1D<float>(
+                checked(batch * matrixSize),
+                CudaMemoryKind.Transient);
+            ownedStateBuffer.MemSetToZero();
+            stateBuffer = ownedStateBuffer;
         }
-        accelerator.Synchronize();
-        return outputBFloat16 is not null
-            ? new ResidentForwardResult(
-                deviceIndex,
-                outputBFloat16,
-                statesBuffer)
-            : new ResidentForwardResult(
-                deviceIndex,
-                outputFloat32!,
-                statesBuffer);
+        else
+        {
+            if (recurrentState.Device.Index != deviceIndex
+                || recurrentState.Length != checked(batch * matrixSize))
+            {
+                statesBuffer.Dispose();
+                outputBFloat16?.Dispose();
+                outputFloat32?.Dispose();
+                throw new ArgumentException(
+                    "Recurrent state must match the CUDA device and batch memory size.",
+                    nameof(recurrentState));
+            }
+            stateBuffer = recurrentState;
+        }
+        int memoryVariant = useDrn ? 2 : useV3 ? 1 : 0;
+        try
+        {
+            bool tensorCore = outputBFloat16 is not null
+                && CudaForgetMemoryTensorCore.TryForward(
+                    accelerator,
+                    projected.EnsureCudaBFloat16Buffer(deviceIndex),
+                    outputBFloat16,
+                    statesBuffer,
+                    stateBuffer,
+                    batch,
+                    sequence,
+                    projectionWidth,
+                    keyWidth,
+                    valueWidth,
+                    retentionFloor,
+                    memoryVariant);
+            if (!tensorCore)
+            {
+                CudaForgetMemoryNative.Forward(
+                    accelerator,
+                    projected.DType == TensorDType.BFloat16
+                        ? 0
+                        : projected.EnsureCudaFloat32Buffer(deviceIndex).NativePtr,
+                    projected.DType == TensorDType.BFloat16
+                        ? projected.EnsureCudaBFloat16Buffer(deviceIndex).NativePtr
+                        : 0,
+                    outputFloat32?.NativePtr ?? 0,
+                    outputBFloat16?.NativePtr ?? 0,
+                    statesBuffer.NativePtr,
+                    stateBuffer.NativePtr,
+                    batch,
+                    sequence,
+                    projectionWidth,
+                    keyWidth,
+                    valueWidth,
+                    retentionFloor,
+                    memoryVariant,
+                    bfloat16Compute);
+            }
+            // A session lane owns one ordered compute stream.  All buffers
+            // above are either retained by the result/recurrent state or
+            // returned to the lane's event-fenced pool.
+            if (!TensorExecutionContext.TryGetCudaStreamLane(
+                    deviceIndex,
+                    out _))
+            {
+                accelerator.Synchronize();
+            }
+            return outputBFloat16 is not null
+                ? new ResidentForwardResult(
+                    deviceIndex,
+                    outputBFloat16,
+                    statesBuffer)
+                : new ResidentForwardResult(
+                    deviceIndex,
+                    outputFloat32!,
+                    statesBuffer);
+        }
+        catch
+        {
+            statesBuffer.Dispose();
+            outputBFloat16?.Dispose();
+            outputFloat32?.Dispose();
+            throw;
+        }
+        finally
+        {
+            ownedStateBuffer?.Dispose();
+        }
     }
 
     internal static void BackwardResident(
@@ -127,14 +170,100 @@ internal static class ForgetMemoryV2Cuda
         {
             projected.EnsureCudaFloat32Buffer(forward.DeviceIndex);
         }
+
+        if (projected.DType == TensorDType.BFloat16
+            && TensorExecutionContext.UsesBFloat16GradientStorage)
+        {
+            NativeCudaBuffer<float>? decodedOutputGradient = null;
+            NativeCudaBuffer<float>? projectedContribution = null;
+            try
+            {
+                using CudaBFloat16GradientSource outputGradientSource =
+                    CudaBFloat16GradientSource.Acquire(
+                        output,
+                        forward.DeviceIndex);
+                using var targets =
+                    new CudaPureBFloat16GradientTargetSet(
+                        forward.DeviceIndex);
+                CudaPureBFloat16GradientTarget projectedGradientTarget =
+                    targets.Get(projected);
+                decodedOutputGradient = Tensor.RentCudaFloatBuffer(
+                    forward.DeviceIndex,
+                    output.Numel);
+                projectedContribution = Tensor.RentCudaFloatBuffer(
+                    forward.DeviceIndex,
+                    projected.Numel);
+                projectedContribution.MemSetToZero();
+                CudaTensorNative.DecodeBFloat16(
+                    forward.DeviceIndex,
+                    outputGradientSource.Buffer.NativePtr,
+                    decodedOutputGradient.NativePtr,
+                    output.Numel);
+                using var pureStateGradient = accelerator.Allocate1D<float>(
+                    checked(batch * matrixSize),
+                    CudaMemoryKind.Transient);
+                using var purePreviousGradient = accelerator.Allocate1D<float>(
+                    checked(batch * matrixSize),
+                    CudaMemoryKind.Transient);
+                pureStateGradient.MemSetToZero();
+                purePreviousGradient.MemSetToZero();
+                CudaForgetMemoryNative.Backward(
+                    accelerator,
+                    0,
+                    projected.EnsureCudaBFloat16Buffer(forward.DeviceIndex)
+                        .NativePtr,
+                    projectedContribution.NativePtr,
+                    decodedOutputGradient.NativePtr,
+                    forward.States.NativePtr,
+                    pureStateGradient.NativePtr,
+                    purePreviousGradient.NativePtr,
+                    batch,
+                    sequence,
+                    projectionWidth,
+                    keyWidth,
+                    valueWidth,
+                    retentionFloor,
+                    useDrn ? 2 : useV3 ? 1 : 0,
+                    bfloat16Compute);
+                projectedGradientTarget.AccumulateFloat32(
+                    projectedContribution,
+                    projected.Numel);
+                targets.CommitAll();
+                if (!TensorExecutionContext.TryGetCudaStreamLane(
+                        forward.DeviceIndex,
+                        out _))
+                {
+                    accelerator.Synchronize();
+                }
+            }
+            finally
+            {
+                if (projectedContribution is not null)
+                {
+                    Tensor.ReturnCudaFloatBuffer(
+                        accelerator,
+                        projectedContribution);
+                }
+                if (decodedOutputGradient is not null)
+                {
+                    Tensor.ReturnCudaFloatBuffer(
+                        accelerator,
+                        decodedOutputGradient);
+                }
+            }
+            return;
+        }
+
         var projectedGradientBuffer = projected.EnsureCudaGradientBuffer(
             forward.DeviceIndex);
         var outputGradientBuffer = output.EnsureCudaGradientBuffer(
             forward.DeviceIndex);
         using var stateGradientBuffer = accelerator.Allocate1D<float>(
-            checked(batch * matrixSize));
+            checked(batch * matrixSize),
+            CudaMemoryKind.Transient);
         using var previousGradientBuffer = accelerator.Allocate1D<float>(
-            checked(batch * matrixSize));
+            checked(batch * matrixSize),
+            CudaMemoryKind.Transient);
         stateGradientBuffer.MemSetToZero();
         previousGradientBuffer.MemSetToZero();
         CudaForgetMemoryNative.Backward(
@@ -160,7 +289,17 @@ internal static class ForgetMemoryV2Cuda
             retentionFloor,
             useDrn ? 2 : useV3 ? 1 : 0,
             bfloat16Compute);
-        accelerator.Synchronize();
+        // Backward is queued on the lane's ordered compute stream.  The next
+        // consumer (gradient reduction/optimizer) observes the same stream
+        // order, and transient state buffers may safely be reused only by a
+        // later launch on that lane.  Do not serialize every ForgetMemory layer
+        // with a device-wide wait in the hot training path.
+        if (!TensorExecutionContext.TryGetCudaStreamLane(
+                forward.DeviceIndex,
+                out _))
+        {
+            accelerator.Synchronize();
+        }
         projected.MarkCudaGradientMutated(forward.DeviceIndex);
     }
 
@@ -479,11 +618,11 @@ internal static class ForgetMemoryV2Cuda
                 $"CUDA device index {requestedIndex} is unavailable; " +
                 $"detected {deviceCount} CUDA device(s).");
         }
-        NativeCudaDevice accelerator = Accelerators.GetOrAdd(
-            requestedIndex,
-            static index => new Lazy<NativeCudaDevice>(
-                () => NativeCudaRuntime.GetDevice(index),
-                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+        // NativeCudaRuntime owns the single process-level wrapper per
+        // validated physical device. Do not add a second static cache here;
+        // lane/session resources are owned below that canonical wrapper.
+        NativeCudaDevice accelerator = NativeCudaRuntime.GetDevice(
+            requestedIndex);
         accelerator.Bind();
         return accelerator;
     }

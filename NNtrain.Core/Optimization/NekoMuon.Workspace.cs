@@ -55,19 +55,25 @@ public sealed partial class NekoMuon
 
     internal int CudaBatchCapacity => _cudaBatchCapacity;
 
-    private static int ResolveCudaBatchCapacity()
+    internal long CudaScratchBudgetBytes => _cudaScratchBudgetBytes;
+
+    private int ResolveCudaBatchCapacity(long scratchBudgetBytes)
     {
-        if (Environment.GetEnvironmentVariable(
-            "NNTRAIN_DISABLE_BATCHED_NEKOMUON") == "1")
+        if (_cudaDispatchPolicy.DisableBatchedNekoMuon)
         {
             return 1;
         }
-        string? configured = Environment.GetEnvironmentVariable(
-            "NNTRAIN_NEKOMUON_BATCH_SIZE");
-        return int.TryParse(configured, out int value)
-            ? Math.Clamp(value, 1, 32)
-            : 8;
+        int requested = _cudaDispatchPolicy.NekoMuonBatchSize;
+        long bytesPerSlot = SharedCudaScratchBytesPerDevice;
+        int budgetCapacity = (int)Math.Clamp(
+            scratchBudgetBytes / Math.Max(1L, bytesPerSlot),
+            1L,
+            32L);
+        return Math.Min(requested, budgetCapacity);
     }
+
+    private long ResolveCudaScratchBudgetBytes()
+        => _cudaDispatchPolicy.NekoMuonScratchBudgetBytes;
 
     private static NekoMuonWorkspace CreateWorkspace(Parameter parameter)
     {

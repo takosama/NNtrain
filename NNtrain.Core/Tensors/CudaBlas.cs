@@ -1,11 +1,12 @@
-using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
+using NNtrain.Cuda.Interop;
+using NNtrain.Runtime.Execution;
 
 namespace NNtrain;
 
 /// <summary>Thin cuBLAS binding over native CUDA Runtime buffers.</summary>
 internal static unsafe class CudaBlas
 {
-    private const string Library = "cublas64_12";
     private const int Success = 0;
     private const int OperationNone = 0;
     private const int OperationTranspose = 1;
@@ -15,9 +16,22 @@ internal static unsafe class CudaBlas
     private const int GemmDefault = -1;
     private const int GemmDefaultTensorOp = 99;
 
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
-        int,
-        Lazy<nint>> Handles = new();
+    private const int FallbackHandleCapacity = 8;
+    private static readonly ResettableBoundedDisposableLeaseCache<
+        HandleKey,
+        LegacyHandle> FallbackHandles = new(FallbackHandleCapacity);
+    private static readonly ConditionalWeakTable<
+        IStreamExecutionLane,
+        Lazy<LaneHandle>> LaneHandles = new();
+    private static int _activeLaneHandleCount;
+
+    internal static int ActiveLaneHandleCount =>
+        Volatile.Read(ref _activeLaneHandleCount);
+
+    internal static int FallbackHandleCount => FallbackHandles.Count;
+
+    internal static void DisposeFallbackResources()
+        => FallbackHandles.Dispose();
 
     internal static void LinearForward(
         NativeCudaDevice accelerator,
@@ -31,7 +45,10 @@ internal static unsafe class CudaBlas
         bool bfloat16)
     {
         accelerator.Bind();
-        nint handle = PrepareHandle(accelerator, deviceIndex);
+        using PreparedHandle preparedHandle = PrepareHandle(
+            accelerator,
+            deviceIndex);
+        nint handle = preparedHandle.Handle;
         float alpha = 1f;
         float beta = 0f;
 
@@ -71,7 +88,10 @@ internal static unsafe class CudaBlas
         int outputWidth)
     {
         accelerator.Bind();
-        nint handle = PrepareHandle(accelerator, deviceIndex);
+        using PreparedHandle preparedHandle = PrepareHandle(
+            accelerator,
+            deviceIndex);
+        nint handle = preparedHandle.Handle;
         float alpha = 1f;
         float beta = 0f;
         int status = CublasGemmEx(
@@ -107,18 +127,6 @@ internal static unsafe class CudaBlas
         int inputWidth,
         int outputWidth)
     {
-        if (CudaBlasLt.TryLinearBackwardInputBFloat16(
-                accelerator,
-                deviceIndex,
-                outputGradient,
-                weight,
-                inputGradient,
-                rows,
-                inputWidth,
-                outputWidth))
-        {
-            return;
-        }
         GemmBFloat16ToFloat32(
             accelerator,
             deviceIndex,
@@ -134,6 +142,7 @@ internal static unsafe class CudaBlas
             inputGradient,
             inputWidth,
             beta: 1f);
+        CudaBlasLt.RecordAccumulatingBackwardCublasExecution();
     }
 
     internal static void LinearBackwardInputBFloat16Direct(
@@ -159,7 +168,10 @@ internal static unsafe class CudaBlas
             return;
         }
         accelerator.Bind();
-        nint handle = PrepareHandle(accelerator, deviceIndex);
+        using PreparedHandle preparedHandle = PrepareHandle(
+            accelerator,
+            deviceIndex);
+        nint handle = preparedHandle.Handle;
         float alpha = 1f;
         float beta = 0f;
         int status = CublasGemmEx(
@@ -185,6 +197,32 @@ internal static unsafe class CudaBlas
         ThrowIfFailed(status, "cublasGemmEx(BF16 direct gradient)");
     }
 
+    internal static void LinearBackwardInputBFloat16Accumulate(
+        NativeCudaDevice accelerator,
+        int deviceIndex,
+        NativeCudaBuffer<ushort> outputGradient,
+        NativeCudaBuffer<ushort> weight,
+        NativeCudaBuffer<ushort> inputGradient,
+        int rows,
+        int inputWidth,
+        int outputWidth,
+        bool accumulate)
+        => GemmBFloat16(
+            accelerator,
+            deviceIndex,
+            OperationNone,
+            OperationNone,
+            inputWidth,
+            rows,
+            outputWidth,
+            weight,
+            inputWidth,
+            outputGradient,
+            outputWidth,
+            inputGradient,
+            inputWidth,
+            accumulate ? 1f : 0f);
+
     internal static void LinearBackwardWeightBFloat16(
         NativeCudaDevice accelerator,
         int deviceIndex,
@@ -195,18 +233,6 @@ internal static unsafe class CudaBlas
         int inputWidth,
         int outputWidth)
     {
-        if (CudaBlasLt.TryLinearBackwardWeightBFloat16(
-                accelerator,
-                deviceIndex,
-                input,
-                outputGradient,
-                weightGradient,
-                rows,
-                inputWidth,
-                outputWidth))
-        {
-            return;
-        }
         GemmBFloat16ToFloat32(
             accelerator,
             deviceIndex,
@@ -222,7 +248,34 @@ internal static unsafe class CudaBlas
             weightGradient,
             inputWidth,
             beta: 1f);
+        CudaBlasLt.RecordAccumulatingBackwardCublasExecution();
     }
+
+    internal static void LinearBackwardWeightBFloat16Direct(
+        NativeCudaDevice accelerator,
+        int deviceIndex,
+        NativeCudaBuffer<ushort> input,
+        NativeCudaBuffer<ushort> outputGradient,
+        NativeCudaBuffer<ushort> weightGradient,
+        int rows,
+        int inputWidth,
+        int outputWidth,
+        bool accumulate)
+        => GemmBFloat16(
+            accelerator,
+            deviceIndex,
+            OperationNone,
+            OperationTranspose,
+            inputWidth,
+            outputWidth,
+            rows,
+            input,
+            inputWidth,
+            outputGradient,
+            outputWidth,
+            weightGradient,
+            inputWidth,
+            accumulate ? 1f : 0f);
 
     internal static void LinearBackwardInput(
         NativeCudaDevice accelerator,
@@ -376,6 +429,48 @@ internal static unsafe class CudaBlas
             output, n, (long)m * n,
             batch, beta: 0f);
 
+    /// <summary>
+    /// Computes row-major <c>left * right^T</c> for one or more batches
+    /// without materializing the transpose. BF16 uses Tensor Core GEMMEx.
+    /// </summary>
+    internal static void MatMulTransposedRightForward(
+        NativeCudaDevice accelerator,
+        int deviceIndex,
+        NativeCudaBuffer<float> left,
+        NativeCudaBuffer<float> right,
+        NativeCudaBuffer<float> output,
+        int batch,
+        int m,
+        int k,
+        int n)
+        => GemmStrided(
+            accelerator, deviceIndex,
+            OperationTranspose, OperationNone,
+            n, m, k,
+            right, k, (long)n * k,
+            left, k, (long)m * k,
+            output, n, (long)m * n,
+            batch, beta: 0f);
+
+    internal static void MatMulTransposedRightForwardBFloat16(
+        NativeCudaDevice accelerator,
+        int deviceIndex,
+        NativeCudaBuffer<ushort> left,
+        NativeCudaBuffer<ushort> right,
+        NativeCudaBuffer<ushort> output,
+        int batch,
+        int m,
+        int k,
+        int n)
+        => GemmStridedBFloat16(
+            accelerator, deviceIndex,
+            OperationTranspose, OperationNone,
+            n, m, k,
+            right, k, (long)n * k,
+            left, k, (long)m * k,
+            output, n, (long)m * n,
+            batch, beta: 0f);
+
     internal static void MatMulBackward(
         NativeCudaDevice accelerator,
         int deviceIndex,
@@ -438,6 +533,224 @@ internal static unsafe class CudaBlas
             batch, beta: 1f);
     }
 
+    internal static void MatMulBackwardLeftBFloat16Direct(
+        NativeCudaDevice accelerator,
+        int deviceIndex,
+        NativeCudaBuffer<ushort> right,
+        NativeCudaBuffer<ushort> outputGradient,
+        NativeCudaBuffer<ushort> leftGradient,
+        int batch,
+        int m,
+        int k,
+        int n,
+        bool accumulate)
+        => GemmStridedBFloat16(
+            accelerator, deviceIndex,
+            OperationTranspose, OperationNone,
+            k, m, n,
+            right, n, (long)k * n,
+            outputGradient, n, (long)m * n,
+            leftGradient, k, (long)m * k,
+            batch, accumulate ? 1f : 0f);
+
+    internal static void MatMulBackwardRightBFloat16Direct(
+        NativeCudaDevice accelerator,
+        int deviceIndex,
+        NativeCudaBuffer<ushort> left,
+        NativeCudaBuffer<ushort> outputGradient,
+        NativeCudaBuffer<ushort> rightGradient,
+        int batch,
+        int m,
+        int k,
+        int n,
+        bool accumulate)
+        => GemmStridedBFloat16(
+            accelerator, deviceIndex,
+            OperationNone, OperationTranspose,
+            n, k, m,
+            outputGradient, n, (long)m * n,
+            left, k, (long)m * k,
+            rightGradient, n, (long)k * n,
+            batch, accumulate ? 1f : 0f);
+
+    internal static void MatMulTransposedRightBackward(
+        NativeCudaDevice accelerator,
+        int deviceIndex,
+        NativeCudaBuffer<float> left,
+        NativeCudaBuffer<float> right,
+        NativeCudaBuffer<float> outputGradient,
+        NativeCudaBuffer<float> leftGradient,
+        NativeCudaBuffer<float> rightGradient,
+        int batch,
+        int m,
+        int k,
+        int n)
+    {
+        // dLeft = dOutput * right
+        GemmStrided(
+            accelerator, deviceIndex,
+            OperationNone, OperationNone,
+            k, m, n,
+            right, k, (long)n * k,
+            outputGradient, n, (long)m * n,
+            leftGradient, k, (long)m * k,
+            batch, beta: 1f);
+        // dRight = dOutput^T * left
+        GemmStrided(
+            accelerator, deviceIndex,
+            OperationNone, OperationTranspose,
+            k, n, m,
+            left, k, (long)m * k,
+            outputGradient, n, (long)m * n,
+            rightGradient, k, (long)n * k,
+            batch, beta: 1f);
+    }
+
+    internal static void MatMulTransposedRightBackwardBFloat16(
+        NativeCudaDevice accelerator,
+        int deviceIndex,
+        NativeCudaBuffer<ushort> left,
+        NativeCudaBuffer<ushort> right,
+        NativeCudaBuffer<ushort> outputGradient,
+        NativeCudaBuffer<float> leftGradient,
+        NativeCudaBuffer<float> rightGradient,
+        int batch,
+        int m,
+        int k,
+        int n)
+    {
+        GemmStridedBFloat16ToFloat32(
+            accelerator, deviceIndex,
+            OperationNone, OperationNone,
+            k, m, n,
+            right, k, (long)n * k,
+            outputGradient, n, (long)m * n,
+            leftGradient, k, (long)m * k,
+            batch, beta: 1f);
+        GemmStridedBFloat16ToFloat32(
+            accelerator, deviceIndex,
+            OperationNone, OperationTranspose,
+            k, n, m,
+            left, k, (long)m * k,
+            outputGradient, n, (long)m * n,
+            rightGradient, k, (long)n * k,
+            batch, beta: 1f);
+    }
+
+    internal static void MatMulTransposedRightBackwardInputBFloat16Direct(
+        NativeCudaDevice accelerator,
+        int deviceIndex,
+        NativeCudaBuffer<ushort> right,
+        NativeCudaBuffer<ushort> outputGradient,
+        NativeCudaBuffer<ushort> leftGradient,
+        int batch,
+        int m,
+        int k,
+        int n)
+        => GemmStridedBFloat16(
+            accelerator, deviceIndex,
+            OperationNone, OperationNone,
+            k, m, n,
+            right, k, (long)n * k,
+            outputGradient, n, (long)m * n,
+            leftGradient, k, (long)m * k,
+            batch, beta: 0f);
+
+    internal static void
+        MatMulTransposedRightBackwardInputBFloat16Accumulate(
+            NativeCudaDevice accelerator,
+            int deviceIndex,
+            NativeCudaBuffer<ushort> right,
+            NativeCudaBuffer<ushort> outputGradient,
+            NativeCudaBuffer<ushort> leftGradient,
+            int batch,
+            int m,
+            int k,
+            int n,
+            bool accumulate)
+        => GemmStridedBFloat16(
+            accelerator, deviceIndex,
+            OperationNone, OperationNone,
+            k, m, n,
+            right, k, (long)n * k,
+            outputGradient, n, (long)m * n,
+            leftGradient, k, (long)m * k,
+            batch, accumulate ? 1f : 0f);
+
+    internal static void MatMulTransposedRightBackwardWeightBFloat16(
+        NativeCudaDevice accelerator,
+        int deviceIndex,
+        NativeCudaBuffer<ushort> left,
+        NativeCudaBuffer<ushort> outputGradient,
+        NativeCudaBuffer<float> rightGradient,
+        int batch,
+        int m,
+        int k,
+        int n)
+        => GemmStridedBFloat16ToFloat32(
+            accelerator, deviceIndex,
+            OperationNone, OperationTranspose,
+            k, n, m,
+            left, k, (long)m * k,
+            outputGradient, n, (long)m * n,
+            rightGradient, k, (long)n * k,
+            batch, beta: 1f);
+
+    internal static void
+        MatMulTransposedRightBackwardWeightBFloat16Direct(
+            NativeCudaDevice accelerator,
+            int deviceIndex,
+            NativeCudaBuffer<ushort> left,
+            NativeCudaBuffer<ushort> outputGradient,
+            NativeCudaBuffer<ushort> rightGradient,
+            int batch,
+            int m,
+            int k,
+            int n,
+            bool accumulate)
+        => GemmStridedBFloat16(
+            accelerator, deviceIndex,
+            OperationNone, OperationTranspose,
+            k, n, m,
+            left, k, (long)m * k,
+            outputGradient, n, (long)m * n,
+            rightGradient, k, (long)n * k,
+            batch, accumulate ? 1f : 0f);
+
+    internal static void TransposeFloat32(
+        NativeCudaDevice accelerator,
+        int deviceIndex,
+        NativeCudaBuffer<float> source,
+        NativeCudaBuffer<float> destination,
+        int sourceRows,
+        int sourceColumns)
+    {
+        accelerator.Bind();
+        using PreparedHandle preparedHandle = PrepareHandle(
+            accelerator,
+            deviceIndex);
+        nint handle = preparedHandle.Handle;
+        float alpha = 1f;
+        float beta = 0f;
+        // Row-major [R,C] is column-major [C,R]. Transposing that view into a
+        // column-major [R,C] buffer produces row-major [C,R].
+        int status = CublasSgeam(
+            handle,
+            OperationTranspose,
+            OperationTranspose,
+            sourceRows,
+            sourceColumns,
+            (nint)(&alpha),
+            source.NativePtr,
+            sourceColumns,
+            (nint)(&beta),
+            source.NativePtr,
+            sourceColumns,
+            destination.NativePtr,
+            sourceRows);
+        ThrowIfFailed(status, "cublasSgeam(transpose)");
+    }
+
     private static void Gemm(
         NativeCudaDevice accelerator,
         int deviceIndex,
@@ -456,7 +769,10 @@ internal static unsafe class CudaBlas
         bool bfloat16)
     {
         accelerator.Bind();
-        nint handle = PrepareHandle(accelerator, deviceIndex);
+        using PreparedHandle preparedHandle = PrepareHandle(
+            accelerator,
+            deviceIndex);
+        nint handle = preparedHandle.Handle;
         float alpha = 1f;
         int status = CublasGemmEx(
             handle, transA, transB, m, n, k,
@@ -468,6 +784,51 @@ internal static unsafe class CudaBlas
             bfloat16 ? Compute32FFast16BFloat : 68,
             bfloat16 ? GemmDefaultTensorOp : GemmDefault);
         ThrowIfFailed(status, "cublasGemmEx");
+    }
+
+    private static void GemmBFloat16(
+        NativeCudaDevice accelerator,
+        int deviceIndex,
+        int transA,
+        int transB,
+        int m,
+        int n,
+        int k,
+        NativeCudaBuffer<ushort> a,
+        int lda,
+        NativeCudaBuffer<ushort> b,
+        int ldb,
+        NativeCudaBuffer<ushort> c,
+        int ldc,
+        float beta)
+    {
+        accelerator.Bind();
+        using PreparedHandle preparedHandle = PrepareHandle(
+            accelerator,
+            deviceIndex);
+        nint handle = preparedHandle.Handle;
+        float alpha = 1f;
+        int status = CublasGemmEx(
+            handle,
+            transA,
+            transB,
+            m,
+            n,
+            k,
+            (nint)(&alpha),
+            a.NativePtr,
+            CudaR16BF,
+            lda,
+            b.NativePtr,
+            CudaR16BF,
+            ldb,
+            (nint)(&beta),
+            c.NativePtr,
+            CudaR16BF,
+            ldc,
+            Compute32FFast16BFloat,
+            GemmDefaultTensorOp);
+        ThrowIfFailed(status, "cublasGemmEx(BF16 direct gradient)");
     }
 
     private static void GemmBFloat16ToFloat32(
@@ -487,7 +848,10 @@ internal static unsafe class CudaBlas
         float beta)
     {
         accelerator.Bind();
-        nint handle = PrepareHandle(accelerator, deviceIndex);
+        using PreparedHandle preparedHandle = PrepareHandle(
+            accelerator,
+            deviceIndex);
+        nint handle = preparedHandle.Handle;
         float alpha = 1f;
         int status = CublasGemmEx(
             handle,
@@ -533,7 +897,10 @@ internal static unsafe class CudaBlas
         float beta)
     {
         accelerator.Bind();
-        nint handle = PrepareHandle(accelerator, deviceIndex);
+        using PreparedHandle preparedHandle = PrepareHandle(
+            accelerator,
+            deviceIndex);
+        nint handle = preparedHandle.Handle;
         float alpha = 1f;
         int status = CublasGemmStridedBatchedEx(
             handle, transA, transB, m, n, k,
@@ -568,7 +935,10 @@ internal static unsafe class CudaBlas
         bool bfloat16)
     {
         accelerator.Bind();
-        nint handle = PrepareHandle(accelerator, deviceIndex);
+        using PreparedHandle preparedHandle = PrepareHandle(
+            accelerator,
+            deviceIndex);
+        nint handle = preparedHandle.Handle;
         float alpha = 1f;
         int status = CublasGemmStridedBatchedEx(
             handle, transA, transB, m, n, k,
@@ -604,7 +974,10 @@ internal static unsafe class CudaBlas
         float beta)
     {
         accelerator.Bind();
-        nint handle = PrepareHandle(accelerator, deviceIndex);
+        using PreparedHandle preparedHandle = PrepareHandle(
+            accelerator,
+            deviceIndex);
+        nint handle = preparedHandle.Handle;
         float alpha = 1f;
         int status = CublasGemmStridedBatchedEx(
             handle, transA, transB, m, n, k,
@@ -638,7 +1011,10 @@ internal static unsafe class CudaBlas
         float beta)
     {
         accelerator.Bind();
-        nint handle = PrepareHandle(accelerator, deviceIndex);
+        using PreparedHandle preparedHandle = PrepareHandle(
+            accelerator,
+            deviceIndex);
+        nint handle = preparedHandle.Handle;
         float alpha = 1f;
         int status = CublasGemmStridedBatchedEx(
             handle, transA, transB, m, n, k,
@@ -651,26 +1027,148 @@ internal static unsafe class CudaBlas
         ThrowIfFailed(status, "cublasGemmStridedBatchedEx(BF16->FP32)");
     }
 
-    private static nint GetHandle(int deviceIndex)
-        => Handles.GetOrAdd(
-            deviceIndex,
-            static _ => new Lazy<nint>(
-                CreateHandle,
-                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
-
-    private static nint CreateHandle()
+    private static nint CreateHandle(nint computeStream)
     {
         int status = CublasCreate(out nint handle);
         ThrowIfFailed(status, "cublasCreate_v2");
-        return handle;
+        try
+        {
+            ThrowIfFailed(
+                CublasSetStream(handle, computeStream),
+                "cublasSetStream_v2");
+            return handle;
+        }
+        catch
+        {
+            _ = CublasDestroy(handle);
+            throw;
+        }
     }
 
-    private static nint PrepareHandle(
+    private static PreparedHandle PrepareHandle(
         NativeCudaDevice accelerator,
         int deviceIndex)
     {
-        nint handle = GetHandle(deviceIndex);
-        return handle;
+        nint computeStream = accelerator.DefaultStream;
+        if (TensorExecutionContext.TryGetCudaStreamLane(
+                deviceIndex,
+                out IStreamExecutionLane lane)
+            && lane.ComputeStreamHandle == computeStream)
+        {
+            LaneHandle owned = LaneHandles.GetValue(
+                lane,
+                static value => new Lazy<LaneHandle>(
+                    () => ExecutionLaneResources.Attach(
+                        value,
+                        new LaneHandle(value.ComputeStreamHandle)),
+                    LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+            return new PreparedHandle(owned.Handle, fallbackLease: null);
+        }
+
+        BoundedDisposableLeaseCache<HandleKey, LegacyHandle>.Lease lease =
+            FallbackHandles.Acquire(
+                new HandleKey(deviceIndex, computeStream),
+                static key => new LegacyHandle(
+                    key.DeviceIndex,
+                    key.ComputeStream))
+            ?? throw new InvalidOperationException(
+                "A legacy cuBLAS handle could not be created.");
+        return new PreparedHandle(lease.Value.Handle, lease);
+    }
+
+    private readonly record struct HandleKey(
+        int DeviceIndex,
+        nint ComputeStream);
+
+    private sealed class PreparedHandle(
+        nint handle,
+        BoundedDisposableLeaseCache<HandleKey, LegacyHandle>.Lease?
+            fallbackLease) : IDisposable
+    {
+        private BoundedDisposableLeaseCache<HandleKey, LegacyHandle>.Lease?
+            _fallbackLease = fallbackLease;
+
+        internal nint Handle { get; } = handle;
+
+        public void Dispose()
+            => Interlocked.Exchange(ref _fallbackLease, null)?.Dispose();
+    }
+
+    private sealed class LaneHandle : IDisposable
+    {
+        private nint _handle;
+
+        internal LaneHandle(nint computeStream)
+        {
+            _handle = CreateHandle(computeStream);
+            Interlocked.Increment(ref _activeLaneHandleCount);
+        }
+
+        internal nint Handle
+        {
+            get
+            {
+                nint handle = Volatile.Read(ref _handle);
+                ObjectDisposedException.ThrowIf(
+                    handle == nint.Zero,
+                    this);
+                return handle;
+            }
+        }
+
+        public void Dispose()
+        {
+            nint handle = Interlocked.Exchange(ref _handle, nint.Zero);
+            if (handle == nint.Zero)
+                return;
+            try
+            {
+                ThrowIfFailed(CublasDestroy(handle), "cublasDestroy_v2");
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeLaneHandleCount);
+            }
+        }
+    }
+
+    private sealed class LegacyHandle : IDisposable
+    {
+        private readonly int _deviceIndex;
+        private readonly nint _computeStream;
+        private nint _handle;
+
+        internal LegacyHandle(int deviceIndex, nint computeStream)
+        {
+            _deviceIndex = deviceIndex;
+            _computeStream = computeStream;
+            _handle = CreateHandle(computeStream);
+        }
+
+        internal nint Handle
+        {
+            get
+            {
+                nint handle = Volatile.Read(ref _handle);
+                ObjectDisposedException.ThrowIf(
+                    handle == nint.Zero,
+                    this);
+                return handle;
+            }
+        }
+
+        public void Dispose()
+        {
+            nint handle = Interlocked.Exchange(ref _handle, nint.Zero);
+            if (handle == nint.Zero)
+                return;
+            NativeCudaRuntime.DisposeAfterStreamFence(
+                _deviceIndex,
+                _computeStream,
+                () => ThrowIfFailed(
+                    CublasDestroy(handle),
+                    "cublasDestroy_v2(legacy fallback)"));
+        }
     }
 
     private static void ThrowIfFailed(int status, string operation)
@@ -682,17 +1180,16 @@ internal static unsafe class CudaBlas
         }
     }
 
-    [DllImport(Library, EntryPoint = "cublasCreate_v2",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int CublasCreate(out nint handle);
+    private static int CublasCreate(out nint handle)
+        => CudaNativeGateway.CublasCreate(out handle);
 
-    [DllImport(Library, EntryPoint = "cublasSetStream_v2",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int CublasSetStream(nint handle, nint stream);
+    private static int CublasDestroy(nint handle)
+        => CudaNativeGateway.CublasDestroy(handle);
 
-    [DllImport(Library, EntryPoint = "cublasGemmEx",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int CublasGemmEx(
+    private static int CublasSetStream(nint handle, nint stream)
+        => CudaNativeGateway.CublasSetStream(handle, stream);
+
+    private static int CublasGemmEx(
         nint handle,
         int transA,
         int transB,
@@ -711,11 +1208,12 @@ internal static unsafe class CudaBlas
         int cType,
         int ldc,
         int computeType,
-        int algorithm);
+        int algorithm)
+        => CudaNativeGateway.CublasGemmEx(
+            handle, transA, transB, m, n, k, alpha, a, aType, lda, b,
+            bType, ldb, beta, c, cType, ldc, computeType, algorithm);
 
-    [DllImport(Library, EntryPoint = "cublasGemmStridedBatchedEx",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int CublasGemmStridedBatchedEx(
+    private static int CublasGemmStridedBatchedEx(
         nint handle,
         int transA,
         int transB,
@@ -738,5 +1236,27 @@ internal static unsafe class CudaBlas
         long strideC,
         int batchCount,
         int computeType,
-        int algorithm);
+        int algorithm)
+        => CudaNativeGateway.CublasGemmStridedBatchedEx(
+            handle, transA, transB, m, n, k, alpha, a, aType, lda, strideA,
+            b, bType, ldb, strideB, beta, c, cType, ldc, strideC,
+            batchCount, computeType, algorithm);
+
+    private static int CublasSgeam(
+        nint handle,
+        int transA,
+        int transB,
+        int m,
+        int n,
+        nint alpha,
+        nint a,
+        int lda,
+        nint beta,
+        nint b,
+        int ldb,
+        nint c,
+        int ldc)
+        => CudaNativeGateway.CublasSgeam(
+            handle, transA, transB, m, n, alpha, a, lda, beta, b, ldb, c,
+            ldc);
 }

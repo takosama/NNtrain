@@ -28,8 +28,13 @@ public class Parameter
         WeightDecay = weightDecay;
         T = new Tensor(data, shape, name, dtype);
         T.EnableMasterData();
-        if (dtype != TensorDType.Float32)
+        if (dtype != TensorDType.Float32
+            && !(dtype == TensorDType.Bfp8
+                && T.Bfp8Quantization?.Granularity
+                    == Bfp8ScaleGranularity.Tensor))
+        {
             data.AsSpan().CopyTo(T.DataBuffer);
+        }
     }
 
     public Tensor T { get; }

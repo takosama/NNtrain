@@ -1,5 +1,9 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using NNtrain.Cuda.Interop;
+using NNtrain.Cuda.Memory;
+using NNtrain.Runtime.Execution;
 
 namespace NNtrain;
 
@@ -10,7 +14,6 @@ namespace NNtrain;
 /// </summary>
 internal static unsafe class CudaBlasLtInt8
 {
-    private const string Library = "cublasLt64_12";
     private const int Success = 0;
     private const int OperationTranspose = 1;
     private const int CudaR8I = 3;
@@ -23,10 +26,16 @@ internal static unsafe class CudaBlasLtInt8
     private const int HeuristicCandidateCount = 16;
     private const int WorkspaceLimitBytes = 4 * 1024 * 1024;
     private const int PlanCacheCapacity = 24;
+    private const int FallbackResourceCapacity = 4;
 
-    private static readonly ConcurrentDictionary<int, Lazy<nint>> Handles = [];
-    private static readonly BoundedDisposableLeaseCache<PlanKey, Int8Plan>
-        Plans = new(PlanCacheCapacity);
+    private static readonly ResettableBoundedDisposableLeaseCache<
+        StreamKey,
+        LaneResources> FallbackResources =
+            new(FallbackResourceCapacity);
+    private static readonly ConditionalWeakTable<
+        IStreamExecutionLane,
+        Lazy<LaneResources>> LaneResourceTable = new();
+    private static int _activeLaneResourceCount;
     private static long _executionCount;
     private static long _lastNumericalImplementationFlags;
 
@@ -35,6 +44,12 @@ internal static unsafe class CudaBlasLtInt8
         (ulong)Interlocked.Read(ref _lastNumericalImplementationFlags));
     internal static bool LastExecutionUsedInt8TensorCores =>
         (LastNumericalImplementationFlags & NumericalImplementationImma) != 0;
+    internal static int ActiveLaneResourceCount =>
+        Volatile.Read(ref _activeLaneResourceCount);
+    internal static int FallbackResourceCount => FallbackResources.Count;
+
+    internal static void DisposeFallbackResources()
+        => FallbackResources.Dispose();
 
     internal static bool TryMatMul(
         NativeCudaDevice accelerator,
@@ -133,8 +148,33 @@ internal static unsafe class CudaBlasLtInt8
         try
         {
             accelerator.Bind();
+            key = key with
+            {
+                ComputeStream = accelerator.DefaultStream,
+            };
+            LaneResources? laneResources = GetLaneResources(
+                key.DeviceIndex,
+                key.ComputeStream);
+            using BoundedDisposableLeaseCache<
+                StreamKey,
+                LaneResources>.Lease? fallbackLease = laneResources is null
+                    ? FallbackResources.Acquire(
+                        new StreamKey(
+                            key.DeviceIndex,
+                            key.ComputeStream),
+                        static value => new LaneResources(
+                            value.DeviceIndex,
+                            value.ComputeStream,
+                            laneOwned: false))
+                    : null;
+            LaneResources resources = laneResources
+                ?? fallbackLease?.Value
+                ?? throw new InvalidOperationException(
+                    "cuBLASLt Int8 fallback resources could not be created.");
             using BoundedDisposableLeaseCache<PlanKey, Int8Plan>.Lease? lease =
-                Plans.Acquire(key, static value => CreatePlan(value));
+                resources.Plans.Acquire(
+                    key,
+                    resources.PlanFactory);
             Int8Plan? plan = lease?.Value;
             if (plan is null || !plan.IsSupported)
                 return false;
@@ -160,7 +200,7 @@ internal static unsafe class CudaBlasLtInt8
                     (nint)(&algorithm),
                     plan.Workspace?.NativePtr ?? 0,
                     plan.WorkspaceSize,
-                    accelerator.DefaultStream);
+                    plan.ComputeStream);
                 if (status != Success)
                 {
                     throw new InvalidOperationException(
@@ -184,9 +224,11 @@ internal static unsafe class CudaBlasLtInt8
         }
     }
 
-    private static Int8Plan CreatePlan(PlanKey key)
+    private static Int8Plan CreatePlan(
+        PlanKey key,
+        LaneResources resources)
     {
-        nint handle = GetHandle(key.DeviceIndex);
+        nint handle = resources.Handle;
         nint operation = 0;
         nint first = 0;
         nint second = 0;
@@ -319,10 +361,7 @@ internal static unsafe class CudaBlasLtInt8
                 return Int8Plan.CreateUnsupported();
 
             if (selectedWorkspace > 0)
-            {
-                workspace = ForgetMemoryV2Cuda.GetAccelerator(key.DeviceIndex)
-                    .Allocate1D<byte>(checked((int)selectedWorkspace));
-            }
+                workspace = resources.Workspace;
             var plan = new Int8Plan(
                 handle,
                 operation,
@@ -332,7 +371,9 @@ internal static unsafe class CudaBlasLtInt8
                 workspace,
                 heuristics[selected].Algorithm,
                 selectedWorkspace,
-                selectedImplementationFlags);
+                selectedImplementationFlags,
+                key.ComputeStream,
+                resources);
             ownershipTransferred = true;
             workspace = null;
             return plan;
@@ -343,24 +384,39 @@ internal static unsafe class CudaBlasLtInt8
                 _ = PreferenceDestroy(preference);
             if (!ownershipTransferred)
             {
-                workspace?.Dispose();
                 DestroyDescriptors(operation, first, second, output);
             }
         }
     }
-
-    private static nint GetHandle(int deviceIndex)
-        => Handles.GetOrAdd(
-            deviceIndex,
-            static _ => new Lazy<nint>(
-                CreateHandle,
-                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
 
     private static nint CreateHandle()
     {
         if (Create(out nint handle) != Success)
             throw new InvalidOperationException("cublasLtCreate failed.");
         return handle;
+    }
+
+    private static LaneResources? GetLaneResources(
+        int deviceIndex,
+        nint computeStream)
+    {
+        if (!TensorExecutionContext.TryGetCudaStreamLane(
+                deviceIndex,
+                out IStreamExecutionLane lane)
+            || lane.ComputeStreamHandle != computeStream)
+        {
+            return null;
+        }
+        return LaneResourceTable.GetValue(
+            lane,
+            static value => new Lazy<LaneResources>(
+                () => ExecutionLaneResources.Attach(
+                    value,
+                    new LaneResources(
+                        value.DeviceIndex,
+                        value.ComputeStreamHandle,
+                        laneOwned: true)),
+                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
     }
 
     private static void DestroyDescriptors(
@@ -390,7 +446,129 @@ internal static unsafe class CudaBlasLtInt8
         Int8Operation Operation,
         int M,
         int N,
-        int K);
+        int K)
+    {
+        internal nint ComputeStream { get; init; }
+    }
+
+    private readonly record struct StreamKey(
+        int DeviceIndex,
+        nint ComputeStream);
+
+    private sealed class LaneResources : IDisposable
+    {
+        private readonly Lazy<nint> _handle;
+        private readonly Lazy<NativeCudaBuffer<byte>> _workspace;
+        private readonly bool _laneOwned;
+        private int _disposed;
+
+        internal LaneResources(
+            int deviceIndex,
+            nint computeStream,
+            bool laneOwned)
+        {
+            DeviceIndex = deviceIndex;
+            ComputeStream = computeStream;
+            _laneOwned = laneOwned;
+            _handle = new Lazy<nint>(
+                CreateHandle,
+                LazyThreadSafetyMode.ExecutionAndPublication);
+            _workspace = new Lazy<NativeCudaBuffer<byte>>(
+                () => ForgetMemoryV2Cuda.GetAccelerator(deviceIndex)
+                    .Allocate1D<byte>(
+                        WorkspaceLimitBytes,
+                        CudaMemoryKind.Workspace),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+            Plans = new(PlanCacheCapacity);
+            PlanFactory = CreatePlan;
+            if (laneOwned)
+                Interlocked.Increment(ref _activeLaneResourceCount);
+        }
+
+        internal int DeviceIndex { get; }
+        internal nint ComputeStream { get; }
+        internal nint Handle => _handle.Value;
+        internal NativeCudaBuffer<byte> Workspace => _workspace.Value;
+        internal BoundedDisposableLeaseCache<PlanKey, Int8Plan> Plans { get; }
+        internal Func<PlanKey, Int8Plan?> PlanFactory { get; }
+        internal bool IsDisposing => Volatile.Read(ref _disposed) != 0;
+
+        private Int8Plan CreatePlan(PlanKey key)
+            => CudaBlasLtInt8.CreatePlan(key, this);
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            if (!_laneOwned)
+            {
+                NativeCudaRuntime.DisposeAfterStreamFence(
+                    DeviceIndex,
+                    ComputeStream,
+                    DisposeOwnedResources);
+                return;
+            }
+            DisposeOwnedResources();
+        }
+
+        internal void DisposeChildAfterFence(Action dispose)
+        {
+            ArgumentNullException.ThrowIfNull(dispose);
+            if (IsDisposing)
+            {
+                dispose();
+                return;
+            }
+            NativeCudaRuntime.DisposeAfterStreamFence(
+                DeviceIndex,
+                ComputeStream,
+                dispose);
+        }
+
+        private void DisposeOwnedResources()
+        {
+            List<Exception>? failures = null;
+            TryDispose(Plans.Dispose, ref failures);
+            if (_workspace.IsValueCreated)
+                TryDispose(_workspace.Value.Dispose, ref failures);
+            if (_handle.IsValueCreated)
+            {
+                TryDispose(
+                    () =>
+                    {
+                        int status = Destroy(_handle.Value);
+                        if (status != Success)
+                        {
+                            throw new InvalidOperationException(
+                                $"cublasLtDestroy(Int8) failed with cuBLAS status {status}.");
+                        }
+                    },
+                    ref failures);
+            }
+            if (_laneOwned)
+                Interlocked.Decrement(ref _activeLaneResourceCount);
+            if (failures is not null)
+            {
+                throw new AggregateException(
+                    $"cuBLASLt Int8 stream resources failed to dispose on device {DeviceIndex}.",
+                    failures);
+            }
+        }
+
+        private static void TryDispose(
+            Action action,
+            ref List<Exception>? failures)
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+        }
+    }
 
     private sealed class Int8Plan(
         nint handle,
@@ -402,6 +580,8 @@ internal static unsafe class CudaBlasLtInt8
         MatmulAlgorithm algorithm,
         nuint workspaceSize,
         ulong numericalImplementationFlags,
+        nint computeStream,
+        LaneResources? owner,
         bool isSupported = true) : IDisposable
     {
         private int _disposed;
@@ -416,6 +596,7 @@ internal static unsafe class CudaBlasLtInt8
         internal nuint WorkspaceSize { get; } = workspaceSize;
         internal ulong NumericalImplementationFlags { get; } =
             numericalImplementationFlags;
+        internal nint ComputeStream { get; } = computeStream;
         internal bool IsSupported { get; } = isSupported;
         internal object ExecutionSync { get; } = new();
 
@@ -429,20 +610,25 @@ internal static unsafe class CudaBlasLtInt8
             default,
             0,
             0,
+            0,
+            null,
             isSupported: false);
 
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
-            try
+            if (owner is null)
             {
                 DestroyDescriptors(Operation, First, Second, Output);
+                return;
             }
-            finally
-            {
-                Workspace?.Dispose();
-            }
+            owner.DisposeChildAfterFence(
+                () => DestroyDescriptors(
+                    Operation,
+                    First,
+                    Second,
+                    Output));
         }
     }
 
@@ -462,61 +648,57 @@ internal static unsafe class CudaBlasLtInt8
         internal fixed int Reserved[4];
     }
 
-    [DllImport(Library, EntryPoint = "cublasLtCreate",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int Create(out nint handle);
+    private static int Create(out nint handle)
+        => CudaNativeGateway.CublasLtCreate(out handle);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatmulDescCreate",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int MatmulDescCreate(
+    private static int Destroy(nint handle)
+        => CudaNativeGateway.CublasLtDestroy(handle);
+
+    private static int MatmulDescCreate(
         out nint descriptor,
         int computeType,
-        int scaleType);
+        int scaleType)
+        => CudaNativeGateway.CublasLtMatmulDescCreate(
+            out descriptor, computeType, scaleType);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatmulDescDestroy",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int MatmulDescDestroy(nint descriptor);
+    private static int MatmulDescDestroy(nint descriptor)
+        => CudaNativeGateway.CublasLtMatmulDescDestroy(descriptor);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatmulDescSetAttribute",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int MatmulDescSetAttribute(
+    private static int MatmulDescSetAttribute(
         nint descriptor,
         int attribute,
         nint value,
-        nuint size);
+        nuint size)
+        => CudaNativeGateway.CublasLtMatmulDescSetAttribute(
+            descriptor, attribute, value, size);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatrixLayoutCreate",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int MatrixLayoutCreate(
+    private static int MatrixLayoutCreate(
         out nint layout,
         int type,
         nuint rows,
         nuint columns,
-        long leadingDimension);
+        long leadingDimension)
+        => CudaNativeGateway.CublasLtMatrixLayoutCreate(
+            out layout, type, rows, columns, leadingDimension);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatrixLayoutDestroy",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int MatrixLayoutDestroy(nint layout);
+    private static int MatrixLayoutDestroy(nint layout)
+        => CudaNativeGateway.CublasLtMatrixLayoutDestroy(layout);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatmulPreferenceCreate",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int PreferenceCreate(out nint preference);
+    private static int PreferenceCreate(out nint preference)
+        => CudaNativeGateway.CublasLtPreferenceCreate(out preference);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatmulPreferenceDestroy",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int PreferenceDestroy(nint preference);
+    private static int PreferenceDestroy(nint preference)
+        => CudaNativeGateway.CublasLtPreferenceDestroy(preference);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatmulPreferenceSetAttribute",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int PreferenceSetAttribute(
+    private static int PreferenceSetAttribute(
         nint preference,
         int attribute,
         nint value,
-        nuint size);
+        nuint size)
+        => CudaNativeGateway.CublasLtPreferenceSetAttribute(
+            preference, attribute, value, size);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatmulAlgoGetHeuristic",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int MatmulAlgoGetHeuristic(
+    private static int MatmulAlgoGetHeuristic(
         nint handle,
         nint operation,
         nint first,
@@ -526,20 +708,21 @@ internal static unsafe class CudaBlasLtInt8
         nint preference,
         int requestedCount,
         nint results,
-        nint returnedCount);
+        nint returnedCount)
+        => CudaNativeGateway.CublasLtMatmulAlgoGetHeuristic(
+            handle, operation, first, second, outputC, outputD, preference,
+            requestedCount, results, returnedCount);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatmulAlgoCapGetAttribute",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int MatmulAlgoCapGetAttribute(
+    private static int MatmulAlgoCapGetAttribute(
         nint algorithm,
         int attribute,
         nint buffer,
         nuint size,
-        nint sizeWritten);
+        nint sizeWritten)
+        => CudaNativeGateway.CublasLtMatmulAlgoCapGetAttribute(
+            algorithm, attribute, buffer, size, sizeWritten);
 
-    [DllImport(Library, EntryPoint = "cublasLtMatmul",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int Matmul(
+    private static int Matmul(
         nint handle,
         nint operation,
         nint alpha,
@@ -555,5 +738,9 @@ internal static unsafe class CudaBlasLtInt8
         nint algorithm,
         nint workspace,
         nuint workspaceSize,
-        nint stream);
+        nint stream)
+        => CudaNativeGateway.CublasLtMatmul(
+            handle, operation, alpha, first, firstLayout, second,
+            secondLayout, beta, outputC, outputCLayout, outputD,
+            outputDLayout, algorithm, workspace, workspaceSize, stream);
 }

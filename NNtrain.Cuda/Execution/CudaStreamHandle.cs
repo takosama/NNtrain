@@ -9,6 +9,7 @@ namespace NNtrain.Cuda.Execution;
 public sealed class CudaStreamHandle : SafeHandle
 {
     private readonly Action<int, nint>? _release;
+    private Exception? _releaseFailure;
 
     public CudaStreamHandle(
         int deviceIndex,
@@ -27,7 +28,25 @@ public sealed class CudaStreamHandle : SafeHandle
 
     public bool OwnsNativeStream => _release is not null;
 
+    /// <summary>
+    /// A native destroy failure captured by the non-throwing SafeHandle
+    /// release path. Explicit owners can surface it with
+    /// <see cref="DisposeChecked"/> while finalization remains safe.
+    /// </summary>
+    public Exception? ReleaseFailure => Volatile.Read(ref _releaseFailure);
+
     public override bool IsInvalid => handle == nint.Zero;
+
+    public void DisposeChecked()
+    {
+        Dispose();
+        if (ReleaseFailure is Exception failure)
+        {
+            throw new InvalidOperationException(
+                $"CUDA stream cleanup failed on device {DeviceIndex}.",
+                failure);
+        }
+    }
 
     protected override bool ReleaseHandle()
     {
@@ -36,8 +55,12 @@ public sealed class CudaStreamHandle : SafeHandle
             _release?.Invoke(DeviceIndex, handle);
             return true;
         }
-        catch
+        catch (Exception exception)
         {
+            Interlocked.CompareExchange(
+                ref _releaseFailure,
+                exception,
+                comparand: null);
             return false;
         }
     }

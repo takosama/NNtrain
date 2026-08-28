@@ -19,6 +19,20 @@ public enum NumericFormat
 }
 
 /// <summary>
+/// Physical operand encodings a CUDA GEMM dispatcher may select after any
+/// storage decode or packing. This is deliberately separate from
+/// <see cref="PrecisionPolicy.MatrixOperand"/>, which is the logical numeric
+/// contract presented to the dispatcher.
+/// </summary>
+[Flags]
+public enum GemmExecutionFormat
+{
+    Float32 = 1 << 0,
+    BFloat16 = 1 << 1,
+    Int8 = 1 << 2,
+}
+
+/// <summary>
 /// Central numeric contract for storage, kernels, stable reductions and
 /// optimizer state. Backends consume this policy instead of inferring
 /// arithmetic from physical tensor storage.
@@ -31,6 +45,7 @@ public sealed record PrecisionPolicy
         NumericFormat activationStorage,
         NumericFormat elementwiseCompute,
         NumericFormat matrixOperand,
+        GemmExecutionFormat gemmExecutionFormats,
         NumericFormat accumulation,
         NumericFormat reduction,
         NumericFormat normalization,
@@ -44,6 +59,7 @@ public sealed record PrecisionPolicy
         ActivationStorage = activationStorage;
         ElementwiseCompute = elementwiseCompute;
         MatrixOperand = matrixOperand;
+        GemmExecutionFormats = gemmExecutionFormats;
         Accumulation = accumulation;
         Reduction = reduction;
         Normalization = normalization;
@@ -57,7 +73,15 @@ public sealed record PrecisionPolicy
     public NumericFormat ParameterStorage { get; }
     public NumericFormat ActivationStorage { get; }
     public NumericFormat ElementwiseCompute { get; }
+
+    /// <summary>
+    /// Logical matrix operand contract. BFP8 policies remain BFP8 here even
+    /// when a CUDA backend decodes them to BF16 or packs them as INT8.
+    /// </summary>
     public NumericFormat MatrixOperand { get; }
+
+    /// <summary>Physical CUDA GEMM operand encodings allowed by this policy.</summary>
+    public GemmExecutionFormat GemmExecutionFormats { get; }
     public NumericFormat Accumulation { get; }
     public NumericFormat Reduction { get; }
     public NumericFormat Normalization { get; }
@@ -73,6 +97,7 @@ public sealed record PrecisionPolicy
         NumericFormat.Float32,
         NumericFormat.Float32,
         NumericFormat.Float32,
+        GemmExecutionFormat.Float32,
         NumericFormat.Float32,
         NumericFormat.Float32,
         NumericFormat.Float32,
@@ -87,6 +112,7 @@ public sealed record PrecisionPolicy
         NumericFormat.BFloat16,
         NumericFormat.BFloat16,
         NumericFormat.BFloat16,
+        GemmExecutionFormat.BFloat16,
         NumericFormat.Float32,
         NumericFormat.Float32,
         NumericFormat.Float32,
@@ -101,6 +127,7 @@ public sealed record PrecisionPolicy
         NumericFormat.BFloat16,
         NumericFormat.BFloat16,
         NumericFormat.BFloat16,
+        GemmExecutionFormat.BFloat16,
         NumericFormat.Float32,
         NumericFormat.Float32,
         NumericFormat.Float32,
@@ -115,6 +142,7 @@ public sealed record PrecisionPolicy
         NumericFormat.Bfp8,
         NumericFormat.Bfp8,
         NumericFormat.Bfp8,
+        GemmExecutionFormat.Int8 | GemmExecutionFormat.BFloat16,
         NumericFormat.Float32,
         NumericFormat.Float32,
         NumericFormat.Float32,
@@ -129,6 +157,7 @@ public sealed record PrecisionPolicy
         NumericFormat.Bfp8,
         NumericFormat.Bfp8,
         NumericFormat.Bfp8,
+        GemmExecutionFormat.BFloat16,
         NumericFormat.Float32,
         NumericFormat.Float32,
         NumericFormat.Float32,
@@ -155,14 +184,17 @@ public sealed record PrecisionPolicy
             return Float32;
         if (string.Equals(value, "bfloat16", StringComparison.OrdinalIgnoreCase))
             return BFloat16;
-        if (string.Equals(value, "mix16_32", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(value, "mix16_32", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "fp16_32", StringComparison.OrdinalIgnoreCase))
             return Mix16_32;
         if (string.Equals(value, "bfp8", StringComparison.OrdinalIgnoreCase))
             return Bfp8;
         if (string.Equals(value, "mix8_32", StringComparison.OrdinalIgnoreCase))
             return Mix8_32;
         throw new ArgumentException(
-            $"Unsupported precision policy '{value}'.",
+            $"Unsupported precision policy '{value}'. Supported values are " +
+            "'float32', 'bfloat16', 'mix16_32' (alias 'fp16_32'), " +
+            "'bfp8', and 'mix8_32'.",
             nameof(value));
     }
 

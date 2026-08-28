@@ -5,6 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NNtrainArchitectureLayer>Core</NNtrainArchitectureLayer>
+    <NNtrainAllowedProjectReferences>NNtrain.Runtime;NNtrain.Cuda</NNtrainAllowedProjectReferences>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,17 +21,6 @@
     <None Include="runtimes\\win-x64\\native\\NNtrain.F16C.dll"
           CopyToOutputDirectory="PreserveNewest"
           Link="NNtrain.F16C.dll" />
-  </ItemGroup>
-
-  <ItemGroup Condition="Exists('runtimes\win-x64\native\NNtrain.CudaKernels.dll')">
-    <None Include="runtimes\win-x64\native\NNtrain.CudaKernels.dll"
-          CopyToOutputDirectory="PreserveNewest"
-          Link="NNtrain.CudaKernels.dll" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="NtvLibs.cuda12.cublas64_12.runtime.win-x64" Version="12.8.1" />
-    <PackageReference Include="NtvLibs.cuda12.cublasLt64_12.runtime.win-x64" Version="12.8.1" />
   </ItemGroup>
 
 </Project>

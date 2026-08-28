@@ -6,11 +6,7 @@ namespace NNtrain;
 internal static partial class TensorCudaKernels
 {
     private static bool UsesDirectBFloat16Gradients
-        // Direct Tensor calls have no model-level policy and retain the
-        // historical all-BF16 path. Model execution keeps intermediate
-        // backward workspaces in the policy's FP32 accumulation format;
-        // pure BF16 is applied at leaf/bucket storage boundaries instead.
-        => TensorExecutionContext.ActivePrecisionPolicy is null;
+        => TensorExecutionContext.UsesBFloat16GradientStorage;
 
     internal static BFloat16AttentionResidentContext
         AttentionForwardBFloat16Resident(
@@ -76,11 +72,8 @@ internal static partial class TensorCudaKernels
         bool directBFloat16Gradient = UsesDirectBFloat16Gradients
             && context.TensorCore
             && !projected.HasGradientBuffer
-            && !string.Equals(
-                Environment.GetEnvironmentVariable(
-                    "NNTRAIN_DISABLE_DIRECT_ATTENTION_BF16_GRADIENT"),
-                "1",
-                StringComparison.Ordinal);
+            && !CudaDispatchPolicy.Current
+                .DisableDirectAttentionBFloat16Gradient;
         NativeCudaBuffer<ushort>? bfloat16Gradient = directBFloat16Gradient
             ? Tensor.RentCudaBFloat16Buffer(deviceIndex, projected.Numel)
             : null;
@@ -155,10 +148,28 @@ internal static partial class TensorCudaKernels
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
-            Tensor.ReturnCudaFloatBuffer(accelerator, SoftmaxLogSumExp);
+            var releases = new List<Action>
+            {
+                () => Tensor.ReturnCudaFloatBuffer(
+                    accelerator,
+                    SoftmaxLogSumExp),
+            };
             if (RowDelta is not null)
-                Tensor.ReturnCudaFloatBuffer(accelerator, RowDelta);
-            GC.SuppressFinalize(this);
+            {
+                releases.Add(() => Tensor.ReturnCudaFloatBuffer(
+                    accelerator,
+                    RowDelta));
+            }
+            try
+            {
+                CudaResourceCleanup.RunAll(
+                    "CUDA BF16 attention context cleanup failed.",
+                    releases);
+            }
+            finally
+            {
+                GC.SuppressFinalize(this);
+            }
         }
     }
 
@@ -232,9 +243,29 @@ internal static partial class TensorCudaKernels
     {
         int deviceIndex = Tensor.CudaDeviceIndex;
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+        if (UsesDirectBFloat16Gradients)
+        {
+            using CudaBFloat16GradientSource outputGradientSource =
+                CudaBFloat16GradientSource.Acquire(output, deviceIndex);
+            using var targets =
+                new CudaPureBFloat16GradientTargetSet(deviceIndex);
+            CudaPureBFloat16GradientTarget tableGradientTarget =
+                targets.Get(table);
+            tableGradientTarget.EnsureZeroInitialized();
+            CudaEmbeddingBackwardDispatcher.BackwardBFloat16Gradient(
+                deviceIndex,
+                context.Indices.NativePtr,
+                outputGradientSource.Buffer.NativePtr,
+                tableGradientTarget.Buffer.NativePtr,
+                output.Numel,
+                width);
+            targets.CommitAll();
+            return;
+        }
+
         var outputGradient = output.EnsureCudaGradientBuffer(deviceIndex);
         var tableGradient = table.EnsureCudaGradientBuffer(deviceIndex);
-        CudaTensorNative.EmbeddingBackward(
+        CudaEmbeddingBackwardDispatcher.Backward(
             deviceIndex,
             context.Indices.NativePtr,
             outputGradient.NativePtr,
@@ -302,10 +333,38 @@ internal static partial class TensorCudaKernels
     {
         int deviceIndex = Tensor.CudaDeviceIndex;
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+        if (UsesDirectBFloat16Gradients)
+        {
+            bool sameTable = ReferenceEquals(tokenTable, positionTable);
+            using CudaBFloat16GradientSource outputGradientSource =
+                CudaBFloat16GradientSource.Acquire(output, deviceIndex);
+            using var targets =
+                new CudaPureBFloat16GradientTargetSet(deviceIndex);
+            CudaPureBFloat16GradientTarget tokenGradientTarget =
+                targets.Get(tokenTable);
+            CudaPureBFloat16GradientTarget positionGradientTarget =
+                targets.Get(positionTable);
+            tokenGradientTarget.EnsureZeroInitialized();
+            if (!sameTable)
+                positionGradientTarget.EnsureZeroInitialized();
+            CudaEmbeddingBackwardDispatcher
+                .BackwardWithPositionsBFloat16Gradient(
+                    deviceIndex,
+                    context.Indices.NativePtr,
+                    outputGradientSource.Buffer.NativePtr,
+                    tokenGradientTarget.Buffer.NativePtr,
+                    positionGradientTarget.Buffer.NativePtr,
+                    output.Numel,
+                    sequenceLength,
+                    width);
+            targets.CommitAll();
+            return;
+        }
+
         var outputGradient = output.EnsureCudaGradientBuffer(deviceIndex);
         var tokenGradient = tokenTable.EnsureCudaGradientBuffer(deviceIndex);
         var positionGradient = positionTable.EnsureCudaGradientBuffer(deviceIndex);
-        CudaTensorNative.EmbeddingPositionsBackward(
+        CudaEmbeddingBackwardDispatcher.BackwardWithPositions(
             deviceIndex,
             context.Indices.NativePtr,
             outputGradient.NativePtr,
@@ -434,28 +493,45 @@ internal static partial class TensorCudaKernels
             uint seed,
             uint dropThreshold,
             float dropoutScale,
-            float epsilon)
+            float epsilon,
+            CudaGraphDropoutToken? graphToken = null)
     {
         int deviceIndex = Tensor.CudaDeviceIndex;
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
         var output = Tensor.RentCudaBFloat16Buffer(deviceIndex, residual.Numel);
         var means = Tensor.RentCudaFloatBuffer(deviceIndex, rows);
         var inverses = Tensor.RentCudaFloatBuffer(deviceIndex, rows);
-        bool succeeded = CudaLayerNorm.TryFusedForwardBFloat16(
-            accelerator,
-            residual.EnsureCudaBFloat16Buffer(deviceIndex),
-            branch.EnsureCudaBFloat16Buffer(deviceIndex),
-            gamma.EnsureCudaBFloat16Buffer(deviceIndex),
-            beta.EnsureCudaBFloat16Buffer(deviceIndex),
-            output,
-            means,
-            inverses,
-            rows,
-            columns,
-            seed,
-            dropThreshold,
-            dropoutScale,
-            epsilon);
+        bool succeeded = graphToken is { } token
+            ? CudaLayerNorm.TryFusedForwardBFloat16Graph(
+                accelerator,
+                residual.EnsureCudaBFloat16Buffer(deviceIndex),
+                branch.EnsureCudaBFloat16Buffer(deviceIndex),
+                gamma.EnsureCudaBFloat16Buffer(deviceIndex),
+                beta.EnsureCudaBFloat16Buffer(deviceIndex),
+                output,
+                means,
+                inverses,
+                rows,
+                columns,
+                token,
+                dropThreshold,
+                dropoutScale,
+                epsilon)
+            : CudaLayerNorm.TryFusedForwardBFloat16(
+                accelerator,
+                residual.EnsureCudaBFloat16Buffer(deviceIndex),
+                branch.EnsureCudaBFloat16Buffer(deviceIndex),
+                gamma.EnsureCudaBFloat16Buffer(deviceIndex),
+                beta.EnsureCudaBFloat16Buffer(deviceIndex),
+                output,
+                means,
+                inverses,
+                rows,
+                columns,
+                seed,
+                dropThreshold,
+                dropoutScale,
+                epsilon);
         if (succeeded)
         {
             return new BFloat16LayerNormResidentContext(
@@ -517,6 +593,29 @@ internal static partial class TensorCudaKernels
         float labelSmoothing)
     {
         int deviceIndex = Tensor.CudaDeviceIndex;
+        if (logits.AllowInPlaceBFloat16Gradient
+            && AutogradEngine.IsReleasingGraph)
+        {
+            NativeCudaBuffer<ushort> inPlace =
+                logits.EnsureCudaBFloat16Buffer(deviceIndex);
+            CudaTensorNative.CrossEntropyBackwardBFloat16Output(
+                deviceIndex,
+                inPlace.NativePtr,
+                context.Maxima.NativePtr,
+                context.InverseSums.NativePtr,
+                context.Labels.NativePtr,
+                inPlace.NativePtr,
+                loss.EnsureCudaGradientBuffer(deviceIndex).NativePtr,
+                logits.Numel,
+                columns,
+                ignoreIndex,
+                validRows,
+                labelSmoothing);
+            logits.MarkCudaBFloat16DataAsGradientInPlace(
+                inPlace,
+                deviceIndex);
+            return;
+        }
         if (UsesDirectBFloat16Gradients)
         {
             NativeCudaDevice accelerator =
@@ -581,13 +680,93 @@ internal static partial class TensorCudaKernels
     {
         int deviceIndex = Tensor.CudaDeviceIndex;
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+        if (!context.Native)
+        {
+            throw new InvalidOperationException(
+                "BF16 CUDA LayerNorm context was not produced by native CUDA.");
+        }
+        if (UsesDirectBFloat16Gradients)
+        {
+            NativeCudaBuffer<float>? decodedOutput = null;
+            NativeCudaBuffer<float>? inputContribution = null;
+            NativeCudaBuffer<float>? gammaContribution = null;
+            NativeCudaBuffer<float>? betaContribution = null;
+            try
+            {
+                using CudaBFloat16GradientSource outputGradientSource =
+                    CudaBFloat16GradientSource.Acquire(
+                        output,
+                        deviceIndex);
+                using var targets =
+                    new CudaPureBFloat16GradientTargetSet(deviceIndex);
+                CudaPureBFloat16GradientTarget inputGradientTarget =
+                    targets.Get(input);
+                CudaPureBFloat16GradientTarget gammaGradientTarget =
+                    targets.Get(gamma);
+                CudaPureBFloat16GradientTarget betaGradientTarget =
+                    targets.Get(beta);
+
+                decodedOutput = Tensor.RentCudaFloatBuffer(
+                    deviceIndex,
+                    output.Numel);
+                inputContribution = Tensor.RentCudaFloatBuffer(
+                    deviceIndex,
+                    input.Numel);
+                gammaContribution = Tensor.RentCudaFloatBuffer(
+                    deviceIndex,
+                    gamma.Numel);
+                betaContribution = Tensor.RentCudaFloatBuffer(
+                    deviceIndex,
+                    beta.Numel);
+                inputContribution.MemSetToZero();
+                gammaContribution.MemSetToZero();
+                betaContribution.MemSetToZero();
+                CudaTensorNative.DecodeBFloat16(
+                    deviceIndex,
+                    outputGradientSource.Buffer.NativePtr,
+                    decodedOutput.NativePtr,
+                    output.Numel);
+                CudaLayerNorm.BackwardBFloat16(
+                    accelerator,
+                    input.EnsureCudaBFloat16Buffer(deviceIndex),
+                    gamma.EnsureCudaBFloat16Buffer(deviceIndex),
+                    context.Means,
+                    context.Inverses,
+                    decodedOutput,
+                    inputContribution,
+                    gammaContribution,
+                    betaContribution,
+                    rows,
+                    columns);
+                inputGradientTarget.AccumulateFloat32(
+                    inputContribution,
+                    input.Numel);
+                gammaGradientTarget.AccumulateFloat32(
+                    gammaContribution,
+                    gamma.Numel);
+                betaGradientTarget.AccumulateFloat32(
+                    betaContribution,
+                    beta.Numel);
+                targets.CommitAll();
+            }
+            finally
+            {
+                if (betaContribution is not null)
+                    Tensor.ReturnCudaFloatBuffer(accelerator, betaContribution);
+                if (gammaContribution is not null)
+                    Tensor.ReturnCudaFloatBuffer(accelerator, gammaContribution);
+                if (inputContribution is not null)
+                    Tensor.ReturnCudaFloatBuffer(accelerator, inputContribution);
+                if (decodedOutput is not null)
+                    Tensor.ReturnCudaFloatBuffer(accelerator, decodedOutput);
+            }
+            return;
+        }
+
         var outputGradient = output.EnsureCudaGradientBuffer(deviceIndex);
         var inputGradient = input.EnsureCudaGradientBuffer(deviceIndex);
         var gammaGradient = gamma.EnsureCudaGradientBuffer(deviceIndex);
         var betaGradient = beta.EnsureCudaGradientBuffer(deviceIndex);
-        if (!context.Native)
-            throw new InvalidOperationException(
-                "BF16 CUDA LayerNorm context was not produced by native CUDA.");
         CudaLayerNorm.BackwardBFloat16(
             accelerator,
             input.EnsureCudaBFloat16Buffer(deviceIndex),
@@ -617,18 +796,150 @@ internal static partial class TensorCudaKernels
         bool sameParent,
         uint seed,
         uint dropThreshold,
-        float dropoutScale)
+        float dropoutScale,
+        CudaGraphDropoutToken? graphToken = null)
     {
         int deviceIndex = Tensor.CudaDeviceIndex;
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+        if (UsesDirectBFloat16Gradients)
+        {
+            NativeCudaBuffer<float>? decodedOutput = null;
+            NativeCudaBuffer<float>? residualContribution = null;
+            NativeCudaBuffer<float>? branchContribution = null;
+            NativeCudaBuffer<float>? gammaContribution = null;
+            NativeCudaBuffer<float>? betaContribution = null;
+            try
+            {
+                using CudaBFloat16GradientSource outputGradientSource =
+                    CudaBFloat16GradientSource.Acquire(
+                        output,
+                        deviceIndex);
+                using var targets =
+                    new CudaPureBFloat16GradientTargetSet(deviceIndex);
+                CudaPureBFloat16GradientTarget residualGradientTarget =
+                    targets.Get(residual);
+                CudaPureBFloat16GradientTarget branchGradientTarget =
+                    targets.Get(branch);
+                CudaPureBFloat16GradientTarget gammaGradientTarget =
+                    targets.Get(gamma);
+                CudaPureBFloat16GradientTarget betaGradientTarget =
+                    targets.Get(beta);
+
+                decodedOutput = Tensor.RentCudaFloatBuffer(
+                    deviceIndex,
+                    output.Numel);
+                residualContribution = Tensor.RentCudaFloatBuffer(
+                    deviceIndex,
+                    residual.Numel);
+                branchContribution = sameParent
+                    ? residualContribution
+                    : Tensor.RentCudaFloatBuffer(
+                        deviceIndex,
+                        branch.Numel);
+                gammaContribution = Tensor.RentCudaFloatBuffer(
+                    deviceIndex,
+                    gamma.Numel);
+                betaContribution = Tensor.RentCudaFloatBuffer(
+                    deviceIndex,
+                    beta.Numel);
+                residualContribution.MemSetToZero();
+                if (!sameParent)
+                    branchContribution.MemSetToZero();
+                gammaContribution.MemSetToZero();
+                betaContribution.MemSetToZero();
+                CudaTensorNative.DecodeBFloat16(
+                    deviceIndex,
+                    outputGradientSource.Buffer.NativePtr,
+                    decodedOutput.NativePtr,
+                    output.Numel);
+                if (graphToken is { } token)
+                {
+                    CudaLayerNorm.FusedBackwardBFloat16Graph(
+                        accelerator,
+                        residual.EnsureCudaBFloat16Buffer(deviceIndex),
+                        branch.EnsureCudaBFloat16Buffer(deviceIndex),
+                        gamma.EnsureCudaBFloat16Buffer(deviceIndex),
+                        context.Means,
+                        context.Inverses,
+                        decodedOutput,
+                        residualContribution,
+                        branchContribution,
+                        gammaContribution,
+                        betaContribution,
+                        rows,
+                        columns,
+                        sameParent,
+                        token,
+                        dropThreshold,
+                        dropoutScale);
+                }
+                else
+                {
+                    CudaLayerNorm.FusedBackwardBFloat16(
+                        accelerator,
+                        residual.EnsureCudaBFloat16Buffer(deviceIndex),
+                        branch.EnsureCudaBFloat16Buffer(deviceIndex),
+                        gamma.EnsureCudaBFloat16Buffer(deviceIndex),
+                        context.Means,
+                        context.Inverses,
+                        decodedOutput,
+                        residualContribution,
+                        branchContribution,
+                        gammaContribution,
+                        betaContribution,
+                        rows,
+                        columns,
+                        sameParent,
+                        seed,
+                        dropThreshold,
+                        dropoutScale);
+                }
+                residualGradientTarget.AccumulateFloat32(
+                    residualContribution,
+                    residual.Numel);
+                if (!sameParent)
+                {
+                    branchGradientTarget.AccumulateFloat32(
+                        branchContribution,
+                        branch.Numel);
+                }
+                gammaGradientTarget.AccumulateFloat32(
+                    gammaContribution,
+                    gamma.Numel);
+                betaGradientTarget.AccumulateFloat32(
+                    betaContribution,
+                    beta.Numel);
+                targets.CommitAll();
+            }
+            finally
+            {
+                if (betaContribution is not null)
+                    Tensor.ReturnCudaFloatBuffer(accelerator, betaContribution);
+                if (gammaContribution is not null)
+                    Tensor.ReturnCudaFloatBuffer(accelerator, gammaContribution);
+                if (!sameParent && branchContribution is not null)
+                {
+                    Tensor.ReturnCudaFloatBuffer(
+                        accelerator,
+                        branchContribution);
+                }
+                if (residualContribution is not null)
+                {
+                    Tensor.ReturnCudaFloatBuffer(
+                        accelerator,
+                        residualContribution);
+                }
+                if (decodedOutput is not null)
+                    Tensor.ReturnCudaFloatBuffer(accelerator, decodedOutput);
+            }
+            return;
+        }
+
         bool directBranchGradient = UsesDirectBFloat16Gradients
             && !sameParent
             && !branch.HasGradientBuffer
-            && !string.Equals(
-                Environment.GetEnvironmentVariable(
-                    "NNTRAIN_DISABLE_DIRECT_LAYERNORM_BF16_BRANCH_GRADIENT"),
-                "1",
-                StringComparison.Ordinal);
+            && !CudaDispatchPolicy.Current
+                .DisableDirectLayerNormBFloat16BranchGradient;
         NativeCudaBuffer<ushort>? branchGradientBFloat16 =
             directBranchGradient
                 ? Tensor.RentCudaBFloat16Buffer(deviceIndex, branch.Numel)
@@ -642,28 +953,56 @@ internal static partial class TensorCudaKernels
         {
             if (branchGradientBFloat16 is not null)
             {
-                CudaLayerNorm.FusedBackwardBFloat16DirectBranch(
-                    accelerator,
-                    residual.EnsureCudaBFloat16Buffer(deviceIndex),
-                    branch.EnsureCudaBFloat16Buffer(deviceIndex),
-                    gamma.EnsureCudaBFloat16Buffer(deviceIndex),
-                    context.Means,
-                    context.Inverses,
+                NativeCudaBuffer<float>? outputGradient =
                     useBFloat16OutputGradient
                         ? null
-                        : output.EnsureCudaGradientBuffer(deviceIndex),
+                        : output.EnsureCudaGradientBuffer(deviceIndex);
+                NativeCudaBuffer<ushort>? encodedOutputGradient =
                     useBFloat16OutputGradient
                         ? outputGradientBFloat16
-                        : null,
-                    residual.EnsureCudaGradientBuffer(deviceIndex),
-                    branchGradientBFloat16,
-                    gamma.EnsureCudaGradientBuffer(deviceIndex),
-                    beta.EnsureCudaGradientBuffer(deviceIndex),
-                    rows,
-                    columns,
-                    seed,
-                    dropThreshold,
-                    dropoutScale);
+                        : null;
+                if (graphToken is { } token)
+                {
+                    CudaLayerNorm.FusedBackwardBFloat16DirectBranchGraph(
+                        accelerator,
+                        residual.EnsureCudaBFloat16Buffer(deviceIndex),
+                        branch.EnsureCudaBFloat16Buffer(deviceIndex),
+                        gamma.EnsureCudaBFloat16Buffer(deviceIndex),
+                        context.Means,
+                        context.Inverses,
+                        outputGradient,
+                        encodedOutputGradient,
+                        residual.EnsureCudaGradientBuffer(deviceIndex),
+                        branchGradientBFloat16,
+                        gamma.EnsureCudaGradientBuffer(deviceIndex),
+                        beta.EnsureCudaGradientBuffer(deviceIndex),
+                        rows,
+                        columns,
+                        token,
+                        dropThreshold,
+                        dropoutScale);
+                }
+                else
+                {
+                    CudaLayerNorm.FusedBackwardBFloat16DirectBranch(
+                        accelerator,
+                        residual.EnsureCudaBFloat16Buffer(deviceIndex),
+                        branch.EnsureCudaBFloat16Buffer(deviceIndex),
+                        gamma.EnsureCudaBFloat16Buffer(deviceIndex),
+                        context.Means,
+                        context.Inverses,
+                        outputGradient,
+                        encodedOutputGradient,
+                        residual.EnsureCudaGradientBuffer(deviceIndex),
+                        branchGradientBFloat16,
+                        gamma.EnsureCudaGradientBuffer(deviceIndex),
+                        beta.EnsureCudaGradientBuffer(deviceIndex),
+                        rows,
+                        columns,
+                        seed,
+                        dropThreshold,
+                        dropoutScale);
+                }
                 branch.AdoptCudaBFloat16GradientBuffer(
                     branchGradientBFloat16,
                     deviceIndex);
@@ -671,26 +1010,53 @@ internal static partial class TensorCudaKernels
             }
             else
             {
-                CudaLayerNorm.FusedBackwardBFloat16(
-                    accelerator,
-                    residual.EnsureCudaBFloat16Buffer(deviceIndex),
-                    branch.EnsureCudaBFloat16Buffer(deviceIndex),
-                    gamma.EnsureCudaBFloat16Buffer(deviceIndex),
-                    context.Means,
-                    context.Inverses,
-                    output.EnsureCudaGradientBuffer(deviceIndex),
-                    residual.EnsureCudaGradientBuffer(deviceIndex),
-                    sameParent
-                        ? residual.EnsureCudaGradientBuffer(deviceIndex)
-                        : branch.EnsureCudaGradientBuffer(deviceIndex),
-                    gamma.EnsureCudaGradientBuffer(deviceIndex),
-                    beta.EnsureCudaGradientBuffer(deviceIndex),
-                    rows,
-                    columns,
-                    sameParent,
-                    seed,
-                    dropThreshold,
-                    dropoutScale);
+                NativeCudaBuffer<float> residualGradient =
+                    residual.EnsureCudaGradientBuffer(deviceIndex);
+                NativeCudaBuffer<float> branchGradient = sameParent
+                    ? residualGradient
+                    : branch.EnsureCudaGradientBuffer(deviceIndex);
+                if (graphToken is { } token)
+                {
+                    CudaLayerNorm.FusedBackwardBFloat16Graph(
+                        accelerator,
+                        residual.EnsureCudaBFloat16Buffer(deviceIndex),
+                        branch.EnsureCudaBFloat16Buffer(deviceIndex),
+                        gamma.EnsureCudaBFloat16Buffer(deviceIndex),
+                        context.Means,
+                        context.Inverses,
+                        output.EnsureCudaGradientBuffer(deviceIndex),
+                        residualGradient,
+                        branchGradient,
+                        gamma.EnsureCudaGradientBuffer(deviceIndex),
+                        beta.EnsureCudaGradientBuffer(deviceIndex),
+                        rows,
+                        columns,
+                        sameParent,
+                        token,
+                        dropThreshold,
+                        dropoutScale);
+                }
+                else
+                {
+                    CudaLayerNorm.FusedBackwardBFloat16(
+                        accelerator,
+                        residual.EnsureCudaBFloat16Buffer(deviceIndex),
+                        branch.EnsureCudaBFloat16Buffer(deviceIndex),
+                        gamma.EnsureCudaBFloat16Buffer(deviceIndex),
+                        context.Means,
+                        context.Inverses,
+                        output.EnsureCudaGradientBuffer(deviceIndex),
+                        residualGradient,
+                        branchGradient,
+                        gamma.EnsureCudaGradientBuffer(deviceIndex),
+                        beta.EnsureCudaGradientBuffer(deviceIndex),
+                        rows,
+                        columns,
+                        sameParent,
+                        seed,
+                        dropThreshold,
+                        dropoutScale);
+                }
             }
         }
         finally
@@ -726,9 +1092,17 @@ internal static partial class TensorCudaKernels
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
-            Tensor.ReturnCudaFloatBuffer(accelerator, Means);
-            Tensor.ReturnCudaFloatBuffer(accelerator, Inverses);
-            GC.SuppressFinalize(this);
+            try
+            {
+                CudaResourceCleanup.RunAll(
+                    "CUDA BF16 LayerNorm context cleanup failed.",
+                    () => Tensor.ReturnCudaFloatBuffer(accelerator, Means),
+                    () => Tensor.ReturnCudaFloatBuffer(accelerator, Inverses));
+            }
+            finally
+            {
+                GC.SuppressFinalize(this);
+            }
         }
     }
 
@@ -845,13 +1219,73 @@ internal static partial class TensorCudaKernels
             }
         }
 
+        if (UsesDirectBFloat16Gradients)
+        {
+            try
+            {
+                using var targets =
+                    new CudaPureBFloat16GradientTargetSet(deviceIndex);
+                CudaPureBFloat16GradientTarget inputGradient =
+                    targets.Get(input);
+                CudaPureBFloat16GradientTarget weightGradientTarget =
+                    targets.Get(weight);
+                CudaPureBFloat16GradientTarget biasGradientTarget =
+                    targets.Get(bias);
+
+                CudaBlas.LinearBackwardInputBFloat16Accumulate(
+                    accelerator,
+                    deviceIndex,
+                    encodedGradient!,
+                    weight.EnsureCudaBFloat16Buffer(deviceIndex),
+                    inputGradient.Buffer,
+                    rows,
+                    inputWidth,
+                    outputWidth,
+                    inputGradient.HasValue);
+                inputGradient.MarkFullContributionWritten();
+
+                CudaBlas.LinearBackwardWeightBFloat16Direct(
+                    accelerator,
+                    deviceIndex,
+                    input.EnsureCudaBFloat16Buffer(deviceIndex),
+                    encodedGradient!,
+                    weightGradientTarget.Buffer,
+                    rows,
+                    inputWidth,
+                    outputWidth,
+                    weightGradientTarget.HasValue);
+                weightGradientTarget.MarkFullContributionWritten();
+
+                // Rows reduce in FP32 inside the CUDA kernel, then the single
+                // completed contribution is accumulated directly into the
+                // authoritative BF16 bias gradient.
+                biasGradientTarget.EnsureZeroInitialized();
+                CudaPureBFloat16GradientNative.LinearBiasBackward(
+                    deviceIndex,
+                    encodedGradient!.NativePtr,
+                    biasGradientTarget.Buffer.NativePtr,
+                    rows,
+                    outputWidth,
+                    accelerator.DefaultStream);
+
+                targets.CommitAll();
+            }
+            finally
+            {
+                if (!borrowedEncodedGradient)
+                {
+                    Tensor.ReturnCudaBFloat16Buffer(
+                        accelerator,
+                        encodedGradient!);
+                }
+            }
+            return;
+        }
+
         bool directInputGradient = UsesDirectBFloat16Gradients
             && !input.HasGradientBuffer
-            && !string.Equals(
-                Environment.GetEnvironmentVariable(
-                    "NNTRAIN_DISABLE_DIRECT_LINEAR_BF16_GRADIENT"),
-                "1",
-                StringComparison.Ordinal);
+            && !CudaDispatchPolicy.Current
+                .DisableDirectLinearBFloat16Gradient;
         NativeCudaBuffer<ushort>? directInputGradientBuffer =
             directInputGradient
                 ? Tensor.RentCudaBFloat16Buffer(

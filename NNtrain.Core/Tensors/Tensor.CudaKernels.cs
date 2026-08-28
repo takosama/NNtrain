@@ -1,14 +1,33 @@
 
+using NNtrain.Runtime.Execution;
+
 namespace NNtrain;
 
 /// <summary>CUDA kernels shared by the ForgetMemory training graph.</summary>
 internal static partial class TensorCudaKernels
 {
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
-        int,
-        Lazy<NativeCudaBuffer<double>>> GradientNormScratch = new();
+    private const int GradientNormFallbackCapacity = 4;
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        IStreamExecutionLane,
+        Lazy<GradientNormScratchOwner>> LaneGradientNormScratch = new();
+    private static readonly ResettableBoundedDisposableLeaseCache<
+        GradientNormScratchKey,
+        GradientNormScratchOwner> FallbackGradientNormScratch =
+            new(GradientNormFallbackCapacity);
+    private static int _activeLaneGradientNormScratchCount;
+    private static int _liveGradientNormScratchBufferCount;
     private static readonly object GradientSquaredSumCacheLock = new();
     private static GradientSquaredSumCacheEntry? _gradientSquaredSumCache;
+
+    internal static int ActiveLaneGradientNormScratchCount =>
+        Volatile.Read(ref _activeLaneGradientNormScratchCount);
+    internal static int FallbackGradientNormScratchCount =>
+        FallbackGradientNormScratch.Count;
+    internal static int LiveGradientNormScratchBufferCount =>
+        Volatile.Read(ref _liveGradientNormScratchBufferCount);
+
+    internal static void DisposeFallbackResources()
+        => FallbackGradientNormScratch.Dispose();
 
     internal static AttentionResidentContext
         AttentionForwardResident(
@@ -78,10 +97,22 @@ internal static partial class TensorCudaKernels
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
+            var releases = new List<Action>(2);
             if (Probabilities is not null)
-                Tensor.ReturnCudaFloatBuffer(accelerator, Probabilities);
+            {
+                releases.Add(() => Tensor.ReturnCudaFloatBuffer(
+                    accelerator,
+                    Probabilities));
+            }
             if (SoftmaxLogSumExp is not null)
-                Tensor.ReturnCudaFloatBuffer(accelerator, SoftmaxLogSumExp);
+            {
+                releases.Add(() => Tensor.ReturnCudaFloatBuffer(
+                    accelerator,
+                    SoftmaxLogSumExp));
+            }
+            CudaResourceCleanup.RunAll(
+                "CUDA attention context cleanup failed.",
+                releases);
         }
     }
 
@@ -90,17 +121,338 @@ internal static partial class TensorCudaKernels
         float maxNorm)
     {
         int[] devices = Tensor.CudaDeviceIndices.ToArray();
+        Tensor[] gradients = parameters
+            .Select(parameter => parameter.T)
+            .Where(tensor => tensor.HasGradientBuffer)
+            .Distinct(
+                (IEqualityComparer<Tensor>)
+                    ReferenceEqualityComparer.Instance)
+            .ToArray();
+        if (gradients.Length == 0)
+            return 0f;
+
+        bool containsPureBfp8 = gradients.Any(IsPureBfp8GradientTensor);
+        if (containsPureBfp8)
+        {
+            if (gradients.Any(tensor =>
+                    !IsPureBfp8GradientTensor(tensor)
+                    || !tensor.HasAuthoritativeCudaBfp8Gradient))
+            {
+                throw new InvalidOperationException(
+                    "Pure BFP8 gradient clipping requires every gradient " +
+                    "to be an authoritative tensor-wide CUDA BFP8 replica. " +
+                    "Implicit Float32 decode/fallback is forbidden.");
+            }
+            return ClipPureBfp8GradientNormResident(
+                parameters,
+                gradients,
+                devices,
+                maxNorm);
+        }
+
+        bool containsPureBFloat16 = gradients.Any(tensor =>
+            tensor.HasAuthoritativeCudaBFloat16Gradient);
+        if (containsPureBFloat16)
+        {
+            if (gradients.Any(tensor =>
+                    tensor.DType != TensorDType.BFloat16
+                    || !tensor.HasAuthoritativeCudaBFloat16Gradient))
+            {
+                throw new InvalidOperationException(
+                    "Pure BFloat16 gradient clipping requires every " +
+                    "gradient to retain authoritative CUDA BF16 storage. " +
+                    "Implicit Float32 decode/fallback is forbidden.");
+            }
+            return ClipPureBFloat16GradientNormResident(
+                parameters,
+                gradients,
+                devices,
+                maxNorm);
+        }
+
+        return ClipFloatGradientNormResident(parameters, devices, maxNorm);
+    }
+
+    private static float ClipPureBFloat16GradientNormResident(
+        IReadOnlyList<Parameter> parameters,
+        IReadOnlyList<Tensor> gradients,
+        IReadOnlyList<int> devices,
+        float maxNorm)
+    {
+        if (devices.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Pure BFloat16 gradient clipping requires a CUDA device.");
+        }
+        foreach (Tensor tensor in gradients)
+        {
+            foreach (int deviceIndex in devices)
+            {
+                if (!tensor.TryGetCudaBFloat16GradientBuffer(
+                        deviceIndex,
+                        out _))
+                {
+                    throw new InvalidOperationException(
+                        $"BF16 gradient replica '{tensor.Name}' is missing " +
+                        $"from CUDA device {deviceIndex}; clipping cannot " +
+                        "decode through the host or Float32 authority.");
+                }
+            }
+        }
+
+        double squaredSumValue;
+        if (!TryConsumeGradientSquaredSum(
+                parameters,
+                devices,
+                out squaredSumValue))
+        {
+            int primaryDevice = devices[0];
+            NativeCudaDevice accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(primaryDevice);
+            using GradientNormScratchLease scratch =
+                AcquireGradientNormScratch(primaryDevice);
+            NativeCudaBuffer<double> squaredSumBuffer = scratch.Buffer;
+            squaredSumBuffer.MemSetToZero();
+            var primaryArenas = new HashSet<NativeCudaArena<ushort>>(
+                ReferenceEqualityComparer.Instance);
+            foreach (Tensor tensor in gradients)
+            {
+                NativeCudaArena<ushort>? arena =
+                    tensor.GetCudaBFloat16GradientArena(primaryDevice);
+                if (arena is not null)
+                {
+                    if (primaryArenas.Add(arena))
+                    {
+                        CudaPureBFloat16GradientNative.AccumulateSquaredSum(
+                            primaryDevice,
+                            arena.NativePtr,
+                            arena.Length,
+                            squaredSumBuffer.NativePtr,
+                            accelerator.DefaultStream);
+                    }
+                    continue;
+                }
+                if (!tensor.TryGetCudaBFloat16GradientBuffer(
+                        primaryDevice,
+                        out NativeCudaBuffer<ushort>? gradient))
+                {
+                    throw new InvalidOperationException(
+                        $"Authoritative BF16 gradient '{tensor.Name}' is " +
+                        $"not resident on CUDA device {primaryDevice}.");
+                }
+                CudaPureBFloat16GradientNative.AccumulateSquaredSum(
+                    primaryDevice,
+                    gradient!.NativePtr,
+                    tensor.Numel,
+                    squaredSumBuffer.NativePtr,
+                    accelerator.DefaultStream);
+            }
+            CudaGradientBuckets.Synchronize(
+                accelerator,
+                primaryDevice,
+                accelerator.DefaultStream);
+            var squaredSum = new double[1];
+            squaredSumBuffer.CopyToCPU(squaredSum);
+            squaredSumValue = squaredSum[0];
+        }
+
+        if (!double.IsFinite(squaredSumValue) || squaredSumValue < 0d)
+        {
+            throw new InvalidOperationException(
+                "The resident BFloat16 gradient norm is not finite.");
+        }
+        float totalNorm = (float)Math.Sqrt(squaredSumValue);
+        if (!float.IsFinite(totalNorm))
+        {
+            throw new InvalidOperationException(
+                "The resident BFloat16 gradient norm exceeds Float32 range.");
+        }
+        if (totalNorm <= maxNorm)
+            return totalNorm;
+
+        float scale = maxNorm / (totalNorm + 1e-6f);
+        foreach (int deviceIndex in devices)
+        {
+            NativeCudaDevice accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+            var scaledArenas = new HashSet<NativeCudaArena<ushort>>(
+                ReferenceEqualityComparer.Instance);
+            foreach (Tensor tensor in gradients)
+            {
+                NativeCudaArena<ushort>? arena =
+                    tensor.GetCudaBFloat16GradientArena(deviceIndex);
+                if (arena is not null)
+                {
+                    if (scaledArenas.Add(arena))
+                    {
+                        CudaPureBFloat16GradientNative.Scale(
+                            deviceIndex,
+                            arena.NativePtr,
+                            arena.Length,
+                            scale,
+                            accelerator.DefaultStream);
+                        arena.MarkDirty();
+                    }
+                    continue;
+                }
+                if (!tensor.TryGetCudaBFloat16GradientBuffer(
+                        deviceIndex,
+                        out NativeCudaBuffer<ushort>? gradient))
+                {
+                    throw new InvalidOperationException(
+                        $"BF16 gradient replica '{tensor.Name}' is missing " +
+                        $"from CUDA device {deviceIndex} during scaling.");
+                }
+                CudaPureBFloat16GradientNative.Scale(
+                    deviceIndex,
+                    gradient!.NativePtr,
+                    tensor.Numel,
+                    scale,
+                    accelerator.DefaultStream);
+                gradient.MarkGradientStorageDirty();
+            }
+        }
+        foreach (Tensor tensor in gradients)
+            tensor.MarkCudaBFloat16GradientsSynchronized(devices);
+        CudaOptimizerStepBatch.RecordClipScaleBarrierElided(devices.Count);
+        return totalNorm;
+    }
+
+    private static float ClipPureBfp8GradientNormResident(
+        IReadOnlyList<Parameter> parameters,
+        IReadOnlyList<Tensor> gradients,
+        IReadOnlyList<int> devices,
+        float maxNorm)
+    {
+        if (devices.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Pure BFP8 gradient clipping requires a CUDA device.");
+        }
+        foreach (Tensor tensor in gradients)
+        {
+            foreach (int deviceIndex in devices)
+            {
+                if (!tensor.TryGetCudaBfp8GradientBuffer(
+                        deviceIndex,
+                        out _))
+                {
+                    throw new InvalidOperationException(
+                        $"BFP8 gradient replica '{tensor.Name}' is missing " +
+                        $"from CUDA device {deviceIndex}; scale-aware " +
+                        "clipping cannot use a host fallback.");
+                }
+            }
+        }
+
+        double squaredSumValue;
+        if (!TryConsumeGradientSquaredSum(parameters, devices, out squaredSumValue))
+        {
+            int primaryDevice = devices[0];
+            NativeCudaDevice accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(primaryDevice);
+            using NativeCudaBuffer<double> squaredSumBuffer =
+                accelerator.Allocate1D<double>(1);
+            using NativeCudaBuffer<int> finiteStatus =
+                accelerator.Allocate1D<int>(1);
+            squaredSumBuffer.MemSetToZero();
+            finiteStatus.MemSetToZero();
+            nint stream = accelerator.DefaultStream;
+            foreach (Tensor tensor in gradients)
+            {
+                if (!tensor.TryGetCudaBfp8GradientBuffer(
+                        primaryDevice,
+                        out CudaBfp8BufferView gradient))
+                {
+                    throw new InvalidOperationException(
+                        $"Authoritative BFP8 gradient '{tensor.Name}' is " +
+                        $"not resident on CUDA device {primaryDevice}.");
+                }
+                CudaBfp8GradientNative.AccumulateSquaredSum(
+                    primaryDevice,
+                    gradient,
+                    squaredSumBuffer,
+                    finiteStatus,
+                    stream);
+            }
+            CudaGradientBuckets.Synchronize(
+                accelerator,
+                primaryDevice,
+                stream);
+            var squaredSum = new double[1];
+            var finite = new int[1];
+            finiteStatus.CopyToCPU(finite);
+            squaredSumBuffer.CopyToCPU(squaredSum);
+            if (finite[0] != 0)
+            {
+                throw new InvalidOperationException(
+                    "Non-finite tensor-wide BFP8 gradient scale was " +
+                    "detected while computing the clipping norm.");
+            }
+            squaredSumValue = squaredSum[0];
+        }
+
+        if (!double.IsFinite(squaredSumValue) || squaredSumValue < 0d)
+        {
+            throw new InvalidOperationException(
+                "The resident BFP8 gradient norm is not finite.");
+        }
+        float totalNorm = (float)Math.Sqrt(squaredSumValue);
+        if (!float.IsFinite(totalNorm))
+        {
+            throw new InvalidOperationException(
+                "The resident BFP8 gradient norm exceeds Float32 range.");
+        }
+        if (totalNorm <= maxNorm)
+            return totalNorm;
+
+        float scale = maxNorm / (totalNorm + 1e-6f);
+        foreach (int deviceIndex in devices)
+        {
+            NativeCudaDevice accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+            nint stream = accelerator.DefaultStream;
+            foreach (Tensor tensor in gradients)
+            {
+                if (!tensor.TryGetCudaBfp8GradientBuffer(
+                        deviceIndex,
+                        out CudaBfp8BufferView gradient))
+                {
+                    throw new InvalidOperationException(
+                        $"BFP8 gradient replica '{tensor.Name}' is missing " +
+                        $"from CUDA device {deviceIndex}; scale-only clip " +
+                        "cannot use a host fallback.");
+                }
+                CudaBfp8GradientNative.Scale(
+                    deviceIndex,
+                    gradient,
+                    scale,
+                    stream);
+            }
+        }
+        CudaOptimizerStepBatch.RecordClipScaleBarrierElided(devices.Count);
+        foreach (Tensor tensor in gradients)
+            tensor.MarkCudaBfp8GradientsSynchronized(devices);
+        return totalNorm;
+    }
+
+    private static bool IsPureBfp8GradientTensor(Tensor tensor)
+        => tensor.DType == TensorDType.Bfp8
+            && tensor.Bfp8Quantization
+                == Bfp8QuantizationDescriptor.TensorWide;
+
+    private static float ClipFloatGradientNormResident(
+        IReadOnlyList<Parameter> parameters,
+        IReadOnlyList<int> devices,
+        float maxNorm)
+    {
         double squaredSumValue;
         if (!TryConsumeGradientSquaredSum(parameters, devices, out squaredSumValue))
         {
             NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator();
-            NativeCudaBuffer<double> squaredSumBuffer = GradientNormScratch
-                .GetOrAdd(
-                    Tensor.CudaDeviceIndex,
-                    static deviceIndex => new Lazy<NativeCudaBuffer<double>>(
-                        () => ForgetMemoryV2Cuda.GetAccelerator(deviceIndex)
-                            .Allocate1D<double>(1),
-                        LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+            using GradientNormScratchLease scratch =
+                AcquireGradientNormScratch(Tensor.CudaDeviceIndex);
+            NativeCudaBuffer<double> squaredSumBuffer = scratch.Buffer;
             squaredSumBuffer.MemSetToZero();
             var primaryArenas = new HashSet<NativeCudaArena<float>>(
                 ReferenceEqualityComparer.Instance);
@@ -175,22 +527,270 @@ internal static partial class TensorCudaKernels
         }
         foreach (Parameter parameter in parameters)
             parameter.T.MarkCudaGradientsSynchronized(devices);
-        foreach (int deviceIndex in devices)
-            ForgetMemoryV2Cuda.GetAccelerator(deviceIndex).Synchronize();
+        CudaOptimizerStepBatch.RecordClipScaleBarrierElided(devices.Count);
         return totalNorm;
+    }
+
+    private static GradientNormScratchLease AcquireGradientNormScratch(
+        int deviceIndex)
+    {
+        NativeCudaDevice accelerator =
+            ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+        accelerator.Bind();
+        nint computeStream = accelerator.DefaultStream;
+        GradientNormScratchOwner? owner = null;
+        BoundedDisposableLeaseCache<
+            GradientNormScratchKey,
+            GradientNormScratchOwner>.Lease? fallbackLease = null;
+        if (TensorExecutionContext.TryGetCudaStreamLane(
+                deviceIndex,
+                out IStreamExecutionLane lane)
+            && lane.ComputeStreamHandle == computeStream)
+        {
+            owner = LaneGradientNormScratch.GetValue(
+                lane,
+                static value => new Lazy<GradientNormScratchOwner>(
+                    () => ExecutionLaneResources.Attach(
+                        value,
+                        new GradientNormScratchOwner(
+                            value.DeviceIndex,
+                            value.ComputeStreamHandle,
+                            laneOwned: true)),
+                    LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+        }
+        else
+        {
+            fallbackLease = FallbackGradientNormScratch.Acquire(
+                new GradientNormScratchKey(deviceIndex, computeStream),
+                static key => new GradientNormScratchOwner(
+                    key.DeviceIndex,
+                    key.ComputeStream,
+                    laneOwned: false));
+            owner = fallbackLease?.Value;
+        }
+
+        if (owner is null)
+        {
+            fallbackLease?.Dispose();
+            throw new InvalidOperationException(
+                "CUDA gradient-norm scratch resources could not be created.");
+        }
+        try
+        {
+            return new GradientNormScratchLease(
+                owner,
+                owner.Rent(),
+                fallbackLease);
+        }
+        catch
+        {
+            fallbackLease?.Dispose();
+            throw;
+        }
+    }
+
+    private readonly record struct GradientNormScratchKey(
+        int DeviceIndex,
+        nint ComputeStream);
+
+    private sealed class GradientNormScratchOwner : IDisposable
+    {
+        private const int IdleBufferCapacity = 4;
+        private readonly object _sync = new();
+        private readonly Stack<NativeCudaBuffer<double>> _idle = [];
+        private readonly bool _laneOwned;
+        private bool _disposed;
+
+        internal GradientNormScratchOwner(
+            int deviceIndex,
+            nint computeStream,
+            bool laneOwned)
+        {
+            DeviceIndex = deviceIndex;
+            ComputeStream = computeStream;
+            _laneOwned = laneOwned;
+            if (laneOwned)
+            {
+                Interlocked.Increment(
+                    ref _activeLaneGradientNormScratchCount);
+            }
+        }
+
+        internal int DeviceIndex { get; }
+        internal nint ComputeStream { get; }
+
+        internal NativeCudaBuffer<double> Rent()
+        {
+            lock (_sync)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                if (_idle.Count != 0)
+                    return _idle.Pop();
+                NativeCudaBuffer<double> buffer =
+                    ForgetMemoryV2Cuda.GetAccelerator(DeviceIndex)
+                        .Allocate1D<double>(1);
+                Interlocked.Increment(
+                    ref _liveGradientNormScratchBufferCount);
+                return buffer;
+            }
+        }
+
+        internal void Return(NativeCudaBuffer<double> buffer)
+        {
+            bool dispose;
+            lock (_sync)
+            {
+                dispose = _disposed || _idle.Count >= IdleBufferCapacity;
+                if (!dispose)
+                    _idle.Push(buffer);
+            }
+            if (dispose)
+                DisposeBuffer(buffer);
+        }
+
+        public void Dispose()
+        {
+            NativeCudaBuffer<double>[] buffers;
+            lock (_sync)
+            {
+                if (_disposed)
+                    return;
+                _disposed = true;
+                buffers = _idle.ToArray();
+                _idle.Clear();
+            }
+
+            void DisposeBuffers()
+            {
+                List<Exception>? failures = null;
+                foreach (NativeCudaBuffer<double> buffer in buffers)
+                {
+                    try
+                    {
+                        DisposeBuffer(buffer);
+                    }
+                    catch (Exception exception)
+                    {
+                        (failures ??= []).Add(exception);
+                    }
+                }
+                if (failures is not null)
+                {
+                    throw new AggregateException(
+                        "CUDA gradient-norm scratch cleanup failed.",
+                        failures);
+                }
+            }
+
+            try
+            {
+                if (_laneOwned)
+                    DisposeBuffers();
+                else
+                {
+                    NativeCudaRuntime.DisposeAfterStreamFence(
+                        DeviceIndex,
+                        ComputeStream,
+                        DisposeBuffers);
+                }
+            }
+            finally
+            {
+                if (_laneOwned)
+                {
+                    Interlocked.Decrement(
+                        ref _activeLaneGradientNormScratchCount);
+                }
+            }
+        }
+
+        private static void DisposeBuffer(NativeCudaBuffer<double> buffer)
+        {
+            try
+            {
+                buffer.Dispose();
+            }
+            finally
+            {
+                Interlocked.Decrement(
+                    ref _liveGradientNormScratchBufferCount);
+            }
+        }
+    }
+
+    private sealed class GradientNormScratchLease : IDisposable
+    {
+        private GradientNormScratchOwner? _owner;
+        private NativeCudaBuffer<double>? _buffer;
+        private BoundedDisposableLeaseCache<
+            GradientNormScratchKey,
+            GradientNormScratchOwner>.Lease? _fallbackLease;
+
+        internal GradientNormScratchLease(
+            GradientNormScratchOwner owner,
+            NativeCudaBuffer<double> buffer,
+            BoundedDisposableLeaseCache<
+                GradientNormScratchKey,
+                GradientNormScratchOwner>.Lease? fallbackLease)
+        {
+            _owner = owner;
+            _buffer = buffer;
+            _fallbackLease = fallbackLease;
+        }
+
+        internal NativeCudaBuffer<double> Buffer => Volatile.Read(ref _buffer)
+            ?? throw new ObjectDisposedException(this.GetType().Name);
+
+        public void Dispose()
+        {
+            GradientNormScratchOwner? owner = Interlocked.Exchange(
+                ref _owner,
+                null);
+            NativeCudaBuffer<double>? buffer = Interlocked.Exchange(
+                ref _buffer,
+                null);
+            BoundedDisposableLeaseCache<
+                GradientNormScratchKey,
+                GradientNormScratchOwner>.Lease? fallback =
+                    Interlocked.Exchange(ref _fallbackLease, null);
+            try
+            {
+                if (owner is not null && buffer is not null)
+                    owner.Return(buffer);
+            }
+            finally
+            {
+                fallback?.Dispose();
+            }
+        }
     }
 
     internal static void PublishGradientSquaredSum(
         IReadOnlyList<Parameter> parameters,
         IReadOnlyList<int> devices,
         double squaredSum)
+        => PublishGradientSquaredSum(
+            parameters
+                .Select(parameter => parameter.T)
+                .Where(tensor => tensor.HasGradientBuffer)
+                .Distinct(
+                    (IEqualityComparer<Tensor>)
+                        ReferenceEqualityComparer.Instance)
+                .ToArray(),
+            devices,
+            squaredSum);
+
+    internal static void PublishGradientSquaredSum(
+        IReadOnlyList<Tensor> gradients,
+        IReadOnlyList<int> devices,
+        double squaredSum)
     {
         if (!double.IsFinite(squaredSum) || squaredSum < 0d)
             return;
         var entry = new GradientSquaredSumCacheEntry(
-            parameters.Select(parameter =>
-                new WeakReference<Parameter>(parameter)).ToArray(),
-            parameters.Select(parameter => parameter.T.GradientVersion).ToArray(),
+            gradients.Select(tensor =>
+                new WeakReference<Tensor>(tensor)).ToArray(),
+            gradients.Select(tensor => tensor.GradientVersion).ToArray(),
             devices.ToArray(),
             squaredSum);
         lock (GradientSquaredSumCacheLock)
@@ -205,26 +805,50 @@ internal static partial class TensorCudaKernels
         lock (GradientSquaredSumCacheLock)
         {
             GradientSquaredSumCacheEntry? entry = _gradientSquaredSumCache;
+            Tensor[] gradients = parameters
+                .Select(parameter => parameter.T)
+                .Where(tensor => tensor.HasGradientBuffer)
+                .Distinct(
+                    (IEqualityComparer<Tensor>)
+                        ReferenceEqualityComparer.Instance)
+                .ToArray();
             if (entry is not null
-                && entry.Parameters.Length == parameters.Count
+                && entry.Gradients.Length == gradients.Length
                 && entry.Devices.SequenceEqual(devices)
-                && parameters.Select((parameter, index) =>
-                    entry.Parameters[index].TryGetTarget(out Parameter? cached)
-                    && ReferenceEquals(parameter, cached)
-                    && parameter.T.GradientVersion == entry.Versions[index])
-                    .All(value => value))
+                && CacheMatches(entry, gradients))
             {
                 _gradientSquaredSumCache = null;
                 squaredSum = entry.SquaredSum;
                 return true;
             }
+            if (entry is not null)
+                _gradientSquaredSumCache = null;
         }
         squaredSum = 0d;
         return false;
     }
 
+    private static bool CacheMatches(
+        GradientSquaredSumCacheEntry entry,
+        IReadOnlyList<Tensor> gradients)
+    {
+        var versions = new Dictionary<Tensor, long>(
+            ReferenceEqualityComparer.Instance);
+        for (int index = 0; index < entry.Gradients.Length; index++)
+        {
+            if (!entry.Gradients[index].TryGetTarget(out Tensor? tensor)
+                || !versions.TryAdd(tensor, entry.Versions[index]))
+            {
+                return false;
+            }
+        }
+        return gradients.All(tensor =>
+            versions.TryGetValue(tensor, out long version)
+            && tensor.GradientVersion == version);
+    }
+
     private sealed record GradientSquaredSumCacheEntry(
-        WeakReference<Parameter>[] Parameters,
+        WeakReference<Tensor>[] Gradients,
         long[] Versions,
         int[] Devices,
         double SquaredSum);
@@ -268,7 +892,21 @@ internal static partial class TensorCudaKernels
             primaryGradient.View.CopyTo(secondaryGradient.View);
             secondary.Synchronize();
         }
-        tensor.MarkCudaGradientsSynchronized(deviceIndices);
+        CudaGradientReductionStamp reductionStamp =
+            CudaGradientReductionStampSource.CreateStandalone();
+        tensor.RegisterCudaGradientReducer(
+            reductionStamp.ReducerGeneration, deviceIndices);
+        tensor.BeginCudaGradientReduction(reductionStamp, deviceIndices);
+        try
+        {
+            tensor.MarkCudaGradientsSynchronized(
+                deviceIndices, reductionStamp);
+        }
+        catch
+        {
+            tensor.AbortCudaGradientReduction(reductionStamp);
+            throw;
+        }
     }
 
     internal static void AllReduceGradientsResident(
@@ -327,8 +965,33 @@ internal static partial class TensorCudaKernels
             }
             secondary.Synchronize();
         }
-        foreach (Parameter parameter in parameters)
-            parameter.T.MarkCudaGradientsSynchronized(deviceIndices);
+        CudaGradientReductionStamp reductionStamp =
+            CudaGradientReductionStampSource.CreateStandalone();
+        bool published = false;
+        try
+        {
+            foreach (Parameter parameter in parameters)
+            {
+                parameter.T.RegisterCudaGradientReducer(
+                    reductionStamp.ReducerGeneration, deviceIndices);
+                parameter.T.BeginCudaGradientReduction(
+                    reductionStamp, deviceIndices);
+            }
+            foreach (Parameter parameter in parameters)
+            {
+                parameter.T.MarkCudaGradientsSynchronized(
+                    deviceIndices, reductionStamp);
+            }
+            published = true;
+        }
+        finally
+        {
+            if (!published)
+            {
+                foreach (Parameter parameter in parameters)
+                    parameter.T.AbortCudaGradientReduction(reductionStamp);
+            }
+        }
     }
 
     private static void AllReduceFlatGradientsResident(
@@ -447,8 +1110,23 @@ internal static partial class TensorCudaKernels
             }
             accelerator.Synchronize();
         });
-        foreach (Parameter parameter in parameters)
-            parameter.T.MarkCudaGradientsSynchronized(deviceIndices);
+        CudaGradientReductionStamp reductionStamp =
+            plan.BeginReductionStamp();
+        bool published = false;
+        try
+        {
+            foreach (Parameter parameter in parameters)
+            {
+                parameter.T.MarkCudaGradientsSynchronized(
+                    deviceIndices, reductionStamp);
+            }
+            published = true;
+        }
+        finally
+        {
+            if (!published)
+                plan.AbortReductionStamp(reductionStamp);
+        }
     }
 
     internal sealed class FlatGradientPlan : IDisposable
@@ -458,6 +1136,10 @@ internal static partial class TensorCudaKernels
         private readonly Dictionary<int, NativeCudaBuffer<float>> _flat = [];
         private readonly Dictionary<int, NativeCudaBuffer<float>> _staging = [];
         private readonly Dictionary<int, NativeCudaBuffer<float>> _exchange = [];
+        private readonly long _reducerGeneration =
+            CudaGradientReductionStampSource.CreateReducerGeneration();
+        private long _reductionStepSequence;
+        private int _disposed;
 
         internal FlatGradientPlan(
             IReadOnlyList<Parameter> parameters,
@@ -473,13 +1155,42 @@ internal static partial class TensorCudaKernels
                 total = checked(total + _parameters[index].T.Numel);
             }
             TotalElements = total;
-            foreach (int device in _devices)
+            try
             {
-                NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator(device);
-                _flat[device] = accelerator.Allocate1D<float>(total);
-                _staging[device] = accelerator.Allocate1D<float>(total);
-                if (_devices.Length > 2)
-                    _exchange[device] = accelerator.Allocate1D<float>(total);
+                foreach (int device in _devices)
+                {
+                    NativeCudaDevice accelerator =
+                        ForgetMemoryV2Cuda.GetAccelerator(device);
+                    _flat[device] = accelerator.Allocate1D<float>(total);
+                    _staging[device] = accelerator.Allocate1D<float>(total);
+                    if (_devices.Length > 2)
+                    {
+                        _exchange[device] =
+                            accelerator.Allocate1D<float>(total);
+                    }
+                }
+                foreach (Parameter parameter in _parameters)
+                {
+                    parameter.T.RegisterCudaGradientReducer(
+                        _reducerGeneration,
+                        _devices);
+                }
+            }
+            catch (Exception initializationFailure)
+            {
+                try
+                {
+                    Dispose();
+                }
+                catch (Exception cleanupFailure)
+                {
+                    throw new AggregateException(
+                        "Flat CUDA gradient plan initialization and rollback " +
+                        "both failed.",
+                        initializationFailure,
+                        cleanupFailure);
+                }
+                throw;
             }
         }
 
@@ -499,17 +1210,66 @@ internal static partial class TensorCudaKernels
                 && parameters.Select((parameter, index) =>
                     ReferenceEquals(parameter, _parameters[index])).All(value => value);
 
+        internal CudaGradientReductionStamp BeginReductionStamp()
+        {
+            long stepId = Interlocked.Increment(ref _reductionStepSequence);
+            if (stepId <= 0)
+            {
+                throw new InvalidOperationException(
+                    "Flat CUDA reducer step space was exhausted.");
+            }
+            var stamp = new CudaGradientReductionStamp(
+                _reducerGeneration, stepId);
+            try
+            {
+                foreach (Parameter parameter in _parameters)
+                    parameter.T.BeginCudaGradientReduction(stamp, _devices);
+                return stamp;
+            }
+            catch
+            {
+                AbortReductionStamp(stamp);
+                throw;
+            }
+        }
+
+        internal void AbortReductionStamp(
+            CudaGradientReductionStamp stamp)
+        {
+            foreach (Parameter parameter in _parameters)
+                parameter.T.AbortCudaGradientReduction(stamp);
+        }
+
         public void Dispose()
         {
-            foreach (var buffer in _flat.Values)
-                buffer.Dispose();
-            foreach (var buffer in _staging.Values)
-                buffer.Dispose();
-            foreach (var buffer in _exchange.Values)
-                buffer.Dispose();
-            _flat.Clear();
-            _staging.Clear();
-            _exchange.Clear();
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            var releases = new List<Action>(
+                _flat.Count + _staging.Count + _exchange.Count
+                + _parameters.Length);
+            foreach (NativeCudaBuffer<float> buffer in _flat.Values)
+                releases.Add(buffer.Dispose);
+            foreach (NativeCudaBuffer<float> buffer in _staging.Values)
+                releases.Add(buffer.Dispose);
+            foreach (NativeCudaBuffer<float> buffer in _exchange.Values)
+                releases.Add(buffer.Dispose);
+            foreach (Parameter parameter in _parameters)
+            {
+                releases.Add(() => parameter.T.UnregisterCudaGradientReducer(
+                    _reducerGeneration));
+            }
+            try
+            {
+                CudaResourceCleanup.RunAll(
+                    "Flat CUDA gradient plan cleanup failed.",
+                    releases);
+            }
+            finally
+            {
+                _flat.Clear();
+                _staging.Clear();
+                _exchange.Clear();
+            }
         }
     }
 
@@ -627,19 +1387,41 @@ internal static partial class TensorCudaKernels
     {
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator();
         var tableBuffer = table.EnsureCudaFloat32Buffer();
-        using var indicesBuffer = accelerator.Allocate1D(indices);
-        var outputBuffer = Tensor.RentCudaFloatBuffer(
-            Tensor.CudaDeviceIndex, checked(indices.Length * width));
-        CudaTensorNative.Embedding(
-            Tensor.CudaDeviceIndex,
-            tableBuffer.NativePtr,
-            indicesBuffer.NativePtr,
-            outputBuffer.NativePtr,
-            checked((int)outputBuffer.Length),
-            width,
-            bfloat16: false);
-        accelerator.Synchronize();
-        return outputBuffer;
+        int deviceIndex = Tensor.CudaDeviceIndex;
+        NativeCudaBuffer<int> indicesBuffer =
+            Tensor.RentCudaIntBuffer(deviceIndex, indices);
+        NativeCudaBuffer<float>? outputBuffer = null;
+        try
+        {
+            outputBuffer = Tensor.RentCudaFloatBuffer(
+                deviceIndex,
+                checked(indices.Length * width));
+            CudaTensorNative.Embedding(
+                deviceIndex,
+                tableBuffer.NativePtr,
+                indicesBuffer.NativePtr,
+                outputBuffer.NativePtr,
+                checked((int)outputBuffer.Length),
+                width,
+                bfloat16: false);
+            if (!TensorExecutionContext.TryGetCudaStreamLane(
+                    deviceIndex,
+                    out _))
+            {
+                accelerator.Synchronize();
+            }
+            return outputBuffer;
+        }
+        catch
+        {
+            if (outputBuffer is not null)
+                Tensor.ReturnCudaFloatBuffer(accelerator, outputBuffer);
+            throw;
+        }
+        finally
+        {
+            Tensor.ReturnCudaIntBuffer(accelerator, indicesBuffer);
+        }
     }
 
     internal static void EmbeddingBackwardResident(
@@ -649,18 +1431,32 @@ internal static partial class TensorCudaKernels
         int width)
     {
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator();
-        using var indicesBuffer = accelerator.Allocate1D(indices);
-        var outputGradientBuffer = output.EnsureCudaGradientBuffer();
-        var tableGradientBuffer = table.EnsureCudaGradientBuffer();
-        CudaTensorNative.EmbeddingBackward(
-            Tensor.CudaDeviceIndex,
-            indicesBuffer.NativePtr,
-            outputGradientBuffer.NativePtr,
-            tableGradientBuffer.NativePtr,
-            output.Numel,
-            width);
-        accelerator.Synchronize();
-        table.MarkCudaGradientMutated();
+        int deviceIndex = Tensor.CudaDeviceIndex;
+        NativeCudaBuffer<int> indicesBuffer =
+            Tensor.RentCudaIntBuffer(deviceIndex, indices);
+        try
+        {
+            var outputGradientBuffer = output.EnsureCudaGradientBuffer();
+            var tableGradientBuffer = table.EnsureCudaGradientBuffer();
+            CudaEmbeddingBackwardDispatcher.Backward(
+                deviceIndex,
+                indicesBuffer.NativePtr,
+                outputGradientBuffer.NativePtr,
+                tableGradientBuffer.NativePtr,
+                output.Numel,
+                width);
+            if (!TensorExecutionContext.TryGetCudaStreamLane(
+                    deviceIndex,
+                    out _))
+            {
+                accelerator.Synchronize();
+            }
+            table.MarkCudaGradientMutated();
+        }
+        finally
+        {
+            Tensor.ReturnCudaIntBuffer(accelerator, indicesBuffer);
+        }
     }
 
     internal static EmbeddingPositionsResidentContext
@@ -704,7 +1500,7 @@ internal static partial class TensorCudaKernels
         var outputGradient = output.EnsureCudaGradientBuffer();
         var tokenGradient = tokenTable.EnsureCudaGradientBuffer();
         var positionGradient = positionTable.EnsureCudaGradientBuffer();
-        CudaTensorNative.EmbeddingPositionsBackward(
+        CudaEmbeddingBackwardDispatcher.BackwardWithPositions(
             Tensor.CudaDeviceIndex,
             context.Indices.NativePtr,
             outputGradient.NativePtr,
@@ -867,7 +1663,7 @@ internal static partial class TensorCudaKernels
         using var indicesBuffer = accelerator.Allocate1D(indices);
         using var outputGradientBuffer = accelerator.Allocate1D(outputGradient);
         using var tableGradientBuffer = accelerator.Allocate1D(tableGradient);
-        CudaTensorNative.EmbeddingBackward(
+        CudaEmbeddingBackwardDispatcher.Backward(
             Tensor.CudaDeviceIndex,
             indicesBuffer.NativePtr,
             outputGradientBuffer.NativePtr,
@@ -886,7 +1682,9 @@ internal static partial class TensorCudaKernels
     {
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator();
         var output = new float[input.Length];
-        var inputBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, input);
+        using CudaResidentArrayLease inputLease =
+            CudaResidentArrayCache.GetOrUpload(accelerator, input);
+        NativeCudaBuffer<float> inputBuffer = inputLease.Buffer;
         using var outputBuffer = accelerator.Allocate1D<float>(output.Length);
         CudaTensorNative.Dropout(
             Tensor.CudaDeviceIndex,
@@ -933,8 +1731,12 @@ internal static partial class TensorCudaKernels
     {
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator();
         var output = new float[residual.Length];
-        var residualBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, residual);
-        var branchBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, branch);
+        using CudaResidentArrayLease residualLease =
+            CudaResidentArrayCache.GetOrUpload(accelerator, residual);
+        using CudaResidentArrayLease branchLease =
+            CudaResidentArrayCache.GetOrUpload(accelerator, branch);
+        NativeCudaBuffer<float> residualBuffer = residualLease.Buffer;
+        NativeCudaBuffer<float> branchBuffer = branchLease.Buffer;
         using var outputBuffer = accelerator.Allocate1D<float>(output.Length);
         CudaTensorNative.AddDropout(
             Tensor.CudaDeviceIndex,
@@ -1139,9 +1941,11 @@ internal static partial class TensorCudaKernels
         var output = new float[checked(rows * outputWidth)];
         using NativeCudaBuffer<float>? temporaryInputBuffer =
             cacheInput ? null : accelerator.Allocate1D(input);
-        NativeCudaBuffer<float> inputBuffer = cacheInput
+        using CudaResidentArrayLease? inputLease = cacheInput
             ? CudaResidentArrayCache.GetOrUpload(accelerator, input)
-            : temporaryInputBuffer!;
+            : null;
+        NativeCudaBuffer<float> inputBuffer =
+            inputLease?.Buffer ?? temporaryInputBuffer!;
         var weightBuffer = weight.EnsureCudaFloat32Buffer(deviceIndex);
         var biasBuffer = bias.EnsureCudaFloat32Buffer(deviceIndex);
         using var outputBuffer = accelerator.Allocate1D<float>(output.Length);
@@ -1252,9 +2056,15 @@ internal static partial class TensorCudaKernels
         bool applyRelu,
         bool bfloat16Compute)
     {
-        var inputBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, input);
-        var weightBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, weight);
-        var outputBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, storedOutput);
+        using CudaResidentArrayLease inputLease =
+            CudaResidentArrayCache.GetOrUpload(accelerator, input);
+        using CudaResidentArrayLease weightLease =
+            CudaResidentArrayCache.GetOrUpload(accelerator, weight);
+        using CudaResidentArrayLease outputLease =
+            CudaResidentArrayCache.GetOrUpload(accelerator, storedOutput);
+        NativeCudaBuffer<float> inputBuffer = inputLease.Buffer;
+        NativeCudaBuffer<float> weightBuffer = weightLease.Buffer;
+        NativeCudaBuffer<float> outputBuffer = outputLease.Buffer;
         using var outputGradientBuffer = accelerator.Allocate1D(outputGradient);
         using var inputGradientBuffer = accelerator.Allocate1D(inputGradient);
         using var weightGradientBuffer = accelerator.Allocate1D(weightGradient);
@@ -1352,28 +2162,45 @@ internal static partial class TensorCudaKernels
             uint seed,
             uint dropThreshold,
             float dropoutScale,
-            float epsilon)
+            float epsilon,
+            CudaGraphDropoutToken? graphToken = null)
     {
         int deviceIndex = Tensor.CudaDeviceIndex;
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
         var output = Tensor.RentCudaFloatBuffer(deviceIndex, residual.Numel);
         var means = Tensor.RentCudaFloatBuffer(deviceIndex, rows);
         var inverses = Tensor.RentCudaFloatBuffer(deviceIndex, rows);
-        bool succeeded = CudaLayerNorm.TryFusedForward(
-            accelerator,
-            residual.EnsureCudaFloat32Buffer(deviceIndex),
-            branch.EnsureCudaFloat32Buffer(deviceIndex),
-            gamma.EnsureCudaFloat32Buffer(deviceIndex),
-            beta.EnsureCudaFloat32Buffer(deviceIndex),
-            output,
-            means,
-            inverses,
-            rows,
-            columns,
-            seed,
-            dropThreshold,
-            dropoutScale,
-            epsilon);
+        bool succeeded = graphToken is { } token
+            ? CudaLayerNorm.TryFusedForwardGraph(
+                accelerator,
+                residual.EnsureCudaFloat32Buffer(deviceIndex),
+                branch.EnsureCudaFloat32Buffer(deviceIndex),
+                gamma.EnsureCudaFloat32Buffer(deviceIndex),
+                beta.EnsureCudaFloat32Buffer(deviceIndex),
+                output,
+                means,
+                inverses,
+                rows,
+                columns,
+                token,
+                dropThreshold,
+                dropoutScale,
+                epsilon)
+            : CudaLayerNorm.TryFusedForward(
+                accelerator,
+                residual.EnsureCudaFloat32Buffer(deviceIndex),
+                branch.EnsureCudaFloat32Buffer(deviceIndex),
+                gamma.EnsureCudaFloat32Buffer(deviceIndex),
+                beta.EnsureCudaFloat32Buffer(deviceIndex),
+                output,
+                means,
+                inverses,
+                rows,
+                columns,
+                seed,
+                dropThreshold,
+                dropoutScale,
+                epsilon);
         if (succeeded)
         {
             return new LayerNormResidentContext(
@@ -1432,30 +2259,58 @@ internal static partial class TensorCudaKernels
         bool sameParent,
         uint seed,
         uint dropThreshold,
-        float dropoutScale)
+        float dropoutScale,
+        CudaGraphDropoutToken? graphToken = null)
     {
         int deviceIndex = Tensor.CudaDeviceIndex;
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
-        CudaLayerNorm.FusedBackward(
-            accelerator,
-            residual.EnsureCudaFloat32Buffer(deviceIndex),
-            branch.EnsureCudaFloat32Buffer(deviceIndex),
-            gamma.EnsureCudaFloat32Buffer(deviceIndex),
-            context.Means,
-            context.Inverses,
-            output.EnsureCudaGradientBuffer(deviceIndex),
-            residual.EnsureCudaGradientBuffer(deviceIndex),
-            sameParent
-                ? residual.EnsureCudaGradientBuffer(deviceIndex)
-                : branch.EnsureCudaGradientBuffer(deviceIndex),
-            gamma.EnsureCudaGradientBuffer(deviceIndex),
-            beta.EnsureCudaGradientBuffer(deviceIndex),
-            rows,
-            columns,
-            sameParent,
-            seed,
-            dropThreshold,
-            dropoutScale);
+        NativeCudaBuffer<float> residualGradient =
+            residual.EnsureCudaGradientBuffer(deviceIndex);
+        NativeCudaBuffer<float> branchGradient = sameParent
+            ? residualGradient
+            : branch.EnsureCudaGradientBuffer(deviceIndex);
+        if (graphToken is { } token)
+        {
+            CudaLayerNorm.FusedBackwardGraph(
+                accelerator,
+                residual.EnsureCudaFloat32Buffer(deviceIndex),
+                branch.EnsureCudaFloat32Buffer(deviceIndex),
+                gamma.EnsureCudaFloat32Buffer(deviceIndex),
+                context.Means,
+                context.Inverses,
+                output.EnsureCudaGradientBuffer(deviceIndex),
+                residualGradient,
+                branchGradient,
+                gamma.EnsureCudaGradientBuffer(deviceIndex),
+                beta.EnsureCudaGradientBuffer(deviceIndex),
+                rows,
+                columns,
+                sameParent,
+                token,
+                dropThreshold,
+                dropoutScale);
+        }
+        else
+        {
+            CudaLayerNorm.FusedBackward(
+                accelerator,
+                residual.EnsureCudaFloat32Buffer(deviceIndex),
+                branch.EnsureCudaFloat32Buffer(deviceIndex),
+                gamma.EnsureCudaFloat32Buffer(deviceIndex),
+                context.Means,
+                context.Inverses,
+                output.EnsureCudaGradientBuffer(deviceIndex),
+                residualGradient,
+                branchGradient,
+                gamma.EnsureCudaGradientBuffer(deviceIndex),
+                beta.EnsureCudaGradientBuffer(deviceIndex),
+                rows,
+                columns,
+                sameParent,
+                seed,
+                dropThreshold,
+                dropoutScale);
+        }
         residual.MarkCudaGradientMutated(deviceIndex);
         if (!sameParent)
             branch.MarkCudaGradientMutated(deviceIndex);
@@ -1470,7 +2325,7 @@ internal static partial class TensorCudaKernels
         NativeCudaDevice accelerator,
         bool native) : IDisposable
     {
-        private bool _disposed;
+        private int _disposed;
         internal NativeCudaBuffer<float> Output { get; } = output;
         internal NativeCudaBuffer<float> Means { get; } = means;
         internal NativeCudaBuffer<float> Inverses { get; } = inverses;
@@ -1478,17 +2333,29 @@ internal static partial class TensorCudaKernels
 
         internal void Dispose()
         {
-            if (_disposed)
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
-            Tensor.ReturnCudaFloatBuffer(accelerator, Means);
-            Tensor.ReturnCudaFloatBuffer(accelerator, Inverses);
-            _disposed = true;
-            GC.SuppressFinalize(this);
+            try
+            {
+                CudaResourceCleanup.RunAll(
+                    "CUDA LayerNorm context cleanup failed.",
+                    () => Tensor.ReturnCudaFloatBuffer(accelerator, Means),
+                    () => Tensor.ReturnCudaFloatBuffer(accelerator, Inverses));
+            }
+            finally
+            {
+                GC.SuppressFinalize(this);
+            }
         }
 
         void IDisposable.Dispose() => Dispose();
 
-        ~LayerNormResidentContext() => Dispose();
+        ~LayerNormResidentContext()
+            => CudaResourceCleanup.RunAllNoThrow(
+            [
+                () => Tensor.ReturnCudaFloatBuffer(accelerator, Means),
+                () => Tensor.ReturnCudaFloatBuffer(accelerator, Inverses),
+            ]);
     }
 
     internal static (
@@ -1506,7 +2373,9 @@ internal static partial class TensorCudaKernels
         var output = new float[input.Length];
         var normalized = new float[input.Length];
         var inverses = new float[rows];
-        var inputBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, input);
+        using CudaResidentArrayLease inputLease =
+            CudaResidentArrayCache.GetOrUpload(accelerator, input);
+        NativeCudaBuffer<float> inputBuffer = inputLease.Buffer;
         var gammaBuffer = gamma.EnsureCudaFloat32Buffer();
         var betaBuffer = beta.EnsureCudaFloat32Buffer();
         using var outputBuffer = accelerator.Allocate1D<float>(output.Length);
@@ -1566,11 +2435,16 @@ internal static partial class TensorCudaKernels
                 reconstructedInput[offset + column] =
                     normalized[offset + column] / inverse;
         }
-        var inputBuffer = CudaResidentArrayCache.GetOrUpload(
-            accelerator, reconstructedInput);
+        using CudaResidentArrayLease inputLease =
+            CudaResidentArrayCache.GetOrUpload(
+                accelerator,
+                reconstructedInput);
+        NativeCudaBuffer<float> inputBuffer = inputLease.Buffer;
         using var meansBuffer = accelerator.Allocate1D<float>(rows);
         meansBuffer.MemSetToZero();
-        var inverseBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, inverses);
+        using CudaResidentArrayLease inverseLease =
+            CudaResidentArrayCache.GetOrUpload(accelerator, inverses);
+        NativeCudaBuffer<float> inverseBuffer = inverseLease.Buffer;
         using var outputGradientBuffer = accelerator.Allocate1D(outputGradient);
         using var inputGradientBuffer = accelerator.Allocate1D(inputGradient);
         using var gammaGradientBuffer = accelerator.Allocate1D(gammaGradient);
@@ -1671,7 +2545,7 @@ internal static partial class TensorCudaKernels
         NativeCudaBuffer<int> labels,
         NativeCudaDevice accelerator) : IDisposable
     {
-        private bool _disposed;
+        private int _disposed;
         internal NativeCudaBuffer<float> Loss { get; } = loss;
         internal NativeCudaBuffer<float> Maxima { get; } = maxima;
         internal NativeCudaBuffer<float> InverseSums { get; } = inverseSums;
@@ -1680,19 +2554,35 @@ internal static partial class TensorCudaKernels
 
         internal void Dispose()
         {
-            if (_disposed)
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
-            Tensor.ReturnCudaFloatBuffer(accelerator, Maxima);
-            Tensor.ReturnCudaFloatBuffer(accelerator, InverseSums);
-            Tensor.ReturnCudaFloatBuffer(accelerator, RowLosses);
-            Tensor.ReturnCudaIntBuffer(accelerator, Labels);
-            _disposed = true;
-            GC.SuppressFinalize(this);
+            try
+            {
+                CudaResourceCleanup.RunAll(
+                    "CUDA cross-entropy context cleanup failed.",
+                    () => Tensor.ReturnCudaFloatBuffer(accelerator, Maxima),
+                    () => Tensor.ReturnCudaFloatBuffer(
+                        accelerator,
+                        InverseSums),
+                    () => Tensor.ReturnCudaFloatBuffer(accelerator, RowLosses),
+                    () => Tensor.ReturnCudaIntBuffer(accelerator, Labels));
+            }
+            finally
+            {
+                GC.SuppressFinalize(this);
+            }
         }
 
         void IDisposable.Dispose() => Dispose();
 
-        ~CrossEntropyResidentContext() => Dispose();
+        ~CrossEntropyResidentContext()
+            => CudaResourceCleanup.RunAllNoThrow(
+            [
+                () => Tensor.ReturnCudaFloatBuffer(accelerator, Maxima),
+                () => Tensor.ReturnCudaFloatBuffer(accelerator, InverseSums),
+                () => Tensor.ReturnCudaFloatBuffer(accelerator, RowLosses),
+                () => Tensor.ReturnCudaIntBuffer(accelerator, Labels),
+            ]);
     }
 
     internal static (float Loss, float[] Probabilities) CrossEntropyForward(
@@ -1707,7 +2597,9 @@ internal static partial class TensorCudaKernels
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator();
         var probabilities = new float[logits.Length];
         var loss = new float[1];
-        var logitsBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, logits);
+        using CudaResidentArrayLease logitsLease =
+            CudaResidentArrayCache.GetOrUpload(accelerator, logits);
+        NativeCudaBuffer<float> logitsBuffer = logitsLease.Buffer;
         using var labelsBuffer = accelerator.Allocate1D(labels);
         using var probabilitiesBuffer =
             accelerator.Allocate1D<float>(probabilities.Length);
@@ -1754,7 +2646,10 @@ internal static partial class TensorCudaKernels
         float upstreamGradient)
     {
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator();
-        var probabilitiesBuffer = CudaResidentArrayCache.GetOrUpload(accelerator, probabilities);
+        using CudaResidentArrayLease probabilitiesLease =
+            CudaResidentArrayCache.GetOrUpload(accelerator, probabilities);
+        NativeCudaBuffer<float> probabilitiesBuffer =
+            probabilitiesLease.Buffer;
         using var labelsBuffer = accelerator.Allocate1D(labels);
         using var gradientBuffer = accelerator.Allocate1D(logitsGradient);
         CudaTensorNative.CrossEntropyProbabilitiesBackward(

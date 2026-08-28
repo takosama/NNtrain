@@ -375,7 +375,8 @@ public class ForgetMemoryV2Gpt : LanguageModel
                 // The prompt is absorbed once; every generated token then costs
                 // one recurrent step against a fixed-size memory rather than a
                 // full forward pass over the whole prefix.
-                ForgetMemoryV2RecurrentState state = CreateRecurrentState();
+                using ForgetMemoryV2RecurrentState state =
+                    CreateRecurrentState();
                 CudaInferenceScope inferenceScope =
                     CudaInferenceScope.Begin();
                 try
@@ -383,8 +384,8 @@ public class ForgetMemoryV2Gpt : LanguageModel
                     Tensor logits = AdvanceToLastLogits(result, state);
                     for (int generated = 0; generated < maxNewTokens; generated++)
                     {
-                        int nextToken = Sample(
-                            logits.Data,
+                        int nextToken = SampleLogits(
+                            logits,
                             0,
                             VocabularySize,
                             temperature,
@@ -626,9 +627,10 @@ public sealed class ForgetMemoryDRNGpt : ForgetMemoryV2Gpt
 /// so a 16x16 memory is 1 KiB per layer regardless of whether the model has
 /// read a hundred tokens or a million.
 /// </remarks>
-public sealed class ForgetMemoryV2RecurrentState
+public sealed class ForgetMemoryV2RecurrentState : IDisposable
 {
-    private readonly float[][] _memories;
+    private readonly ForgetMemoryRecurrentMemory[] _memories;
+    private int _disposed;
 
     internal ForgetMemoryV2RecurrentState(int layerCount, int stateSize)
     {
@@ -637,9 +639,9 @@ public sealed class ForgetMemoryV2RecurrentState
         if (stateSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(stateSize));
 
-        _memories = new float[layerCount][];
+        _memories = new ForgetMemoryRecurrentMemory[layerCount];
         for (int layer = 0; layer < layerCount; layer++)
-            _memories[layer] = new float[stateSize];
+            _memories[layer] = new ForgetMemoryRecurrentMemory(stateSize);
         LayerCount = layerCount;
         StateSize = stateSize;
     }
@@ -658,10 +660,11 @@ public sealed class ForgetMemoryV2RecurrentState
     /// <summary>Largest absolute memory entry, for divergence checks.</summary>
     public float PeakMagnitude()
     {
+        ThrowIfDisposed();
         float peak = 0f;
-        foreach (float[] memory in _memories)
+        foreach (ForgetMemoryRecurrentMemory memory in _memories)
         {
-            foreach (float value in memory)
+            foreach (float value in memory.HostSnapshot())
                 peak = MathF.Max(peak, MathF.Abs(value));
         }
         return peak;
@@ -669,12 +672,52 @@ public sealed class ForgetMemoryV2RecurrentState
 
     public void Reset()
     {
-        foreach (float[] memory in _memories)
-            Array.Clear(memory);
+        ThrowIfDisposed();
+        foreach (ForgetMemoryRecurrentMemory memory in _memories)
+            memory.Reset();
         TokensSeen = 0;
     }
 
-    internal float[] Memory(int layer) => _memories[layer];
+    internal ForgetMemoryRecurrentMemory Memory(int layer)
+    {
+        ThrowIfDisposed();
+        return _memories[layer];
+    }
 
-    internal void Advanced(int tokens) => TokensSeen += tokens;
+    internal void Advanced(int tokens)
+    {
+        ThrowIfDisposed();
+        TokensSeen += tokens;
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
+        List<Exception>? failures = null;
+        foreach (ForgetMemoryRecurrentMemory memory in _memories)
+        {
+            try
+            {
+                memory.Dispose();
+            }
+            catch (Exception failure)
+            {
+                (failures ??= []).Add(failure);
+            }
+        }
+        GC.SuppressFinalize(this);
+        if (failures is not null)
+        {
+            throw new AggregateException(
+                "One or more recurrent CUDA memories failed to release.",
+                failures);
+        }
+    }
+
+    private void ThrowIfDisposed()
+        => ObjectDisposedException.ThrowIf(
+            Volatile.Read(ref _disposed) != 0,
+            this);
 }

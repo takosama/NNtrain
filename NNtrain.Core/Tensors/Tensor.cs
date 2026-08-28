@@ -12,7 +12,8 @@ public partial class Tensor
 {
     /// <summary>
     /// Gets or selects the execution device for kernels with a GPU backend.
-    /// Kernels not yet ported continue to use their CPU implementation.
+    /// CUDA execution requires a resident CUDA route; an unsupported
+    /// shape/dtype fails explicitly instead of materializing a CPU fallback.
     /// </summary>
     public static TensorDevice ExecutionDevice
     {
@@ -66,18 +67,75 @@ public partial class Tensor
     /// <summary>Gets the number of CUDA adapters visible to the runtime.</summary>
     public static int CudaDeviceCount => NNtrain.ForgetMemoryV2Cuda.DeviceCount;
 
-    private TensorStorage _data;
-    private float[]? _masterData;
-    private float[]? _physicalFloat32Cache;
-    private long _physicalFloat32CacheDataVersion = -1;
-    private float[] _grad;
-    private readonly int[] _shape;
-    private long _dataVersion;
-    private readonly object _transposeCacheLock = new();
-    private float[]? _transposedDataCache;
-    private long _transposedDataVersion = -1;
+    private readonly TensorValue _value = new();
 
-    internal AutogradNode Node { get; }
+    // Compatibility proxies keep the many operation partials small while
+    // making TensorValue/TensorStorageOwner the only real storage owners.
+    private TensorStorage _data
+    {
+        get => _value.Storage.Data;
+        set => _value.Storage.Data = value;
+    }
+    private float[]? _masterData
+    {
+        get => _value.Storage.MasterData;
+        set => _value.Storage.MasterData = value;
+    }
+    private float[]? _physicalFloat32Cache
+    {
+        get => _value.Storage.PhysicalFloat32Cache;
+        set => _value.Storage.PhysicalFloat32Cache = value;
+    }
+    private long _physicalFloat32CacheDataVersion
+    {
+        get => _value.Storage.PhysicalFloat32CacheDataVersion;
+        set => _value.Storage.PhysicalFloat32CacheDataVersion = value;
+    }
+    private float[] _grad
+    {
+        get => _value.Storage.Gradient;
+        set => _value.Storage.Gradient = value;
+    }
+    private int[] _shape
+    {
+        get => _value.Storage.Shape;
+        set => _value.Storage.Shape = value;
+    }
+    private long _dataVersion
+    {
+        get => _value.Storage.DataVersion;
+        set => _value.Storage.DataVersion = value;
+    }
+    private object _transposeCacheLock => _value.Storage.CacheSync;
+    private float[]? _transposedDataCache
+    {
+        get => _value.Storage.TransposedDataCache;
+        set => _value.Storage.TransposedDataCache = value;
+    }
+    private long _transposedDataVersion
+    {
+        get => _value.Storage.TransposedDataVersion;
+        set => _value.Storage.TransposedDataVersion = value;
+    }
+    private bool _allowInPlaceBFloat16Gradient
+    {
+        get => _value.Storage.AllowInPlaceBFloat16Gradient;
+        set => _value.Storage.AllowInPlaceBFloat16Gradient = value;
+    }
+
+    internal TensorValue Value => _value;
+
+    internal AutogradNode Node
+    {
+        get => _value.Autograd;
+        private set => _value.Autograd = value;
+    }
+
+    internal bool AllowInPlaceBFloat16Gradient
+    {
+        get => _allowInPlaceBFloat16Gradient;
+        set => _allowInPlaceBFloat16Gradient = value;
+    }
 
     public IReadOnlyList<float> Data
     {
@@ -163,7 +221,8 @@ public partial class Tensor
             {
                 return _grad.Length != 0
                     || _cudaGradientBuffers.Count != 0
-                    || _cudaBFloat16GradientBuffers.Count != 0;
+                    || _cudaBFloat16GradientBuffers.Count != 0
+                    || _cudaBfp8GradientBuffers.Count != 0;
             }
         }
     }
@@ -426,6 +485,9 @@ public partial class Tensor
         if (dtype == DType)
             return this;
 
+        if (ExecutionDevice == TensorDevice.Cuda)
+            return ToCuda(dtype);
+
         var result = new Tensor(
             _data.ToFloat32Array(),
             _shape,
@@ -463,17 +525,26 @@ public partial class Tensor
                 nameof(bfp8Quantization));
         }
 
+        bool retainMaster = preserveFloat32Master
+            ?? (dtype == TensorDType.Bfp8
+                && bfp8Quantization!.Granularity
+                    == Bfp8ScaleGranularity.Block);
+
         lock (_deviceSync)
         {
+            if (TryConvertCudaStorageInPlaceLocked(
+                    dtype,
+                    bfp8Quantization,
+                    retainMaster))
+            {
+                return;
+            }
+
             SynchronizeHostFromCudaLocked();
             SynchronizeHostGradientFromCudaLocked();
             float[] authoritative = _masterData is not null
                 ? (float[])_masterData.Clone()
                 : _data.ToFloat32Array();
-            bool retainMaster = preserveFloat32Master
-                ?? (dtype == TensorDType.Bfp8
-                    && bfp8Quantization!.Granularity
-                        == Bfp8ScaleGranularity.Block);
 
             // Monitor locks are reentrant. Keeping invalidation inside the
             // same critical section closes the race with a concurrent Ensure
@@ -496,6 +567,45 @@ public partial class Tensor
             }
             // The gradient was materialized before device replicas were
             // released. Its array and AutogradNode retain Tensor identity.
+            _hostGradientCurrent = true;
+        }
+    }
+
+    internal void RestoreBfp8ValuesInPlace(
+        ReadOnlySpan<float> values,
+        bool preserveFloat32Master)
+    {
+        if (DType != TensorDType.Bfp8)
+        {
+            throw new InvalidOperationException(
+                "BFP8 restore requires BFP8 tensor storage.");
+        }
+        if (values.Length != Numel)
+        {
+            throw new ArgumentException(
+                "Restored values must match the tensor length.",
+                nameof(values));
+        }
+
+        lock (_deviceSync)
+        {
+            SynchronizeHostFromCudaLocked();
+            SynchronizeHostGradientFromCudaLocked();
+            InvalidateCudaBuffers();
+            _data.CopyFrom(values);
+            _masterData = preserveFloat32Master
+                ? values.ToArray()
+                : null;
+            CudaResidentArrayCache.Invalidate(_physicalFloat32Cache);
+            _physicalFloat32Cache = null;
+            _physicalFloat32CacheDataVersion = -1;
+            _transposedDataCache = null;
+            _transposedDataVersion = -1;
+            unchecked
+            {
+                _dataVersion++;
+            }
+            _hostDataCurrent = true;
             _hostGradientCurrent = true;
         }
     }
@@ -572,9 +682,23 @@ public partial class Tensor
 
     internal int StorageByteLength => _data.ByteLength;
 
+    internal bool HasFloat32MasterData
+    {
+        get
+        {
+            lock (_deviceSync)
+                return _masterData is not null || _cudaMasterBuffers.Count != 0;
+        }
+    }
+
     internal void EnableMasterData()
     {
-        if (DType != TensorDType.Float32)
+        // Pure tensor-wide BFP8 is intentionally masterless: its signed-Int8
+        // payload and scale are the optimizer authority. Mixed policies keep
+        // an FP32 master, including block-scaled mix8_32.
+        bool pureBfp8 = DType == TensorDType.Bfp8
+            && Bfp8Quantization?.Granularity == Bfp8ScaleGranularity.Tensor;
+        if (DType != TensorDType.Float32 && !pureBfp8)
             _masterData ??= _data.ToFloat32Array();
     }
 

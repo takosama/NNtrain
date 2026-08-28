@@ -61,7 +61,10 @@ public partial class Tensor
         params Tensor[] operands)
     {
         ArgumentNullException.ThrowIfNull(operands);
-        Bfp8QuantizationDescriptor? block = null;
+        if (operands.Length == 0)
+            throw new ArgumentException("At least one BFP8 operand is required.", nameof(operands));
+
+        Bfp8QuantizationDescriptor? expected = null;
         foreach (Tensor operand in operands)
         {
             if (operand.DType != TensorDType.Bfp8)
@@ -73,16 +76,16 @@ public partial class Tensor
             Bfp8QuantizationDescriptor descriptor = operand.Bfp8Quantization
                 ?? throw new InvalidOperationException(
                     "BFP8 tensor storage has no quantization descriptor.");
-            if (descriptor.Granularity == Bfp8ScaleGranularity.Block)
+            operand.ValidateBfp8PrecisionContract();
+            if (expected is not null && expected != descriptor)
             {
-                if (block is not null && block != descriptor)
-                {
-                    throw new InvalidOperationException(
-                        "BFP8 GEMM operands must use the same block scale contract.");
-                }
-                block = descriptor;
+                throw new InvalidOperationException(
+                    "BFP8 GEMM operands must use the same quantization " +
+                    "descriptor; tensor-wide and block-scaled operands cannot " +
+                    "be mixed implicitly.");
             }
+            expected = descriptor;
         }
-        return block ?? Bfp8QuantizationDescriptor.TensorWide;
+        return expected!;
     }
 }

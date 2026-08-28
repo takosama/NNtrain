@@ -1,10 +1,9 @@
-using System.Runtime.InteropServices;
+using NNtrain.Cuda.Interop;
 
 namespace NNtrain;
 
 internal static class CudaForgetMemoryTensorCore
 {
-    private const string Library = "NNtrain.CudaKernels";
     private static int _availability;
 
     internal static bool BackendActive => Volatile.Read(ref _availability) > 0;
@@ -23,8 +22,7 @@ internal static class CudaForgetMemoryTensorCore
         float retentionFloor,
         int memoryVariant)
     {
-        if (Environment.GetEnvironmentVariable(
-                "NNTRAIN_DISABLE_TENSOR_CORE_FORGET_MEMORY") == "1"
+        if (CudaDispatchPolicy.Current.DisableTensorCoreForgetMemory
             || Volatile.Read(ref _availability) < 0
             || keyWidth <= 0
             || keyWidth > 128
@@ -39,7 +37,9 @@ internal static class CudaForgetMemoryTensorCore
         {
             accelerator.Bind();
             nint stream = accelerator.DefaultStream;
-            int status = ForwardNative(
+            int status = CudaNativeGateway
+                .ForgetMemoryForwardBFloat16TensorCore(
+                accelerator.Index,
                 projected.NativePtr,
                 output.NativePtr,
                 states.NativePtr,
@@ -72,21 +72,4 @@ internal static class CudaForgetMemoryTensorCore
         }
     }
 
-    [DllImport(
-        Library,
-        EntryPoint = "nntrain_forget_memory_forward_bf16_tensor_core",
-        CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ForwardNative(
-        nint projected,
-        nint output,
-        nint states,
-        nint state,
-        int batch,
-        int sequence,
-        int projectionWidth,
-        int keyWidth,
-        int valueWidth,
-        float retentionFloor,
-        int memoryVariant,
-        nint stream);
 }

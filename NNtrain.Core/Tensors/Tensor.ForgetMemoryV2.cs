@@ -188,6 +188,19 @@ partial class Tensor
         bool useV3,
         bool useDrn)
     {
+        if (DType == TensorDType.Bfp8)
+        {
+            return ForgetMemoryBfp8Cuda(
+                batch,
+                sequence,
+                projectionWidth,
+                keyWidth,
+                valueWidth,
+                retentionFloor,
+                useV3,
+                useDrn);
+        }
+
         bool bfloat16Compute = DType == TensorDType.BFloat16;
         NNtrain.ForgetMemoryV2Cuda.ResidentForwardResult forward =
             NNtrain.ForgetMemoryV2Cuda.ForwardResident(
@@ -219,13 +232,21 @@ partial class Tensor
             return result;
         }
 
-        result.Node.RegisterResource(forward);
-        result.Node.BackwardAction = () =>
+        AutogradLease<NNtrain.ForgetMemoryV2Cuda.ResidentForwardResult> lease =
+            AutogradLease<NNtrain.ForgetMemoryV2Cuda
+                .ResidentForwardResult>.Own(
+                forward,
+                AutogradLeaseMetadata.CudaOwned(
+                    forward.DeviceIndex,
+                    result.DType,
+                    DataVersion),
+                static saved => saved.Dispose());
+        result.Node.SetBackward(lease, savedContext =>
         {
             NNtrain.ForgetMemoryV2Cuda.BackwardResident(
                 this,
                 result,
-                forward,
+                savedContext,
                 batch,
                 sequence,
                 projectionWidth,
@@ -235,7 +256,7 @@ partial class Tensor
                 bfloat16Compute,
                 useV3,
                 useDrn);
-        };
+        });
         return result;
     }
 
@@ -287,6 +308,112 @@ partial class Tensor
             useV3: false,
             useDrn: true);
 
+    internal Tensor ForgetMemoryV2Continue(
+        int keyWidth,
+        int valueWidth,
+        float retentionFloor,
+        ForgetMemoryRecurrentMemory state)
+        => ForgetMemoryContinue(
+            keyWidth,
+            valueWidth,
+            retentionFloor,
+            state,
+            useV3: false);
+
+    internal Tensor ForgetMemoryV3Continue(
+        int keyWidth,
+        int valueWidth,
+        float retentionFloor,
+        ForgetMemoryRecurrentMemory state)
+        => ForgetMemoryContinue(
+            keyWidth,
+            valueWidth,
+            retentionFloor,
+            state,
+            useV3: true,
+            useDrn: false);
+
+    internal Tensor ForgetMemoryDRNContinue(
+        int keyWidth,
+        int valueWidth,
+        float retentionFloor,
+        ForgetMemoryRecurrentMemory state)
+        => ForgetMemoryContinue(
+            keyWidth,
+            valueWidth,
+            retentionFloor,
+            state,
+            useV3: false,
+            useDrn: true);
+
+    private Tensor ForgetMemoryContinue(
+        int keyWidth,
+        int valueWidth,
+        float retentionFloor,
+        ForgetMemoryRecurrentMemory state,
+        bool useV3,
+        bool useDrn = false)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ValidateForgetMemoryContinuation(
+            keyWidth,
+            valueWidth,
+            retentionFloor,
+            state.Length);
+
+        if (ExecutionDevice != TensorDevice.Cuda)
+        {
+            float[] hostState = state.HostForCpuMutation();
+            try
+            {
+                return ForgetMemoryContinue(
+                    keyWidth,
+                    valueWidth,
+                    retentionFloor,
+                    hostState,
+                    useV3,
+                    useDrn);
+            }
+            finally
+            {
+                state.MarkHostMutated();
+            }
+        }
+
+        int deviceIndex = CudaDeviceIndex;
+        NativeCudaBuffer<float> cudaState =
+            state.EnsureCudaBuffer(deviceIndex);
+        try
+        {
+            return DType == TensorDType.Bfp8
+                ? ForgetMemoryBfp8ContinueCuda(
+                    _shape[1],
+                    _shape[2],
+                    keyWidth,
+                    valueWidth,
+                    retentionFloor,
+                    cudaState,
+                    useV3,
+                    useDrn)
+                : ForgetMemoryContinueCuda(
+                    _shape[1],
+                    _shape[2],
+                    keyWidth,
+                    valueWidth,
+                    retentionFloor,
+                    cudaState,
+                    useV3,
+                    useDrn);
+        }
+        finally
+        {
+            // A launch may have updated the borrowed state before a later
+            // output conversion fails. Keep authority truthful on both the
+            // success and rollback paths.
+            state.MarkCudaMutated(deviceIndex);
+        }
+    }
+
     private Tensor ForgetMemoryContinue(
         int keyWidth,
         int valueWidth,
@@ -295,8 +422,52 @@ partial class Tensor
         bool useV3,
         bool useDrn = false)
     {
-        CheckRank(3);
         ArgumentNullException.ThrowIfNull(state);
+        ValidateForgetMemoryContinuation(
+            keyWidth,
+            valueWidth,
+            retentionFloor,
+            state.Length);
+
+        int sequence = _shape[1];
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType == TensorDType.Bfp8)
+        {
+            return ForgetMemoryBfp8ContinueCuda(
+                sequence,
+                _shape[2],
+                keyWidth,
+                valueWidth,
+                retentionFloor,
+                state,
+                useV3,
+                useDrn);
+        }
+
+        var output = new float[checked(sequence * valueWidth)];
+        ForwardForgetMemoryV2Batch(
+            _data,
+            output,
+            state,
+            batchIndex: 0,
+            sequence,
+            _shape[2],
+            keyWidth,
+            valueWidth,
+            retentionFloor,
+            states: null,
+            useV3,
+            useDrn);
+        return new Tensor(output, [1, sequence, valueWidth], [this]);
+    }
+
+    private void ValidateForgetMemoryContinuation(
+        int keyWidth,
+        int valueWidth,
+        float retentionFloor,
+        int stateLength)
+    {
+        CheckRank(3);
         if (keyWidth <= 0)
             throw new ArgumentOutOfRangeException(nameof(keyWidth));
         if (valueWidth <= 0)
@@ -331,30 +502,53 @@ partial class Tensor
                 "Recurrent stepping carries one memory, so the batch "
                 + "dimension must be 1.");
         }
-        if (state.Length != checked(valueWidth * keyWidth))
+        if (stateLength != checked(valueWidth * keyWidth))
         {
             throw new ArgumentException(
                 $"The recurrent state must hold valueWidth * keyWidth = "
                 + $"{valueWidth * keyWidth} values.",
-                nameof(state));
+                "state");
         }
+    }
 
-        int sequence = _shape[1];
-        var output = new float[checked(sequence * valueWidth)];
-        ForwardForgetMemoryV2Batch(
-            _data,
-            output,
-            state,
-            batchIndex: 0,
-            sequence,
-            _shape[2],
-            keyWidth,
-            valueWidth,
-            retentionFloor,
-            states: null,
-            useV3,
-            useDrn);
-        return new Tensor(output, [1, sequence, valueWidth], [this]);
+    private Tensor ForgetMemoryContinueCuda(
+        int sequence,
+        int projectionWidth,
+        int keyWidth,
+        int valueWidth,
+        float retentionFloor,
+        NativeCudaBuffer<float> state,
+        bool useV3,
+        bool useDrn)
+    {
+        bool bfloat16Compute = DType == TensorDType.BFloat16;
+        ForgetMemoryV2Cuda.ResidentForwardResult forward =
+            ForgetMemoryV2Cuda.ForwardResident(
+                this,
+                batch: 1,
+                sequence,
+                projectionWidth,
+                keyWidth,
+                valueWidth,
+                retentionFloor,
+                bfloat16Compute,
+                useV3,
+                useDrn,
+                recurrentState: state);
+        Tensor result = forward.OutputBFloat16 is not null
+            ? FromCudaResult(
+                forward.OutputBFloat16,
+                forward.DeviceIndex,
+                [1, sequence, valueWidth],
+                [this],
+                TensorDType.BFloat16)
+            : FromCudaResult(
+                forward.OutputFloat32!,
+                forward.DeviceIndex,
+                [1, sequence, valueWidth],
+                [this]);
+        forward.Dispose();
+        return result;
     }
 
     private static void ForwardForgetMemoryV2Batch(

@@ -21,6 +21,14 @@ partial class Tensor
     public static Tensor operator -(Tensor value)
     {
         ArgumentNullException.ThrowIfNull(value);
+        if (ExecutionDevice == TensorDevice.Cuda
+            && value.DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return value.ApplyUnaryCuda(CudaPublicUnaryOperation.Negate);
+        }
+        ThrowIfCudaHostFallback("Unary negation");
 
         float[] resultData = new float[value.Numel];
         MultiplyValues(
@@ -66,6 +74,14 @@ partial class Tensor
 
     public Tensor Pow(float exponent)
     {
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return ApplyUnaryCuda(CudaPublicUnaryOperation.Pow, exponent);
+        }
+        ThrowIfCudaHostFallback(nameof(Pow));
         float[] resultData = new float[Numel];
         for (int index = 0; index < Numel; index++)
             resultData[index] = MathF.Pow(_data[index], exponent);
@@ -87,6 +103,14 @@ partial class Tensor
 
     public Tensor Sum()
     {
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return ReduceCuda(CudaPublicReductionOperation.Sum);
+        }
+        ThrowIfCudaHostFallback(nameof(Sum));
         float sum = SumValues(_data, 0, Numel);
 
         var result = new Tensor(
@@ -106,5 +130,43 @@ partial class Tensor
     }
 
     public Tensor Mean()
-        => Sum() / Scalar(Numel);
+    {
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return ReduceCuda(CudaPublicReductionOperation.Mean);
+        }
+        return Sum() / Scalar(Numel);
+    }
+
+    public Tensor Max()
+    {
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return ReduceCuda(CudaPublicReductionOperation.Max);
+        }
+
+        ThrowIfCudaHostFallback(nameof(Max));
+        float maximum = MaxValues(_data, 0, Numel);
+        var result = new Tensor(
+            [maximum],
+            [1],
+            [this],
+            dtype: TensorDType.Float32);
+        result.Node.BackwardAction = () =>
+        {
+            float gradient = result._grad[0];
+            for (int index = 0; index < Numel; index++)
+            {
+                if (_data[index] == maximum)
+                    _grad[index] += gradient;
+            }
+        };
+        return result;
+    }
 }

@@ -44,7 +44,9 @@ partial class Tensor
 
         int rows = _shape[0];
         int width = _shape[1];
-        int[] retainedIndices = (int[])indices.Clone();
+        int[] retainedIndices = ExecutionDevice == TensorDevice.Cuda
+            ? CudaGraphBatchInputs.RetainOrClone(indices)
+            : (int[])indices.Clone();
         var resultShape = new int[outputShape.Length + 1];
         outputShape.CopyTo(resultShape, 0);
         resultShape[^1] = width;
@@ -62,6 +64,98 @@ partial class Tensor
         }
         if (ExecutionDevice == TensorDevice.Cuda)
         {
+            if (DType == TensorDType.Bfp8)
+            {
+                Bfp8QuantizationDescriptor outputDescriptor =
+                    Bfp8Quantization ?? throw new InvalidOperationException(
+                        "BFP8 embedding table has no quantization descriptor.");
+                if (!AutogradContext.IsRecordingEnabled
+                    && CudaBfp8InferenceComputeScope.IsActive)
+                {
+                    return EmbeddingLookupBfp8StorageBFloat16Inference(
+                        retainedIndices,
+                        width,
+                        resultShape);
+                }
+                var bfp8Context = CudaOperationProfiler.IsEnabled
+                    ? CudaOperationProfiler.Measure(
+                        "forward.embedding",
+                        () => TensorCudaKernels.EmbeddingForwardBfp8Resident(
+                            this,
+                            retainedIndices,
+                            width,
+                            outputDescriptor))
+                    : TensorCudaKernels.EmbeddingForwardBfp8Resident(
+                        this,
+                        retainedIndices,
+                        width,
+                        outputDescriptor);
+                Tensor bfp8Result;
+                try
+                {
+                    bfp8Result = FromCudaBfp8Result(
+                        bfp8Context.Output,
+                        CudaDeviceIndex,
+                        resultShape,
+                        [this]);
+                }
+                catch (Exception adoptionFailure)
+                {
+                    try
+                    {
+                        bfp8Context.Dispose();
+                    }
+                    catch (Exception cleanupFailure)
+                    {
+                        throw new AggregateException(
+                            "Adopting a CUDA BFP8 embedding result failed, " +
+                            "and its saved context also failed to dispose.",
+                            adoptionFailure,
+                            cleanupFailure);
+                    }
+                    throw;
+                }
+                if (AutogradContext.IsRecordingEnabled)
+                {
+                    AutogradLease<TensorCudaKernels
+                        .Bfp8EmbeddingResidentContext> lease =
+                        AutogradLease<TensorCudaKernels
+                            .Bfp8EmbeddingResidentContext>.Own(
+                            bfp8Context,
+                            AutogradLeaseMetadata.CudaOwned(
+                                CudaDeviceIndex,
+                                TensorDType.Bfp8,
+                                DataVersion),
+                            static saved => saved.Dispose());
+                    bfp8Result.Node.SetBackward(lease, savedContext =>
+                    {
+                        if (CudaOperationProfiler.IsEnabled)
+                        {
+                            CudaOperationProfiler.Measure(
+                                "backward.embedding",
+                                () => TensorCudaKernels
+                                    .EmbeddingBackwardBfp8Resident(
+                                        bfp8Result,
+                                        this,
+                                        savedContext,
+                                        width));
+                        }
+                        else
+                        {
+                            TensorCudaKernels.EmbeddingBackwardBfp8Resident(
+                                bfp8Result,
+                                this,
+                                savedContext,
+                                width);
+                        }
+                    });
+                }
+                else if (!CudaInferenceScope.TrackResource(bfp8Context))
+                {
+                    bfp8Context.Dispose();
+                }
+                return bfp8Result;
+            }
             if (DType == TensorDType.BFloat16)
             {
                 var bfloat16Context = CudaOperationProfiler.IsEnabled
@@ -83,8 +177,17 @@ partial class Tensor
                     TensorDType.BFloat16);
                 if (AutogradContext.IsRecordingEnabled)
                 {
-                    bfloat16Result.Node.RegisterResource(bfloat16Context);
-                    bfloat16Result.Node.BackwardAction = () =>
+                    AutogradLease<TensorCudaKernels
+                        .BFloat16EmbeddingResidentContext> lease =
+                        AutogradLease<TensorCudaKernels
+                            .BFloat16EmbeddingResidentContext>.Own(
+                            bfloat16Context,
+                            AutogradLeaseMetadata.CudaOwned(
+                                CudaDeviceIndex,
+                                TensorDType.BFloat16,
+                                DataVersion),
+                            static saved => saved.Dispose());
+                    bfloat16Result.Node.SetBackward(lease, savedContext =>
                     {
                         if (CudaOperationProfiler.IsEnabled)
                         {
@@ -94,7 +197,7 @@ partial class Tensor
                                     .EmbeddingBackwardBFloat16Resident(
                                         bfloat16Result,
                                         this,
-                                        bfloat16Context,
+                                        savedContext,
                                         width));
                         }
                         else
@@ -102,10 +205,10 @@ partial class Tensor
                             TensorCudaKernels.EmbeddingBackwardBFloat16Resident(
                                 bfloat16Result,
                                 this,
-                                bfloat16Context,
+                                savedContext,
                                 width);
                         }
-                    };
+                    });
                 }
                 else if (!CudaInferenceScope.TrackResource(bfloat16Context))
                 {
@@ -226,7 +329,9 @@ partial class Tensor
                 "Sequence length exceeds the position embedding table.");
         }
 
-        int[] retainedIndices = (int[])tokenIndices.Clone();
+        int[] retainedIndices = ExecutionDevice == TensorDevice.Cuda
+            ? CudaGraphBatchInputs.RetainOrClone(tokenIndices)
+            : (int[])tokenIndices.Clone();
         for (int position = 0; position < retainedIndices.Length; position++)
         {
             int token = retainedIndices[position];
@@ -242,6 +347,119 @@ partial class Tensor
 
         if (ExecutionDevice == TensorDevice.Cuda)
         {
+            bool tokenBfp8 = DType == TensorDType.Bfp8;
+            bool positionBfp8 = positionTable.DType == TensorDType.Bfp8;
+            if (tokenBfp8 || positionBfp8)
+            {
+                if (!tokenBfp8 || !positionBfp8)
+                {
+                    throw new NotSupportedException(
+                        "CUDA embedding/position fusion requires both tables " +
+                        "to use BFP8. Decoding one full table as a mixed-dtype " +
+                        "fallback is forbidden.");
+                }
+                if (!AutogradContext.IsRecordingEnabled
+                    && CudaBfp8InferenceComputeScope.IsActive)
+                {
+                    return EmbeddingWithPositionsBfp8StorageBFloat16Inference(
+                        positionTable,
+                        retainedIndices,
+                        batchSize,
+                        sequenceLength,
+                        width);
+                }
+                Bfp8QuantizationDescriptor outputDescriptor =
+                    SelectBfp8ResultDescriptor(this, positionTable);
+                var bfp8Context = CudaOperationProfiler.IsEnabled
+                    ? CudaOperationProfiler.Measure(
+                        "forward.embedding_position",
+                        () => TensorCudaKernels
+                            .EmbeddingWithPositionsForwardBfp8Resident(
+                                this,
+                                positionTable,
+                                retainedIndices,
+                                sequenceLength,
+                                width,
+                                outputDescriptor))
+                    : TensorCudaKernels
+                        .EmbeddingWithPositionsForwardBfp8Resident(
+                            this,
+                            positionTable,
+                            retainedIndices,
+                            sequenceLength,
+                            width,
+                            outputDescriptor);
+                Tensor bfp8Result;
+                try
+                {
+                    bfp8Result = FromCudaBfp8Result(
+                        bfp8Context.Output,
+                        CudaDeviceIndex,
+                        [batchSize, sequenceLength, width],
+                        [this, positionTable]);
+                }
+                catch (Exception adoptionFailure)
+                {
+                    try
+                    {
+                        bfp8Context.Dispose();
+                    }
+                    catch (Exception cleanupFailure)
+                    {
+                        throw new AggregateException(
+                            "Adopting a CUDA BFP8 embedding/position result " +
+                            "failed, and its saved context also failed to dispose.",
+                            adoptionFailure,
+                            cleanupFailure);
+                    }
+                    throw;
+                }
+                if (AutogradContext.IsRecordingEnabled)
+                {
+                    AutogradLease<TensorCudaKernels
+                        .Bfp8EmbeddingPositionsResidentContext> lease =
+                        AutogradLease<TensorCudaKernels
+                            .Bfp8EmbeddingPositionsResidentContext>.Own(
+                            bfp8Context,
+                            AutogradLeaseMetadata.CudaOwned(
+                                CudaDeviceIndex,
+                                TensorDType.Bfp8,
+                                DataVersion),
+                            static saved => saved.Dispose());
+                    bfp8Result.Node.SetBackward(lease, savedContext =>
+                    {
+                        if (CudaOperationProfiler.IsEnabled)
+                        {
+                            CudaOperationProfiler.Measure(
+                                "backward.embedding_position",
+                                () => TensorCudaKernels
+                                    .EmbeddingWithPositionsBackwardBfp8Resident(
+                                        bfp8Result,
+                                        this,
+                                        positionTable,
+                                        savedContext,
+                                        sequenceLength,
+                                        width));
+                        }
+                        else
+                        {
+                            TensorCudaKernels
+                                .EmbeddingWithPositionsBackwardBfp8Resident(
+                                    bfp8Result,
+                                    this,
+                                    positionTable,
+                                    savedContext,
+                                    sequenceLength,
+                                    width);
+                        }
+                    });
+                }
+                else if (!CudaInferenceScope.TrackResource(bfp8Context))
+                {
+                    bfp8Context.Dispose();
+                }
+                return bfp8Result;
+            }
             if (DType == TensorDType.BFloat16
                 && positionTable.DType == TensorDType.BFloat16)
             {
@@ -270,8 +488,17 @@ partial class Tensor
                     TensorDType.BFloat16);
                 if (AutogradContext.IsRecordingEnabled)
                 {
-                    bfloat16Result.Node.RegisterResource(bfloat16Context);
-                    bfloat16Result.Node.BackwardAction = () =>
+                    AutogradLease<TensorCudaKernels
+                        .BFloat16EmbeddingPositionsResidentContext> lease =
+                        AutogradLease<TensorCudaKernels
+                            .BFloat16EmbeddingPositionsResidentContext>.Own(
+                            bfloat16Context,
+                            AutogradLeaseMetadata.CudaOwned(
+                                CudaDeviceIndex,
+                                TensorDType.BFloat16,
+                                DataVersion),
+                            static saved => saved.Dispose());
+                    bfloat16Result.Node.SetBackward(lease, savedContext =>
                     {
                         if (CudaOperationProfiler.IsEnabled)
                         {
@@ -282,7 +509,7 @@ partial class Tensor
                                         bfloat16Result,
                                         this,
                                         positionTable,
-                                        bfloat16Context,
+                                        savedContext,
                                         sequenceLength,
                                         width));
                         }
@@ -293,11 +520,11 @@ partial class Tensor
                                     bfloat16Result,
                                     this,
                                     positionTable,
-                                    bfloat16Context,
+                                    savedContext,
                                     sequenceLength,
                                     width);
                         }
-                    };
+                    });
                 }
                 else if (!CudaInferenceScope.TrackResource(bfloat16Context))
                 {
@@ -327,8 +554,17 @@ partial class Tensor
                 [this, positionTable]);
             if (AutogradContext.IsRecordingEnabled)
             {
-                cudaResult.Node.RegisterResource(context);
-                cudaResult.Node.BackwardAction = () =>
+                AutogradLease<TensorCudaKernels
+                    .EmbeddingPositionsResidentContext> lease =
+                    AutogradLease<TensorCudaKernels
+                        .EmbeddingPositionsResidentContext>.Own(
+                        context,
+                        AutogradLeaseMetadata.CudaOwned(
+                            CudaDeviceIndex,
+                            TensorDType.Float32,
+                            DataVersion),
+                        static saved => saved.Dispose());
+                cudaResult.Node.SetBackward(lease, savedContext =>
                 {
                     if (CudaOperationProfiler.IsEnabled)
                     {
@@ -338,7 +574,7 @@ partial class Tensor
                                 cudaResult,
                                 this,
                                 positionTable,
-                                context,
+                                savedContext,
                                 sequenceLength,
                                 width));
                     }
@@ -348,11 +584,11 @@ partial class Tensor
                             cudaResult,
                             this,
                             positionTable,
-                            context,
+                            savedContext,
                             sequenceLength,
                             width);
                     }
-                };
+                });
             }
             else
             {

@@ -61,6 +61,9 @@ internal static class TensorFloat16OperationManifest
                 "Mean()",
                 "TensorFloat16BasicOperationTests.ReductionsReturnFloat32AndAccumulateInFloat32"),
             Reduction(
+                "Max()",
+                "CudaPublicApiCompatibilityTests.ReductionsMatchCpuForwardBackward"),
+            Reduction(
                 "CrossEntropyWithLogits(Int32[],Single,Int32)",
                 "TensorFloat16ActivationAndLossTests.CrossEntropyReducesFloat16LogitsToFloat32"),
 
@@ -102,6 +105,18 @@ internal static class TensorFloat16OperationManifest
             Preserve(
                 "Relu()",
                 "TensorFloat16ActivationAndLossTests.ActivationPipelinePreservesFloat16AndFloat32Gradients"),
+            Preserve(
+                "Gelu()",
+                "CudaPublicApiCompatibilityTests.UnaryOperationsMatchCpuForwardBackward"),
+            Preserve(
+                "Tanh()",
+                "CudaPublicApiCompatibilityTests.UnaryOperationsMatchCpuForwardBackward"),
+            Preserve(
+                "Exp()",
+                "CudaPublicApiCompatibilityTests.UnaryOperationsMatchCpuForwardBackward"),
+            Preserve(
+                "Log()",
+                "CudaPublicApiCompatibilityTests.UnaryOperationsMatchCpuForwardBackward"),
             Preserve(
                 "AddRowWise(Tensor)",
                 "TensorFloat16ActivationAndLossTests.ElementwiseAndMaskedActivationsPreserveFloat16"),
@@ -167,10 +182,19 @@ internal static class TensorFloat16OperationManifest
                 "ForgetMemoryV2Continue(Int32,Int32,Single,Single[])",
                 "ForgetMemoryV2Tests.GptSchedulesShortToLongMemoryAndTrains"),
             Preserve(
+                "ForgetMemoryV2Continue(Int32,Int32,Single,ForgetMemoryRecurrentMemory)",
+                "ForgetMemoryV2Tests.RecurrentStateMatchesFullCpuForwardAndResetsDeterministically"),
+            Preserve(
                 "ForgetMemoryV3Continue(Int32,Int32,Single,Single[])",
                 "ForgetMemoryV3Tests.GptUsesV3InEveryLayer"),
             Preserve(
+                "ForgetMemoryV3Continue(Int32,Int32,Single,ForgetMemoryRecurrentMemory)",
+                "ForgetMemoryV3Tests.GptUsesV3InEveryLayer"),
+            Preserve(
                 "ForgetMemoryDRNContinue(Int32,Int32,Single,Single[])",
+                "ForgetMemoryDRNTests.GptUsesDrnInEveryLayerAndTrains"),
+            Preserve(
+                "ForgetMemoryDRNContinue(Int32,Int32,Single,ForgetMemoryRecurrentMemory)",
                 "ForgetMemoryDRNTests.GptUsesDrnInEveryLayerAndTrains"),
             Preserve(
                 "FusedMultiHeadAttentionIncremental(NativeCudaBuffer`1,NativeCudaBuffer`1,Int32,Int32,Int32,Int32)",
@@ -178,6 +202,10 @@ internal static class TensorFloat16OperationManifest
             Preserve(
                 "LinearLastDim(Tensor,Tensor,Boolean)",
                 "LinearLastDimTests.Float16ProjectionMatchesFormerFloat16Graph"),
+            new(
+                "LinearLastDimBFloat16ForLoss(Tensor,Tensor)",
+                TensorFloat16ResultPolicy.Bfp8ToBFloat16,
+                "CudaBfp8TransformerEndToEndTests.TrainingLossHeadPublishesBFloat16DirectlyToCrossEntropy"),
             Preserve(
                 "SelectLastSequenceToken()",
                 "GptRinWikiJpTests.GreedyGenerationReturnsValidTokensAndRestoresTrainingMode"),
@@ -264,6 +292,12 @@ internal enum TensorFloat16ResultPolicy
 
     /// <summary>Reads Float16 inputs but intentionally returns Float32.</summary>
     ReduceFloat32,
+
+    /// <summary>
+    /// Reads BFP8 operands and intentionally publishes BF16 storage to a
+    /// numerically sensitive fused consumer without an intermediate requantize.
+    /// </summary>
+    Bfp8ToBFloat16,
 
     /// <summary>Non-Tensor-returning public contract such as Backward.</summary>
     Auxiliary,

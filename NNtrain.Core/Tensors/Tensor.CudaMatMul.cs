@@ -92,6 +92,53 @@ internal static partial class TensorCudaKernels
     {
         int deviceIndex = Tensor.CudaDeviceIndex;
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+
+        if (TensorExecutionContext.UsesBFloat16GradientStorage)
+        {
+            bool sameParent = ReferenceEquals(left, right);
+            using CudaBFloat16GradientSource outputGradient =
+                CudaBFloat16GradientSource.Acquire(output, deviceIndex);
+            using CudaPureBFloat16GradientTarget leftGradient =
+                CudaPureBFloat16GradientTarget.Acquire(left, deviceIndex);
+            using CudaPureBFloat16GradientTarget? rightGradient = sameParent
+                ? null
+                : CudaPureBFloat16GradientTarget.Acquire(
+                    right,
+                    deviceIndex);
+
+            CudaBlas.MatMulBackwardLeftBFloat16Direct(
+                accelerator,
+                deviceIndex,
+                right.EnsureCudaBFloat16Buffer(deviceIndex),
+                outputGradient.Buffer,
+                leftGradient.Buffer,
+                batch,
+                m,
+                k,
+                n,
+                leftGradient.HasValue);
+            leftGradient.MarkFullContributionWritten();
+
+            CudaPureBFloat16GradientTarget effectiveRight =
+                rightGradient ?? leftGradient;
+            CudaBlas.MatMulBackwardRightBFloat16Direct(
+                accelerator,
+                deviceIndex,
+                left.EnsureCudaBFloat16Buffer(deviceIndex),
+                outputGradient.Buffer,
+                effectiveRight.Buffer,
+                batch,
+                m,
+                k,
+                n,
+                effectiveRight.HasValue);
+            effectiveRight.MarkFullContributionWritten();
+
+            leftGradient.Commit();
+            rightGradient?.Commit();
+            return;
+        }
+
         int length = checked(batch * m * n);
         var encodedGradient = Tensor.RentCudaBFloat16Buffer(deviceIndex, length);
         try

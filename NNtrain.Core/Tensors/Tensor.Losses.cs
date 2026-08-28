@@ -7,8 +7,9 @@ partial class Tensor
     private const int MaximumCachedCrossEntropyProbabilities = 1 << 20;
 
     /// <summary>
-    /// Computes mean cross entropy directly from rank-1 or rank-2 logits
-    /// and integer class labels.
+    /// Computes mean cross entropy directly from logits and integer labels.
+    /// For rank three and above, all leading dimensions are flattened into
+    /// rows while the final dimension remains the class dimension.
     /// </summary>
     public Tensor CrossEntropyWithLogits(
         int[] labels,
@@ -26,14 +27,14 @@ partial class Tensor
                 "Label smoothing must be finite and in the range [0, 1).");
         }
 
-        if (Rank is not 1 and not 2)
+        if (Rank < 1)
         {
             throw new InvalidOperationException(
-                "CrossEntropyWithLogits requires rank-1 or rank-2 logits.");
+                "CrossEntropyWithLogits requires at least one dimension.");
         }
 
-        int rows = Rank == 1 ? 1 : _shape[0];
-        int columns = Rank == 1 ? _shape[0] : _shape[1];
+        int columns = _shape[^1];
+        int rows = Rank == 1 ? 1 : Numel / columns;
         if (labels.Length != rows)
         {
             throw new ArgumentException(
@@ -41,7 +42,9 @@ partial class Tensor
                 nameof(labels));
         }
 
-        int[] retainedLabels = (int[])labels.Clone();
+        int[] retainedLabels = ExecutionDevice == TensorDevice.Cuda
+            ? CudaGraphBatchInputs.RetainOrClone(labels)
+            : (int[])labels.Clone();
         int validRows = 0;
         for (int row = 0; row < rows; row++)
         {
@@ -66,6 +69,16 @@ partial class Tensor
 
         if (ExecutionDevice == TensorDevice.Cuda)
         {
+            if (DType == TensorDType.Bfp8)
+            {
+                return CrossEntropyWithLogitsBfp8Cuda(
+                    retainedLabels,
+                    rows,
+                    columns,
+                    ignoreIndex,
+                    validRows,
+                    labelSmoothing);
+            }
             if (DType == TensorDType.BFloat16)
             {
                 TensorCudaKernels.CrossEntropyResidentContext bfloat16Context =
@@ -97,8 +110,16 @@ partial class Tensor
                     dtype: TensorDType.Float32);
                 if (AutogradContext.IsRecordingEnabled)
                 {
-                    bfloat16Result.Node.RegisterResource(bfloat16Context);
-                    bfloat16Result.Node.BackwardAction = () =>
+                    AutogradLease<TensorCudaKernels.CrossEntropyResidentContext>
+                        lease = AutogradLease<TensorCudaKernels
+                            .CrossEntropyResidentContext>.Own(
+                            bfloat16Context,
+                            AutogradLeaseMetadata.CudaOwned(
+                                CudaDeviceIndex,
+                                TensorDType.BFloat16,
+                                DataVersion),
+                            static saved => saved.Dispose());
+                    bfloat16Result.Node.SetBackward(lease, savedContext =>
                     {
                         if (CudaOperationProfiler.IsEnabled)
                         {
@@ -108,7 +129,7 @@ partial class Tensor
                                     .CrossEntropyBackwardBFloat16Resident(
                                         this,
                                         bfloat16Result,
-                                        bfloat16Context,
+                                        savedContext,
                                         columns,
                                         ignoreIndex,
                                         validRows,
@@ -119,13 +140,13 @@ partial class Tensor
                             TensorCudaKernels.CrossEntropyBackwardBFloat16Resident(
                                 this,
                                 bfloat16Result,
-                                bfloat16Context,
+                                savedContext,
                                 columns,
                                 ignoreIndex,
                                 validRows,
                                 labelSmoothing);
                         }
-                    };
+                    });
                 }
                 else if (!CudaInferenceScope.TrackResource(bfloat16Context))
                 {
@@ -161,8 +182,16 @@ partial class Tensor
                 dtype: TensorDType.Float32);
             if (AutogradContext.IsRecordingEnabled)
             {
-                cudaResult.Node.RegisterResource(context);
-                cudaResult.Node.BackwardAction = () =>
+                AutogradLease<TensorCudaKernels.CrossEntropyResidentContext>
+                    lease = AutogradLease<TensorCudaKernels
+                        .CrossEntropyResidentContext>.Own(
+                        context,
+                        AutogradLeaseMetadata.CudaOwned(
+                            CudaDeviceIndex,
+                            TensorDType.Float32,
+                            DataVersion),
+                        static saved => saved.Dispose());
+                cudaResult.Node.SetBackward(lease, savedContext =>
                 {
                     if (CudaOperationProfiler.IsEnabled)
                     {
@@ -171,7 +200,7 @@ partial class Tensor
                             () => TensorCudaKernels.CrossEntropyBackwardResident(
                                 this,
                                 cudaResult,
-                                context,
+                                savedContext,
                                 columns,
                                 ignoreIndex,
                                 validRows,
@@ -182,13 +211,13 @@ partial class Tensor
                         TensorCudaKernels.CrossEntropyBackwardResident(
                             this,
                             cudaResult,
-                            context,
+                            savedContext,
                             columns,
                             ignoreIndex,
                             validRows,
                             labelSmoothing);
                     }
-                };
+                });
             }
             else
             {

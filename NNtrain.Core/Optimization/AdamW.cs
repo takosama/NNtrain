@@ -8,6 +8,12 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
     private readonly AdamWWorkItem[] _workItems;
     private readonly Dictionary<int, CudaOptimizerKernels.AdamWMultiTensorPlan>
         _cudaMultiTensorPlans = [];
+    private readonly Dictionary<int, NativeCudaBuffer<int>>
+        _cudaBfp8FiniteStatus = [];
+    private readonly Dictionary<int, CudaOptimizerFiniteStatusReadback>
+        _cudaBfp8FiniteReadbacks = [];
+    private readonly Dictionary<int,
+        CudaOptimizerKernels.AdamWBfp8DeviceScratch> _cudaBfp8Scratch = [];
     private AdamWOptions _options;
     private AdamWParameterState[] _parameterStates;
     private readonly Action<int> _updateWorkItemAction;
@@ -16,8 +22,11 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
     private float _stepUpdateScale;
     private float _stepScaledEpsilon;
     private int _step;
+    private int _cudaMultiTensorPlanBuildCount;
 
     internal IReadOnlyList<Parameter> Parameters => _parameters;
+    internal int CudaMultiTensorPlanBuildCount
+        => _cudaMultiTensorPlanBuildCount;
 
     public AdamW(
         IEnumerable<Parameter> parameters,
@@ -54,6 +63,15 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         _workItems = CreateWorkItems(_parameters);
 
         AdamWOptions effectiveOptions = options ?? new AdamWOptions();
+        if (TensorExecutionContext.ActivePrecisionPolicy?.OptimizerState
+                == NNtrain.Runtime.Execution.NumericFormat.BFloat16)
+        {
+            effectiveOptions = effectiveOptions with
+            {
+                UseBFloat16FirstMoment = true,
+                UseBFloat16SecondMoment = true,
+            };
+        }
         ValidateOptions(effectiveOptions, nameof(options));
         AdamWState initialState = CreateInitialState(
             _parameters,
@@ -91,12 +109,12 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                     index,
                     parameter.Name,
                     parameter.T.Shape.ToArray(),
-                    _options.UseBFloat16FirstMoment
+                    _parameterRuntime[index].FirstMomentBFloat16 is not null
                         ? DecodeBFloat16(
                             _parameterRuntime[index]
                                 .FirstMomentBFloat16!)
                         : _parameterRuntime[index].FirstMoment.ToArray(),
-                    _options.UseBFloat16SecondMoment
+                    _parameterRuntime[index].SecondMomentBFloat16 is not null
                         ? DecodeBFloat16(
                             _parameterRuntime[index]
                                 .SecondMomentBFloat16!)
@@ -132,6 +150,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         {
             runtime.CudaState?.SynchronizeHost(primaryDevice);
             runtime.CudaBFloat16State?.SynchronizeHost(primaryDevice);
+            runtime.CudaBfp8State?.SynchronizeHost(primaryDevice);
         }
     }
 
@@ -145,14 +164,15 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
     {
         AdamWParameterState state = _parameterStates[index];
         AdamWParameterRuntime runtime = _parameterRuntime[index];
+        bool bfp8State = runtime.CudaBfp8State is not null;
         return new AdamWStreamingParameterState(
             state.Index,
             state.Name,
             state.Shape,
             runtime.FirstMoment,
-            runtime.FirstMomentBFloat16,
+            bfp8State ? null : runtime.FirstMomentBFloat16,
             runtime.SecondMoment,
-            runtime.SecondMomentBFloat16);
+            bfp8State ? null : runtime.SecondMomentBFloat16);
     }
 
     public float LearningRate => _options.LearningRate;
@@ -182,15 +202,25 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         ValidateState(state);
         AdamWState restored = takeOwnership ? state : CloneState(state);
         _step = restored.Step;
-        _options = restored.Options;
+        _options = TensorExecutionContext.ActivePrecisionPolicy?.OptimizerState
+                == NNtrain.Runtime.Execution.NumericFormat.BFloat16
+            ? restored.Options with
+            {
+                UseBFloat16FirstMoment = true,
+                UseBFloat16SecondMoment = true,
+            }
+            : restored.Options;
         _parameterStates = restored.ParameterStates;
+        DisposeCudaResources();
         for (int index = 0; index < _parameterRuntime.Length; index++)
         {
-            _parameterRuntime[index].CudaState?.Dispose();
-            _parameterRuntime[index].CudaState = null;
-            _parameterRuntime[index].CudaBFloat16State?.Dispose();
-            _parameterRuntime[index].CudaBFloat16State = null;
-            if (_options.UseBFloat16FirstMoment)
+            bool bfp8State = UsesPureBfp8OptimizerState(
+                _parameterRuntime[index].Parameter.T);
+            bool mix8State = UsesMix8Parameter(
+                _parameterRuntime[index].Parameter.T);
+            if (_options.UseBFloat16FirstMoment
+                && !bfp8State
+                && !mix8State)
             {
                 _parameterRuntime[index].FirstMoment = [];
                 _parameterRuntime[index].FirstMomentBFloat16 =
@@ -206,7 +236,9 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                     _parameterStates[index].FirstMoment;
                 _parameterRuntime[index].FirstMomentBFloat16 = null;
             }
-            if (_options.UseBFloat16SecondMoment)
+            if (_options.UseBFloat16SecondMoment
+                && !bfp8State
+                && !mix8State)
             {
                 _parameterRuntime[index].SecondMoment = [];
                 _parameterRuntime[index].SecondMomentBFloat16 =
@@ -223,12 +255,6 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                 _parameterRuntime[index].SecondMomentBFloat16 = null;
             }
         }
-        foreach (CudaOptimizerKernels.AdamWMultiTensorPlan plan
-            in _cudaMultiTensorPlans.Values)
-        {
-            plan.Dispose();
-        }
-        _cudaMultiTensorPlans.Clear();
         RefreshWeightDecayFlags();
     }
 
@@ -276,6 +302,13 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                 "AdamW cannot advance beyond Int32.MaxValue steps.");
         }
 
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            CudaGradientOptimizerGuard.ValidateAndConsume(
+                _parameters,
+                Tensor.CudaDeviceIndices);
+        }
+
         _step++;
         AdamWOptions options = _options;
 
@@ -289,6 +322,55 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
         {
             int[] devices = Tensor.CudaDeviceIndices.ToArray();
+            bool pureBFloat16 = UsesPureBFloat16OptimizerState();
+            if (TensorExecutionContext.ActivePrecisionPolicy?.OptimizerState
+                    == NNtrain.Runtime.Execution.NumericFormat.BFloat16
+                && !pureBFloat16)
+            {
+                throw new InvalidOperationException(
+                    "The pure BFloat16 AdamW contract requires every " +
+                    "parameter to use physical BFloat16 storage.");
+            }
+            bool pureBfp8 = _parameterRuntime.All(runtime =>
+                UsesPureBfp8OptimizerState(runtime.Parameter.T));
+            if (TensorExecutionContext.ActivePrecisionPolicy?.OptimizerState
+                    == NNtrain.Runtime.Execution.NumericFormat.Bfp8
+                && !pureBfp8)
+            {
+                throw new InvalidOperationException(
+                    "The pure BFP8 AdamW contract requires every parameter " +
+                    "to use tensor-wide BFP8 storage.");
+            }
+            if (pureBfp8)
+            {
+                StepCudaBfp8(devices, options);
+                return;
+            }
+            bool anyMix8 = _parameterRuntime.Any(runtime =>
+                UsesMix8Parameter(runtime.Parameter.T));
+            bool mix8 = _parameterRuntime.All(runtime =>
+                UsesMix8Parameter(runtime.Parameter.T));
+            if (anyMix8 && !mix8)
+            {
+                throw new InvalidOperationException(
+                    "The mix8_32 AdamW contract cannot mix block-scaled " +
+                    "BFP8 parameters with another storage format.");
+            }
+            if (anyMix8)
+                ValidateMix8OptimizerContract();
+            if (TensorExecutionContext.ActivePrecisionPolicy?.Mode
+                    == NNtrain.Runtime.Execution.PrecisionMode.Mix8_32
+                && !mix8)
+            {
+                throw new InvalidOperationException(
+                    "The mix8_32 AdamW contract requires every parameter " +
+                    "to use block-scaled BFP8 storage.");
+            }
+            if (mix8)
+            {
+                StepCudaMix8(devices, options);
+                return;
+            }
             for (int parameterIndex = 0;
                 parameterIndex < _parameterRuntime.Length;
                 parameterIndex++)
@@ -357,7 +439,8 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                             runtime.Parameter.T,
                             runtime.CudaState,
                             runtime.CudaBFloat16State,
-                            runtime.ApplyWeightDecay))
+                            runtime.ApplyWeightDecay,
+                            pureBFloat16))
                     .ToArray();
             if (multiTensorItems.Length > 0)
             {
@@ -370,11 +453,18 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                     int deviceIndex = devices[deviceSlot];
                     if (!_cudaMultiTensorPlans.TryGetValue(
                         deviceIndex,
-                        out CudaOptimizerKernels.AdamWMultiTensorPlan? plan))
+                        out CudaOptimizerKernels.AdamWMultiTensorPlan? plan)
+                        || !plan.Matches(multiTensorItems))
                     {
+                        if (plan is not null)
+                        {
+                            plan.Dispose();
+                            _cudaMultiTensorPlans.Remove(deviceIndex);
+                        }
                         plan = new CudaOptimizerKernels.AdamWMultiTensorPlan(
                             deviceIndex, multiTensorItems);
                         _cudaMultiTensorPlans.Add(deviceIndex, plan);
+                        _cudaMultiTensorPlanBuildCount++;
                     }
                     plans[deviceSlot] = plan;
                 }
@@ -395,14 +485,19 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                         _stepScaledEpsilon);
                 });
             }
-            foreach (AdamWParameterRuntime runtime in _parameterRuntime)
-            {
-                runtime.Parameter.T.MarkCudaDataMutated(
-                    Tensor.CudaDeviceIndex);
-            }
-            CudaOptimizerKernels.SynchronizeDevices(
+            CudaOptimizerStepBatch.CompleteAfterSynchronization(
                 devices,
-                "AdamW update");
+                "AdamW update",
+                queueReadback: null,
+                finalize: () =>
+                {
+                    foreach (AdamWParameterRuntime runtime
+                        in _parameterRuntime)
+                    {
+                        runtime.Parameter.T
+                            .MarkCudaDataReplicasSynchronized(devices);
+                    }
+                });
             return;
         }
 
@@ -434,7 +529,339 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         }
     }
 
+    private bool UsesPureBFloat16OptimizerState()
+        => TensorExecutionContext.ActivePrecisionPolicy?.OptimizerState
+                == NNtrain.Runtime.Execution.NumericFormat.BFloat16
+            && _parameterRuntime.All(runtime =>
+                runtime.Parameter.T.DType == TensorDType.BFloat16);
+
     public void step() => Step();
+
+    private void StepCudaBfp8(int[] devices, AdamWOptions options)
+    {
+        if (devices.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "Pure BFP8 AdamW requires at least one CUDA device.");
+        }
+
+        // A precision transition invalidates plans which captured Float32 or
+        // BF16 moment addresses. Preserve their latest values before making
+        // the BFP8 payloads the only resident optimizer authority.
+        bool transitioned = _parameterRuntime.Any(runtime =>
+            runtime.CudaBfp8State is null);
+        if (transitioned)
+        {
+            foreach (CudaOptimizerKernels.AdamWMultiTensorPlan plan
+                in _cudaMultiTensorPlans.Values)
+            {
+                plan.Dispose();
+            }
+            _cudaMultiTensorPlans.Clear();
+        }
+
+        int primaryDevice = devices[0];
+        foreach (AdamWParameterRuntime runtime in _parameterRuntime)
+        {
+            if (runtime.CudaBfp8State is null)
+            {
+                runtime.CudaState?.SynchronizeHost(primaryDevice);
+                runtime.CudaBFloat16State?.SynchronizeHost(primaryDevice);
+                runtime.CudaState?.Dispose();
+                runtime.CudaState = null;
+                runtime.CudaBFloat16State?.Dispose();
+                runtime.CudaBFloat16State = null;
+
+                if (runtime.FirstMomentBFloat16 is not null)
+                {
+                    runtime.FirstMoment = DecodeBFloat16(
+                        runtime.FirstMomentBFloat16);
+                    runtime.FirstMomentBFloat16 = null;
+                }
+                if (runtime.SecondMomentBFloat16 is not null)
+                {
+                    runtime.SecondMoment = DecodeBFloat16(
+                        runtime.SecondMomentBFloat16);
+                    runtime.SecondMomentBFloat16 = null;
+                }
+                if (runtime.FirstMoment.Length != runtime.Parameter.T.Numel)
+                    runtime.FirstMoment = new float[runtime.Parameter.T.Numel];
+                if (runtime.SecondMoment.Length != runtime.Parameter.T.Numel)
+                    runtime.SecondMoment = new float[runtime.Parameter.T.Numel];
+
+                runtime.CudaBfp8State =
+                    new CudaOptimizerKernels.AdamWBfp8ResidentState(
+                        runtime.FirstMoment,
+                        runtime.SecondMoment);
+            }
+            foreach (int deviceIndex in devices)
+                runtime.CudaBfp8State.GetOrCreate(deviceIndex);
+        }
+
+        var statuses = new NativeCudaBuffer<int>[devices.Length];
+        var scratch = new CudaOptimizerKernels
+            .AdamWBfp8DeviceScratch[devices.Length];
+        int maximumLeafLength = _parameterRuntime.Max(
+            runtime => runtime.Parameter.T.Numel);
+        for (int deviceSlot = 0; deviceSlot < devices.Length; deviceSlot++)
+        {
+            int deviceIndex = devices[deviceSlot];
+            statuses[deviceSlot] = GetOrCreateBfp8FiniteStatus(deviceIndex);
+            scratch[deviceSlot] = GetOrCreateBfp8Scratch(
+                deviceIndex, maximumLeafLength);
+            statuses[deviceSlot].MemSetToZero();
+        }
+
+        Parallel.For(0, devices.Length, deviceSlot =>
+        {
+            int deviceIndex = devices[deviceSlot];
+            NativeCudaBuffer<int> finiteStatus = statuses[deviceSlot];
+            foreach (AdamWParameterRuntime runtime in _parameterRuntime)
+            {
+                runtime.CudaBfp8State!.Execute(
+                    runtime.Parameter.T,
+                    deviceIndex,
+                    finiteStatus,
+                    scratch[deviceSlot],
+                    options.Beta1,
+                    options.Beta2,
+                    options.LearningRate,
+                    options.WeightDecay,
+                    _stepUpdateScale,
+                    _stepScaledEpsilon,
+                    runtime.ApplyWeightDecay);
+            }
+        });
+
+        CudaOptimizerFiniteStatusReadback[] readbacks = devices
+            .Select(GetOrCreateBfp8FiniteReadback)
+            .ToArray();
+        CudaOptimizerStepBatch.CompleteAfterSynchronization(
+            devices,
+            "pure BFP8 AdamW update",
+            queueReadback: () =>
+            {
+                for (int deviceSlot = 0;
+                    deviceSlot < devices.Length;
+                    deviceSlot++)
+                {
+                    readbacks[deviceSlot].Begin(statuses[deviceSlot]);
+                }
+            },
+            finalize: () =>
+            {
+                int nonFiniteDevice = -1;
+                for (int deviceSlot = 0;
+                    deviceSlot < devices.Length;
+                    deviceSlot++)
+                {
+                    int finite =
+                        readbacks[deviceSlot].ReadAfterSynchronization();
+                    if (finite != 0 && nonFiniteDevice < 0)
+                        nonFiniteDevice = devices[deviceSlot];
+                }
+                if (nonFiniteDevice >= 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Non-finite CUDA value detected while publishing " +
+                        $"pure BFP8 AdamW state on device " +
+                        $"{nonFiniteDevice} at optimizer step {_step}.");
+                }
+
+                foreach (AdamWParameterRuntime runtime in _parameterRuntime)
+                {
+                    runtime.Parameter.T
+                        .MarkCudaBfp8DataReplicasSynchronized(devices);
+                }
+            });
+    }
+
+    private NativeCudaBuffer<int> GetOrCreateBfp8FiniteStatus(int deviceIndex)
+    {
+        if (_cudaBfp8FiniteStatus.TryGetValue(
+                deviceIndex,
+                out NativeCudaBuffer<int>? status))
+        {
+            return status;
+        }
+        status = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex)
+            .Allocate1D<int>(1);
+        _cudaBfp8FiniteStatus.Add(deviceIndex, status);
+        return status;
+    }
+
+    private CudaOptimizerFiniteStatusReadback
+        GetOrCreateBfp8FiniteReadback(int deviceIndex)
+    {
+        if (_cudaBfp8FiniteReadbacks.TryGetValue(
+                deviceIndex,
+                out CudaOptimizerFiniteStatusReadback? readback))
+        {
+            return readback;
+        }
+        readback = new CudaOptimizerFiniteStatusReadback(deviceIndex);
+        _cudaBfp8FiniteReadbacks.Add(deviceIndex, readback);
+        return readback;
+    }
+
+    private CudaOptimizerKernels.AdamWBfp8DeviceScratch
+        GetOrCreateBfp8Scratch(int deviceIndex, int capacity)
+    {
+        if (_cudaBfp8Scratch.TryGetValue(
+                deviceIndex,
+                out CudaOptimizerKernels.AdamWBfp8DeviceScratch? scratch))
+        {
+            if (scratch.Capacity >= capacity)
+                return scratch;
+            scratch.Dispose();
+            _cudaBfp8Scratch.Remove(deviceIndex);
+        }
+        scratch = new CudaOptimizerKernels.AdamWBfp8DeviceScratch(
+            deviceIndex, capacity);
+        _cudaBfp8Scratch.Add(deviceIndex, scratch);
+        return scratch;
+    }
+
+    private void DisposeBfp8FiniteStatus()
+    {
+        List<Exception>? failures = null;
+        foreach (CudaOptimizerFiniteStatusReadback readback
+            in _cudaBfp8FiniteReadbacks.Values)
+        {
+            try
+            {
+                readback.Dispose();
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+        }
+        _cudaBfp8FiniteReadbacks.Clear();
+        foreach (NativeCudaBuffer<int> status
+            in _cudaBfp8FiniteStatus.Values)
+        {
+            try
+            {
+                status.Dispose();
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+        }
+        _cudaBfp8FiniteStatus.Clear();
+        if (failures is not null)
+        {
+            throw new AggregateException(
+                "AdamW BFP8 finite-status cleanup failed.", failures);
+        }
+    }
+
+    private void DisposeBfp8Scratch()
+    {
+        List<Exception>? failures = null;
+        foreach (CudaOptimizerKernels.AdamWBfp8DeviceScratch scratch
+            in _cudaBfp8Scratch.Values)
+        {
+            try
+            {
+                scratch.Dispose();
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+        }
+        _cudaBfp8Scratch.Clear();
+        if (failures is not null)
+        {
+            throw new AggregateException(
+                "AdamW BFP8 shared-scratch cleanup failed.", failures);
+        }
+    }
+
+    internal void DisposeCudaResources()
+    {
+        List<Exception>? failures = null;
+        foreach (CudaOptimizerKernels.AdamWMultiTensorPlan plan
+            in _cudaMultiTensorPlans.Values)
+        {
+            TryDisposeCudaResource(plan, ref failures);
+        }
+        _cudaMultiTensorPlans.Clear();
+        foreach (AdamWParameterRuntime runtime in _parameterRuntime)
+        {
+            if (runtime.CudaState is not null)
+                TryDisposeCudaResource(runtime.CudaState, ref failures);
+            if (runtime.CudaBFloat16State is not null)
+                TryDisposeCudaResource(runtime.CudaBFloat16State, ref failures);
+            if (runtime.CudaBfp8State is not null)
+                TryDisposeCudaResource(runtime.CudaBfp8State, ref failures);
+            runtime.CudaState = null;
+            runtime.CudaBFloat16State = null;
+            runtime.CudaBfp8State = null;
+        }
+        try
+        {
+            DisposeBfp8FiniteStatus();
+        }
+        catch (Exception exception)
+        {
+            (failures ??= []).Add(exception);
+        }
+        try
+        {
+            DisposeBfp8Scratch();
+        }
+        catch (Exception exception)
+        {
+            (failures ??= []).Add(exception);
+        }
+        if (failures is not null)
+        {
+            throw new AggregateException(
+                "AdamW CUDA resource cleanup failed.", failures);
+        }
+    }
+
+    private static void TryDisposeCudaResource(
+        IDisposable resource,
+        ref List<Exception>? failures)
+    {
+        try
+        {
+            resource.Dispose();
+        }
+        catch (Exception exception)
+        {
+            (failures ??= []).Add(exception);
+        }
+    }
+
+    internal (CudaBfp8BufferView First, CudaBfp8BufferView Second)
+        GetCudaBfp8Moments(int parameterIndex, int deviceIndex)
+    {
+        CudaOptimizerKernels.AdamWBfp8ResidentState state =
+            _parameterRuntime[parameterIndex].CudaBfp8State
+            ?? throw new InvalidOperationException(
+                "The AdamW parameter has no resident BFP8 state.");
+        return (
+            state.GetFirstMoment(deviceIndex),
+            state.GetSecondMoment(deviceIndex));
+    }
+
+    internal (NativeCudaBuffer<short> First, NativeCudaBuffer<short> Second)
+        GetCudaBFloat16Moments(int parameterIndex, int deviceIndex)
+    {
+        CudaOptimizerKernels.AdamWBFloat16ResidentState state =
+            _parameterRuntime[parameterIndex].CudaBFloat16State
+            ?? throw new InvalidOperationException(
+                "The AdamW parameter has no resident BF16 state.");
+        CudaOptimizerKernels.AdamWBFloat16ResidentState.Buffers buffers =
+            state.GetOrCreate(deviceIndex);
+        return (buffers.First, buffers.Second);
+    }
 
     public OptimizerStateDictionary state_dict()
         => OptimizerStateDictionary.Create("AdamW", CaptureState());

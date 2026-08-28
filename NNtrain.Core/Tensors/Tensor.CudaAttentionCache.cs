@@ -24,6 +24,8 @@ partial class Tensor
             sequence,
             cacheCapacity,
             modelWidth);
+        if (CudaBfp8InferenceComputeScope.IsActive)
+            CudaBfp8InferenceTelemetry.RecordKvCachePrefill();
     }
 
     internal Tensor FusedMultiHeadAttentionIncremental(
@@ -79,6 +81,8 @@ partial class Tensor
                 cacheCapacity,
                 modelWidth,
                 numHeads);
+            if (CudaBfp8InferenceComputeScope.IsActive)
+                CudaBfp8InferenceTelemetry.RecordKvCacheIncremental();
             int[] outputShape = Rank == 3
                 ? [1, 1, modelWidth]
                 : [1, modelWidth];

@@ -45,10 +45,39 @@ public abstract class Module
                 $"requires storage dtype '{expectedStorage}', but module " +
                 $"'{GetType().Name}' uses '{DType}'.");
         }
+        if (expectedStorage == TensorDType.Bfp8)
+        {
+            Bfp8ScaleGranularity expectedGranularity =
+                precisionMode == TensorPrecisionMode.Bfp8
+                    ? Bfp8ScaleGranularity.Tensor
+                    : Bfp8ScaleGranularity.Block;
+            Parameter? incompatible = _directParameters.FirstOrDefault(
+                parameter => parameter.T.Bfp8Quantization?.Granularity
+                    != expectedGranularity);
+            if (incompatible is not null)
+            {
+                throw new InvalidOperationException(
+                    $"Precision mode " +
+                    $"'{TensorPrecisionModeNames.Format(precisionMode)}' " +
+                    $"requires {expectedGranularity.ToString().ToLowerInvariant()} " +
+                    $"BFP8 scaling, but parameter '{incompatible.Name}' in " +
+                    $"module '{GetType().Name}' uses " +
+                    $"'{FormatBfp8Descriptor(incompatible.T.Bfp8Quantization)}'. " +
+                    "Use model.to(...) to convert the scaling contract.");
+            }
+        }
         PrecisionMode = precisionMode;
         foreach (Module module in _directModules)
             module.SetPrecisionMode(precisionMode);
     }
+
+    private static string FormatBfp8Descriptor(
+        Bfp8QuantizationDescriptor? descriptor)
+        => descriptor is null
+            ? "none"
+            : descriptor.Granularity == Bfp8ScaleGranularity.Tensor
+                ? "tensor"
+                : $"block:{descriptor.BlockSize}";
 
     protected Parameter RegisterParameter(Parameter parameter)
     {
@@ -228,8 +257,7 @@ public abstract class Module
         bool preserveMaster = precisionMode is TensorPrecisionMode.Mix16_32
             or TensorPrecisionMode.Mix8_32;
 
-        Parameter[] parameters = Parameters().ToArray();
-        foreach (Parameter parameter in parameters)
+        foreach (Parameter parameter in Parameters())
         {
             parameter.T.ConvertStorageInPlace(
                 storageDType,
@@ -374,10 +402,20 @@ public abstract class Module
 
         for (int index = 0; index < parameters.Length; index++)
         {
-            using Tensor.DataMutation mutation =
-                parameters[index].BeginUpdate();
             ModuleParameterState parameterState = state.Parameters[index];
-            parameterState.Values.AsSpan().CopyTo(mutation.Values);
+            if (parameters[index].T.DType == TensorDType.Bfp8)
+            {
+                parameters[index].T.RestoreBfp8ValuesInPlace(
+                    parameterState.Values,
+                    preserveFloat32Master:
+                        PrecisionMode == TensorPrecisionMode.Mix8_32);
+            }
+            else
+            {
+                using Tensor.DataMutation mutation =
+                    parameters[index].BeginUpdate();
+                parameterState.Values.AsSpan().CopyTo(mutation.Values);
+            }
         }
     }
 
@@ -516,6 +554,7 @@ public abstract class Module
                 || parameterState.DType is not TensorDType.Float32
                     and not TensorDType.Float16
                     and not TensorDType.BFloat16
+                    and not TensorDType.Bfp8
                 || parameterState.StorageMetadata is { IsRaw: false })
             {
                 throw new ArgumentException(

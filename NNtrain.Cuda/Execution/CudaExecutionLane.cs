@@ -7,9 +7,12 @@ namespace NNtrain.Cuda.Execution;
 /// Owns the compute stream, communication stream, memory manager,
 /// capabilities and profiler for exactly one CUDA device.
 /// </summary>
-public sealed class CudaExecutionLane : IExecutionLane
+public sealed class CudaExecutionLane : IStreamExecutionLane
 {
-    private readonly Action<int>? _synchronizeBeforeDispose;
+    private readonly object _resourceSync = new();
+    private readonly List<IDisposable> _ownedResources = [];
+    private readonly Action<int, nint>? _activateComputeStream;
+    private readonly Action<int, nint>? _synchronizeStream;
     private int _disposed;
 
     public CudaExecutionLane(
@@ -19,7 +22,8 @@ public sealed class CudaExecutionLane : IExecutionLane
         CudaMemoryManager memoryManager,
         CudaKernelCapabilities capabilities,
         IExecutionProfiler? profiler = null,
-        Action<int>? synchronizeBeforeDispose = null)
+        Action<int, nint>? activateComputeStream = null,
+        Action<int, nint>? synchronizeStream = null)
     {
         if (deviceIndex < 0)
             throw new ArgumentOutOfRangeException(nameof(deviceIndex));
@@ -33,7 +37,8 @@ public sealed class CudaExecutionLane : IExecutionLane
         CudaCapabilities = capabilities
             ?? throw new ArgumentNullException(nameof(capabilities));
         Profiler = profiler ?? NullExecutionProfiler.Instance;
-        _synchronizeBeforeDispose = synchronizeBeforeDispose;
+        _activateComputeStream = activateComputeStream;
+        _synchronizeStream = synchronizeStream;
 
         if (ComputeStream.DeviceIndex != deviceIndex
             || CommunicationStream.DeviceIndex != deviceIndex
@@ -53,6 +58,39 @@ public sealed class CudaExecutionLane : IExecutionLane
     public IDeviceMemoryManager MemoryManager => Memory;
     public IKernelCapabilitySet Capabilities => CudaCapabilities;
     public IExecutionProfiler Profiler { get; }
+    public nint ComputeStreamHandle => ComputeStream.DangerousGetHandle();
+    public nint CommunicationStreamHandle =>
+        CommunicationStream.DangerousGetHandle();
+
+    public void ActivateComputeStream()
+    {
+        ThrowIfDisposed();
+        _activateComputeStream?.Invoke(DeviceIndex, ComputeStreamHandle);
+    }
+
+    public void SynchronizeComputeStream()
+    {
+        ThrowIfDisposed();
+        _synchronizeStream?.Invoke(DeviceIndex, ComputeStreamHandle);
+    }
+
+    public void SynchronizeCommunicationStream()
+    {
+        ThrowIfDisposed();
+        _synchronizeStream?.Invoke(DeviceIndex, CommunicationStreamHandle);
+    }
+
+    public T OwnResource<T>(T resource)
+        where T : class, IDisposable
+    {
+        ArgumentNullException.ThrowIfNull(resource);
+        lock (_resourceSync)
+        {
+            ThrowIfDisposed();
+            _ownedResources.Add(resource);
+        }
+        return resource;
+    }
 
     public void Dispose()
     {
@@ -60,10 +98,23 @@ public sealed class CudaExecutionLane : IExecutionLane
             return;
 
         List<Exception>? failures = null;
-        TryDispose(() => _synchronizeBeforeDispose?.Invoke(DeviceIndex), ref failures);
-        TryDispose(Memory.Dispose, ref failures);
-        TryDispose(CommunicationStream.Dispose, ref failures);
-        TryDispose(ComputeStream.Dispose, ref failures);
+        TryDispose(SynchronizeBothStreams, ref failures);
+        // Tensor kernels keep the selected stream in native thread-local
+        // state. Never leave that TLS entry pointing at a stream that this
+        // lane is about to destroy; the next legacy CUDA launch on the same
+        // worker would otherwise dereference an invalid resource handle.
+        TryDispose(RestoreLegacyDefaultStream, ref failures);
+        IDisposable[] resources;
+        lock (_resourceSync)
+        {
+            resources = _ownedResources.ToArray();
+            _ownedResources.Clear();
+        }
+        for (int index = resources.Length - 1; index >= 0; index--)
+            TryDispose(resources[index].Dispose, ref failures);
+        TryDispose(DisposeMemoryChecked, ref failures);
+        TryDispose(CommunicationStream.DisposeChecked, ref failures);
+        TryDispose(ComputeStream.DisposeChecked, ref failures);
         if (!ReferenceEquals(Profiler, NullExecutionProfiler.Instance))
             TryDispose(Profiler.Dispose, ref failures);
 
@@ -72,6 +123,44 @@ public sealed class CudaExecutionLane : IExecutionLane
                 $"CUDA lane {DeviceIndex} failed to clean up completely.",
                 failures);
     }
+
+    private void SynchronizeBothStreams()
+    {
+        if (_synchronizeStream is null)
+            return;
+        List<Exception>? failures = null;
+        TryDispose(
+            () => _synchronizeStream(DeviceIndex, ComputeStreamHandle),
+            ref failures);
+        TryDispose(
+            () => _synchronizeStream(DeviceIndex, CommunicationStreamHandle),
+            ref failures);
+        if (failures is not null)
+        {
+            throw new AggregateException(
+                $"CUDA lane {DeviceIndex} stream synchronization failed.",
+                failures);
+        }
+    }
+
+    private void RestoreLegacyDefaultStream()
+        => _activateComputeStream?.Invoke(DeviceIndex, nint.Zero);
+
+    private void DisposeMemoryChecked()
+    {
+        Memory.Dispose();
+        if (Memory.ReleaseErrors.Count != 0)
+        {
+            throw new AggregateException(
+                $"CUDA lane {DeviceIndex} memory cleanup failed.",
+                Memory.ReleaseErrors);
+        }
+    }
+
+    private void ThrowIfDisposed()
+        => ObjectDisposedException.ThrowIf(
+            Volatile.Read(ref _disposed) != 0,
+            this);
 
     private static void TryDispose(
         Action action,

@@ -1,12 +1,15 @@
 using System.Buffers;
-using System.Collections.Concurrent;
 
 namespace NNtrain;
 
 partial class Tensor
 {
     private const long FftScratchBudgetBytes = 128L * 1024 * 1024;
-    private static readonly ConcurrentDictionary<int, FftPlan> FftPlans = new();
+    internal const int MaximumCachedFftPlans = 8;
+    private static readonly BoundedLruCache<int, FftPlan> FftPlans =
+        new(MaximumCachedFftPlans);
+
+    internal static int CachedFftPlanCount => FftPlans.Count;
 
     private static int GetFftLength(int sequence)
     {
@@ -325,7 +328,9 @@ partial class Tensor
         int width,
         bool inverse)
     {
-        FftPlan plan = FftPlans.GetOrAdd(fftLength, static length => new(length));
+        FftPlan plan = FftPlans.GetOrAdd(
+            fftLength,
+            static length => new FftPlan(length));
         int tilesPerTransform = Math.Max(
             1,
             (int)Math.Min(

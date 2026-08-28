@@ -5,6 +5,97 @@ namespace NNtrain;
 partial class Tensor
 {
     /// <summary>
+    /// Training-only language-model head path. Block/tensor BFP8 operands
+    /// execute on BF16 Tensor Cores but publish BF16 logits directly to the
+    /// immediately following cross entropy instead of requantizing them.
+    /// </summary>
+    internal Tensor LinearLastDimBFloat16ForLoss(
+        Tensor weight,
+        Tensor bias)
+    {
+        ArgumentNullException.ThrowIfNull(weight);
+        ArgumentNullException.ThrowIfNull(bias);
+        if (ExecutionDevice != TensorDevice.Cuda
+            || DType != TensorDType.Bfp8
+            || weight.DType != TensorDType.Bfp8
+            || bias.DType != TensorDType.Bfp8)
+        {
+            throw new InvalidOperationException(
+                "The direct BF16 loss head requires CUDA BFP8 operands.");
+        }
+        if (Rank == 0 || weight.Rank != 2 || bias.Rank != 1)
+        {
+            throw new InvalidOperationException(
+                "The direct BF16 loss head requires (..., in), (out, in), " +
+                "and (out) operands.");
+        }
+
+        int inputWidth = _shape[^1];
+        int outputWidth = weight._shape[0];
+        if (weight._shape[1] != inputWidth || bias.Numel != outputWidth)
+        {
+            throw new ArgumentException(
+                "The direct BF16 loss-head dimensions are incompatible.");
+        }
+        int rows = Numel / inputWidth;
+        int[] outputShape = (int[])_shape.Clone();
+        outputShape[^1] = outputWidth;
+        string forwardOperation =
+            $"forward.loss_head_linear[{inputWidth}->{outputWidth}]";
+        NativeCudaBuffer<ushort> output = CudaOperationProfiler.IsEnabled
+            ? CudaOperationProfiler.Measure(
+                forwardOperation,
+                () => CudaBfp8Gemm.LinearForwardBFloat16Output(
+                    this,
+                    weight,
+                    bias,
+                    rows,
+                    inputWidth,
+                    outputWidth))
+            : CudaBfp8Gemm.LinearForwardBFloat16Output(
+                this,
+                weight,
+                bias,
+                rows,
+                inputWidth,
+                outputWidth);
+        Tensor result = FromCudaResult(
+            output,
+            CudaDeviceIndex,
+            outputShape,
+            [this, weight, bias],
+            dtype: TensorDType.BFloat16);
+        result.AllowInPlaceBFloat16Gradient = true;
+        if (AutogradContext.IsRecordingEnabled)
+        {
+            result.Node.BackwardAction = () =>
+            {
+                void Backward() => CudaBfp8Gemm.LinearBackward(
+                    this,
+                    weight,
+                    bias,
+                    result,
+                    rows,
+                    inputWidth,
+                    outputWidth,
+                    applyRelu: false);
+                if (CudaOperationProfiler.IsEnabled)
+                {
+                    CudaOperationProfiler.Measure(
+                        $"backward.loss_head_linear" +
+                        $"[{inputWidth}->{outputWidth}]",
+                        Backward);
+                }
+                else
+                {
+                    Backward();
+                }
+            };
+        }
+        return result;
+    }
+
+    /// <summary>
     /// Applies a dense projection to the last dimension without creating a
     /// flattened view tensor. All leading dimensions are preserved.
     /// </summary>
@@ -41,6 +132,12 @@ partial class Tensor
         bool bfp8MatrixOperands = DType == TensorDType.Bfp8
             && weight.DType == TensorDType.Bfp8
             && bias.DType == TensorDType.Bfp8;
+        bool bfp8ParameterInference =
+            !AutogradContext.IsRecordingEnabled
+            && CudaBfp8InferenceComputeScope.IsActive
+            && DType == TensorDType.BFloat16
+            && weight.DType == TensorDType.Bfp8
+            && bias.DType == TensorDType.Bfp8;
         if (ExecutionDevice == TensorDevice.Cuda)
         {
             bool bfloat16Compute = bfloat16MatrixOperands;
@@ -50,6 +147,37 @@ partial class Tensor
                 : applyRelu ? "forward.linear_relu" : "forward.linear";
             int[] cudaOutputShape = (int[])_shape.Clone();
             cudaOutputShape[^1] = outputWidth;
+            if (bfp8ParameterInference)
+            {
+                NativeCudaBuffer<ushort> mixedOutput =
+                    CudaOperationProfiler.IsEnabled
+                        ? CudaOperationProfiler.Measure(
+                            forwardOperation,
+                            () => TensorCudaKernels
+                                .LinearForwardBFloat16ActivationBfp8ParametersInference(
+                                    this,
+                                    weight,
+                                    bias,
+                                    rows,
+                                    inputWidth,
+                                    outputWidth,
+                                    applyRelu))
+                        : TensorCudaKernels
+                            .LinearForwardBFloat16ActivationBfp8ParametersInference(
+                                this,
+                                weight,
+                                bias,
+                                rows,
+                                inputWidth,
+                                outputWidth,
+                                applyRelu);
+                return FromCudaResult(
+                    mixedOutput,
+                    CudaDeviceIndex,
+                    cudaOutputShape,
+                    [this, weight, bias],
+                    TensorDType.BFloat16);
+            }
             if (bfp8MatrixOperands)
             {
                 Bfp8QuantizationDescriptor outputDescriptor =
@@ -461,7 +589,7 @@ partial class Tensor
                 int inputOffset = row * inputWidth;
                 int outputOffset = row * outputWidth;
                 bool roundInputGradient = bfloat16MatrixOperands
-                    && TensorExecutionContext.ActivePrecisionPolicy is null;
+                    && TensorExecutionContext.UsesBFloat16GradientStorage;
                 if (transposedWeight is not null)
                 {
                     for (int inner = 0; inner < inputWidth; inner++)

@@ -20,6 +20,14 @@ partial class Tensor
         }
 
         int width = channels / 3;
+        if (ExecutionDevice == TensorDevice.Cuda
+            && DType is TensorDType.Float32
+                or TensorDType.BFloat16
+                or TensorDType.Bfp8)
+        {
+            return ForgetScanCuda(batch, sequence, width);
+        }
+        ThrowIfCudaHostFallback(nameof(FusedForgetScan));
         int rows = checked(batch * sequence);
         int stateLength = checked(rows * width);
         var memory = new float[stateLength];

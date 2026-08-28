@@ -5,6 +5,16 @@ namespace NNtrain;
 
 public interface IOptimizer
 {
+    /// <summary>
+    /// Materializes reusable optimizer resources before the guarded training
+    /// hot path begins. Implementations must be idempotent. Optimizers which
+    /// do not need preparation retain source and binary compatibility through
+    /// this default no-op.
+    /// </summary>
+    void prepare()
+    {
+    }
+
     void zero_grad();
 
     void step();
