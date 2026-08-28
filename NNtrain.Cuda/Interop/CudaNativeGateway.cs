@@ -25,6 +25,7 @@ public readonly record struct CudaAbiVersion(int Major, int Minor)
     public const int ExternalGradientReadyEventMinor = 19;
     public const int BlockBfp8GradientTransportMinor = 20;
     public const int LayerNormOneScanMinor = 21;
+    public const int DirectBfp8LayerNormMinor = 22;
 
     public uint Packed =>
         ((uint)(ushort)Major << 16) | (ushort)Minor;

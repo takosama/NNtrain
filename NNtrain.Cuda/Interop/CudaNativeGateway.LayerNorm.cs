@@ -100,6 +100,29 @@ public static partial class CudaNativeGateway
             device);
     }
 
+    public static int ResidualDropoutLayerNormForwardBfp8Block128x512(
+        int device,
+        nint residualPayload, nint residualScales,
+        nint branchPayload, nint branchScales,
+        nint gammaPayload, nint gammaScales,
+        nint betaPayload, nint betaScales,
+        nint outputPayload, nint outputScales,
+        nint means, nint inverses, int rows, int columns, int blockSize,
+        uint seed, uint dropThreshold, float dropoutScale, float epsilon,
+        nint stream)
+    {
+        EnsureDirectBfp8LayerNormAbi();
+        return Complete(
+            LayerNormNativeMethods.ResidualDropoutForwardBfp8Block128x512(
+                residualPayload, residualScales, branchPayload, branchScales,
+                gammaPayload, gammaScales, betaPayload, betaScales,
+                outputPayload, outputScales, means, inverses, rows, columns,
+                blockSize, seed, dropThreshold, dropoutScale, epsilon,
+                stream),
+            CudaNativeOperation.ResidualDropoutLayerNormForwardBFloat16,
+            device);
+    }
+
     public static int GraphResidualDropoutLayerNormForward(
         int device, nint residual, nint branch, nint gamma, nint beta,
         nint output, nint means, nint inverses, int rows, int columns,
@@ -127,6 +150,29 @@ public static partial class CudaNativeGateway
             LayerNormNativeMethods.GraphResidualDropoutForwardBFloat16(
                 residual, branch, gamma, beta, output, means, inverses,
                 rows, columns, stepCounter, operationSeed, dropThreshold,
+                dropoutScale, epsilon, stream),
+            CudaNativeOperation.ResidualDropoutLayerNormForwardBFloat16,
+            device);
+    }
+
+    public static int GraphResidualDropoutLayerNormForwardBfp8Block128x512(
+        int device,
+        nint residualPayload, nint residualScales,
+        nint branchPayload, nint branchScales,
+        nint gammaPayload, nint gammaScales,
+        nint betaPayload, nint betaScales,
+        nint outputPayload, nint outputScales,
+        nint means, nint inverses, int rows, int columns, int blockSize,
+        nint stepCounter, ulong operationSeed, uint dropThreshold,
+        float dropoutScale, float epsilon, nint stream)
+    {
+        EnsureDirectBfp8LayerNormAbi();
+        return Complete(
+            LayerNormNativeMethods.GraphResidualDropoutForwardBfp8Block128x512(
+                residualPayload, residualScales, branchPayload, branchScales,
+                gammaPayload, gammaScales, betaPayload, betaScales,
+                outputPayload, outputScales, means, inverses, rows, columns,
+                blockSize, stepCounter, operationSeed, dropThreshold,
                 dropoutScale, epsilon, stream),
             CudaNativeOperation.ResidualDropoutLayerNormForwardBFloat16,
             device);
@@ -166,6 +212,29 @@ public static partial class CudaNativeGateway
                 residualGradient, branchGradient, gammaGradient, betaGradient,
                 parameterScratch, rows, columns, sameParent, seed,
                 dropThreshold, dropoutScale, stream),
+            CudaNativeOperation.ResidualDropoutLayerNormBackwardBFloat16,
+            device);
+    }
+
+    public static int ResidualDropoutLayerNormBackwardBfp8Block128x512(
+        int device,
+        nint residualPayload, nint residualScales,
+        nint branchPayload, nint branchScales,
+        nint gammaPayload, nint gammaScales,
+        nint means, nint inverses, nint outputGradient,
+        nint residualGradient, nint branchGradient,
+        nint gammaGradient, nint betaGradient, nint parameterScratch,
+        int rows, int columns, int blockSize, int sameParent,
+        uint seed, uint dropThreshold, float dropoutScale, nint stream)
+    {
+        EnsureDirectBfp8LayerNormAbi();
+        return Complete(
+            LayerNormNativeMethods.ResidualDropoutBackwardBfp8Block128x512(
+                residualPayload, residualScales, branchPayload, branchScales,
+                gammaPayload, gammaScales, means, inverses, outputGradient,
+                residualGradient, branchGradient, gammaGradient,
+                betaGradient, parameterScratch, rows, columns, blockSize,
+                sameParent, seed, dropThreshold, dropoutScale, stream),
             CudaNativeOperation.ResidualDropoutLayerNormBackwardBFloat16,
             device);
     }
@@ -224,6 +293,31 @@ public static partial class CudaNativeGateway
                 residualGradient, branchGradient, gammaGradient, betaGradient,
                 parameterScratch, rows, columns, sameParent, stepCounter,
                 operationSeed, dropThreshold, dropoutScale, stream),
+            CudaNativeOperation.ResidualDropoutLayerNormBackwardBFloat16,
+            device);
+    }
+
+    public static int GraphResidualDropoutLayerNormBackwardBfp8Block128x512(
+        int device,
+        nint residualPayload, nint residualScales,
+        nint branchPayload, nint branchScales,
+        nint gammaPayload, nint gammaScales,
+        nint means, nint inverses, nint outputGradient,
+        nint residualGradient, nint branchGradient,
+        nint gammaGradient, nint betaGradient, nint parameterScratch,
+        int rows, int columns, int blockSize, int sameParent,
+        nint stepCounter, ulong operationSeed, uint dropThreshold,
+        float dropoutScale, nint stream)
+    {
+        EnsureDirectBfp8LayerNormAbi();
+        return Complete(
+            LayerNormNativeMethods.GraphResidualDropoutBackwardBfp8Block128x512(
+                residualPayload, residualScales, branchPayload, branchScales,
+                gammaPayload, gammaScales, means, inverses, outputGradient,
+                residualGradient, branchGradient, gammaGradient,
+                betaGradient, parameterScratch, rows, columns, blockSize,
+                sameParent, stepCounter, operationSeed, dropThreshold,
+                dropoutScale, stream),
             CudaNativeOperation.ResidualDropoutLayerNormBackwardBFloat16,
             device);
     }
@@ -347,6 +441,11 @@ public static partial class CudaNativeGateway
             CudaAbiVersion.GraphFusedLayerNormMinor,
             "CUDA Graph fused residual/dropout/LayerNorm");
 
+    private static void EnsureDirectBfp8LayerNormAbi() =>
+        EnsureMinimumAbiMinor(
+            CudaAbiVersion.DirectBfp8LayerNormMinor,
+            "direct block-BFP8 residual/dropout/LayerNorm");
+
     private static class LayerNormNativeMethods
     {
         [DllImport(LibraryName, EntryPoint = "nntrain_layer_norm_forward",
@@ -397,6 +496,20 @@ public static partial class CudaNativeGateway
 
         [DllImport(
             LibraryName,
+            EntryPoint = "nntrain_residual_dropout_layer_norm_forward_bfp8_block128_512",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int ResidualDropoutForwardBfp8Block128x512(
+            nint residualPayload, nint residualScales,
+            nint branchPayload, nint branchScales,
+            nint gammaPayload, nint gammaScales,
+            nint betaPayload, nint betaScales,
+            nint outputPayload, nint outputScales,
+            nint means, nint inverses, int rows, int columns, int blockSize,
+            uint seed, uint dropThreshold, float dropoutScale, float epsilon,
+            nint stream);
+
+        [DllImport(
+            LibraryName,
             EntryPoint = "nntrain_cuda_graph_residual_dropout_layer_norm_forward",
             CallingConvention = CallingConvention.Cdecl)]
         internal static extern int GraphResidualDropoutForward(
@@ -414,6 +527,20 @@ public static partial class CudaNativeGateway
             nint means, nint inverses, int rows, int columns, nint stepCounter,
             ulong operationSeed, uint dropThreshold, float dropoutScale,
             float epsilon, nint stream);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint = "nntrain_cuda_graph_residual_dropout_layer_norm_forward_bfp8_block128_512",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int GraphResidualDropoutForwardBfp8Block128x512(
+            nint residualPayload, nint residualScales,
+            nint branchPayload, nint branchScales,
+            nint gammaPayload, nint gammaScales,
+            nint betaPayload, nint betaScales,
+            nint outputPayload, nint outputScales,
+            nint means, nint inverses, int rows, int columns, int blockSize,
+            nint stepCounter, ulong operationSeed, uint dropThreshold,
+            float dropoutScale, float epsilon, nint stream);
 
         [DllImport(LibraryName,
             EntryPoint = "nntrain_residual_dropout_layer_norm_backward",
@@ -434,6 +561,20 @@ public static partial class CudaNativeGateway
             nint gammaGradient, nint betaGradient, nint parameterScratch,
             int rows, int columns, int sameParent, uint seed,
             uint dropThreshold, float dropoutScale, nint stream);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint = "nntrain_residual_dropout_layer_norm_backward_bfp8_block128_512",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int ResidualDropoutBackwardBfp8Block128x512(
+            nint residualPayload, nint residualScales,
+            nint branchPayload, nint branchScales,
+            nint gammaPayload, nint gammaScales,
+            nint means, nint inverses, nint outputGradient,
+            nint residualGradient, nint branchGradient,
+            nint gammaGradient, nint betaGradient, nint parameterScratch,
+            int rows, int columns, int blockSize, int sameParent,
+            uint seed, uint dropThreshold, float dropoutScale, nint stream);
 
         [DllImport(LibraryName,
             EntryPoint = "nntrain_residual_dropout_layer_norm_backward_bf16_one_scan_512",
@@ -502,6 +643,21 @@ public static partial class CudaNativeGateway
             nint outputGradient, nint residualGradient, nint branchGradient,
             nint gammaGradient, nint betaGradient, nint parameterScratch,
             int rows, int columns, uint seed, uint dropThreshold,
+            float dropoutScale, nint stream);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint = "nntrain_cuda_graph_residual_dropout_layer_norm_backward_bfp8_block128_512",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int GraphResidualDropoutBackwardBfp8Block128x512(
+            nint residualPayload, nint residualScales,
+            nint branchPayload, nint branchScales,
+            nint gammaPayload, nint gammaScales,
+            nint means, nint inverses, nint outputGradient,
+            nint residualGradient, nint branchGradient,
+            nint gammaGradient, nint betaGradient, nint parameterScratch,
+            int rows, int columns, int blockSize, int sameParent,
+            nint stepCounter, ulong operationSeed, uint dropThreshold,
             float dropoutScale, nint stream);
 
         [DllImport(

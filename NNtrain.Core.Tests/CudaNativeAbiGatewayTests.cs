@@ -148,6 +148,8 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_residual_dropout_layer_norm_backward_bf16",
         "nntrain_residual_dropout_layer_norm_backward_bf16_branch_gradient",
         "nntrain_residual_dropout_layer_norm_backward_bf16_io_gradient",
+        "nntrain_residual_dropout_layer_norm_forward_bfp8_block128_512",
+        "nntrain_residual_dropout_layer_norm_backward_bfp8_block128_512",
         "nntrain_flash_attention_forward",
         "nntrain_flash_attention_backward",
         "nntrain_flash_attention_forward_bf16",
@@ -192,6 +194,8 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_cuda_graph_residual_dropout_layer_norm_forward_bf16",
         "nntrain_cuda_graph_residual_dropout_layer_norm_backward",
         "nntrain_cuda_graph_residual_dropout_layer_norm_backward_bf16",
+        "nntrain_cuda_graph_residual_dropout_layer_norm_forward_bfp8_block128_512",
+        "nntrain_cuda_graph_residual_dropout_layer_norm_backward_bfp8_block128_512",
         "nntrain_cuda_graph_residual_dropout_layer_norm_backward_bf16_branch_gradient",
         "nntrain_cuda_graph_residual_dropout_layer_norm_backward_bf16_io_gradient",
         "nntrain_tensor_embedding_backward_reduced_bf16_gradient",
@@ -496,6 +500,7 @@ public sealed class CudaNativeAbiGatewayTests
         Assert.Equal(19, CudaAbiVersion.ExternalGradientReadyEventMinor);
         Assert.Equal(20, CudaAbiVersion.BlockBfp8GradientTransportMinor);
         Assert.Equal(21, CudaAbiVersion.LayerNormOneScanMinor);
+        Assert.Equal(22, CudaAbiVersion.DirectBfp8LayerNormMinor);
         Assert.Equal(
             CudaKernelFeature.None,
             CudaNativeGateway.RequiredFeatures(

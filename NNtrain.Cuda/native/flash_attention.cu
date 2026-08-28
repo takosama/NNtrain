@@ -2016,6 +2016,265 @@ __global__ void layer_norm_forward_warp_512(
     }
 }
 
+__device__ __forceinline__ float layer_norm_bfp8_load(
+    const signed char* payload,
+    const float* scales,
+    int index) {
+    return __bfloat162float(__float2bfloat16_rn(
+        static_cast<float>(payload[index]) * scales[index >> 7]));
+}
+
+__device__ __forceinline__ float layer_norm_warp_max(float value) {
+    #pragma unroll
+    for (int offset = kWarpSize / 2; offset > 0; offset >>= 1)
+        value = fmaxf(value, __shfl_down_sync(0xffffffffu, value, offset));
+    return __shfl_sync(0xffffffffu, value, 0);
+}
+
+// Production mix8_32 uses width=512 and contiguous 128-value scale blocks.
+// Read those payloads directly, fuse residual/dropout/normalization and emit
+// block-scaled output in one pass. This removes five whole-tensor codec passes
+// and all temporary BF16 operands from the graph while retaining FP32 row
+// statistics and reductions.
+template <bool GraphDropout = false>
+__global__ void residual_dropout_layer_norm_forward_bfp8_block128_512(
+    const signed char* __restrict__ residual_payload,
+    const float* __restrict__ residual_scales,
+    const signed char* __restrict__ branch_payload,
+    const float* __restrict__ branch_scales,
+    const signed char* __restrict__ gamma_payload,
+    const float* __restrict__ gamma_scales,
+    const signed char* __restrict__ beta_payload,
+    const float* __restrict__ beta_scales,
+    signed char* __restrict__ output_payload,
+    float* __restrict__ output_scales,
+    float* __restrict__ means,
+    float* __restrict__ inverses,
+    int rows,
+    float epsilon,
+    unsigned int seed,
+    unsigned int drop_threshold,
+    float dropout_scale,
+    const unsigned long long* step_counter,
+    unsigned long long operation_seed) {
+    const int warp = threadIdx.x / kWarpSize;
+    const int lane = threadIdx.x & (kWarpSize - 1);
+    const int row = blockIdx.x * kLayerNormWarpsPerBlock + warp;
+    if (row >= rows)
+        return;
+    const int offset = row * kLayerNormWarpColumns;
+    float cached[kLayerNormWarpValuesPerLane];
+    #pragma unroll
+    for (int item = 0; item < kLayerNormWarpValuesPerLane; ++item) {
+        const int column = lane + item * kWarpSize;
+        const int index = offset + column;
+        const float multiplier = GraphDropout
+            ? layer_norm_graph_dropout_multiplier(
+                step_counter, operation_seed, index,
+                drop_threshold, dropout_scale)
+            : dropout_multiplier(
+                seed, index, drop_threshold, dropout_scale);
+        cached[item] = layer_norm_bfp8_load(
+            residual_payload, residual_scales, index)
+            + layer_norm_bfp8_load(
+                branch_payload, branch_scales, index) * multiplier;
+    }
+    const float mean = __fdiv_rn(
+        layer_norm_virtual_block_sum_512(cached),
+        static_cast<float>(kLayerNormWarpColumns));
+    const float variance = __fdiv_rn(
+        layer_norm_virtual_block_variance_512(cached, mean),
+        static_cast<float>(kLayerNormWarpColumns));
+    const float inverse = layer_norm_inverse_sqrt(variance + epsilon);
+    if (lane == 0) {
+        means[row] = mean;
+        inverses[row] = inverse;
+    }
+    float normalized[kLayerNormWarpValuesPerLane];
+    #pragma unroll
+    for (int item = 0; item < kLayerNormWarpValuesPerLane; ++item) {
+        const int column = lane + item * kWarpSize;
+        const float xhat = (cached[item] - mean) * inverse;
+        normalized[item] = __bfloat162float(__float2bfloat16_rn(fmaf(
+            xhat,
+            layer_norm_bfp8_load(
+                gamma_payload, gamma_scales, column),
+            layer_norm_bfp8_load(beta_payload, beta_scales, column))));
+    }
+    #pragma unroll
+    for (int block = 0; block < 4; ++block) {
+        const int first_item = block * 4;
+        float maximum = 0.f;
+        #pragma unroll
+        for (int item = 0; item < 4; ++item)
+            maximum = fmaxf(maximum, fabsf(normalized[first_item + item]));
+        maximum = layer_norm_warp_max(maximum);
+        const float scale = maximum > 0.f
+            ? __fdiv_rn(maximum, 127.f)
+            : 1.f;
+        if (lane == 0)
+            output_scales[row * 4 + block] = scale;
+        #pragma unroll
+        for (int item = 0; item < 4; ++item) {
+            const int column = lane + (first_item + item) * kWarpSize;
+            const int index = offset + column;
+            const int quantized = __float2int_rn(
+                __fdiv_rn(normalized[first_item + item], scale));
+            output_payload[index] = static_cast<signed char>(
+                max(-127, min(127, quantized)));
+        }
+    }
+}
+
+template <bool GraphDropout = false>
+__global__ void residual_dropout_layer_norm_backward_input_bfp8_block128_512(
+    const signed char* __restrict__ residual_payload,
+    const float* __restrict__ residual_scales,
+    const signed char* __restrict__ branch_payload,
+    const float* __restrict__ branch_scales,
+    const signed char* __restrict__ gamma_payload,
+    const float* __restrict__ gamma_scales,
+    const float* __restrict__ means,
+    const float* __restrict__ inverses,
+    const float* __restrict__ output_gradient,
+    float* __restrict__ residual_gradient,
+    float* __restrict__ branch_gradient,
+    int same_parent,
+    unsigned int seed,
+    unsigned int drop_threshold,
+    float dropout_scale,
+    const unsigned long long* step_counter,
+    unsigned long long operation_seed) {
+    const int row = blockIdx.x;
+    const int offset = row * kLayerNormWarpColumns;
+    const float mean = means[row];
+    const float inverse = inverses[row];
+    float cached_output_gradient[kLayerNormValuesPerThread] = {};
+    float cached_xhat[kLayerNormValuesPerThread] = {};
+    float dxhat_sum = 0.f;
+    float dxhat_xhat_sum = 0.f;
+    #pragma unroll
+    for (int item = 0; item < kLayerNormValuesPerThread; ++item) {
+        const int column = threadIdx.x + item * blockDim.x;
+        if (column < kLayerNormWarpColumns) {
+            const int index = offset + column;
+            const float raw_gradient = output_gradient[index];
+            const float multiplier = GraphDropout
+                ? layer_norm_graph_dropout_multiplier(
+                    step_counter, operation_seed, index,
+                    drop_threshold, dropout_scale)
+                : dropout_multiplier(
+                    seed, index, drop_threshold, dropout_scale);
+            const float value = layer_norm_bfp8_load(
+                residual_payload, residual_scales, index)
+                + layer_norm_bfp8_load(
+                    branch_payload, branch_scales, index) * multiplier;
+            const float xhat = (value - mean) * inverse;
+            const float dxhat = raw_gradient * layer_norm_bfp8_load(
+                gamma_payload, gamma_scales, column);
+            cached_output_gradient[item] = raw_gradient;
+            cached_xhat[item] = xhat;
+            dxhat_sum += dxhat;
+            dxhat_xhat_sum = fmaf(dxhat, xhat, dxhat_xhat_sum);
+        }
+    }
+    block_sum_pair(dxhat_sum, dxhat_xhat_sum);
+    const float inverse_over_columns = __fdiv_rn(
+        inverse, static_cast<float>(kLayerNormWarpColumns));
+    #pragma unroll
+    for (int item = 0; item < kLayerNormValuesPerThread; ++item) {
+        const int column = threadIdx.x + item * blockDim.x;
+        if (column < kLayerNormWarpColumns) {
+            const int index = offset + column;
+            const float dxhat = cached_output_gradient[item]
+                * layer_norm_bfp8_load(
+                    gamma_payload, gamma_scales, column);
+            const float gradient = inverse_over_columns
+                * (kLayerNormWarpColumns * dxhat - dxhat_sum
+                    - cached_xhat[item] * dxhat_xhat_sum);
+            const float multiplier = GraphDropout
+                ? layer_norm_graph_dropout_multiplier(
+                    step_counter, operation_seed, index,
+                    drop_threshold, dropout_scale)
+                : dropout_multiplier(
+                    seed, index, drop_threshold, dropout_scale);
+            if (same_parent) {
+                residual_gradient[index] +=
+                    gradient * (1.f + multiplier);
+            }
+            else {
+                residual_gradient[index] += gradient;
+                branch_gradient[index] += gradient * multiplier;
+            }
+        }
+    }
+}
+
+template <bool GraphDropout = false>
+__global__ void residual_dropout_layer_norm_backward_parameters_bfp8_block128_512(
+    const signed char* __restrict__ residual_payload,
+    const float* __restrict__ residual_scales,
+    const signed char* __restrict__ branch_payload,
+    const float* __restrict__ branch_scales,
+    const float* __restrict__ means,
+    const float* __restrict__ inverses,
+    const float* __restrict__ output_gradient,
+    float* __restrict__ parameter_partials,
+    int rows,
+    int row_tiles,
+    unsigned int seed,
+    unsigned int drop_threshold,
+    float dropout_scale,
+    const unsigned long long* step_counter,
+    unsigned long long operation_seed) {
+    __shared__ float gamma_partials
+        [kLayerNormParameterRows][kLayerNormParameterColumns];
+    __shared__ float beta_partials
+        [kLayerNormParameterRows][kLayerNormParameterColumns];
+    const int column = blockIdx.x * kLayerNormParameterColumns + threadIdx.x;
+    const int row_start = blockIdx.y * kLayerNormRowsPerTile;
+    const int row_end = min(rows, row_start + kLayerNormRowsPerTile);
+    float gamma_sum = 0.f;
+    float beta_sum = 0.f;
+    if (column < kLayerNormWarpColumns) {
+        for (int row = row_start + threadIdx.y;
+             row < row_end;
+             row += kLayerNormParameterRows) {
+            const int index = row * kLayerNormWarpColumns + column;
+            const float gradient = output_gradient[index];
+            const float multiplier = GraphDropout
+                ? layer_norm_graph_dropout_multiplier(
+                    step_counter, operation_seed, index,
+                    drop_threshold, dropout_scale)
+                : dropout_multiplier(
+                    seed, index, drop_threshold, dropout_scale);
+            const float value = layer_norm_bfp8_load(
+                residual_payload, residual_scales, index)
+                + layer_norm_bfp8_load(
+                    branch_payload, branch_scales, index) * multiplier;
+            const float xhat = (value - means[row]) * inverses[row];
+            beta_sum += gradient;
+            gamma_sum = fmaf(gradient, xhat, gamma_sum);
+        }
+    }
+    gamma_partials[threadIdx.y][threadIdx.x] = gamma_sum;
+    beta_partials[threadIdx.y][threadIdx.x] = beta_sum;
+    __syncthreads();
+    if (threadIdx.y == 0 && column < kLayerNormWarpColumns) {
+        gamma_sum = 0.f;
+        beta_sum = 0.f;
+        #pragma unroll
+        for (int row_lane = 0; row_lane < kLayerNormParameterRows; ++row_lane) {
+            gamma_sum += gamma_partials[row_lane][threadIdx.x];
+            beta_sum += beta_partials[row_lane][threadIdx.x];
+        }
+        const int partial = blockIdx.y * kLayerNormWarpColumns + column;
+        parameter_partials[partial] = gamma_sum;
+        parameter_partials[row_tiles * kLayerNormWarpColumns + partial] =
+            beta_sum;
+    }
+}
+
 template <typename T, bool FuseResidualDropout,
     typename output_gradient_t, typename branch_gradient_t,
     bool GraphDropout = false, bool FuseParameterGradients = false>
@@ -2240,6 +2499,120 @@ __global__ void layer_norm_backward_parameters_finalize(
     gamma_gradient[column] += gamma_sum;
     beta_gradient[column] += beta_sum;
 }
+
+template <bool GraphDropout = false>
+int launch_residual_dropout_layer_norm_forward_bfp8_block128_512(
+    const signed char* residual_payload,
+    const float* residual_scales,
+    const signed char* branch_payload,
+    const float* branch_scales,
+    const signed char* gamma_payload,
+    const float* gamma_scales,
+    const signed char* beta_payload,
+    const float* beta_scales,
+    signed char* output_payload,
+    float* output_scales,
+    float* means,
+    float* inverses,
+    int rows,
+    int columns,
+    int block_size,
+    unsigned int seed,
+    unsigned int drop_threshold,
+    float dropout_scale,
+    float epsilon,
+    const unsigned long long* step_counter,
+    unsigned long long operation_seed,
+    cudaStream_t stream) {
+    if (!residual_payload || !residual_scales || !branch_payload
+        || !branch_scales || !gamma_payload || !gamma_scales
+        || !beta_payload || !beta_scales || !output_payload
+        || !output_scales || !means || !inverses || rows <= 0
+        || columns != kLayerNormWarpColumns || block_size != 128
+        || epsilon <= 0.f || (GraphDropout && !step_counter)) {
+        return (int)cudaErrorInvalidValue;
+    }
+    residual_dropout_layer_norm_forward_bfp8_block128_512<GraphDropout><<<
+        (rows + kLayerNormWarpsPerBlock - 1) / kLayerNormWarpsPerBlock,
+        kLayerNormThreads,
+        0,
+        stream>>>(
+            residual_payload, residual_scales, branch_payload, branch_scales,
+            gamma_payload, gamma_scales, beta_payload, beta_scales,
+            output_payload, output_scales, means, inverses, rows, epsilon,
+            seed, drop_threshold, dropout_scale, step_counter,
+            operation_seed);
+    return (int)cudaPeekAtLastError();
+}
+
+template <bool GraphDropout = false>
+int launch_residual_dropout_layer_norm_backward_bfp8_block128_512(
+    const signed char* residual_payload,
+    const float* residual_scales,
+    const signed char* branch_payload,
+    const float* branch_scales,
+    const signed char* gamma_payload,
+    const float* gamma_scales,
+    const float* means,
+    const float* inverses,
+    const float* output_gradient,
+    float* residual_gradient,
+    float* branch_gradient,
+    float* gamma_gradient,
+    float* beta_gradient,
+    float* parameter_partials,
+    int rows,
+    int columns,
+    int block_size,
+    int same_parent,
+    unsigned int seed,
+    unsigned int drop_threshold,
+    float dropout_scale,
+    const unsigned long long* step_counter,
+    unsigned long long operation_seed,
+    cudaStream_t stream) {
+    if (!residual_payload || !residual_scales || !branch_payload
+        || !branch_scales || !gamma_payload || !gamma_scales
+        || !means || !inverses || !output_gradient || !residual_gradient
+        || !branch_gradient || !gamma_gradient || !beta_gradient
+        || !parameter_partials || rows <= 0
+        || columns != kLayerNormWarpColumns || block_size != 128
+        || (GraphDropout && !step_counter)) {
+        return (int)cudaErrorInvalidValue;
+    }
+    residual_dropout_layer_norm_backward_input_bfp8_block128_512<
+        GraphDropout><<<rows, kLayerNormThreads, 0, stream>>>(
+            residual_payload, residual_scales, branch_payload, branch_scales,
+            gamma_payload, gamma_scales, means, inverses, output_gradient,
+            residual_gradient, branch_gradient, same_parent, seed,
+            drop_threshold, dropout_scale, step_counter, operation_seed);
+    cudaError_t status = cudaPeekAtLastError();
+    if (status != cudaSuccess)
+        return (int)status;
+    const dim3 threads(
+        kLayerNormParameterColumns, kLayerNormParameterRows);
+    const dim3 grid(
+        kLayerNormWarpColumns / kLayerNormParameterColumns,
+        (rows + kLayerNormRowsPerTile - 1) / kLayerNormRowsPerTile);
+    residual_dropout_layer_norm_backward_parameters_bfp8_block128_512<
+        GraphDropout><<<grid, threads, 0, stream>>>(
+            residual_payload, residual_scales, branch_payload, branch_scales,
+            means, inverses, output_gradient, parameter_partials, rows,
+            grid.y, seed, drop_threshold, dropout_scale, step_counter,
+            operation_seed);
+    status = cudaPeekAtLastError();
+    if (status != cudaSuccess)
+        return (int)status;
+    layer_norm_backward_parameters_finalize<<<
+        kLayerNormWarpColumns / kLayerNormThreads,
+        kLayerNormThreads,
+        0,
+        stream>>>(
+            parameter_partials, gamma_gradient, beta_gradient,
+            grid.y, kLayerNormWarpColumns);
+    return (int)cudaPeekAtLastError();
+}
+
 
 template <typename T, bool FuseResidualDropout, bool GraphDropout = false>
 int launch_layer_norm_forward(
@@ -2870,6 +3243,24 @@ NNTRAIN_EXPORT int nntrain_residual_dropout_layer_norm_forward_bf16(
         nullptr, 0ull, stream);
 }
 
+NNTRAIN_EXPORT int
+nntrain_residual_dropout_layer_norm_forward_bfp8_block128_512(
+    const signed char* residual_payload, const float* residual_scales,
+    const signed char* branch_payload, const float* branch_scales,
+    const signed char* gamma_payload, const float* gamma_scales,
+    const signed char* beta_payload, const float* beta_scales,
+    signed char* output_payload, float* output_scales,
+    float* means, float* inverses, int rows, int columns, int block_size,
+    unsigned int seed, unsigned int drop_threshold, float dropout_scale,
+    float epsilon, cudaStream_t stream) {
+    return launch_residual_dropout_layer_norm_forward_bfp8_block128_512<false>(
+        residual_payload, residual_scales, branch_payload, branch_scales,
+        gamma_payload, gamma_scales, beta_payload, beta_scales,
+        output_payload, output_scales, means, inverses, rows, columns,
+        block_size, seed, drop_threshold, dropout_scale, epsilon,
+        nullptr, 0ull, stream);
+}
+
 NNTRAIN_EXPORT int nntrain_residual_dropout_layer_norm_backward(
     const float* residual, const float* branch, const float* gamma,
     const float* means, const float* inverses,
@@ -2904,6 +3295,27 @@ NNTRAIN_EXPORT int nntrain_residual_dropout_layer_norm_backward_bf16(
         rows, columns,
         same_parent, seed, drop_threshold, dropout_scale,
         nullptr, 0ull, stream);
+}
+
+NNTRAIN_EXPORT int
+nntrain_residual_dropout_layer_norm_backward_bfp8_block128_512(
+    const signed char* residual_payload, const float* residual_scales,
+    const signed char* branch_payload, const float* branch_scales,
+    const signed char* gamma_payload, const float* gamma_scales,
+    const float* means, const float* inverses,
+    const float* output_gradient, float* residual_gradient,
+    float* branch_gradient, float* gamma_gradient, float* beta_gradient,
+    float* parameter_partials, int rows, int columns, int block_size,
+    int same_parent, unsigned int seed, unsigned int drop_threshold,
+    float dropout_scale, cudaStream_t stream) {
+    return launch_residual_dropout_layer_norm_backward_bfp8_block128_512<
+        false>(
+            residual_payload, residual_scales, branch_payload, branch_scales,
+            gamma_payload, gamma_scales, means, inverses, output_gradient,
+            residual_gradient, branch_gradient, gamma_gradient,
+            beta_gradient, parameter_partials, rows, columns, block_size,
+            same_parent, seed, drop_threshold, dropout_scale,
+            nullptr, 0ull, stream);
 }
 
 NNTRAIN_EXPORT int
@@ -2989,6 +3401,25 @@ nntrain_cuda_graph_residual_dropout_layer_norm_forward_bf16(
 }
 
 NNTRAIN_EXPORT int
+nntrain_cuda_graph_residual_dropout_layer_norm_forward_bfp8_block128_512(
+    const signed char* residual_payload, const float* residual_scales,
+    const signed char* branch_payload, const float* branch_scales,
+    const signed char* gamma_payload, const float* gamma_scales,
+    const signed char* beta_payload, const float* beta_scales,
+    signed char* output_payload, float* output_scales,
+    float* means, float* inverses, int rows, int columns, int block_size,
+    const unsigned long long* step_counter,
+    unsigned long long operation_seed, unsigned int drop_threshold,
+    float dropout_scale, float epsilon, cudaStream_t stream) {
+    return launch_residual_dropout_layer_norm_forward_bfp8_block128_512<true>(
+        residual_payload, residual_scales, branch_payload, branch_scales,
+        gamma_payload, gamma_scales, beta_payload, beta_scales,
+        output_payload, output_scales, means, inverses, rows, columns,
+        block_size, 0, drop_threshold, dropout_scale, epsilon,
+        step_counter, operation_seed, stream);
+}
+
+NNTRAIN_EXPORT int
 nntrain_cuda_graph_residual_dropout_layer_norm_backward(
     const float* residual, const float* branch, const float* gamma,
     const float* means, const float* inverses,
@@ -3023,6 +3454,28 @@ nntrain_cuda_graph_residual_dropout_layer_norm_backward_bf16(
         residual_gradient, branch_gradient, gamma_gradient, beta_gradient,
         parameter_partials, rows, columns, same_parent, 0, drop_threshold,
         dropout_scale, step_counter, operation_seed, stream);
+}
+
+NNTRAIN_EXPORT int
+nntrain_cuda_graph_residual_dropout_layer_norm_backward_bfp8_block128_512(
+    const signed char* residual_payload, const float* residual_scales,
+    const signed char* branch_payload, const float* branch_scales,
+    const signed char* gamma_payload, const float* gamma_scales,
+    const float* means, const float* inverses,
+    const float* output_gradient, float* residual_gradient,
+    float* branch_gradient, float* gamma_gradient, float* beta_gradient,
+    float* parameter_partials, int rows, int columns, int block_size,
+    int same_parent, const unsigned long long* step_counter,
+    unsigned long long operation_seed, unsigned int drop_threshold,
+    float dropout_scale, cudaStream_t stream) {
+    return launch_residual_dropout_layer_norm_backward_bfp8_block128_512<
+        true>(
+            residual_payload, residual_scales, branch_payload, branch_scales,
+            gamma_payload, gamma_scales, means, inverses, output_gradient,
+            residual_gradient, branch_gradient, gamma_gradient,
+            beta_gradient, parameter_partials, rows, columns, block_size,
+            same_parent, 0, drop_threshold, dropout_scale,
+            step_counter, operation_seed, stream);
 }
 
 NNTRAIN_EXPORT int
