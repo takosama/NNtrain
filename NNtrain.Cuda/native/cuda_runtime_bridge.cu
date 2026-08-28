@@ -14,7 +14,7 @@
 
 namespace {
 constexpr std::uint32_t nntrain_abi_major = 1;
-constexpr std::uint32_t nntrain_abi_minor = 19;
+constexpr std::uint32_t nntrain_abi_minor = 21;
 constexpr std::uint32_t nntrain_abi_version_value =
     (nntrain_abi_major << 16) | nntrain_abi_minor;
 

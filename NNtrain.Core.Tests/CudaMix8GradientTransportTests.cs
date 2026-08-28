@@ -265,7 +265,8 @@ public sealed class CudaMix8GradientTransportTests
             Assert.Equal(0, engine.FlatGradientPlanBuildCount);
             Assert.False(engine.HasFlatGradientPlan);
             Assert.Equal(
-                2L * elements * sizeof(ushort),
+                2L * (elements
+                    + ((elements + 127L) / 128L) * sizeof(float)),
                 engine.BFloat16GradientTransportBytesPerStep);
             Assert.Equal(0, engine.BFloat16GradientTransportCompletedSteps);
         }
@@ -319,7 +320,8 @@ public sealed class CudaMix8GradientTransportTests
                 Assert.False(engine.HasFlatGradientPlan);
                 Assert.Equal(1, engine.BFloat16GradientTransportCompletedSteps);
                 Assert.Equal(
-                    2L * elements * sizeof(ushort),
+                    2L * (elements
+                        + ((elements + 127L) / 128L) * sizeof(float)),
                     engine.LastBFloat16GradientTransportBytes);
                 foreach (Parameter parameter in parameters)
                 {

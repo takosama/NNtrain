@@ -110,6 +110,11 @@ public sealed class CudaBfp8LayerNormTests
 
         WithCuda(() =>
         {
+            using IDisposable dispatch = CudaDispatchPolicy.Push(
+                CudaDispatchPolicy.Defaults with
+                {
+                    EnableLayerNormOneScan512 = columns == 512,
+                });
             Tensor residual = Bfp8Tensor(
                 residualValues, [rows, columns], descriptor);
             Tensor branch = sameParent

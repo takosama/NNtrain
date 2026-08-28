@@ -39,10 +39,10 @@ internal enum CudaCapturedBackwardRecordingMode
 }
 
 /// <summary>
-/// Packs completed FP32 leaf accumulators into BF16 transport buckets and
-/// overlaps two-GPU exchange with the remaining backward graph on non-blocking
-/// CUDA streams. The reduced/unpacked gradient remains FP32 authoritative;
-/// this plan is therefore also the mix8_32 transport path.
+/// Packs completed FP32 leaf accumulators into BF16 transport buckets, or
+/// block-scaled BFP8 buckets for mix8_32, and overlaps two-GPU exchange with
+/// the remaining backward graph on non-blocking CUDA streams. The
+/// reduced/unpacked gradient remains FP32 authoritative in both modes.
 /// </summary>
 internal sealed class CudaBFloat16GradientAllReducePlan
     : ICudaGradientReductionPlan, IDisposable
@@ -68,6 +68,7 @@ internal sealed class CudaBFloat16GradientAllReducePlan
     private readonly bool _useHostPipeline;
     private readonly bool _asyncHostPipeline;
     private readonly bool _usesBFloat16GradientStorage;
+    private readonly bool _usesBlockBfp8Transport;
     private readonly bool _usesExternalCapturedReadyEvents;
     private readonly int _hostPipelineChunkElements;
     private readonly Func<long, int, int, Exception?>?
@@ -111,6 +112,7 @@ internal sealed class CudaBFloat16GradientAllReducePlan
         IReadOnlyList<int> devices,
         CudaDispatchPolicy? dispatchPolicy = null,
         bool useBFloat16GradientStorage = false,
+        bool useBlockBfp8Transport = false,
         Func<long, int, int, Exception?>? hostReductionFaultInjector = null,
         Func<int, int, bool>? peerAccessProbe = null)
     {
@@ -123,6 +125,12 @@ internal sealed class CudaBFloat16GradientAllReducePlan
         _parameters = parameters.ToArray();
         _devices = devices.ToArray();
         _usesBFloat16GradientStorage = useBFloat16GradientStorage;
+        _usesBlockBfp8Transport = useBlockBfp8Transport;
+        if (_usesBFloat16GradientStorage && _usesBlockBfp8Transport)
+        {
+            throw new ArgumentException(
+                "Direct BF16 gradient storage cannot use BFP8 transport.");
+        }
         _hostReductionFaultInjector = hostReductionFaultInjector;
         if (_usesBFloat16GradientStorage
             && _parameters.Any(parameter =>
@@ -199,10 +207,12 @@ internal sealed class CudaBFloat16GradientAllReducePlan
                     destination++)
                 {
                     int source = 1 - destination;
-                    _hostPipelines[destination] =
-                        CudaGradientBuckets.CreateHostPipeline(
-                            _devices[source],
-                            _devices[destination],
+                    _hostPipelines[destination] = _usesBlockBfp8Transport
+                        ? CudaGradientBuckets.CreateHostPipelineBfp8Block(
+                            _devices[source], _devices[destination],
+                            _hostPipelineChunkElements)
+                        : CudaGradientBuckets.CreateHostPipeline(
+                            _devices[source], _devices[destination],
                             _hostPipelineChunkElements);
                     if (_asyncHostPipeline)
                     {
@@ -254,6 +264,8 @@ internal sealed class CudaBFloat16GradientAllReducePlan
     internal bool UsesExternalCapturedReadyEvents
         => _usesExternalCapturedReadyEvents;
 
+    internal bool UsesBlockBfp8Transport => _usesBlockBfp8Transport;
+
     internal int BucketCount => _buckets.Length;
 
     internal int[] BucketElementCounts
@@ -278,7 +290,11 @@ internal sealed class CudaBFloat16GradientAllReducePlan
     /// destination receives the other device's BF16 bucket exactly once.
     /// </summary>
     internal long TransportBytesPerStep => checked(
-        (long)_devices.Length * TotalGradientElements * sizeof(ushort));
+        (long)_devices.Length * (_usesBlockBfp8Transport
+            ? _buckets.Sum(bucket => (long)bucket.TotalElements
+                + ((long)bucket.TotalElements + 127L) / 128L
+                    * sizeof(float))
+            : (long)TotalGradientElements * sizeof(ushort)));
 
     internal long LastCompletedTransportBytes
         => Volatile.Read(ref _lastCompletedTransportBytes);
@@ -410,7 +426,7 @@ internal sealed class CudaBFloat16GradientAllReducePlan
                 _deviceBuffers[deviceSlot].Buckets[bucketIndex];
             if (_usesBFloat16GradientStorage)
             {
-                _ = bucket.LocalArena.ClearIfDirty();
+                _ = bucket.LocalArena!.ClearIfDirty();
                 _ = bucket.GradientArena.ClearIfDirty();
             }
             else
@@ -502,7 +518,7 @@ internal sealed class CudaBFloat16GradientAllReducePlan
         bool ownsExpectedArena = _usesBFloat16GradientStorage
             ? ReferenceEquals(
                 tensor.GetCudaBFloat16GradientArena(deviceIndex),
-                bucketBuffers.LocalArena)
+                bucketBuffers.LocalArena!)
             : ReferenceEquals(
                 tensor.GetCudaGradientArena(deviceIndex),
                 bucketBuffers.GradientArena);
@@ -521,7 +537,16 @@ internal sealed class CudaBFloat16GradientAllReducePlan
         }
         if (_usesBFloat16GradientStorage)
         {
-            bucketBuffers.LocalArena.MarkDirty();
+            bucketBuffers.LocalArena!.MarkDirty();
+        }
+        else if (_usesBlockBfp8Transport)
+        {
+            CudaGradientBuckets.PackBfp8Block(
+                deviceIndex, accelerator,
+                bucketBuffers.GradientArena.Buffer,
+                bucketBuffers.Bfp8Local!, bucketBuffers.Bfp8LocalScales!,
+                _buckets[location.Bucket].TotalElements);
+            Interlocked.Increment(ref _managedLocalPackSubmissionCount);
         }
         else
         {
@@ -778,7 +803,7 @@ internal sealed class CudaBFloat16GradientAllReducePlan
                         ? ReferenceEquals(
                             segment.Tensor.GetCudaBFloat16GradientArena(
                                 deviceIndex),
-                            bucketBuffers.LocalArena)
+                            bucketBuffers.LocalArena!)
                         : ReferenceEquals(
                             segment.Tensor.GetCudaGradientArena(deviceIndex),
                             bucketBuffers.GradientArena);
@@ -1323,38 +1348,64 @@ internal sealed class CudaBFloat16GradientAllReducePlan
         BucketBuffers sourceBucket = _deviceBuffers[source].Buckets[bucketIndex];
         if (_useHostPipeline)
         {
-            CudaGradientBuckets.HostPipelineExchange(
-                destinationBuffers.Accelerator,
-                _devices[source],
-                _hostPipelineChunkElements,
-                _hostPipelines[destination],
-                destinationBucket.Local,
-                sourceBucket.Local,
-                destinationBucket.GradientArena.Buffer,
-                bucket.TotalElements,
-                destination == 0
-                    ? _primarySquaredSum!.NativePtr
-                    : 0,
-                destinationBucket.ReadyEvent,
-                sourceBucket.ReadyEvent);
+            if (_usesBlockBfp8Transport)
+            {
+                CudaGradientBuckets.HostPipelineExchangeBfp8Block(
+                    destinationBuffers.Accelerator, _devices[source],
+                    _hostPipelineChunkElements, _hostPipelines[destination],
+                    destinationBucket.Bfp8Local!,
+                    destinationBucket.Bfp8LocalScales!,
+                    sourceBucket.Bfp8Local!, sourceBucket.Bfp8LocalScales!,
+                    destinationBucket.GradientArena.Buffer,
+                    bucket.TotalElements,
+                    destination == 0 ? _primarySquaredSum!.NativePtr : 0,
+                    destinationBucket.ReadyEvent, sourceBucket.ReadyEvent);
+            }
+            else
+            {
+                CudaGradientBuckets.HostPipelineExchange(
+                    destinationBuffers.Accelerator, _devices[source],
+                    _hostPipelineChunkElements, _hostPipelines[destination],
+                    destinationBucket.Local, sourceBucket.Local,
+                    destinationBucket.GradientArena.Buffer,
+                    bucket.TotalElements,
+                    destination == 0 ? _primarySquaredSum!.NativePtr : 0,
+                    destinationBucket.ReadyEvent, sourceBucket.ReadyEvent);
+            }
         }
         else
         {
-            CudaGradientBuckets.Exchange(
-                destinationBuffers.Accelerator,
-                destinationBuffers.DeviceIndex,
-                _deviceBuffers[source].DeviceIndex,
-                destinationBucket.Local,
-                sourceBucket.Local,
-                destinationBucket.Remote!,
-                destinationBucket.GradientArena.Buffer,
-                bucket.TotalElements,
-                destination == 0
-                    ? _primarySquaredSum!.NativePtr
-                    : 0,
-                destinationBuffers.CommunicationStream,
-                destinationBucket.ReadyEvent,
-                sourceBucket.ReadyEvent);
+            if (_usesBlockBfp8Transport)
+            {
+                CudaGradientBuckets.ExchangeBfp8Block(
+                    destinationBuffers.Accelerator,
+                    destinationBuffers.DeviceIndex,
+                    _deviceBuffers[source].DeviceIndex,
+                    destinationBucket.Bfp8Local!,
+                    destinationBucket.Bfp8LocalScales!,
+                    sourceBucket.Bfp8Local!, sourceBucket.Bfp8LocalScales!,
+                    destinationBucket.Bfp8Remote!,
+                    destinationBucket.Bfp8RemoteScales!,
+                    destinationBucket.GradientArena.Buffer,
+                    bucket.TotalElements,
+                    destination == 0 ? _primarySquaredSum!.NativePtr : 0,
+                    destinationBuffers.CommunicationStream,
+                    destinationBucket.ReadyEvent, sourceBucket.ReadyEvent);
+            }
+            else
+            {
+                CudaGradientBuckets.Exchange(
+                    destinationBuffers.Accelerator,
+                    destinationBuffers.DeviceIndex,
+                    _deviceBuffers[source].DeviceIndex,
+                    destinationBucket.Local, sourceBucket.Local,
+                    destinationBucket.Remote!,
+                    destinationBucket.GradientArena.Buffer,
+                    bucket.TotalElements,
+                    destination == 0 ? _primarySquaredSum!.NativePtr : 0,
+                    destinationBuffers.CommunicationStream,
+                    destinationBucket.ReadyEvent, sourceBucket.ReadyEvent);
+            }
         }
         destinationBucket.GradientArena.MarkDirty();
     }
@@ -1377,7 +1428,7 @@ internal sealed class CudaBFloat16GradientAllReducePlan
                     bucket.GradientArena.NativePtr,
                     bucket.Local.NativePtr,
                     _buckets[bucketIndex].TotalElements);
-                bucket.LocalArena.MarkDirty();
+                bucket.LocalArena!.MarkDirty();
             }
             accelerator.Synchronize(
                 $"BF16 gradient publication device {buffers.DeviceIndex}");
@@ -1468,18 +1519,37 @@ internal sealed class CudaBFloat16GradientAllReducePlan
     {
         NativeCudaArena<ushort>? localArena = null;
         NativeCudaBuffer<ushort>? remote = null;
+        NativeCudaBuffer<sbyte>? bfp8Local = null;
+        NativeCudaBuffer<float>? bfp8LocalScales = null;
+        NativeCudaBuffer<sbyte>? bfp8Remote = null;
+        NativeCudaBuffer<float>? bfp8RemoteScales = null;
         NativeCudaArena<float>? gradientArena = null;
         nint readyEvent = 0;
         try
         {
-            localArena = new NativeCudaArena<ushort>(accelerator, length);
-            if (!_useHostPipeline)
-                remote = accelerator.Allocate1D<ushort>(length);
+            if (_usesBlockBfp8Transport)
+            {
+                int scaleCount = checked((length + 127) / 128);
+                bfp8Local = accelerator.Allocate1D<sbyte>(length);
+                bfp8LocalScales = accelerator.Allocate1D<float>(scaleCount);
+                if (!_useHostPipeline)
+                {
+                    bfp8Remote = accelerator.Allocate1D<sbyte>(length);
+                    bfp8RemoteScales = accelerator.Allocate1D<float>(scaleCount);
+                }
+            }
+            else
+            {
+                localArena = new NativeCudaArena<ushort>(accelerator, length);
+                if (!_useHostPipeline)
+                    remote = accelerator.Allocate1D<ushort>(length);
+            }
             gradientArena = new NativeCudaArena<float>(accelerator, length);
             readyEvent = CudaGradientBuckets.CreateReadyEvent(
                 accelerator, deviceIndex);
             return new BucketBuffers(
-                localArena, remote, gradientArena, readyEvent);
+                localArena, remote, bfp8Local, bfp8LocalScales,
+                bfp8Remote, bfp8RemoteScales, gradientArena, readyEvent);
         }
         catch
         {
@@ -1491,6 +1561,10 @@ internal sealed class CudaBFloat16GradientAllReducePlan
             gradientArena?.Dispose();
             remote?.Dispose();
             localArena?.Dispose();
+            bfp8RemoteScales?.Dispose();
+            bfp8Remote?.Dispose();
+            bfp8LocalScales?.Dispose();
+            bfp8Local?.Dispose();
             throw;
         }
     }
@@ -1511,7 +1585,7 @@ internal sealed class CudaBFloat16GradientAllReducePlan
                         segment.Tensor.BindCudaBFloat16GradientArena(
                             deviceIndex,
                             _deviceBuffers[device].Buckets[bucket]
-                                .LocalArena.Slice(
+                                .LocalArena!.Slice(
                                     segment.Offset,
                                     segment.Length));
                     }
@@ -1544,7 +1618,7 @@ internal sealed class CudaBFloat16GradientAllReducePlan
                     {
                         segment.Tensor.UnbindCudaBFloat16GradientArena(
                             deviceIndex,
-                            buffers.Buckets[bucket].LocalArena);
+                            buffers.Buckets[bucket].LocalArena!);
                     }
                     else
                     {
@@ -1725,14 +1799,24 @@ internal sealed class CudaBFloat16GradientAllReducePlan
     }
 
     private sealed class BucketBuffers(
-        NativeCudaArena<ushort> localArena,
+        NativeCudaArena<ushort>? localArena,
         NativeCudaBuffer<ushort>? remote,
+        NativeCudaBuffer<sbyte>? bfp8Local,
+        NativeCudaBuffer<float>? bfp8LocalScales,
+        NativeCudaBuffer<sbyte>? bfp8Remote,
+        NativeCudaBuffer<float>? bfp8RemoteScales,
         NativeCudaArena<float> gradientArena,
         nint readyEvent)
     {
-        internal NativeCudaArena<ushort> LocalArena { get; } = localArena;
-        internal NativeCudaBuffer<ushort> Local => LocalArena.Buffer;
+        internal NativeCudaArena<ushort>? LocalArena { get; } = localArena;
+        internal NativeCudaBuffer<ushort> Local => LocalArena!.Buffer;
         internal NativeCudaBuffer<ushort>? Remote { get; } = remote;
+        internal NativeCudaBuffer<sbyte>? Bfp8Local { get; } = bfp8Local;
+        internal NativeCudaBuffer<float>? Bfp8LocalScales { get; } =
+            bfp8LocalScales;
+        internal NativeCudaBuffer<sbyte>? Bfp8Remote { get; } = bfp8Remote;
+        internal NativeCudaBuffer<float>? Bfp8RemoteScales { get; } =
+            bfp8RemoteScales;
         internal NativeCudaArena<float> GradientArena { get; } = gradientArena;
         internal nint ReadyEvent { get; } = readyEvent;
 
@@ -1742,8 +1826,12 @@ internal sealed class CudaBFloat16GradientAllReducePlan
         {
             CudaGradientBuckets.DestroyEvent(
                 accelerator, deviceIndex, ReadyEvent);
-            LocalArena.Dispose();
+            LocalArena?.Dispose();
             Remote?.Dispose();
+            Bfp8Local?.Dispose();
+            Bfp8LocalScales?.Dispose();
+            Bfp8Remote?.Dispose();
+            Bfp8RemoteScales?.Dispose();
             GradientArena.Dispose();
         }
     }

@@ -6,6 +6,7 @@
 namespace {
 
 constexpr int kGradientBucketThreads = 256;
+constexpr int kGradientBfp8BlockSize = 128;
 
 __global__ void pack_gradient_bf16(
     const float* __restrict__ source,
@@ -17,6 +18,44 @@ __global__ void pack_gradient_bf16(
          index += blockDim.x * gridDim.x) {
         destination[destination_offset + index] =
             __float2bfloat16_rn(source[index]);
+    }
+}
+
+__global__ void pack_gradient_bfp8_block(
+    const float* __restrict__ source,
+    signed char* __restrict__ destination,
+    float* __restrict__ scales,
+    int length) {
+    __shared__ float maxima[kGradientBfp8BlockSize];
+    __shared__ int non_finite;
+    const int block_start = blockIdx.x * kGradientBfp8BlockSize;
+    const int index = block_start + threadIdx.x;
+    float value = index < length ? source[index] : 0.0f;
+    if (threadIdx.x == 0)
+        non_finite = 0;
+    __syncthreads();
+    if (index < length && !isfinite(value))
+        atomicExch(&non_finite, 1);
+    maxima[threadIdx.x] = isfinite(value) ? fabsf(value) : 0.0f;
+    __syncthreads();
+    for (int stride = kGradientBfp8BlockSize / 2; stride > 0;
+         stride >>= 1) {
+        if (threadIdx.x < stride) {
+            maxima[threadIdx.x] = fmaxf(
+                maxima[threadIdx.x], maxima[threadIdx.x + stride]);
+        }
+        __syncthreads();
+    }
+    const float scale = non_finite
+        ? __int_as_float(0x7fffffff)
+        : (maxima[0] > 0.0f ? __fdiv_rn(maxima[0], 127.0f) : 1.0f);
+    if (threadIdx.x == 0)
+        scales[blockIdx.x] = scale;
+    if (index < length) {
+        int quantized = non_finite
+            ? 0
+            : __float2int_rn(__fdiv_rn(value, scale));
+        destination[index] = (signed char)max(-127, min(127, quantized));
     }
 }
 
@@ -33,6 +72,45 @@ __global__ void sum_gradient_bf16(
          index += blockDim.x * gridDim.x) {
         float value = __bfloat162float(local[index])
             + __bfloat162float(remote[index]);
+        reduced[index] = value;
+        if (squared_sum)
+            partial += (double)value * value;
+    }
+    if (!squared_sum)
+        return;
+    partials[threadIdx.x] = partial;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride)
+            partials[threadIdx.x] += partials[threadIdx.x + stride];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0)
+        atomicAdd(squared_sum, partials[0]);
+}
+
+__global__ void sum_gradient_bfp8_block(
+    const signed char* __restrict__ local,
+    const float* __restrict__ local_scales,
+    const signed char* __restrict__ remote,
+    const float* __restrict__ remote_scales,
+    float* __restrict__ reduced,
+    int length,
+    double* __restrict__ squared_sum) {
+    __shared__ double partials[kGradientBucketThreads];
+    double partial = 0.0;
+    for (int index = blockIdx.x * blockDim.x + threadIdx.x;
+         index < length;
+         index += blockDim.x * gridDim.x) {
+        const int scale_index = index / kGradientBfp8BlockSize;
+        // Explicit round-to-nearest products prevent --use_fast_math from
+        // choosing destination-dependent FMA ordering. Both replicas must
+        // receive bit-identical reduced FP32 gradients.
+        float local_value = __fmul_rn(
+            (float)local[index], local_scales[scale_index]);
+        float remote_value = __fmul_rn(
+            (float)remote[index], remote_scales[scale_index]);
+        float value = __fadd_rn(local_value, remote_value);
         reduced[index] = value;
         if (squared_sum)
             partial += (double)value * value;
@@ -73,7 +151,10 @@ struct gradient_host_pipeline {
     int destination_device = -1;
     int capacity = 0;
     void* host[2] = {nullptr, nullptr};
-    __nv_bfloat16* device[2] = {nullptr, nullptr};
+    void* device[2] = {nullptr, nullptr};
+    float* host_scales[2] = {nullptr, nullptr};
+    float* device_scales[2] = {nullptr, nullptr};
+    bool bfp8_block = false;
     cudaStream_t download_stream = nullptr;
     cudaStream_t upload_stream = nullptr;
     cudaEvent_t download_done[2] = {nullptr, nullptr};
@@ -111,6 +192,8 @@ cudaError_t destroy_gradient_host_pipeline(
                 retain(cudaEventDestroy(pipeline->upload_done[slot]));
             if (pipeline->device[slot])
                 retain(cudaFree(pipeline->device[slot]));
+            if (pipeline->device_scales[slot])
+                retain(cudaFree(pipeline->device_scales[slot]));
         }
         if (pipeline->upload_stream)
             retain(cudaStreamDestroy(pipeline->upload_stream));
@@ -118,6 +201,8 @@ cudaError_t destroy_gradient_host_pipeline(
     for (int slot = 0; slot < 2; ++slot) {
         if (pipeline->host[slot])
             retain(cudaFreeHost(pipeline->host[slot]));
+        if (pipeline->host_scales[slot])
+            retain(cudaFreeHost(pipeline->host_scales[slot]));
     }
     delete pipeline;
     return first;
@@ -150,6 +235,19 @@ NNTRAIN_EXPORT int nntrain_gradient_pack_bf16(
     pack_gradient_bf16<<<
         gradient_blocks(length), kGradientBucketThreads, 0,
         compute_stream>>>(source, destination, destination_offset, length);
+    return (int)cudaPeekAtLastError();
+}
+
+NNTRAIN_EXPORT int nntrain_gradient_pack_bfp8_block(
+    int device, const float* source, signed char* destination,
+    float* scales, int length, cudaStream_t compute_stream) {
+    if (!source || !destination || !scales || length <= 0)
+        return (int)cudaErrorInvalidValue;
+    (void)device;
+    const int blocks = (length + kGradientBfp8BlockSize - 1)
+        / kGradientBfp8BlockSize;
+    pack_gradient_bfp8_block<<<blocks, kGradientBfp8BlockSize, 0,
+        compute_stream>>>(source, destination, scales, length);
     return (int)cudaPeekAtLastError();
 }
 
@@ -210,6 +308,54 @@ NNTRAIN_EXPORT int nntrain_gradient_exchange_bf16(
     return (int)cudaPeekAtLastError();
 }
 
+NNTRAIN_EXPORT int nntrain_gradient_exchange_bfp8_block(
+    int destination_device,
+    int source_device,
+    const signed char* local,
+    const float* local_scales,
+    const signed char* remote_source,
+    const float* remote_source_scales,
+    signed char* remote_staging,
+    float* remote_staging_scales,
+    float* reduced,
+    int length,
+    double* squared_sum,
+    cudaStream_t communication_stream,
+    cudaEvent_t local_ready,
+    cudaEvent_t remote_ready) {
+    if (!local || !local_scales || !remote_source
+        || !remote_source_scales || !remote_staging
+        || !remote_staging_scales || !reduced || length <= 0) {
+        return (int)cudaErrorInvalidValue;
+    }
+    cudaError_t status = cudaStreamWaitEvent(
+        communication_stream, local_ready, 0);
+    if (status != cudaSuccess)
+        return (int)status;
+    status = cudaStreamWaitEvent(communication_stream, remote_ready, 0);
+    if (status != cudaSuccess)
+        return (int)status;
+    status = cudaMemcpyPeerAsync(
+        remote_staging, destination_device, remote_source, source_device,
+        (size_t)length, communication_stream);
+    if (status != cudaSuccess)
+        return (int)status;
+    const int scale_count =
+        (length + kGradientBfp8BlockSize - 1) / kGradientBfp8BlockSize;
+    status = cudaMemcpyPeerAsync(
+        remote_staging_scales, destination_device,
+        remote_source_scales, source_device,
+        (size_t)scale_count * sizeof(float), communication_stream);
+    if (status != cudaSuccess)
+        return (int)status;
+    sum_gradient_bfp8_block<<<
+        gradient_blocks(length), kGradientBucketThreads, 0,
+        communication_stream>>>(
+            local, local_scales, remote_staging, remote_staging_scales,
+            reduced, length, squared_sum);
+    return (int)cudaPeekAtLastError();
+}
+
 NNTRAIN_EXPORT int nntrain_gradient_host_pipeline_create(
     int source_device,
     int destination_device,
@@ -254,6 +400,70 @@ NNTRAIN_EXPORT int nntrain_gradient_host_pipeline_create(
             status = cudaMalloc((void**)&pipeline->device[slot], bytes);
         if (status == cudaSuccess)
             status = cudaMallocHost(&pipeline->host[slot], bytes);
+    }
+    if (status != cudaSuccess) {
+        (void)destroy_gradient_host_pipeline(pipeline);
+        return (int)status;
+    }
+    *pipeline_pointer = pipeline;
+    return (int)cudaSuccess;
+}
+
+NNTRAIN_EXPORT int nntrain_gradient_host_pipeline_create_bfp8_block(
+    int source_device,
+    int destination_device,
+    int chunk_elements,
+    void** pipeline_pointer) {
+    if (!pipeline_pointer || source_device == destination_device
+        || chunk_elements <= 0
+        || chunk_elements % kGradientBfp8BlockSize != 0) {
+        return (int)cudaErrorInvalidValue;
+    }
+    *pipeline_pointer = nullptr;
+    gradient_host_pipeline* pipeline = new (std::nothrow)
+        gradient_host_pipeline();
+    if (!pipeline)
+        return (int)cudaErrorMemoryAllocation;
+    pipeline->source_device = source_device;
+    pipeline->destination_device = destination_device;
+    pipeline->capacity = chunk_elements;
+    pipeline->bfp8_block = true;
+    const size_t payload_bytes = (size_t)chunk_elements;
+    const size_t scale_bytes =
+        (size_t)(chunk_elements / kGradientBfp8BlockSize) * sizeof(float);
+    cudaError_t status = nntrain::cuda::internal::select_device(
+        source_device);
+    if (status == cudaSuccess) {
+        status = cudaStreamCreateWithFlags(
+            &pipeline->download_stream, cudaStreamNonBlocking);
+    }
+    for (int slot = 0; status == cudaSuccess && slot < 2; ++slot) {
+        status = cudaEventCreateWithFlags(
+            &pipeline->download_done[slot], cudaEventDisableTiming);
+    }
+    if (status == cudaSuccess) {
+        status = nntrain::cuda::internal::select_device(
+            destination_device);
+    }
+    if (status == cudaSuccess) {
+        status = cudaStreamCreateWithFlags(
+            &pipeline->upload_stream, cudaStreamNonBlocking);
+    }
+    for (int slot = 0; status == cudaSuccess && slot < 2; ++slot) {
+        status = cudaEventCreateWithFlags(
+            &pipeline->upload_done[slot], cudaEventDisableTiming);
+        if (status == cudaSuccess)
+            status = cudaMalloc(&pipeline->device[slot], payload_bytes);
+        if (status == cudaSuccess) {
+            status = cudaMalloc(
+                (void**)&pipeline->device_scales[slot], scale_bytes);
+        }
+        if (status == cudaSuccess)
+            status = cudaMallocHost(&pipeline->host[slot], payload_bytes);
+        if (status == cudaSuccess) {
+            status = cudaMallocHost(
+                (void**)&pipeline->host_scales[slot], scale_bytes);
+        }
     }
     if (status != cudaSuccess) {
         (void)destroy_gradient_host_pipeline(pipeline);
@@ -342,8 +552,134 @@ NNTRAIN_EXPORT int nntrain_gradient_host_pipeline_exchange_bf16(
             sum_gradient_bf16<<<
                 gradient_blocks(count), kGradientBucketThreads, 0,
                 pipeline->upload_stream>>>(
-                    local + offset, pipeline->device[slot],
+                    local + offset,
+                    (const __nv_bfloat16*)pipeline->device[slot],
                     reduced + offset, count, squared_sum);
+            status = cudaPeekAtLastError();
+        }
+        if (status == cudaSuccess) {
+            status = cudaEventRecord(
+                pipeline->upload_done[slot], pipeline->upload_stream);
+        }
+        const int next = chunk + 2;
+        if (status == cudaSuccess && next < chunks) {
+            status = cudaEventSynchronize(pipeline->upload_done[slot]);
+            if (status == cudaSuccess)
+                status = queue_download(next);
+        }
+    }
+    if (status == cudaSuccess) {
+        status = nntrain::cuda::internal::select_device(
+            pipeline->destination_device);
+    }
+    if (status == cudaSuccess)
+        status = cudaStreamSynchronize(pipeline->upload_stream);
+    return (int)status;
+}
+
+NNTRAIN_EXPORT int nntrain_gradient_host_pipeline_exchange_bfp8_block(
+    void* pipeline_pointer,
+    const signed char* local,
+    const float* local_scales,
+    const signed char* remote_source,
+    const float* remote_source_scales,
+    float* reduced,
+    int length,
+    double* squared_sum,
+    cudaEvent_t local_ready,
+    cudaEvent_t remote_ready) {
+    gradient_host_pipeline* pipeline =
+        reinterpret_cast<gradient_host_pipeline*>(pipeline_pointer);
+    if (!pipeline || !pipeline->bfp8_block || !local || !local_scales
+        || !remote_source || !remote_source_scales || !reduced
+        || length <= 0 || !local_ready || !remote_ready) {
+        return (int)cudaErrorInvalidValue;
+    }
+    cudaError_t status = nntrain::cuda::internal::select_device(
+        pipeline->source_device);
+    if (status != cudaSuccess)
+        return (int)status;
+    status = cudaEventSynchronize(remote_ready);
+    if (status != cudaSuccess)
+        return (int)status;
+    status = nntrain::cuda::internal::select_device(
+        pipeline->destination_device);
+    if (status != cudaSuccess)
+        return (int)status;
+    status = cudaEventSynchronize(local_ready);
+    if (status != cudaSuccess)
+        return (int)status;
+
+    const int chunks = (length + pipeline->capacity - 1)
+        / pipeline->capacity;
+    auto queue_download = [&](int chunk) -> cudaError_t {
+        const int slot = chunk & 1;
+        const int offset = chunk * pipeline->capacity;
+        const int count = min(pipeline->capacity, length - offset);
+        const int scale_offset = offset / kGradientBfp8BlockSize;
+        const int scale_count =
+            (count + kGradientBfp8BlockSize - 1) / kGradientBfp8BlockSize;
+        cudaError_t queue_status = nntrain::cuda::internal::select_device(
+            pipeline->source_device);
+        if (queue_status != cudaSuccess)
+            return queue_status;
+        queue_status = cudaMemcpyAsync(
+            pipeline->host[slot], remote_source + offset,
+            (size_t)count, cudaMemcpyDeviceToHost,
+            pipeline->download_stream);
+        if (queue_status == cudaSuccess) {
+            queue_status = cudaMemcpyAsync(
+                pipeline->host_scales[slot],
+                remote_source_scales + scale_offset,
+                (size_t)scale_count * sizeof(float),
+                cudaMemcpyDeviceToHost, pipeline->download_stream);
+        }
+        if (queue_status != cudaSuccess)
+            return queue_status;
+        return cudaEventRecord(
+            pipeline->download_done[slot], pipeline->download_stream);
+    };
+
+    status = queue_download(0);
+    if (status == cudaSuccess && chunks > 1)
+        status = queue_download(1);
+    for (int chunk = 0; status == cudaSuccess && chunk < chunks; ++chunk) {
+        const int slot = chunk & 1;
+        const int offset = chunk * pipeline->capacity;
+        const int count = min(pipeline->capacity, length - offset);
+        const int scale_offset = offset / kGradientBfp8BlockSize;
+        const int scale_count =
+            (count + kGradientBfp8BlockSize - 1) / kGradientBfp8BlockSize;
+        status = nntrain::cuda::internal::select_device(
+            pipeline->source_device);
+        if (status == cudaSuccess) {
+            status = cudaEventSynchronize(
+                pipeline->download_done[slot]);
+        }
+        if (status != cudaSuccess)
+            break;
+        status = nntrain::cuda::internal::select_device(
+            pipeline->destination_device);
+        if (status == cudaSuccess) {
+            status = cudaMemcpyAsync(
+                pipeline->device[slot], pipeline->host[slot],
+                (size_t)count, cudaMemcpyHostToDevice,
+                pipeline->upload_stream);
+        }
+        if (status == cudaSuccess) {
+            status = cudaMemcpyAsync(
+                pipeline->device_scales[slot], pipeline->host_scales[slot],
+                (size_t)scale_count * sizeof(float),
+                cudaMemcpyHostToDevice, pipeline->upload_stream);
+        }
+        if (status == cudaSuccess) {
+            sum_gradient_bfp8_block<<<
+                gradient_blocks(count), kGradientBucketThreads, 0,
+                pipeline->upload_stream>>>(
+                    local + offset, local_scales + scale_offset,
+                    (const signed char*)pipeline->device[slot],
+                    pipeline->device_scales[slot], reduced + offset,
+                    count, squared_sum);
             status = cudaPeekAtLastError();
         }
         if (status == cudaSuccess) {

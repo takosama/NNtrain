@@ -4,6 +4,7 @@ using NNtrain.Cuda.Execution;
 using NNtrain.Runtime.Execution;
 using NNtrain.Training.Execution;
 using NNtrain.Training.Metrics;
+using NNtrain.Training.Optimization;
 using NNtrain.Training.Persistence;
 
 namespace NNtrain.Benchmarks;
@@ -400,6 +401,18 @@ internal static class PerformanceBaselineRunner
                                 : null);
                     Synchronize(scenario);
                     double saveMilliseconds = Elapsed(saveStarted);
+                    TrainingRandomState? probeRandomState =
+                        fixture.Model.CaptureTrainingRandomState();
+                    float lossBeforeReload = fixture.DataParallelEngine!
+                        .ForwardBackward(
+                            fixture.Input,
+                            fixture.Target,
+                            configuration.Batch,
+                            configuration.Sequence,
+                            Tensor.DefaultCrossEntropyIgnoreIndex,
+                            checked(globalStep + 1));
+                    fixture.Optimizer.zero_grad();
+                    fixture.Model.RestoreTrainingRandomState(probeRandomState);
                     CheckpointArtifactSnapshot checkpointSnapshot =
                         CaptureCheckpointArtifacts(checkpointPath);
                     BaselineCheckpointArtifact manifestArtifact =
@@ -489,6 +502,14 @@ internal static class PerformanceBaselineRunner
                             == expectedNekoMuonStep
                         && fixture.AdamW.StreamingStep
                             == expectedAdamWStep;
+                    (bool modelPayloadValidated,
+                        bool optimizerPayloadValidated) =
+                        ValidateReloadedCheckpointPayloads(
+                            checkpointPath,
+                            checkpointSnapshot.Manifest,
+                            fixture.Model,
+                            fixture.Optimizer,
+                            artifactDirectory);
                     bool adaptiveStateValidated =
                         AdaptiveShardStatesEqual(
                             expectedAdaptiveState,
@@ -507,7 +528,8 @@ internal static class PerformanceBaselineRunner
                     // scratch buffer, and parameter master is present on all
                     // configured devices.
                     fixture.PrepareForTraining(configuration.Batch);
-                    bool optimizerValidated = optimizerStateValidated;
+                    bool optimizerValidated = optimizerStateValidated
+                        && optimizerPayloadValidated;
                     bool precisionValidated =
                         fixture.Model.PrecisionMode == precision
                         && fixture.Model.DType == storageDType
@@ -525,6 +547,7 @@ internal static class PerformanceBaselineRunner
                                 == configuration.Bfp8BlockSize);
                     bool modelValidated =
                         fixture.Model is GptRinWikiJp
+                        && modelPayloadValidated
                         && fixture.Parameters.Length
                             == expectedParameterCount
                         && checkpointSnapshot.Manifest.VocabularySize
@@ -577,13 +600,24 @@ internal static class PerformanceBaselineRunner
 
                     TrainingRandomState? restoredRandomState =
                         fixture.Model.CaptureTrainingRandomState();
-                    fixture.PrewarmCompiledTrainingPlan(
+                    float lossAfterReload = fixture.PrewarmCompiledTrainingPlan(
                         configuration,
                         checked(globalStep + 1),
                         CreateAdaptiveShardingOptions(configuration),
                         restoredAdaptiveState);
                     fixture.Model.RestoreTrainingRandomState(
                         restoredRandomState);
+                    float lossDelta = MathF.Abs(
+                        lossBeforeReload - lossAfterReload);
+                    Console.WriteLine(
+                        $"checkpoint forward continuity: before=" +
+                        $"{lossBeforeReload:G9}, after={lossAfterReload:G9}, " +
+                        $"delta={lossDelta:G9}");
+                    // A reconstructed CUDA Graph receives new per-operation
+                    // dropout seeds, so training-mode loss is diagnostic and
+                    // is not expected to be bitwise equal. Exact streamed
+                    // model and optimizer artifact hashes above are the
+                    // authoritative resume-continuity check.
                     metrics = new MetricJournalJsonlRepository(sidecarPath);
                     MetricJournalLoadResult resumedMetrics = metrics.Load();
                     sidecarContinuityValidated =
@@ -828,6 +862,79 @@ internal static class PerformanceBaselineRunner
             bufferSize: 4 * 1024 * 1024,
             FileOptions.SequentialScan);
         return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
+
+    private static (bool Model, bool Optimizer)
+        ValidateReloadedCheckpointPayloads(
+            string checkpointPath,
+            WikiLanguageModelCommand.WikiModelCheckpoint manifest,
+            Module model,
+            IOptimizer optimizer,
+            string artifactDirectory)
+    {
+        string currentArtifact =
+            WikiLanguageModelCommand.GetCurrentModelArtifactPath(
+                checkpointPath, manifest.ArtifactSlot);
+        string verificationModel = Path.Combine(
+            artifactDirectory, "reload-model-verification.safetensors");
+        var verificationOptimizerPaths = new List<string>();
+        try
+        {
+            SafeTensorFile.SaveModel(
+                model,
+                verificationModel,
+                artifactDTypeOverride: TensorDType.Float32);
+            bool modelValid = new FileInfo(currentArtifact).Length
+                    == new FileInfo(verificationModel).Length
+                && string.Equals(
+                    ComputeFileSha256(currentArtifact),
+                    ComputeFileSha256(verificationModel),
+                    StringComparison.Ordinal);
+
+            IReadOnlyList<IOptimizer> leaves =
+                OptimizerBundle.GetCheckpointLeafOptimizers(optimizer);
+            bool optimizerValid =
+                leaves.Count == manifest.OptimizerStateTypes?.Length;
+            for (int index = 0; index < leaves.Count; index++)
+            {
+                string source = WikiLanguageModelCommand
+                    .GetOptimizerBinaryArtifactPath(
+                        checkpointPath, manifest.ArtifactSlot, index);
+                string verification = Path.Combine(
+                    artifactDirectory,
+                    $"reload-optimizer-{index}-verification.bin");
+                verificationOptimizerPaths.Add(verification);
+                using (var stream = new FileStream(
+                    verification,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None,
+                    bufferSize: 4 * 1024 * 1024,
+                    FileOptions.SequentialScan))
+                {
+                    OptimizerStateStream.SaveStateBinary(
+                        leaves[index], stream);
+                    stream.Flush(flushToDisk: true);
+                }
+                optimizerValid &= new FileInfo(source).Length
+                        == new FileInfo(verification).Length
+                    && string.Equals(
+                        ComputeFileSha256(source),
+                        ComputeFileSha256(verification),
+                        StringComparison.Ordinal);
+            }
+            return (modelValid, optimizerValid);
+        }
+        finally
+        {
+            if (File.Exists(verificationModel))
+                File.Delete(verificationModel);
+            foreach (string path in verificationOptimizerPaths)
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+        }
     }
 
     private static WikiTrainingConfiguration
@@ -2217,7 +2324,7 @@ internal static class PerformanceBaselineRunner
             Optimizer.prepare();
         }
 
-        internal void PrewarmCompiledTrainingPlan(
+        internal float PrewarmCompiledTrainingPlan(
             BaselineModelConfiguration configuration,
             long globalStep,
             CudaAdaptiveShardingOptions options,
@@ -2229,7 +2336,7 @@ internal static class PerformanceBaselineRunner
                 ?? throw new InvalidOperationException(
                     "CUDA graph prewarm requires a data-parallel engine.");
             PrepareForTraining(configuration.Batch);
-            _ = engine.ForwardBackward(
+            float loss = engine.ForwardBackward(
                 Input,
                 Target,
                 configuration.Batch,
@@ -2241,6 +2348,7 @@ internal static class PerformanceBaselineRunner
                 engine.ConfigureAdaptiveSharding(options);
             else
                 engine.RestoreAdaptiveShardingState(adaptiveState);
+            return loss;
         }
 
         internal void RestartDataParallelEngine(

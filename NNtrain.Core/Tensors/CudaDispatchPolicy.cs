@@ -32,6 +32,7 @@ internal sealed record CudaDispatchPolicy
     internal bool DisableExternalGradientReadyEvents { get; init; }
     internal bool DisableDirectAttentionBFloat16Gradient { get; init; }
     internal bool DisableDirectLayerNormBFloat16BranchGradient { get; init; }
+    internal bool EnableLayerNormOneScan512 { get; init; }
     internal bool DisableDirectLinearBFloat16Gradient { get; init; }
     internal bool DisableKvCache { get; init; }
     internal bool SynchronizeDataParallelPhases { get; init; }
@@ -152,6 +153,9 @@ internal sealed record CudaDispatchPolicy
             DisableDirectLayerNormBFloat16BranchGradient = ReadFlag(
                 readEnvironment,
                 "NNTRAIN_DISABLE_DIRECT_LAYERNORM_BF16_BRANCH_GRADIENT"),
+            EnableLayerNormOneScan512 = ReadFlag(
+                readEnvironment,
+                "NNTRAIN_ENABLE_LAYERNORM_ONE_SCAN_512"),
             DisableDirectLinearBFloat16Gradient = ReadFlag(
                 readEnvironment,
                 "NNTRAIN_DISABLE_DIRECT_LINEAR_BF16_GRADIENT"),

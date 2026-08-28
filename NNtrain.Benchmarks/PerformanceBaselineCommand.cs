@@ -223,6 +223,24 @@ internal static class PerformanceBaselineCommand
                             256L * 1024L * 1024L,
                         MaximumLastToFirstP50Ratio: 1.05d)),
             ],
+            "soak-resume2" =>
+            [
+                CudaScenario(
+                    "2gpu-soak-resume2",
+                    [0, 1],
+                    warmup: 0,
+                    steps: 2,
+                    soak: new BaselineSoakConfiguration(
+                        TotalCommittedSteps: 2,
+                        PerformanceWarmupSteps: 0,
+                        TrendWindowSteps: 1,
+                        GenerationStep: 2,
+                        GenerationTokens: 1,
+                        RestartStep: 1,
+                        MaximumPostWarmupVramGrowthBytes:
+                            256L * 1024L * 1024L,
+                        MaximumLastToFirstP50Ratio: 1000d)),
+            ],
             "soak-smoke" =>
             [
                 CudaScenario(
@@ -977,6 +995,9 @@ internal static class PerformanceBaselineCommand
             "[--config PATH] [--output PATH]");
         Console.WriteLine(
             "  --performance-baseline soak2100 " +
+            "[--config PATH] [--output PATH]");
+        Console.WriteLine(
+            "  --performance-baseline soak-resume2 " +
             "[--config PATH] [--output PATH]");
         Console.WriteLine(
             "  --performance-baseline soak-smoke [--output PATH]");

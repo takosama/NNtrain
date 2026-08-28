@@ -48,6 +48,21 @@ internal static class CudaGradientBuckets
             "pack BF16 gradient bucket");
     }
 
+    internal static void PackBfp8Block(
+        int device,
+        NativeCudaDevice accelerator,
+        NativeCudaBuffer<float> source,
+        NativeCudaBuffer<sbyte> destination,
+        NativeCudaBuffer<float> scales,
+        int length)
+    {
+        accelerator.Bind();
+        ThrowIfFailed(CudaNativeGateway.GradientPackBfp8Block(
+            device, source.NativePtr, destination.NativePtr,
+            scales.NativePtr, length, accelerator.DefaultStream),
+            "pack block-scaled BFP8 gradient bucket");
+    }
+
     internal static void RecordReady(
         int device,
         NativeCudaDevice accelerator,
@@ -104,6 +119,34 @@ internal static class CudaGradientBuckets
             "exchange BF16 gradient bucket");
     }
 
+    internal static void ExchangeBfp8Block(
+        NativeCudaDevice destinationAccelerator,
+        int destinationDevice,
+        int sourceDevice,
+        NativeCudaBuffer<sbyte> local,
+        NativeCudaBuffer<float> localScales,
+        NativeCudaBuffer<sbyte> remoteSource,
+        NativeCudaBuffer<float> remoteSourceScales,
+        NativeCudaBuffer<sbyte> remoteStaging,
+        NativeCudaBuffer<float> remoteStagingScales,
+        NativeCudaBuffer<float> reduced,
+        int length,
+        nint squaredSum,
+        nint communicationStream,
+        nint localReadyEvent,
+        nint remoteReadyEvent)
+    {
+        destinationAccelerator.Bind();
+        ThrowIfFailed(CudaNativeGateway.GradientExchangeBfp8Block(
+            destinationDevice, sourceDevice, local.NativePtr,
+            localScales.NativePtr, remoteSource.NativePtr,
+            remoteSourceScales.NativePtr, remoteStaging.NativePtr,
+            remoteStagingScales.NativePtr, reduced.NativePtr, length,
+            squaredSum, communicationStream, localReadyEvent,
+            remoteReadyEvent),
+            "exchange block-scaled BFP8 gradient bucket");
+    }
+
     internal static nint CreateHostPipeline(
         int sourceDevice,
         int destinationDevice,
@@ -118,6 +161,21 @@ internal static class CudaGradientBuckets
             chunkElements,
             out nint pipeline),
             "create gradient host pipeline");
+        return pipeline;
+    }
+
+    internal static nint CreateHostPipelineBfp8Block(
+        int sourceDevice,
+        int destinationDevice,
+        int chunkElements)
+    {
+        NativeCudaRuntime.Check(
+            NativeCudaRuntime.SetDeviceNative(destinationDevice),
+            "cudaSetDevice(BFP8 gradient host pipeline)");
+        ThrowIfFailed(CudaNativeGateway.GradientHostPipelineCreateBfp8Block(
+            sourceDevice, destinationDevice, chunkElements,
+            out nint pipeline),
+            "create block-scaled BFP8 gradient host pipeline");
         return pipeline;
     }
 
@@ -167,6 +225,45 @@ internal static class CudaGradientBuckets
         NativeCudaRuntime.RecordGradientCollectiveHostPipeline(
             physicalCopyCount,
             physicalBytes);
+        transport?.Commit();
+    }
+
+    internal static void HostPipelineExchangeBfp8Block(
+        NativeCudaDevice destinationAccelerator,
+        int sourceDevice,
+        int chunkElements,
+        nint pipeline,
+        NativeCudaBuffer<sbyte> local,
+        NativeCudaBuffer<float> localScales,
+        NativeCudaBuffer<sbyte> remoteSource,
+        NativeCudaBuffer<float> remoteSourceScales,
+        NativeCudaBuffer<float> reduced,
+        int length,
+        nint squaredSum,
+        nint localReadyEvent,
+        nint remoteReadyEvent)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(sourceDevice);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chunkElements);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(length);
+        long physicalCopyCount = checked(
+            (((long)length - 1L) / chunkElements + 1L) * 2L);
+        long scaleCount = ((long)length + 127L) / 128L;
+        long physicalBytes = checked((long)length + scaleCount * sizeof(float));
+        DeviceTransferGuard.GradientCollectiveTransportReservation?
+            transport = DeviceTransferGuard.ReserveGradientCollectiveTransport(
+                sourceDevice, destinationAccelerator.Index,
+                physicalCopyCount, physicalBytes);
+        destinationAccelerator.Bind();
+        ThrowIfFailed(
+            CudaNativeGateway.GradientHostPipelineExchangeBfp8Block(
+                destinationAccelerator.Index, pipeline, local.NativePtr,
+                localScales.NativePtr, remoteSource.NativePtr,
+                remoteSourceScales.NativePtr, reduced.NativePtr, length,
+                squaredSum, localReadyEvent, remoteReadyEvent),
+            "exchange block-scaled BFP8 gradient host pipeline");
+        NativeCudaRuntime.RecordGradientCollectiveHostPipeline(
+            physicalCopyCount, physicalBytes);
         transport?.Commit();
     }
 

@@ -358,16 +358,29 @@ internal static class CudaLayerNorm
         accelerator.Bind();
         using ParameterScratchLease parameterScratch = GetParameterScratch(
             accelerator, rows, columns);
-        ThrowIfFailed(CudaNativeGateway
-            .ResidualDropoutLayerNormBackwardBFloat16(
-            accelerator.Index,
-            residual.NativePtr, branch.NativePtr, gamma.NativePtr,
-            means.NativePtr, inverses.NativePtr,
-            outputGradient.NativePtr, residualGradient.NativePtr,
-            branchGradient.NativePtr, gammaGradient.NativePtr,
-            betaGradient.NativePtr, parameterScratch.Buffer.NativePtr,
-            rows, columns, sameParent ? 1 : 0,
-            seed, dropThreshold, dropoutScale, Stream(accelerator)));
+        bool oneScan = columns == 512
+            && CudaDispatchPolicy.Current.EnableLayerNormOneScan512;
+        ThrowIfFailed(oneScan
+            ? CudaNativeGateway
+                .ResidualDropoutLayerNormBackwardBFloat16OneScan512(
+                    accelerator.Index,
+                    residual.NativePtr, branch.NativePtr, gamma.NativePtr,
+                    means.NativePtr, inverses.NativePtr,
+                    outputGradient.NativePtr, residualGradient.NativePtr,
+                    branchGradient.NativePtr, gammaGradient.NativePtr,
+                    betaGradient.NativePtr, parameterScratch.Buffer.NativePtr,
+                    rows, columns, sameParent ? 1 : 0,
+                    seed, dropThreshold, dropoutScale, Stream(accelerator))
+            : CudaNativeGateway
+                .ResidualDropoutLayerNormBackwardBFloat16(
+                    accelerator.Index,
+                    residual.NativePtr, branch.NativePtr, gamma.NativePtr,
+                    means.NativePtr, inverses.NativePtr,
+                    outputGradient.NativePtr, residualGradient.NativePtr,
+                    branchGradient.NativePtr, gammaGradient.NativePtr,
+                    betaGradient.NativePtr, parameterScratch.Buffer.NativePtr,
+                    rows, columns, sameParent ? 1 : 0,
+                    seed, dropThreshold, dropoutScale, Stream(accelerator)));
     }
 
     internal static void FusedBackwardGraph(
@@ -451,7 +464,9 @@ internal static class CudaLayerNorm
             sameParent,
             dropThreshold,
             dropoutScale,
-            token.OperationSeed);
+            token.OperationSeed,
+            columns == 512
+                && CudaDispatchPolicy.Current.EnableLayerNormOneScan512);
     }
 
     internal static void FusedBackwardBFloat16DirectBranch(

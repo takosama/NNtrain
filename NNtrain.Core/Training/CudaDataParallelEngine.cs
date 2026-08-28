@@ -1370,8 +1370,12 @@ public sealed class CudaDataParallelEngine : IDisposable
         }
         _flatGradientPlan?.Dispose();
         _flatGradientPlan = null;
+        bool useBlockBfp8Transport =
+            _model.PrecisionMode == TensorPrecisionMode.Mix8_32;
         if (_bfloat16GradientPlan is null
-            || !_bfloat16GradientPlan.Matches(parameters, devices))
+            || !_bfloat16GradientPlan.Matches(parameters, devices)
+            || _bfloat16GradientPlan.UsesBlockBfp8Transport
+                != useBlockBfp8Transport)
         {
             _bfloat16GradientPlan?.Dispose();
             _bfloat16GradientPlan =
@@ -1381,7 +1385,8 @@ public sealed class CudaDataParallelEngine : IDisposable
                     _dispatchPolicy,
                     useBFloat16GradientStorage:
                         ResolvePrecisionPolicy(_model.PrecisionMode).Gradient
-                            == NumericFormat.BFloat16);
+                            == NumericFormat.BFloat16,
+                    useBlockBfp8Transport: useBlockBfp8Transport);
             Interlocked.Increment(ref _bfloat16GradientPlanBuildCount);
         }
         return _bfloat16GradientPlan;

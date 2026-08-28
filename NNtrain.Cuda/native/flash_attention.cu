@@ -2018,7 +2018,7 @@ __global__ void layer_norm_forward_warp_512(
 
 template <typename T, bool FuseResidualDropout,
     typename output_gradient_t, typename branch_gradient_t,
-    bool GraphDropout = false>
+    bool GraphDropout = false, bool FuseParameterGradients = false>
 __global__ void layer_norm_backward_input_block(
     const T* __restrict__ input,
     const T* __restrict__ branch,
@@ -2028,6 +2028,8 @@ __global__ void layer_norm_backward_input_block(
     const output_gradient_t* __restrict__ output_gradient,
     float* __restrict__ input_gradient,
     branch_gradient_t* __restrict__ branch_gradient,
+    float* __restrict__ gamma_gradient,
+    float* __restrict__ beta_gradient,
     int columns,
     int same_parent,
     unsigned int seed,
@@ -2040,7 +2042,7 @@ __global__ void layer_norm_backward_input_block(
     const float mean = means[row];
     const float inverse = inverses[row];
     if (columns <= kLayerNormCachedColumns) {
-        float cached_dxhat[kLayerNormValuesPerThread] = {};
+        float cached_output_gradient[kLayerNormValuesPerThread] = {};
         float cached_xhat[kLayerNormValuesPerThread] = {};
         float dxhat_sum = 0.f;
         float dxhat_xhat_sum = 0.f;
@@ -2049,7 +2051,9 @@ __global__ void layer_norm_backward_input_block(
             const int column = threadIdx.x + item * blockDim.x;
             if (column < columns) {
                 const int index = offset + column;
-                const float dxhat = load_value(output_gradient, index)
+                const float raw_gradient = load_value(
+                    output_gradient, index);
+                const float dxhat = raw_gradient
                     * load_value(gamma, column);
                 const float xhat =
                     (layer_norm_input<
@@ -2057,7 +2061,7 @@ __global__ void layer_norm_backward_input_block(
                         input, branch, index, seed, drop_threshold,
                         dropout_scale, step_counter, operation_seed) - mean)
                         * inverse;
-                cached_dxhat[item] = dxhat;
+                cached_output_gradient[item] = raw_gradient;
                 cached_xhat[item] = xhat;
                 dxhat_sum += dxhat;
                 dxhat_xhat_sum = fmaf(
@@ -2072,9 +2076,18 @@ __global__ void layer_norm_backward_input_block(
             const int column = threadIdx.x + item * blockDim.x;
             if (column < columns) {
                 const int index = offset + column;
+                const float raw_gradient =
+                    cached_output_gradient[item];
+                const float dxhat = raw_gradient
+                    * load_value(gamma, column);
                 const float gradient = inverse_over_columns
-                    * (columns * cached_dxhat[item] - dxhat_sum
+                    * (columns * dxhat - dxhat_sum
                         - cached_xhat[item] * dxhat_xhat_sum);
+                if constexpr (FuseParameterGradients) {
+                    atomicAdd(beta_gradient + column, raw_gradient);
+                    atomicAdd(gamma_gradient + column,
+                        raw_gradient * cached_xhat[item]);
+                }
                 if constexpr (FuseResidualDropout) {
                     const float multiplier = GraphDropout
                         ? layer_norm_graph_dropout_multiplier(
@@ -2310,7 +2323,8 @@ int launch_layer_norm_backward(
         branch_gradient_t, GraphDropout><<<
         rows, kLayerNormThreads, 0, stream>>>(
             input, branch, gamma, means, inverses, output_gradient,
-            input_gradient, branch_gradient, columns, same_parent, seed,
+            input_gradient, branch_gradient, nullptr, nullptr,
+            columns, same_parent, seed,
             drop_threshold, dropout_scale, step_counter, operation_seed);
     cudaError_t status = cudaPeekAtLastError();
     if (status != cudaSuccess)
@@ -2335,6 +2349,47 @@ int launch_layer_norm_backward(
         kLayerNormThreads, 0, stream>>>(
         parameter_partials, gamma_gradient, beta_gradient,
         grid.y, columns);
+    return (int)cudaPeekAtLastError();
+}
+
+template <typename T, bool FuseResidualDropout,
+    typename output_gradient_t, typename branch_gradient_t,
+    bool GraphDropout = false>
+int launch_layer_norm_backward_one_scan_512(
+    const T* input,
+    const T* branch,
+    const T* gamma,
+    const float* means,
+    const float* inverses,
+    const output_gradient_t* output_gradient,
+    float* input_gradient,
+    branch_gradient_t* branch_gradient,
+    float* gamma_gradient,
+    float* beta_gradient,
+    int rows,
+    int columns,
+    int same_parent,
+    unsigned int seed,
+    unsigned int drop_threshold,
+    float dropout_scale,
+    const unsigned long long* step_counter,
+    unsigned long long operation_seed,
+    cudaStream_t stream) {
+    if (!input || !gamma || !means || !inverses || !output_gradient
+        || !input_gradient || !gamma_gradient || !beta_gradient
+        || (FuseResidualDropout && (!branch || !branch_gradient))
+        || rows <= 0 || columns != kLayerNormWarpColumns
+        || (GraphDropout && !step_counter)) {
+        return (int)cudaErrorInvalidValue;
+    }
+    layer_norm_backward_input_block<
+        T, FuseResidualDropout, output_gradient_t,
+        branch_gradient_t, GraphDropout, true><<<
+        rows, kLayerNormThreads, 0, stream>>>(
+            input, branch, gamma, means, inverses, output_gradient,
+            input_gradient, branch_gradient, gamma_gradient, beta_gradient,
+            columns, same_parent, seed, drop_threshold, dropout_scale,
+            step_counter, operation_seed);
     return (int)cudaPeekAtLastError();
 }
 
@@ -2852,6 +2907,25 @@ NNTRAIN_EXPORT int nntrain_residual_dropout_layer_norm_backward_bf16(
 }
 
 NNTRAIN_EXPORT int
+nntrain_residual_dropout_layer_norm_backward_bf16_one_scan_512(
+    const __nv_bfloat16* residual, const __nv_bfloat16* branch,
+    const __nv_bfloat16* gamma, const float* means,
+    const float* inverses, const float* output_gradient,
+    float* residual_gradient, float* branch_gradient,
+    float* gamma_gradient, float* beta_gradient,
+    float* parameter_partials,
+    int rows, int columns, int same_parent, unsigned int seed,
+    unsigned int drop_threshold, float dropout_scale, cudaStream_t stream) {
+    (void)parameter_partials;
+    return launch_layer_norm_backward_one_scan_512<
+        __nv_bfloat16, true, float, float>(
+        residual, branch, gamma, means, inverses, output_gradient,
+        residual_gradient, branch_gradient, gamma_gradient, beta_gradient,
+        rows, columns, same_parent, seed, drop_threshold, dropout_scale,
+        nullptr, 0ull, stream);
+}
+
+NNTRAIN_EXPORT int
 nntrain_residual_dropout_layer_norm_backward_bf16_branch_gradient(
     const __nv_bfloat16* residual, const __nv_bfloat16* branch,
     const __nv_bfloat16* gamma, const float* means,
@@ -2949,6 +3023,26 @@ nntrain_cuda_graph_residual_dropout_layer_norm_backward_bf16(
         residual_gradient, branch_gradient, gamma_gradient, beta_gradient,
         parameter_partials, rows, columns, same_parent, 0, drop_threshold,
         dropout_scale, step_counter, operation_seed, stream);
+}
+
+NNTRAIN_EXPORT int
+nntrain_cuda_graph_residual_dropout_layer_norm_backward_bf16_one_scan_512(
+    const __nv_bfloat16* residual, const __nv_bfloat16* branch,
+    const __nv_bfloat16* gamma, const float* means,
+    const float* inverses, const float* output_gradient,
+    float* residual_gradient, float* branch_gradient,
+    float* gamma_gradient, float* beta_gradient,
+    float* parameter_partials, int rows, int columns, int same_parent,
+    const unsigned long long* step_counter,
+    unsigned long long operation_seed, unsigned int drop_threshold,
+    float dropout_scale, cudaStream_t stream) {
+    (void)parameter_partials;
+    return launch_layer_norm_backward_one_scan_512<
+        __nv_bfloat16, true, float, float, true>(
+        residual, branch, gamma, means, inverses, output_gradient,
+        residual_gradient, branch_gradient, gamma_gradient, beta_gradient,
+        rows, columns, same_parent, 0, drop_threshold, dropout_scale,
+        step_counter, operation_seed, stream);
 }
 
 NNTRAIN_EXPORT int

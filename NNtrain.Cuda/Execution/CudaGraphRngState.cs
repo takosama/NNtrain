@@ -477,7 +477,8 @@ public sealed class CudaGraphRngState : IDisposable
         bool sameParent,
         uint dropThreshold,
         float dropoutScale,
-        ulong operationSeed)
+        ulong operationSeed,
+        bool oneScan512 = false)
     {
         ValidateFusedLayerNormBackward(
             residual, branch, gamma, means, inverses, outputGradient,
@@ -485,7 +486,30 @@ public sealed class CudaGraphRngState : IDisposable
             parameterScratch, rows, columns, dropoutScale);
         _lane.ActivateComputeStream();
         CudaGraphStatus.Check(
-            CudaNativeGateway.GraphResidualDropoutLayerNormBackwardBFloat16(
+            oneScan512
+            ? CudaNativeGateway
+                .GraphResidualDropoutLayerNormBackwardBFloat16OneScan512(
+                DeviceIndex,
+                residual,
+                branch,
+                gamma,
+                means,
+                inverses,
+                outputGradient,
+                residualGradient,
+                branchGradient,
+                gammaGradient,
+                betaGradient,
+                parameterScratch,
+                rows,
+                columns,
+                sameParent ? 1 : 0,
+                _counter.Pointer,
+                operationSeed,
+                dropThreshold,
+                dropoutScale,
+                _lane.ComputeStreamHandle)
+            : CudaNativeGateway.GraphResidualDropoutLayerNormBackwardBFloat16(
                 DeviceIndex,
                 residual,
                 branch,

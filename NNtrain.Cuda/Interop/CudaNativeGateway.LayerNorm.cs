@@ -170,6 +170,26 @@ public static partial class CudaNativeGateway
             device);
     }
 
+    public static int ResidualDropoutLayerNormBackwardBFloat16OneScan512(
+        int device, nint residual, nint branch, nint gamma, nint means,
+        nint inverses, nint outputGradient, nint residualGradient,
+        nint branchGradient, nint gammaGradient, nint betaGradient,
+        nint parameterScratch, int rows, int columns, int sameParent,
+        uint seed, uint dropThreshold, float dropoutScale, nint stream)
+    {
+        EnsureMinimumAbiMinor(
+            CudaAbiVersion.LayerNormOneScanMinor,
+            "one-scan BF16 LayerNorm backward");
+        return Complete(
+            LayerNormNativeMethods.ResidualDropoutBackwardBFloat16OneScan512(
+                residual, branch, gamma, means, inverses, outputGradient,
+                residualGradient, branchGradient, gammaGradient, betaGradient,
+                parameterScratch, rows, columns, sameParent, seed,
+                dropThreshold, dropoutScale, stream),
+            CudaNativeOperation.ResidualDropoutLayerNormBackwardBFloat16,
+            device);
+    }
+
     public static int GraphResidualDropoutLayerNormBackward(
         int device, nint residual, nint branch, nint gamma, nint means,
         nint inverses, nint outputGradient, nint residualGradient,
@@ -204,6 +224,29 @@ public static partial class CudaNativeGateway
                 residualGradient, branchGradient, gammaGradient, betaGradient,
                 parameterScratch, rows, columns, sameParent, stepCounter,
                 operationSeed, dropThreshold, dropoutScale, stream),
+            CudaNativeOperation.ResidualDropoutLayerNormBackwardBFloat16,
+            device);
+    }
+
+    public static int GraphResidualDropoutLayerNormBackwardBFloat16OneScan512(
+        int device, nint residual, nint branch, nint gamma, nint means,
+        nint inverses, nint outputGradient, nint residualGradient,
+        nint branchGradient, nint gammaGradient, nint betaGradient,
+        nint parameterScratch, int rows, int columns, int sameParent,
+        nint stepCounter, ulong operationSeed, uint dropThreshold,
+        float dropoutScale, nint stream)
+    {
+        EnsureMinimumAbiMinor(
+            CudaAbiVersion.LayerNormOneScanMinor,
+            "CUDA Graph one-scan BF16 LayerNorm backward");
+        return Complete(
+            LayerNormNativeMethods
+                .GraphResidualDropoutBackwardBFloat16OneScan512(
+                    residual, branch, gamma, means, inverses, outputGradient,
+                    residualGradient, branchGradient, gammaGradient,
+                    betaGradient, parameterScratch, rows, columns, sameParent,
+                    stepCounter, operationSeed, dropThreshold, dropoutScale,
+                    stream),
             CudaNativeOperation.ResidualDropoutLayerNormBackwardBFloat16,
             device);
     }
@@ -392,6 +435,16 @@ public static partial class CudaNativeGateway
             int rows, int columns, int sameParent, uint seed,
             uint dropThreshold, float dropoutScale, nint stream);
 
+        [DllImport(LibraryName,
+            EntryPoint = "nntrain_residual_dropout_layer_norm_backward_bf16_one_scan_512",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int ResidualDropoutBackwardBFloat16OneScan512(
+            nint residual, nint branch, nint gamma, nint means, nint inverses,
+            nint outputGradient, nint residualGradient, nint branchGradient,
+            nint gammaGradient, nint betaGradient, nint parameterScratch,
+            int rows, int columns, int sameParent, uint seed,
+            uint dropThreshold, float dropoutScale, nint stream);
+
         [DllImport(
             LibraryName,
             EntryPoint = "nntrain_cuda_graph_residual_dropout_layer_norm_backward",
@@ -415,6 +468,18 @@ public static partial class CudaNativeGateway
             int rows, int columns, int sameParent, nint stepCounter,
             ulong operationSeed, uint dropThreshold, float dropoutScale,
             nint stream);
+
+        [DllImport(LibraryName,
+            EntryPoint = "nntrain_cuda_graph_residual_dropout_layer_norm_backward_bf16_one_scan_512",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int
+            GraphResidualDropoutBackwardBFloat16OneScan512(
+                nint residual, nint branch, nint gamma, nint means,
+                nint inverses, nint outputGradient, nint residualGradient,
+                nint branchGradient, nint gammaGradient, nint betaGradient,
+                nint parameterScratch, int rows, int columns, int sameParent,
+                nint stepCounter, ulong operationSeed, uint dropThreshold,
+                float dropoutScale, nint stream);
 
         [DllImport(
             LibraryName,

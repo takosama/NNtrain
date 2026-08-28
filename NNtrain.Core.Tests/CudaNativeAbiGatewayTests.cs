@@ -108,16 +108,22 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_gradient_comm_create",
         "nntrain_gradient_event_create",
         "nntrain_gradient_pack_bf16",
+        "nntrain_gradient_pack_bfp8_block",
         "nntrain_gradient_record_ready",
         "nntrain_gradient_record_ready_external",
         "nntrain_gradient_exchange_bf16",
+        "nntrain_gradient_exchange_bfp8_block",
         "nntrain_gradient_host_pipeline_create",
+        "nntrain_gradient_host_pipeline_create_bfp8_block",
         "nntrain_gradient_host_pipeline_exchange_bf16",
+        "nntrain_gradient_host_pipeline_exchange_bfp8_block",
         "nntrain_gradient_host_pipeline_destroy",
         "nntrain_gradient_unpack_float",
         "nntrain_gradient_comm_synchronize",
         "nntrain_gradient_event_destroy",
         "nntrain_gradient_comm_destroy",
+        "nntrain_residual_dropout_layer_norm_backward_bf16_one_scan_512",
+        "nntrain_cuda_graph_residual_dropout_layer_norm_backward_bf16_one_scan_512",
     ];
 
     private static readonly string[] Bfp8GradientExports =
@@ -488,6 +494,8 @@ public sealed class CudaNativeAbiGatewayTests
         Assert.Equal(17, CudaAbiVersion.GraphFusedLayerNormMinor);
         Assert.Equal(18, CudaAbiVersion.PureBFloat16OptimizerMinor);
         Assert.Equal(19, CudaAbiVersion.ExternalGradientReadyEventMinor);
+        Assert.Equal(20, CudaAbiVersion.BlockBfp8GradientTransportMinor);
+        Assert.Equal(21, CudaAbiVersion.LayerNormOneScanMinor);
         Assert.Equal(
             CudaKernelFeature.None,
             CudaNativeGateway.RequiredFeatures(

@@ -67,6 +67,10 @@ $requiredGatewayExports = @(
     'nntrain_tensor_topk_float',
     'nntrain_tensor_topk_bf16',
     'nntrain_gradient_record_ready_external',
+    'nntrain_gradient_pack_bfp8_block',
+    'nntrain_gradient_exchange_bfp8_block',
+    'nntrain_gradient_host_pipeline_create_bfp8_block',
+    'nntrain_gradient_host_pipeline_exchange_bfp8_block',
     'nntrain_cuda_stream_begin_capture',
     'nntrain_cuda_stream_end_capture',
     'nntrain_cuda_graph_instantiate',
@@ -86,6 +90,8 @@ $requiredGatewayExports = @(
     'nntrain_cuda_graph_residual_dropout_layer_norm_forward_bf16'
     'nntrain_cuda_graph_residual_dropout_layer_norm_backward'
     'nntrain_cuda_graph_residual_dropout_layer_norm_backward_bf16'
+    'nntrain_residual_dropout_layer_norm_backward_bf16_one_scan_512'
+    'nntrain_cuda_graph_residual_dropout_layer_norm_backward_bf16_one_scan_512'
     'nntrain_cuda_graph_residual_dropout_layer_norm_backward_bf16_branch_gradient'
     'nntrain_cuda_graph_residual_dropout_layer_norm_backward_bf16_io_gradient'
     'nntrain_tensor_embedding_backward_reduced_bf16_gradient'
