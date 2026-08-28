@@ -501,6 +501,7 @@ public sealed class CudaNativeAbiGatewayTests
         Assert.Equal(20, CudaAbiVersion.BlockBfp8GradientTransportMinor);
         Assert.Equal(21, CudaAbiVersion.LayerNormOneScanMinor);
         Assert.Equal(22, CudaAbiVersion.DirectBfp8LayerNormMinor);
+        Assert.Equal(23, CudaAbiVersion.BlockBfp8OptimizerStateMinor);
         Assert.Equal(
             CudaKernelFeature.None,
             CudaNativeGateway.RequiredFeatures(

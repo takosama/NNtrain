@@ -88,7 +88,10 @@ else if (args.Length > 0
 {
     int warmup = args.Length > 1 ? int.Parse(args[1]) : 3;
     int iterations = args.Length > 2 ? int.Parse(args[2]) : 10;
-    Bfp8CudaGemmProfiler.Run(warmup, iterations);
+    int m = args.Length > 3 ? int.Parse(args[3]) : 256;
+    int k = args.Length > 4 ? int.Parse(args[4]) : 512;
+    int n = args.Length > 5 ? int.Parse(args[5]) : 256;
+    Bfp8CudaGemmProfiler.Run(warmup, iterations, m, k, n);
 }
 else if (args.Length > 0
     && string.Equals(

@@ -69,8 +69,10 @@ internal static partial class CudaOptimizerKernels
 
     private static CudaBfp8BufferView AllocateBfp8StateBuffer(
         NativeCudaDevice accelerator,
-        ReadOnlySpan<float> host)
+        ReadOnlySpan<float> host,
+        Bfp8QuantizationDescriptor? descriptor = null)
     {
+        descriptor ??= Bfp8QuantizationDescriptor.TensorWide;
         NativeCudaBuffer<sbyte>? payload = null;
         NativeCudaBuffer<float>? scales = null;
         try
@@ -79,14 +81,17 @@ internal static partial class CudaOptimizerKernels
             {
                 payload = accelerator.Allocate1D<sbyte>(host.Length);
                 payload.MemSetToZero();
-                scales = AllocateStateBuffer(accelerator, [1f]);
+                int scaleCount = descriptor.GetScaleCount(host.Length);
+                var initialScales = new float[scaleCount];
+                Array.Fill(initialScales, 1f);
+                scales = AllocateStateBuffer(accelerator, initialScales);
             }
             else
             {
                 Bfp8EncodedStorage encoded =
                     Bfp8QuantizationCodec.Default.Encode(
                         host,
-                        Bfp8QuantizationDescriptor.TensorWide);
+                        descriptor);
                 payload = accelerator.Allocate1D(encoded.Payload.Span);
                 scales = accelerator.Allocate1D(encoded.Scales.Span);
             }
@@ -94,7 +99,7 @@ internal static partial class CudaOptimizerKernels
             var result = new CudaBfp8BufferView(
                 payload,
                 scales,
-                Bfp8QuantizationDescriptor.TensorWide);
+                descriptor);
             payload = null;
             scales = null;
             return result;
@@ -103,6 +108,49 @@ internal static partial class CudaOptimizerKernels
         {
             payload?.Dispose();
             scales?.Dispose();
+        }
+    }
+
+    private static void QuantizeBfp8OptimizerState(
+        int deviceIndex,
+        NativeCudaBuffer<float> source,
+        CudaBfp8BufferView destination,
+        NativeCudaBuffer<int> finiteStatus,
+        nint stream)
+    {
+        CudaOptimizerNative.AccumulateFiniteStatus(
+            deviceIndex,
+            source.NativePtr,
+            source.Length,
+            finiteStatus.NativePtr);
+        if (destination.Descriptor.Granularity == Bfp8ScaleGranularity.Block)
+        {
+            CudaBfp8Native.QuantizeFloat32Roundtrip(
+                deviceIndex,
+                source,
+                destination.Payload,
+                destination.Scales,
+                destination.Descriptor,
+                stream);
+        }
+        else
+        {
+            CudaBfp8Native.QuantizeFloat32(
+                deviceIndex,
+                source,
+                destination.Payload,
+                destination.Scales,
+                destination.Descriptor,
+                stream);
+            // Tensor-wide pure-BFP8 retains its existing exact persistence
+            // boundary; the block path performs this writeback in one kernel.
+            CudaBfp8Native.DequantizeFloat32(
+                deviceIndex,
+                destination.Payload,
+                destination.Scales,
+                source,
+                destination.Descriptor,
+                stream);
         }
     }
 
@@ -284,14 +332,18 @@ internal static partial class CudaOptimizerKernels
         // the sole optimizer-state authority until explicit serialization.
         private readonly float[] _firstHost;
         private readonly float[] _secondHost;
+        private readonly Bfp8QuantizationDescriptor _descriptor;
         private readonly Dictionary<int, Buffers> _buffers = [];
 
         internal AdamWBfp8ResidentState(
             float[] firstHost,
-            float[] secondHost)
+            float[] secondHost,
+            Bfp8QuantizationDescriptor? descriptor = null)
         {
             _firstHost = firstHost;
             _secondHost = secondHost;
+            _descriptor = descriptor
+                ?? Bfp8QuantizationDescriptor.TensorWide;
         }
 
         internal Buffers GetOrCreate(int deviceIndex)
@@ -304,12 +356,14 @@ internal static partial class CudaOptimizerKernels
             {
                 CudaBfp8BufferView first = AllocateBfp8StateBuffer(
                     accelerator,
-                    _firstHost);
+                    _firstHost,
+                    _descriptor);
                 own(first.Payload);
                 own(first.Scales);
                 CudaBfp8BufferView second = AllocateBfp8StateBuffer(
                     accelerator,
-                    _secondHost);
+                    _secondHost,
+                    _descriptor);
                 own(second.Payload);
                 own(second.Scales);
                 var created = new Buffers(
@@ -325,25 +379,55 @@ internal static partial class CudaOptimizerKernels
             Tensor parameter,
             int deviceIndex,
             NativeCudaBuffer<int> finiteStatus,
-            AdamWBfp8DeviceScratch scratch,
+            AdamWBfp8DeviceScratch? scratch,
             float beta1,
             float beta2,
             float learningRate,
             float weightDecay,
             float updateScale,
             float scaledEpsilon,
-            bool applyWeightDecay)
+            bool applyWeightDecay,
+            bool mixedBlockState = false)
         {
             Buffers buffers = GetOrCreate(deviceIndex);
             CudaBfp8BufferView data =
                 parameter.EnsureCudaBfp8Buffer(deviceIndex);
-            CudaBfp8BufferView gradient =
-                parameter.EnsureCudaBfp8GradientBuffer(deviceIndex);
             NativeCudaDevice accelerator =
                 ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
             nint stream = accelerator.DefaultStream;
+            if (mixedBlockState)
+            {
+                NativeCudaBuffer<float> master =
+                    parameter.EnsureCudaMasterFloat32Buffer(deviceIndex);
+                NativeCudaBuffer<float> mixedGradient =
+                    parameter.EnsureCudaGradientBuffer(deviceIndex);
+                CudaOptimizerNative.AdamWBlockBfp8State(
+                    deviceIndex,
+                    master.NativePtr,
+                    mixedGradient.NativePtr,
+                    buffers.First,
+                    buffers.Second,
+                    parameter.Numel,
+                    beta1,
+                    beta2,
+                    learningRate,
+                    weightDecay,
+                    updateScale,
+                    scaledEpsilon,
+                    applyWeightDecay,
+                    finiteStatus.NativePtr,
+                    stream);
+                PublishMix8Master(parameter, deviceIndex, finiteStatus);
+                return;
+            }
             AdamWBfp8DeviceScratch.Buffers workspace =
-                scratch.Get(parameter.Numel);
+                (scratch ?? throw new InvalidOperationException(
+                    "Pure BFP8 AdamW requires decode scratch."))
+                .Get(parameter.Numel);
+            NativeCudaBuffer<float> dataForUpdate;
+            NativeCudaBuffer<float> gradientForUpdate;
+            CudaBfp8BufferView gradient =
+                parameter.EnsureCudaBfp8GradientBuffer(deviceIndex);
             CudaBfp8Native.DequantizeFloat32(
                 deviceIndex,
                 data.Payload,
@@ -358,6 +442,8 @@ internal static partial class CudaOptimizerKernels
                 workspace.Gradient,
                 gradient.Descriptor,
                 stream);
+            dataForUpdate = workspace.Data;
+            gradientForUpdate = workspace.Gradient;
             CudaBfp8Native.DequantizeFloat32(
                 deviceIndex,
                 buffers.First.Payload,
@@ -378,20 +464,20 @@ internal static partial class CudaOptimizerKernels
             // disappears before the next optimizer step.
             CudaOptimizerNative.AdamWBfp8Moments(
                 deviceIndex,
-                workspace.Gradient.NativePtr,
+                gradientForUpdate.NativePtr,
                 workspace.First.NativePtr,
                 workspace.Second.NativePtr,
                 parameter.Numel,
                 beta1,
                 beta2,
                 finiteStatus.NativePtr);
-            CudaBfp8GradientNative.Quantize(
+            QuantizeBfp8OptimizerState(
                 deviceIndex,
                 workspace.First,
                 buffers.First,
                 finiteStatus,
                 stream);
-            CudaBfp8GradientNative.Quantize(
+            QuantizeBfp8OptimizerState(
                 deviceIndex,
                 workspace.Second,
                 buffers.Second,
@@ -399,10 +485,12 @@ internal static partial class CudaOptimizerKernels
                 stream);
             CudaOptimizerNative.AdamWBfp8Apply(
                 deviceIndex,
-                workspace.Data.NativePtr,
+                dataForUpdate.NativePtr,
                 workspace.First.NativePtr,
                 workspace.Second.NativePtr,
                 buffers.Second.Scales.NativePtr,
+                buffers.Second.Descriptor.GetEffectiveBlockSize(
+                    parameter.Numel),
                 parameter.Numel,
                 learningRate,
                 weightDecay,
@@ -431,13 +519,13 @@ internal static partial class CudaOptimizerKernels
             float[] destination)
         {
             var payload = new sbyte[destination.Length];
-            var scale = new float[1];
+            var scale = new float[source.Scales.Length];
             source.Payload.CopyToCPU(payload);
             source.Scales.CopyToCPU(scale);
             Bfp8QuantizationCodec.Default.Decode(
                 payload,
                 scale,
-                Bfp8QuantizationDescriptor.TensorWide,
+                source.Descriptor,
                 destination);
         }
 
@@ -1171,16 +1259,20 @@ internal static partial class CudaOptimizerKernels
         private readonly float[] _fastHost;
         private readonly float[] _slowHost;
         private readonly float _initialConfidence;
+        private readonly Bfp8QuantizationDescriptor _descriptor;
         private readonly Dictionary<int, NekoBuffers> _buffers = [];
 
         internal NekoMuonBfp8ResidentState(
             float[] fastHost,
             float[] slowHost,
-            float initialConfidence)
+            float initialConfidence,
+            Bfp8QuantizationDescriptor? descriptor = null)
         {
             _fastHost = fastHost;
             _slowHost = slowHost;
             _initialConfidence = initialConfidence;
+            _descriptor = descriptor
+                ?? Bfp8QuantizationDescriptor.TensorWide;
         }
 
         internal NekoBuffers GetOrCreate(int deviceIndex)
@@ -1194,12 +1286,14 @@ internal static partial class CudaOptimizerKernels
             {
                 CudaBfp8BufferView fast = AllocateBfp8StateBuffer(
                     accelerator,
-                    _fastHost);
+                    _fastHost,
+                    _descriptor);
                 own(fast.Payload);
                 own(fast.Scales);
                 CudaBfp8BufferView slow = AllocateBfp8StateBuffer(
                     accelerator,
-                    _slowHost);
+                    _slowHost,
+                    _descriptor);
                 own(slow.Payload);
                 own(slow.Scales);
                 NativeCudaBuffer<float> stats =
@@ -1233,13 +1327,13 @@ internal static partial class CudaOptimizerKernels
             float[] destination)
         {
             var payload = new sbyte[destination.Length];
-            var scale = new float[1];
+            var scale = new float[source.Scales.Length];
             source.Payload.CopyToCPU(payload);
             source.Scales.CopyToCPU(scale);
             Bfp8QuantizationCodec.Default.Decode(
                 payload,
                 scale,
-                Bfp8QuantizationDescriptor.TensorWide,
+                source.Descriptor,
                 destination);
         }
 
@@ -1617,24 +1711,73 @@ internal static partial class CudaOptimizerKernels
         float fastCorrection,
         float slowCorrection,
         float epsilon,
-        float rho)
+        float rho,
+        bool mixedBlockState = false)
     {
         NativeCudaDevice accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
         NekoMuonDeviceScratch.Bfp8Buffers workspace =
             scratch.GetBfp8Buffers(parameter.Numel);
-        CudaBfp8BufferView gradient =
-            parameter.EnsureCudaBfp8GradientBuffer(deviceIndex);
         NekoMuonBfp8ResidentState.NekoBuffers buffers =
             state.GetOrCreate(deviceIndex);
         nint stream = accelerator.DefaultStream;
-        CudaBfp8Native.DequantizeFloat32(
-            deviceIndex,
-            gradient.Payload,
-            gradient.Scales,
-            workspace.Gradient,
-            gradient.Descriptor,
-            stream);
+        NativeCudaBuffer<float> gradientForUpdate;
+        if (mixedBlockState)
+        {
+            gradientForUpdate =
+                parameter.EnsureCudaGradientBuffer(deviceIndex);
+            CudaOptimizerNative.NekoMuonBlockBfp8Moments(
+                deviceIndex,
+                gradientForUpdate.NativePtr,
+                buffers.Fast,
+                buffers.Slow,
+                workspace.Fast.NativePtr,
+                workspace.Slow.NativePtr,
+                parameter.Numel,
+                betaFast,
+                betaSlow,
+                finiteStatus.NativePtr,
+                stream);
+            buffers.Stats.MemSetToZero();
+            if (!CudaNekoMuon.TryMomentsAndStatsCompactFinite(
+                accelerator,
+                gradientForUpdate,
+                workspace.Fast,
+                workspace.Slow,
+                buffers.Stats,
+                finiteStatus,
+                parameter.Numel,
+                betaFast: 1f,
+                betaSlow: 1f,
+                fastCorrection,
+                slowCorrection))
+            {
+                throw new InvalidOperationException(
+                    "The finite-aware CUDA NekoMuon statistics kernel is " +
+                    "required for block-BFP8 optimizer state.");
+            }
+            CudaOptimizerNative.NekoUpdateDeviceControl(
+                deviceIndex,
+                buffers.Stats.NativePtr,
+                buffers.Confidence.NativePtr,
+                finiteStatus.NativePtr,
+                epsilon,
+                rho);
+            return;
+        }
+        else
+        {
+            CudaBfp8BufferView gradient =
+                parameter.EnsureCudaBfp8GradientBuffer(deviceIndex);
+            CudaBfp8Native.DequantizeFloat32(
+                deviceIndex,
+                gradient.Payload,
+                gradient.Scales,
+                workspace.Gradient,
+                gradient.Descriptor,
+                stream);
+            gradientForUpdate = workspace.Gradient;
+        }
         CudaBfp8Native.DequantizeFloat32(
             deviceIndex,
             buffers.Fast.Payload,
@@ -1652,7 +1795,7 @@ internal static partial class CudaOptimizerKernels
         buffers.Stats.MemSetToZero();
         if (!CudaNekoMuon.TryMomentsAndStatsCompact(
             accelerator,
-            workspace.Gradient,
+            gradientForUpdate,
             workspace.Fast,
             workspace.Slow,
             buffers.Stats,
@@ -1665,13 +1808,13 @@ internal static partial class CudaOptimizerKernels
             throw new InvalidOperationException(
                 "The native CUDA NekoMuon statistics kernel is required.");
         }
-        CudaBfp8GradientNative.Quantize(
+        QuantizeBfp8OptimizerState(
             deviceIndex,
             workspace.Fast,
             buffers.Fast,
             finiteStatus,
             stream);
-        CudaBfp8GradientNative.Quantize(
+        QuantizeBfp8OptimizerState(
             deviceIndex,
             workspace.Slow,
             buffers.Slow,
@@ -1685,7 +1828,7 @@ internal static partial class CudaOptimizerKernels
         buffers.Stats.MemSetToZero();
         if (!CudaNekoMuon.TryMomentsAndStatsCompactFinite(
             accelerator,
-            workspace.Gradient,
+            gradientForUpdate,
             workspace.Fast,
             workspace.Slow,
             buffers.Stats,
@@ -2170,6 +2313,7 @@ internal static partial class CudaOptimizerKernels
         float weightDecay,
         bool applyWeightDecay,
         bool deviceOnlyFixedFive,
+        bool mixedBlockState = false,
         bool forceFullNewtonSchulz = false)
     {
         NativeCudaDevice accelerator =
@@ -2178,15 +2322,25 @@ internal static partial class CudaOptimizerKernels
             scratch.GetBfp8Buffers(parameter.Numel);
         NekoMuonBfp8ResidentState.NekoBuffers buffers =
             state.GetOrCreate(deviceIndex);
-        CudaBfp8BufferView data = parameter.EnsureCudaBfp8Buffer(deviceIndex);
         nint stream = accelerator.DefaultStream;
-        CudaBfp8Native.DequantizeFloat32(
-            deviceIndex,
-            data.Payload,
-            data.Scales,
-            workspace.Data,
-            data.Descriptor,
-            stream);
+        NativeCudaBuffer<float> dataForUpdate;
+        CudaBfp8BufferView data = parameter.EnsureCudaBfp8Buffer(deviceIndex);
+        if (mixedBlockState)
+        {
+            dataForUpdate =
+                parameter.EnsureCudaMasterFloat32Buffer(deviceIndex);
+        }
+        else
+        {
+            CudaBfp8Native.DequantizeFloat32(
+                deviceIndex,
+                data.Payload,
+                data.Scales,
+                workspace.Data,
+                data.Descriptor,
+                stream);
+            dataForUpdate = workspace.Data;
+        }
         CudaBfp8Native.DequantizeFloat32(
             deviceIndex,
             buffers.Fast.Payload,
@@ -2308,19 +2462,26 @@ internal static partial class CudaOptimizerKernels
             (float)originalRows / originalColumns));
         CudaOptimizerNative.NekoApply(
             deviceIndex,
-            workspace.Data.NativePtr,
+            dataForUpdate.NativePtr,
             update.NativePtr,
             parameter.Numel,
             learningRate,
             finalScale,
             weightDecay,
             applyWeightDecay);
-        CudaBfp8GradientNative.Quantize(
-            deviceIndex,
-            workspace.Data,
-            data,
-            finiteStatus,
-            stream);
+        if (mixedBlockState)
+        {
+            PublishMix8Master(parameter, deviceIndex, finiteStatus);
+        }
+        else
+        {
+            CudaBfp8GradientNative.Quantize(
+                deviceIndex,
+                workspace.Data,
+                data,
+                finiteStatus,
+                stream);
+        }
         return confidence;
     }
 

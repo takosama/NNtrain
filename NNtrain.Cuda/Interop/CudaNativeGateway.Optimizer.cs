@@ -45,13 +45,15 @@ public static partial class CudaNativeGateway
 
     public static int OptimizerAdamWBfp8Apply(
         int device, nint data, nint first, nint second, nint secondScale,
-        int length, float learningRate, float weightDecay, float updateScale,
+        int secondScaleBlockSize, int length, float learningRate,
+        float weightDecay, float updateScale,
         float scaledEpsilon, bool applyWeightDecay, nint finiteStatus)
     {
         EnsureCompatibleAbi();
         return Complete(
             OptimizerNativeMethods.AdamWBfp8Apply(
-                data, first, second, secondScale, length, learningRate,
+                data, first, second, secondScale, secondScaleBlockSize,
+                length, learningRate,
                 weightDecay, updateScale, scaledEpsilon,
                 applyWeightDecay ? 1 : 0, finiteStatus),
             CudaNativeOperation.OptimizerBfp8,
@@ -303,7 +305,7 @@ public static partial class CudaNativeGateway
         [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_adamw_bfp8_moments", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int AdamWBfp8Moments(nint gradient, nint first, nint second, int length, float beta1, float beta2, nint finiteStatus);
         [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_adamw_bfp8_apply", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int AdamWBfp8Apply(nint data, nint first, nint second, nint secondScale, int length, float learningRate, float weightDecay, float updateScale, float scaledEpsilon, int applyWeightDecay, nint finiteStatus);
+        internal static extern int AdamWBfp8Apply(nint data, nint first, nint second, nint secondScale, int secondScaleBlockSize, int length, float learningRate, float weightDecay, float updateScale, float scaledEpsilon, int applyWeightDecay, nint finiteStatus);
         [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_adamw_bf16_state", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int AdamWBFloat16State(nint data, nint gradient, nint first, nint second, int length, float beta1, float beta2, float learningRate, float weightDecay, float updateScale, float scaledEpsilon, int applyWeightDecay);
         [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_adamw_publish", CallingConvention = CallingConvention.Cdecl)]

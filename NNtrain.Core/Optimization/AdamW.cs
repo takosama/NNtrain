@@ -14,6 +14,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         _cudaBfp8FiniteReadbacks = [];
     private readonly Dictionary<int,
         CudaOptimizerKernels.AdamWBfp8DeviceScratch> _cudaBfp8Scratch = [];
+    private readonly CudaDispatchPolicy _cudaDispatchPolicy;
     private AdamWOptions _options;
     private AdamWParameterState[] _parameterStates;
     private readonly Action<int> _updateWorkItemAction;
@@ -33,6 +34,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         AdamWOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(parameters);
+        _cudaDispatchPolicy = CudaDispatchPolicy.Current.Validate();
 
         _parameters = [];
         var seenParameters =
@@ -368,7 +370,10 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
             }
             if (mix8)
             {
-                StepCudaMix8(devices, options);
+                if (_cudaDispatchPolicy.EnableBlockBfp8OptimizerState)
+                    StepCudaBfp8(devices, options, mixedBlockState: true);
+                else
+                    StepCudaMix8(devices, options);
                 return;
             }
             for (int parameterIndex = 0;
@@ -537,7 +542,10 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
 
     public void step() => Step();
 
-    private void StepCudaBfp8(int[] devices, AdamWOptions options)
+    private void StepCudaBfp8(
+        int[] devices,
+        AdamWOptions options,
+        bool mixedBlockState = false)
     {
         if (devices.Length == 0)
         {
@@ -592,7 +600,10 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                 runtime.CudaBfp8State =
                     new CudaOptimizerKernels.AdamWBfp8ResidentState(
                         runtime.FirstMoment,
-                        runtime.SecondMoment);
+                        runtime.SecondMoment,
+                        mixedBlockState
+                            ? Bfp8QuantizationDescriptor.Mix8_32
+                            : Bfp8QuantizationDescriptor.TensorWide);
             }
             foreach (int deviceIndex in devices)
                 runtime.CudaBfp8State.GetOrCreate(deviceIndex);
@@ -600,15 +611,18 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
 
         var statuses = new NativeCudaBuffer<int>[devices.Length];
         var scratch = new CudaOptimizerKernels
-            .AdamWBfp8DeviceScratch[devices.Length];
+            .AdamWBfp8DeviceScratch?[devices.Length];
         int maximumLeafLength = _parameterRuntime.Max(
             runtime => runtime.Parameter.T.Numel);
         for (int deviceSlot = 0; deviceSlot < devices.Length; deviceSlot++)
         {
             int deviceIndex = devices[deviceSlot];
             statuses[deviceSlot] = GetOrCreateBfp8FiniteStatus(deviceIndex);
-            scratch[deviceSlot] = GetOrCreateBfp8Scratch(
-                deviceIndex, maximumLeafLength);
+            if (!mixedBlockState)
+            {
+                scratch[deviceSlot] = GetOrCreateBfp8Scratch(
+                    deviceIndex, maximumLeafLength);
+            }
             statuses[deviceSlot].MemSetToZero();
         }
 
@@ -629,7 +643,8 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                     options.WeightDecay,
                     _stepUpdateScale,
                     _stepScaledEpsilon,
-                    runtime.ApplyWeightDecay);
+                    runtime.ApplyWeightDecay,
+                    mixedBlockState);
             }
         });
 
@@ -638,7 +653,9 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
             .ToArray();
         CudaOptimizerStepBatch.CompleteAfterSynchronization(
             devices,
-            "pure BFP8 AdamW update",
+            mixedBlockState
+                ? "block-BFP8-state mix8_32 AdamW update"
+                : "pure BFP8 AdamW update",
             queueReadback: () =>
             {
                 for (int deviceSlot = 0;

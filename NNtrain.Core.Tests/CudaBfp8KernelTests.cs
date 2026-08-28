@@ -56,6 +56,55 @@ public sealed class CudaBfp8KernelTests
     }
 
     [Fact]
+    public void NativeBlockQuantizeRoundtripPublishesEncodedStateInOnePass()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        const int length = 515;
+        Bfp8QuantizationDescriptor descriptor =
+            Bfp8QuantizationDescriptor.Mix8_32;
+        float[] source = Enumerable.Range(0, length)
+            .Select(index =>
+                MathF.Sin(index * 0.043f) *
+                (0.125f + (index % 139) * 0.017f))
+            .ToArray();
+        Bfp8EncodedStorage expected = Bfp8QuantizationCodec.Default.Encode(
+            source,
+            descriptor);
+        var expectedDecoded = new float[length];
+        Bfp8QuantizationCodec.Default.Decode(
+            expected.Payload.Span,
+            expected.Scales.Span,
+            descriptor,
+            expectedDecoded);
+
+        NativeCudaDevice device = ForgetMemoryV2Cuda.GetAccelerator(0);
+        using NativeCudaBuffer<float> state = device.Allocate1D(source);
+        using NativeCudaBuffer<sbyte> payload =
+            device.Allocate1D<sbyte>(length);
+        using NativeCudaBuffer<float> scales = device.Allocate1D<float>(
+            descriptor.GetScaleCount(length));
+        CudaBfp8Native.QuantizeFloat32Roundtrip(
+            0,
+            state,
+            payload,
+            scales,
+            descriptor);
+        device.Synchronize();
+
+        var actualState = new float[length];
+        var actualPayload = new sbyte[length];
+        var actualScales = new float[scales.Length];
+        state.CopyToCPU(actualState);
+        payload.CopyToCPU(actualPayload);
+        scales.CopyToCPU(actualScales);
+        Assert.Equal(expected.Payload.ToArray(), actualPayload);
+        Assert.Equal(expected.Scales.ToArray(), actualScales);
+        Assert.Equal(expectedDecoded, actualState);
+    }
+
+    [Fact]
     public void NativeBFloat16FallbackStaysOnCuda()
     {
         if (!Tensor.IsCudaAvailable())

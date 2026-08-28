@@ -14,7 +14,7 @@
 
 namespace {
 constexpr std::uint32_t nntrain_abi_major = 1;
-constexpr std::uint32_t nntrain_abi_minor = 22;
+constexpr std::uint32_t nntrain_abi_minor = 23;
 constexpr std::uint32_t nntrain_abi_version_value =
     (nntrain_abi_major << 16) | nntrain_abi_minor;
 
@@ -188,6 +188,217 @@ __global__ void bfp8_quantize_f32_kernel(
     }
 }
 
+__global__ void bfp8_quantize_f32_roundtrip_kernel(
+    float* source,
+    signed char* payload,
+    float* scales,
+    int length,
+    int quantization_block_size) {
+    const long long start =
+        static_cast<long long>(blockIdx.x) * quantization_block_size;
+    const long long end = min(
+        static_cast<long long>(length),
+        start + quantization_block_size);
+    float local_maximum = 0.0f;
+    for (long long index = start + threadIdx.x;
+         index < end;
+         index += blockDim.x) {
+        local_maximum = fmaxf(local_maximum, fabsf(source[index]));
+    }
+    __shared__ float reduction[256];
+    reduction[threadIdx.x] = local_maximum;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            reduction[threadIdx.x] = fmaxf(
+                reduction[threadIdx.x], reduction[threadIdx.x + stride]);
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0)
+        scales[blockIdx.x] = bfp8_scale_from_maximum(reduction[0]);
+    __syncthreads();
+    const float scale = scales[blockIdx.x];
+    for (long long index = start + threadIdx.x;
+         index < end;
+         index += blockDim.x) {
+        const int quantized = bfp8_quantized_code(source[index], scale);
+        payload[index] = static_cast<signed char>(quantized);
+        source[index] = static_cast<float>(quantized) * scale;
+    }
+}
+
+// mix8_32 keeps FP32 master weights/gradients but persists Adam moments in
+// block-scaled BFP8. One block owns one quantization block, so moment decode,
+// EMA update, scale reduction, requantization and parameter update share the
+// values in registers instead of crossing six kernel boundaries.
+__global__ void adamw_block_bfp8_state_kernel(
+    float* data,
+    const float* gradient,
+    signed char* first_payload,
+    float* first_scales,
+    signed char* second_payload,
+    float* second_scales,
+    int length,
+    float beta1,
+    float beta2,
+    float learning_rate,
+    float weight_decay,
+    float update_scale,
+    float scaled_epsilon,
+    int apply_weight_decay,
+    int* finite_status) {
+    constexpr int block_size = 128;
+    __shared__ float first_maximum[block_size];
+    __shared__ float second_maximum[block_size];
+    __shared__ int invalid;
+    if (threadIdx.x == 0)
+        invalid = *finite_status;
+    __syncthreads();
+
+    const int index = blockIdx.x * block_size + threadIdx.x;
+    float first = 0.f;
+    float second = 0.f;
+    if (index < length && invalid == 0) {
+        const float g = gradient[index];
+        first = fmaf(
+            beta1,
+            static_cast<float>(first_payload[index]) * first_scales[blockIdx.x],
+            (1.f - beta1) * g);
+        second = fmaf(
+            beta2,
+            static_cast<float>(second_payload[index]) * second_scales[blockIdx.x],
+            (1.f - beta2) * g * g);
+        if (!isfinite(g) || !isfinite(first) || !isfinite(second)
+            || second < 0.f) {
+            atomicExch(&invalid, 1);
+        }
+    }
+    first_maximum[threadIdx.x] = fabsf(first);
+    second_maximum[threadIdx.x] = fabsf(second);
+    __syncthreads();
+    for (int stride = block_size / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            first_maximum[threadIdx.x] = fmaxf(
+                first_maximum[threadIdx.x], first_maximum[threadIdx.x + stride]);
+            second_maximum[threadIdx.x] = fmaxf(
+                second_maximum[threadIdx.x], second_maximum[threadIdx.x + stride]);
+        }
+        __syncthreads();
+    }
+    if (invalid != 0) {
+        if (threadIdx.x == 0)
+            atomicExch(finite_status, 1);
+        return;
+    }
+    if (threadIdx.x == 0) {
+        first_scales[blockIdx.x] =
+            bfp8_scale_from_maximum(first_maximum[0]);
+        second_scales[blockIdx.x] =
+            bfp8_scale_from_maximum(second_maximum[0]);
+    }
+    __syncthreads();
+    if (index >= length)
+        return;
+
+    const float first_scale = first_scales[blockIdx.x];
+    const float second_scale = second_scales[blockIdx.x];
+    const int first_code = bfp8_quantized_code(first, first_scale);
+    const int second_code = bfp8_quantized_code(second, second_scale);
+    first_payload[index] = static_cast<signed char>(first_code);
+    second_payload[index] = static_cast<signed char>(second_code);
+    first = static_cast<float>(first_code) * first_scale;
+    second = static_cast<float>(second_code) * second_scale;
+
+    const float variance = fmaxf(second, 0.5f * second_scale);
+    float parameter = data[index];
+    if (apply_weight_decay)
+        parameter *= 1.f - learning_rate * weight_decay;
+    parameter -= update_scale * first /
+        (sqrtf(variance) + scaled_epsilon);
+    if (!isfinite(parameter)) {
+        atomicExch(finite_status, 1);
+        return;
+    }
+    data[index] = parameter;
+}
+
+// The NekoMuon statistics kernel must observe the quantized persistent
+// moments. Fuse decode/update/requantize and materialize that exact state into
+// the shared FP32 workspace; the existing block reducer then computes stable
+// FP32 statistics in one additional launch.
+__global__ void nekomuon_block_bfp8_moments_kernel(
+    const float* gradient,
+    signed char* fast_payload,
+    float* fast_scales,
+    signed char* slow_payload,
+    float* slow_scales,
+    float* fast_roundtrip,
+    float* slow_roundtrip,
+    int length,
+    float beta_fast,
+    float beta_slow,
+    int* finite_status) {
+    constexpr int block_size = 128;
+    __shared__ float fast_maximum[block_size];
+    __shared__ float slow_maximum[block_size];
+    __shared__ int invalid;
+    if (threadIdx.x == 0)
+        invalid = *finite_status;
+    __syncthreads();
+
+    const int index = blockIdx.x * block_size + threadIdx.x;
+    float fast = 0.f;
+    float slow = 0.f;
+    if (index < length && invalid == 0) {
+        const float g = gradient[index];
+        fast = fmaf(
+            beta_fast,
+            static_cast<float>(fast_payload[index]) * fast_scales[blockIdx.x],
+            (1.f - beta_fast) * g);
+        slow = fmaf(
+            beta_slow,
+            static_cast<float>(slow_payload[index]) * slow_scales[blockIdx.x],
+            (1.f - beta_slow) * g);
+        if (!isfinite(g) || !isfinite(fast) || !isfinite(slow))
+            atomicExch(&invalid, 1);
+    }
+    fast_maximum[threadIdx.x] = fabsf(fast);
+    slow_maximum[threadIdx.x] = fabsf(slow);
+    __syncthreads();
+    for (int stride = block_size / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            fast_maximum[threadIdx.x] = fmaxf(
+                fast_maximum[threadIdx.x], fast_maximum[threadIdx.x + stride]);
+            slow_maximum[threadIdx.x] = fmaxf(
+                slow_maximum[threadIdx.x], slow_maximum[threadIdx.x + stride]);
+        }
+        __syncthreads();
+    }
+    if (invalid != 0) {
+        if (threadIdx.x == 0)
+            atomicExch(finite_status, 1);
+        return;
+    }
+    if (threadIdx.x == 0) {
+        fast_scales[blockIdx.x] =
+            bfp8_scale_from_maximum(fast_maximum[0]);
+        slow_scales[blockIdx.x] =
+            bfp8_scale_from_maximum(slow_maximum[0]);
+    }
+    __syncthreads();
+    if (index >= length)
+        return;
+    const float fast_scale = fast_scales[blockIdx.x];
+    const float slow_scale = slow_scales[blockIdx.x];
+    const int fast_code = bfp8_quantized_code(fast, fast_scale);
+    const int slow_code = bfp8_quantized_code(slow, slow_scale);
+    fast_payload[index] = static_cast<signed char>(fast_code);
+    slow_payload[index] = static_cast<signed char>(slow_code);
+    fast_roundtrip[index] = static_cast<float>(fast_code) * fast_scale;
+    slow_roundtrip[index] = static_cast<float>(slow_code) * slow_scale;
+}
+
 // Tensor-wide BFP8 must inspect the complete tensor before any payload byte
 // can be published. Running that reduction in the generic one-block kernel
 // leaves only 256 threads active even for multi-million-element parameters.
@@ -289,6 +500,23 @@ __global__ void bfp8_dequantize_bf16_warp_blocks_kernel(
     const int start = scale_index * QuantizationBlockSize;
     const int end = min(length, start + QuantizationBlockSize);
     const float scale = scales[scale_index];
+    if (end - start == QuantizationBlockSize
+        && QuantizationBlockSize == 128) {
+        // One lane owns four adjacent payload bytes.  The 128-value scale
+        // block is naturally aligned, so char4 loads and bfloat162 stores
+        // turn 128 scalar memory instructions into 32 + 64 vector accesses.
+        const char4 quantized =
+            reinterpret_cast<const char4*>(payload + start)[lane];
+        __nv_bfloat162* output =
+            reinterpret_cast<__nv_bfloat162*>(destination + start);
+        output[lane * 2] = __floats2bfloat162_rn(
+            static_cast<float>(quantized.x) * scale,
+            static_cast<float>(quantized.y) * scale);
+        output[lane * 2 + 1] = __floats2bfloat162_rn(
+            static_cast<float>(quantized.z) * scale,
+            static_cast<float>(quantized.w) * scale);
+        return;
+    }
     for (int index = start + lane; index < end; index += warpSize) {
         destination[index] = __float2bfloat16_rn(
             static_cast<float>(payload[index]) * scale);
@@ -371,6 +599,37 @@ __global__ void bfp8_quantize_bf16_warp_blocks_kernel(
     const int start = scale_index * QuantizationBlockSize;
     const int end = min(length, start + QuantizationBlockSize);
     float maximum = 0.f;
+    if (end - start == QuantizationBlockSize
+        && QuantizationBlockSize == 128) {
+        const int base = start + lane * 4;
+        const float x = __bfloat162float(source[base]);
+        const float y = __bfloat162float(source[base + 1]);
+        const float z = __bfloat162float(source[base + 2]);
+        const float w = __bfloat162float(source[base + 3]);
+        maximum = fmaxf(
+            fmaxf(fabsf(x), fabsf(y)),
+            fmaxf(fabsf(z), fabsf(w)));
+        for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
+            maximum = fmaxf(
+                maximum,
+                __shfl_down_sync(0xffffffffu, maximum, offset));
+        }
+        const float scale = bfp8_scale_from_maximum(
+            __shfl_sync(0xffffffffu, maximum, 0));
+        if (lane == 0)
+            scales[scale_index] = scale;
+        char4 quantized;
+        quantized.x = static_cast<signed char>(
+            bfp8_quantized_code(x, scale));
+        quantized.y = static_cast<signed char>(
+            bfp8_quantized_code(y, scale));
+        quantized.z = static_cast<signed char>(
+            bfp8_quantized_code(z, scale));
+        quantized.w = static_cast<signed char>(
+            bfp8_quantized_code(w, scale));
+        reinterpret_cast<char4*>(payload + start)[lane] = quantized;
+        return;
+    }
     for (int index = start + lane; index < end; index += warpSize) {
         maximum = fmaxf(
             maximum,
@@ -1051,6 +1310,159 @@ NNTRAIN_EXPORT int nntrain_cuda_bfp8_dequantize_f32(
             quantization_block_size);
     return complete(
         nntrain_operation_bfp8_dequantize_f32,
+        device,
+        static_cast<int>(cudaPeekAtLastError()));
+}
+
+NNTRAIN_EXPORT int nntrain_cuda_bfp8_quantize_f32_roundtrip(
+    int device,
+    float* source,
+    signed char* payload,
+    float* scales,
+    int length,
+    int quantization_block_size,
+    void* stream) {
+    if (source == nullptr || payload == nullptr || scales == nullptr
+        || length <= 0 || quantization_block_size <= 0
+        || quantization_block_size >= length) {
+        return complete(
+            nntrain_operation_bfp8_quantize,
+            device,
+            static_cast<int>(cudaErrorInvalidValue));
+    }
+    int status = select_device(device);
+    if (status != cudaSuccess) {
+        return complete(nntrain_operation_bfp8_quantize, device, status);
+    }
+    const long long blocks64 =
+        (static_cast<long long>(length) + quantization_block_size - 1)
+        / quantization_block_size;
+    if (blocks64 > 2147483647ll) {
+        return complete(
+            nntrain_operation_bfp8_quantize,
+            device,
+            static_cast<int>(cudaErrorInvalidConfiguration));
+    }
+    bfp8_quantize_f32_roundtrip_kernel<<<
+        static_cast<int>(blocks64),
+        256,
+        0,
+        reinterpret_cast<cudaStream_t>(stream)>>>(
+            source,
+            payload,
+            scales,
+            length,
+            quantization_block_size);
+    return complete(
+        nntrain_operation_bfp8_quantize,
+        device,
+        static_cast<int>(cudaPeekAtLastError()));
+}
+
+NNTRAIN_EXPORT int nntrain_cuda_adamw_block_bfp8_state(
+    int device,
+    float* data,
+    const float* gradient,
+    signed char* first_payload,
+    float* first_scales,
+    signed char* second_payload,
+    float* second_scales,
+    int length,
+    float beta1,
+    float beta2,
+    float learning_rate,
+    float weight_decay,
+    float update_scale,
+    float scaled_epsilon,
+    int apply_weight_decay,
+    int* finite_status,
+    void* stream) {
+    if (data == nullptr || gradient == nullptr || first_payload == nullptr
+        || first_scales == nullptr || second_payload == nullptr
+        || second_scales == nullptr || length <= 0
+        || finite_status == nullptr) {
+        return complete(
+            nntrain_operation_bfp8_quantize,
+            device,
+            static_cast<int>(cudaErrorInvalidValue));
+    }
+    int status = select_device(device);
+    if (status != cudaSuccess)
+        return complete(nntrain_operation_bfp8_quantize, device, status);
+    constexpr int threads = 128;
+    const int blocks = (length + threads - 1) / threads;
+    adamw_block_bfp8_state_kernel<<<
+        blocks,
+        threads,
+        0,
+        reinterpret_cast<cudaStream_t>(stream)>>>(
+            data,
+            gradient,
+            first_payload,
+            first_scales,
+            second_payload,
+            second_scales,
+            length,
+            beta1,
+            beta2,
+            learning_rate,
+            weight_decay,
+            update_scale,
+            scaled_epsilon,
+            apply_weight_decay,
+            finite_status);
+    return complete(
+        nntrain_operation_bfp8_quantize,
+        device,
+        static_cast<int>(cudaPeekAtLastError()));
+}
+
+NNTRAIN_EXPORT int nntrain_cuda_nekomuon_block_bfp8_moments(
+    int device,
+    const float* gradient,
+    signed char* fast_payload,
+    float* fast_scales,
+    signed char* slow_payload,
+    float* slow_scales,
+    float* fast_roundtrip,
+    float* slow_roundtrip,
+    int length,
+    float beta_fast,
+    float beta_slow,
+    int* finite_status,
+    void* stream) {
+    if (gradient == nullptr || fast_payload == nullptr || fast_scales == nullptr
+        || slow_payload == nullptr || slow_scales == nullptr
+        || fast_roundtrip == nullptr || slow_roundtrip == nullptr
+        || length <= 0 || finite_status == nullptr) {
+        return complete(
+            nntrain_operation_bfp8_quantize,
+            device,
+            static_cast<int>(cudaErrorInvalidValue));
+    }
+    int status = select_device(device);
+    if (status != cudaSuccess)
+        return complete(nntrain_operation_bfp8_quantize, device, status);
+    constexpr int threads = 128;
+    const int blocks = (length + threads - 1) / threads;
+    nekomuon_block_bfp8_moments_kernel<<<
+        blocks,
+        threads,
+        0,
+        reinterpret_cast<cudaStream_t>(stream)>>>(
+            gradient,
+            fast_payload,
+            fast_scales,
+            slow_payload,
+            slow_scales,
+            fast_roundtrip,
+            slow_roundtrip,
+            length,
+            beta_fast,
+            beta_slow,
+            finite_status);
+    return complete(
+        nntrain_operation_bfp8_quantize,
         device,
         static_cast<int>(cudaPeekAtLastError()));
 }

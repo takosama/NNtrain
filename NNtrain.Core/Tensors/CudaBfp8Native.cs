@@ -60,6 +60,35 @@ internal static class CudaBfp8Native
             "CUDA BFP8 dequantize(float32)");
     }
 
+    internal static void QuantizeFloat32Roundtrip(
+        int deviceIndex,
+        NativeCudaBuffer<float> source,
+        NativeCudaBuffer<sbyte> payload,
+        NativeCudaBuffer<float> scales,
+        Bfp8QuantizationDescriptor descriptor,
+        nint stream = 0)
+    {
+        ValidateBuffers(
+            deviceIndex, source, payload, scales, descriptor);
+        if (descriptor.Granularity != Bfp8ScaleGranularity.Block)
+        {
+            throw new ArgumentException(
+                "Roundtrip quantization requires block-scaled BFP8.",
+                nameof(descriptor));
+        }
+        RequireCapability(deviceIndex, CudaKernelFeature.Bfp8Quantization);
+        NativeCudaRuntime.Check(
+            CudaNativeGateway.Bfp8QuantizeFloat32Roundtrip(
+                deviceIndex,
+                source.NativePtr,
+                payload.NativePtr,
+                scales.NativePtr,
+                source.Length,
+                descriptor.GetEffectiveBlockSize(source.Length),
+                stream),
+            "CUDA BFP8 quantize/roundtrip(float32)");
+    }
+
     internal static void DequantizeBFloat16(
         int deviceIndex,
         NativeCudaBuffer<sbyte> payload,

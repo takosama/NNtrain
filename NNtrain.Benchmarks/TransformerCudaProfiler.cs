@@ -407,6 +407,40 @@ internal static class TransformerCudaProfiler
         Console.WriteLine(
             $"final adaptive GPU shard = [" +
             $"{string.Join(',', dataParallelEngine.LastShardBatchSizes)}]");
+        if (devices.Length > 1)
+        {
+            var peerRoutes = new List<string>();
+            for (int source = 0; source < devices.Length; source++)
+            {
+                for (int destination = 0;
+                    destination < devices.Length;
+                    destination++)
+                {
+                    if (source == destination)
+                        continue;
+                    peerRoutes.Add(
+                        $"{devices[source]}->{devices[destination]}=" +
+                        (NativeCudaRuntime.CanAccessPeer(
+                            devices[source], devices[destination])
+                            ? "yes"
+                            : "no"));
+                }
+            }
+            Console.WriteLine(
+                $"CUDA peer access: {string.Join(", ", peerRoutes)}");
+        }
+        foreach (int device in devices)
+        {
+            NativeCudaDevice accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(device);
+            long totalBytes = accelerator.MemorySize;
+            long freeBytes = accelerator.GetFreeMemory();
+            Console.WriteLine(
+                $"GPU {device} VRAM: used=" +
+                $"{(totalBytes - freeBytes) / 1048576d:F1} MiB, " +
+                $"free={freeBytes / 1048576d:F1} MiB, " +
+                $"total={totalBytes / 1048576d:F1} MiB");
+        }
         NativeCudaTransferTelemetry measuredTransfers =
             NativeCudaRuntime.TransferTelemetry
                 - transfersBeforeMeasurement;
@@ -465,6 +499,12 @@ internal static class TransformerCudaProfiler
             (fullyCompiledReplay
                 ? "compiled replay"
                 : "not fully compiled replay"));
+        if (dataParallelEngine.LastGraphFailure is { } graphFailure)
+        {
+            Console.WriteLine(
+                $"CUDA Graph last failure: {graphFailure.GetType().Name}: " +
+                graphFailure.Message);
+        }
         if (dataParallelEngine.LastGradientOverlapTelemetry is
             { } overlap)
         {

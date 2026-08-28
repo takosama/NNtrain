@@ -37,6 +37,7 @@ internal sealed record CudaDispatchPolicy
     internal bool DisableKvCache { get; init; }
     internal bool SynchronizeDataParallelPhases { get; init; }
     internal bool DisableBFloat16GradientBuckets { get; init; }
+    internal bool EnableBlockBfp8OptimizerState { get; init; }
 
     internal static CudaDispatchPolicy Defaults { get; } = new();
 
@@ -168,6 +169,9 @@ internal sealed record CudaDispatchPolicy
             DisableBFloat16GradientBuckets = ReadFlag(
                 readEnvironment,
                 "NNTRAIN_DISABLE_BF16_GRADIENT_BUCKETS"),
+            EnableBlockBfp8OptimizerState = ReadFlag(
+                readEnvironment,
+                "NNTRAIN_ENABLE_BLOCK_BFP8_OPTIMIZER_STATE"),
         };
     }
 

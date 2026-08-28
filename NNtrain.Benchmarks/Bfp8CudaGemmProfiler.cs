@@ -5,12 +5,20 @@ namespace NNtrain.Benchmarks;
 
 internal static class Bfp8CudaGemmProfiler
 {
-    internal static void Run(int warmup, int iterations)
+    internal static void Run(
+        int warmup,
+        int iterations,
+        int m = 256,
+        int k = 512,
+        int n = 256)
     {
         if (!Tensor.IsCudaAvailable())
             throw new InvalidOperationException("CUDA is not available.");
         ArgumentOutOfRangeException.ThrowIfNegative(warmup);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(iterations);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(m);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(k);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(n);
 
         TensorDevice previousDevice = Tensor.ExecutionDevice;
         int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
@@ -18,9 +26,6 @@ internal static class Bfp8CudaGemmProfiler
         {
             Tensor.CudaDeviceIndices = [0];
             Tensor.ExecutionDevice = TensorDevice.Cuda;
-            const int m = 256;
-            const int k = 512;
-            const int n = 256;
             float[] leftValues = Values(m * k, 5);
             float[] rightValues = Values(k * n, 37);
 
@@ -35,7 +40,10 @@ internal static class Bfp8CudaGemmProfiler
                     [k, n],
                     Bfp8QuantizationDescriptor.TensorWide),
                 warmup,
-                iterations);
+                iterations,
+                m,
+                k,
+                n);
             Profile(
                 "block128/bf16-fallback",
                 Tensor.FromBfp8(
@@ -47,7 +55,10 @@ internal static class Bfp8CudaGemmProfiler
                     [k, n],
                     Bfp8QuantizationDescriptor.Mix8_32),
                 warmup,
-                iterations);
+                iterations,
+                m,
+                k,
+                n);
         }
         finally
         {
@@ -61,7 +72,10 @@ internal static class Bfp8CudaGemmProfiler
         Tensor left,
         Tensor right,
         int warmup,
-        int iterations)
+        int iterations,
+        int m,
+        int k,
+        int n)
     {
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator(0);
         left.to(new TorchDevice(TensorDevice.Cuda, 0));
@@ -89,7 +103,7 @@ internal static class Bfp8CudaGemmProfiler
         double p50 = samples[samples.Length / 2];
         double average = samples.Average();
         Console.WriteLine(
-            $"BFP8 GEMM {name}: shape=[256,512]x[512,256], " +
+            $"BFP8 GEMM {name}: shape=[{m},{k}]x[{k},{n}], " +
             $"warmup={warmup}, iterations={iterations}, " +
             $"p50={p50:F3} ms, mean={average:F3} ms, " +
             $"int8={routes.Int8TensorCoreExecutions}, " +

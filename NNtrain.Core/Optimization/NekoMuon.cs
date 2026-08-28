@@ -557,6 +557,16 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                 "The mix8_32 NekoMuon contract requires every parameter " +
                 "to use block-scaled BFP8 storage.");
         }
+        if (mix8 && _cudaDispatchPolicy.EnableBlockBfp8OptimizerState)
+        {
+            StepCudaBfp8(
+                options,
+                fastCorrection,
+                slowCorrection,
+                devices,
+                mixedBlockState: true);
+            return;
+        }
         bool runNewtonSchulz =
             _state.Step % options.NewtonSchulzInterval == 0;
         bool deviceOnlyFixedFive = runNewtonSchulz
@@ -948,7 +958,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         NekoMuonOptions options,
         float fastCorrection,
         float slowCorrection,
-        int[] devices)
+        int[] devices,
+        bool mixedBlockState = false)
     {
         if (devices.Length == 0)
         {
@@ -1046,7 +1057,10 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                     new CudaOptimizerKernels.NekoMuonBfp8ResidentState(
                         parameterState.FastMoment,
                         parameterState.SlowMoment,
-                        parameterState.Confidence);
+                        parameterState.Confidence,
+                        mixedBlockState
+                            ? Bfp8QuantizationDescriptor.Mix8_32
+                            : Bfp8QuantizationDescriptor.TensorWide);
             states[parameterIndex] = state;
             foreach (int deviceIndex in devices)
                 state.GetOrCreate(deviceIndex);
@@ -1070,7 +1084,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                     fastCorrection,
                     slowCorrection,
                     options.Epsilon,
-                    options.Rho);
+                    options.Rho,
+                    mixedBlockState);
             }
         });
 
@@ -1139,6 +1154,7 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                         options.WeightDecay,
                         applyWeightDecay,
                         deviceOnlyFixedFive,
+                        mixedBlockState,
                         ForceFullNewtonSchulz);
             }
         });
@@ -1152,7 +1168,9 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
             .ToArray();
         CudaOptimizerStepBatch.CompleteAfterSynchronization(
             devices,
-            "pure BFP8 NekoMuon update",
+            mixedBlockState
+                ? "block-BFP8-state mix8_32 NekoMuon update"
+                : "pure BFP8 NekoMuon update",
             queueReadback: () =>
             {
                 for (int deviceSlot = 0;

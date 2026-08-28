@@ -99,6 +99,50 @@ public sealed class CudaMix8AdamWTests
         });
     }
 
+    [Fact]
+    public void OptInBlockBfp8StateKeepsMomentsResidentAndFinite()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        WithCuda([0], () =>
+        {
+            using IDisposable dispatch = CudaDispatchPolicy.Push(
+                CudaDispatchPolicy.Defaults with
+                {
+                    EnableBlockBfp8OptimizerState = true,
+                });
+            Parameter parameter = CreateParameter(
+                Values(257, 13, 0.6f),
+                [257],
+                "weight",
+                Bfp8QuantizationDescriptor.Mix8_32);
+            var optimizer = new AdamW([parameter], Options());
+            try
+            {
+                parameter.T.SetCudaGradient(Values(257, 41, 0.08f), 0);
+                optimizer.step();
+
+                var moments = optimizer.GetCudaBfp8Moments(0, 0);
+                Assert.Equal(
+                    Bfp8QuantizationDescriptor.Mix8_32,
+                    moments.First.Descriptor);
+                Assert.Equal(3, moments.First.Scales.Length);
+                Assert.All(Read(moments.First).Scales.ToArray(),
+                    scale => Assert.True(float.IsFinite(scale) && scale > 0f));
+                Assert.All(Read(moments.Second).Scales.ToArray(),
+                    scale => Assert.True(float.IsFinite(scale) && scale > 0f));
+                Assert.All(Read(parameter.T.EnsureCudaMasterFloat32Buffer(0)),
+                    AssertFinite);
+            }
+            finally
+            {
+                optimizer.DisposeCudaResources();
+                parameter.T.InvalidateCudaBuffers();
+            }
+        });
+    }
+
     [Theory]
     [InlineData(1, 128)]
     [InlineData(257, 128)]
@@ -703,6 +747,9 @@ public sealed class CudaMix8AdamWTests
                 tolerance);
         }
     }
+
+    private static void AssertFinite(float value)
+        => Assert.True(float.IsFinite(value));
 
     private static void WithCuda(int[] devices, Action action)
         => WithCudaPolicy(devices, PrecisionPolicy.Mix8_32, action);

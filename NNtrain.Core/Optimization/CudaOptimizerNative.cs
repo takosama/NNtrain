@@ -45,6 +45,7 @@ internal static class CudaOptimizerNative
         nint first,
         nint second,
         nint secondScale,
+        int secondScaleBlockSize,
         int length,
         float learningRate,
         float weightDecay,
@@ -60,6 +61,7 @@ internal static class CudaOptimizerNative
             first,
             second,
             secondScale,
+            secondScaleBlockSize,
             length,
             learningRate,
             weightDecay,
@@ -67,6 +69,74 @@ internal static class CudaOptimizerNative
             scaledEpsilon,
             applyWeightDecay,
             finiteStatus), "scale-aware pure BFP8 AdamW update");
+    }
+
+    internal static void AdamWBlockBfp8State(
+        int device,
+        nint data,
+        nint gradient,
+        CudaBfp8BufferView first,
+        CudaBfp8BufferView second,
+        int length,
+        float beta1,
+        float beta2,
+        float learningRate,
+        float weightDecay,
+        float updateScale,
+        float scaledEpsilon,
+        bool applyWeightDecay,
+        nint finiteStatus,
+        nint stream)
+    {
+        Select(device);
+        Check(CudaNativeGateway.AdamWBlockBfp8State(
+            device,
+            data,
+            gradient,
+            first.Payload.NativePtr,
+            first.Scales.NativePtr,
+            second.Payload.NativePtr,
+            second.Scales.NativePtr,
+            length,
+            beta1,
+            beta2,
+            learningRate,
+            weightDecay,
+            updateScale,
+            scaledEpsilon,
+            applyWeightDecay,
+            finiteStatus,
+            stream), "fused block-BFP8 AdamW state update");
+    }
+
+    internal static void NekoMuonBlockBfp8Moments(
+        int device,
+        nint gradient,
+        CudaBfp8BufferView fast,
+        CudaBfp8BufferView slow,
+        nint fastRoundtrip,
+        nint slowRoundtrip,
+        int length,
+        float betaFast,
+        float betaSlow,
+        nint finiteStatus,
+        nint stream)
+    {
+        Select(device);
+        Check(CudaNativeGateway.NekoMuonBlockBfp8Moments(
+            device,
+            gradient,
+            fast.Payload.NativePtr,
+            fast.Scales.NativePtr,
+            slow.Payload.NativePtr,
+            slow.Scales.NativePtr,
+            fastRoundtrip,
+            slowRoundtrip,
+            length,
+            betaFast,
+            betaSlow,
+            finiteStatus,
+            stream), "fused block-BFP8 NekoMuon moment update");
     }
 
     internal static void AdamWAndPublish(int device, nint data, nint gradient,

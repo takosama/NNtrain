@@ -1137,7 +1137,8 @@ __global__ void adamw_bfp8_moments_kernel(const float* gradient,
 
 __global__ void adamw_bfp8_apply_kernel(float* data,
     const float* first_moment, const float* second_moment,
-    const float* second_scale, int length, float learning_rate,
+    const float* second_scale, int second_scale_block_size,
+    int length, float learning_rate,
     float weight_decay, float update_scale, float scaled_epsilon,
     int apply_weight_decay, int* finite_status) {
     const int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1149,7 +1150,8 @@ __global__ void adamw_bfp8_apply_kernel(float* data,
     // pretending that the missing second moment is exactly zero.  This is
     // scale-aware (and therefore invariant to loss/gradient rescaling), while
     // scaled_epsilon still provides AdamW's configured numerical epsilon.
-    const float quantum = second_scale[0];
+    const float quantum =
+        second_scale[index / second_scale_block_size];
     if (!isfinite(quantum) || !(quantum > 0.f)) {
         atomicExch(finite_status, 1);
         return;
@@ -2436,6 +2438,7 @@ NNTRAIN_EXPORT int nntrain_optimizer_adamw_bfp8_apply(
     const float* first_moment,
     const float* second_moment,
     const float* second_scale,
+    int second_scale_block_size,
     int length,
     float learning_rate,
     float weight_decay,
@@ -2444,11 +2447,12 @@ NNTRAIN_EXPORT int nntrain_optimizer_adamw_bfp8_apply(
     int apply_weight_decay,
     int* finite_status) {
     if (!data || !first_moment || !second_moment || !second_scale
-        || length <= 0 || !finite_status) {
+        || second_scale_block_size <= 0 || length <= 0 || !finite_status) {
         return static_cast<int>(cudaErrorInvalidValue);
     }
     NNTRAIN_LAUNCH_1D(adamw_bfp8_apply_kernel, length, data, first_moment,
-        second_moment, second_scale, length, learning_rate, weight_decay,
+        second_moment, second_scale, second_scale_block_size, length,
+        learning_rate, weight_decay,
         update_scale, scaled_epsilon, apply_weight_decay, finite_status);
 }
 

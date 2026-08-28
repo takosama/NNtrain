@@ -232,6 +232,54 @@ public sealed class CudaMix8NekoMuonTests
         });
     }
 
+    [Fact]
+    public void OptInBlockBfp8StateKeepsMuonMomentsResidentAndFinite()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        WithCuda([0], () =>
+        {
+            using IDisposable dispatch = CudaDispatchPolicy.Push(
+                CudaDispatchPolicy.Defaults with
+                {
+                    EnableBlockBfp8OptimizerState = true,
+                });
+            Parameter parameter = CreateParameter(
+                Values(16 * 32, 17, 0.4f),
+                [16, 32],
+                "hidden",
+                Bfp8QuantizationDescriptor.Mix8_32);
+            var optimizer = new NekoMuon(
+                [parameter],
+                FixedFiveOptions());
+            try
+            {
+                parameter.T.SetCudaGradient(
+                    Values(16 * 32, 53, 0.05f),
+                    0);
+                optimizer.step();
+
+                var moments = optimizer.GetCudaBfp8Moments(0, 0);
+                Assert.Equal(
+                    Bfp8QuantizationDescriptor.Mix8_32,
+                    moments.Fast.Descriptor);
+                Assert.Equal(4, moments.Fast.Scales.Length);
+                Assert.All(Read(moments.Fast).Scales.ToArray(),
+                    scale => Assert.True(float.IsFinite(scale) && scale > 0f));
+                Assert.All(Read(moments.Slow).Scales.ToArray(),
+                    scale => Assert.True(float.IsFinite(scale) && scale > 0f));
+                Assert.All(Read(parameter.T.EnsureCudaMasterFloat32Buffer(0)),
+                    value => Assert.True(float.IsFinite(value)));
+            }
+            finally
+            {
+                optimizer.DisposeCudaResources();
+                parameter.T.InvalidateCudaBuffers();
+            }
+        });
+    }
+
     [Theory]
     [InlineData(1, 128)]
     [InlineData(257, 128)]
