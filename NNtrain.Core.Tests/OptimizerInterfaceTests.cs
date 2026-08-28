@@ -51,11 +51,14 @@ public sealed class OptimizerInterfaceTests
         var second = new CountingOptimizer();
         IOptimizer optimizer = new CompositeOptimizer(first, second);
 
+        optimizer.prepare();
         optimizer.zero_grad();
         optimizer.step();
 
+        Assert.Equal(1, first.PrepareCalls);
         Assert.Equal(1, first.ZeroGradCalls);
         Assert.Equal(1, first.StepCalls);
+        Assert.Equal(1, second.PrepareCalls);
         Assert.Equal(1, second.ZeroGradCalls);
         Assert.Equal(1, second.StepCalls);
     }
@@ -103,7 +106,7 @@ public sealed class OptimizerInterfaceTests
             .ToArray();
 
         Assert.Equal(
-            ["load_state_dict", "state_dict", "step", "zero_grad"],
+            ["load_state_dict", "prepare", "state_dict", "step", "zero_grad"],
             methods);
     }
 
@@ -137,9 +140,13 @@ public sealed class OptimizerInterfaceTests
 
     private sealed class CountingOptimizer : IOptimizer
     {
+        internal int PrepareCalls { get; private set; }
+
         internal int ZeroGradCalls { get; private set; }
 
         internal int StepCalls { get; private set; }
+
+        public void prepare() => PrepareCalls++;
 
         public void zero_grad() => ZeroGradCalls++;
 

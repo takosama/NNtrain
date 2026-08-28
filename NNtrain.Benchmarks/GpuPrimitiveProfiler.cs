@@ -24,8 +24,6 @@ internal static class GpuPrimitiveProfiler
         }
         finally
         {
-            Environment.SetEnvironmentVariable(
-                "NNTRAIN_DISABLE_TENSOR_CORE_FORGET_MEMORY", null);
             Tensor.ExecutionDevice = previousDevice;
             Tensor.CudaDeviceIndices = previousDevices;
         }
@@ -49,15 +47,16 @@ internal static class GpuPrimitiveProfiler
             iterations,
             () => projected.ForgetMemoryV2(
                 keyWidth, valueWidth, retentionFloor: 0.5f),
-            "NNTRAIN_DISABLE_TENSOR_CORE_FORGET_MEMORY",
-            disable: true);
+            CudaDispatchPolicy.Defaults with
+            {
+                DisableTensorCoreForgetMemory = true,
+            });
         double tensorCore = MeasureCuda(
             warmup,
             iterations,
             () => projected.ForgetMemoryV2(
                 keyWidth, valueWidth, retentionFloor: 0.5f),
-            "NNTRAIN_DISABLE_TENSOR_CORE_FORGET_MEMORY",
-            disable: false);
+            CudaDispatchPolicy.Defaults);
         Console.WriteLine(
             $"ForgetMemory forward [{batch},{sequence},K{keyWidth},V{valueWidth}]: " +
             $"native CUDA scalar {scalar:F3} ms, tiled WMMA {tensorCore:F3} ms, " +
@@ -141,14 +140,10 @@ internal static class GpuPrimitiveProfiler
         int warmup,
         int iterations,
         Func<Tensor> operation,
-        string? switchName = null,
-        bool disable = false)
+        CudaDispatchPolicy? dispatchPolicy = null)
     {
-        if (switchName is not null)
-        {
-            Environment.SetEnvironmentVariable(
-                switchName, disable ? "1" : null);
-        }
+        using IDisposable dispatch = CudaDispatchPolicy.Push(
+            dispatchPolicy ?? CudaDispatchPolicy.Current);
         for (int index = 0; index < warmup; ++index)
             RunCuda(operation);
         var samples = new double[iterations];

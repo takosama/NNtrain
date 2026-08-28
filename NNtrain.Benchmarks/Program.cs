@@ -52,6 +52,23 @@ else if (args.Length > 0
     GenerationKvCacheProfiler.Run(warmup, iterations, productionShape);
 }
 else if (args.Length > 0
+    && string.Equals(args[0], "--benchmark-cuda-topk", StringComparison.Ordinal))
+{
+    int warmup = args.Length > 1 ? int.Parse(args[1]) : 5;
+    int iterations = args.Length > 2 ? int.Parse(args[2]) : 20;
+    int vocabulary = args.Length > 3 ? int.Parse(args[3]) : 11500;
+    CudaTopKProfiler.Run(warmup, iterations, vocabulary);
+}
+else if (args.Length > 0
+    && string.Equals(args[0], "--benchmark-cuda-graph", StringComparison.Ordinal))
+{
+    int warmup = args.Length > 1 ? int.Parse(args[1]) : 10;
+    int iterations = args.Length > 2 ? int.Parse(args[2]) : 100;
+    int operations = args.Length > 3 ? int.Parse(args[3]) : 16;
+    int length = args.Length > 4 ? int.Parse(args[4]) : 4096;
+    CudaGraphProfiler.Run(warmup, iterations, operations, length);
+}
+else if (args.Length > 0
     && string.Equals(args[0], "--benchmark-gpu-primitives", StringComparison.Ordinal))
 {
     int warmup = args.Length > 1 ? int.Parse(args[1]) : 2;
@@ -59,11 +76,54 @@ else if (args.Length > 0
     GpuPrimitiveProfiler.Run(warmup, iterations);
 }
 else if (args.Length > 0
+    && string.Equals(args[0], "--benchmark-cuda-public-ops", StringComparison.Ordinal))
+{
+    int warmup = args.Length > 1 ? int.Parse(args[1]) : 3;
+    int iterations = args.Length > 2 ? int.Parse(args[2]) : 20;
+    int length = args.Length > 3 ? int.Parse(args[3]) : 262144;
+    CudaPublicOpsProfiler.Run(warmup, iterations, length);
+}
+else if (args.Length > 0
     && string.Equals(args[0], "--benchmark-bfp8-gemm", StringComparison.Ordinal))
 {
     int warmup = args.Length > 1 ? int.Parse(args[1]) : 3;
     int iterations = args.Length > 2 ? int.Parse(args[2]) : 10;
     Bfp8CudaGemmProfiler.Run(warmup, iterations);
+}
+else if (args.Length > 0
+    && string.Equals(
+        args[0], "--profile-pure-bfp8-stability", StringComparison.Ordinal))
+{
+    int steps = args.Length > 1 ? int.Parse(args[1]) : 12;
+    PureBfp8StabilityProfiler.Run(steps);
+}
+else if (args.Length > 0
+    && string.Equals(
+        args[0], "--benchmark-nekomuon-fixed-ns5", StringComparison.Ordinal))
+{
+    int parameterCount = args.Length > 1 ? int.Parse(args[1]) : 8;
+    int rows = args.Length > 2 ? int.Parse(args[2]) : 48;
+    int columns = args.Length > 3 ? int.Parse(args[3]) : 64;
+    int warmup = args.Length > 4 ? int.Parse(args[4]) : 2;
+    int iterations = args.Length > 5 ? int.Parse(args[5]) : 10;
+    NekoMuonFixedNs5Profiler.Run(
+        parameterCount, rows, columns, warmup, iterations);
+}
+else if (args.Length > 0
+    && string.Equals(
+        args[0], "--benchmark-embedding-backward", StringComparison.Ordinal))
+{
+    int warmup = args.Length > 1 ? int.Parse(args[1]) : 3;
+    int iterations = args.Length > 2 ? int.Parse(args[2]) : 10;
+    EmbeddingBackwardProfiler.Run(warmup, iterations);
+}
+else if (args.Length > 0
+    && string.Equals(
+        args[0], "--benchmark-cross-entropy", StringComparison.Ordinal))
+{
+    int warmup = args.Length > 1 ? int.Parse(args[1]) : 3;
+    int iterations = args.Length > 2 ? int.Parse(args[2]) : 10;
+    CrossEntropyProfiler.Run(warmup, iterations);
 }
 else if (args.Length > 0
     && string.Equals(args[0], "--profile-transformer-detail-json", StringComparison.Ordinal))

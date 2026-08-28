@@ -8,4 +8,5 @@
   <Project Path="NNtrain.Core.Tests/NNtrain.Core.Tests.csproj" />
   <Project Path="NNtrain.IntegrationTests/NNtrain.IntegrationTests.csproj" />
   <Project Path="NNtrain.Benchmarks/NNtrain.Benchmarks.csproj" />
+  <Project Path="NNtrain.Benchmarks.Tests/NNtrain.Benchmarks.Tests.csproj" />
 </Solution>

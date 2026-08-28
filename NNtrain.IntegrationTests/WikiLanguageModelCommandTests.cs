@@ -1,8 +1,176 @@
 using NNtrain;
+using NNtrain.Cuda.Execution;
+using NNtrain.Runtime.Execution;
 using Xunit;
 
 public sealed class WikiLanguageModelCommandTests
 {
+    [Fact]
+    public void ProductionFactoryDoesNotCreateCudaLanesForCpuAuthority()
+    {
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cpu;
+            Tensor.CudaDeviceIndices = [3, 5];
+            int factoryCalls = 0;
+            using var session = ProductionTrainingSessionFactory.Create(
+                TensorPrecisionMode.Float32,
+                lastCommittedStep: -1,
+                deviceIndex =>
+                {
+                    factoryCalls++;
+                    return new TestStreamLane(deviceIndex);
+                });
+
+            Assert.Equal(0, factoryCalls);
+            Assert.Empty(session.ExecutionSession.Lanes);
+            Assert.Equal(
+                ExecutionDeviceKind.Cpu,
+                session.ExecutionSession.Options.Device);
+            Assert.Equal(
+                [3, 5],
+                session.ExecutionSession.Options.CudaDevices);
+        }
+        finally
+        {
+            Tensor.CudaDeviceIndices = previousIndices;
+            Tensor.ExecutionDevice = previousDevice;
+        }
+    }
+
+    [Fact]
+    public void ProductionFactoryAttachesEveryCudaLaneAndCleansPartialFailure()
+    {
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            Tensor.CudaDeviceIndices = [3, 5];
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            var created = new List<TestStreamLane>();
+
+            using (var session = ProductionTrainingSessionFactory.Create(
+                TensorPrecisionMode.Mix16_32,
+                lastCommittedStep: -1,
+                deviceIndex =>
+                {
+                    var lane = new TestStreamLane(deviceIndex);
+                    created.Add(lane);
+                    return lane;
+                }))
+            {
+                Assert.Equal([3, 5], created.Select(lane => lane.DeviceIndex));
+                Assert.Equal(2, session.ExecutionSession.Lanes.Count);
+            }
+            Assert.All(created, lane => Assert.True(lane.Disposed));
+
+            created.Clear();
+            Assert.Throws<InvalidOperationException>(() =>
+                ProductionTrainingSessionFactory.Create(
+                    TensorPrecisionMode.Mix16_32,
+                    lastCommittedStep: -1,
+                    deviceIndex =>
+                    {
+                        if (deviceIndex == 5)
+                        {
+                            throw new InvalidOperationException(
+                                "scripted second-lane failure");
+                        }
+                        var lane = new TestStreamLane(deviceIndex);
+                        created.Add(lane);
+                        return lane;
+                    }));
+            Assert.Single(created);
+            Assert.True(created[0].Disposed);
+        }
+        finally
+        {
+            Tensor.CudaDeviceIndices = previousIndices;
+            Tensor.ExecutionDevice = previousDevice;
+        }
+    }
+
+    [Fact]
+    public void ProductionFactoryUsesExplicitCanonicalDeviceAuthority()
+    {
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            // Deliberately contradict the requested session. Production code
+            // must use its canonical specification, not these legacy globals.
+            Tensor.ExecutionDevice = TensorDevice.Cpu;
+            Tensor.CudaDeviceIndices = [7];
+            var created = new List<TestStreamLane>();
+
+            using var session = ProductionTrainingSessionFactory.Create(
+                TensorPrecisionMode.Mix8_32,
+                lastCommittedStep: 12,
+                TensorDevice.Cuda,
+                [3, 5],
+                deviceIndex =>
+                {
+                    var lane = new TestStreamLane(deviceIndex);
+                    created.Add(lane);
+                    return lane;
+                });
+
+            Assert.Equal(ExecutionDeviceKind.Cuda,
+                session.ExecutionSession.Options.Device);
+            Assert.Equal([3, 5],
+                session.ExecutionSession.Options.CudaDevices);
+            Assert.Equal([3, 5], created.Select(lane => lane.DeviceIndex));
+            Assert.Equal(PrecisionMode.Mix8_32,
+                session.ExecutionSession.Options.Precision.Mode);
+            Assert.Equal(12, session.LastCommittedStep);
+        }
+        finally
+        {
+            Tensor.CudaDeviceIndices = previousIndices;
+            Tensor.ExecutionDevice = previousDevice;
+        }
+    }
+
+    [Fact]
+    public void ExecutionAuthorityCanPrecedeCheckpointRestoreAndBeWrappedLater()
+    {
+        var lanes = new List<TestStreamLane>();
+        ExecutionSession execution =
+            ProductionTrainingSessionFactory.CreateExecutionSession(
+                TensorPrecisionMode.Mix8_32,
+                TensorDevice.Cuda,
+                [3, 5],
+                deviceIndex =>
+                {
+                    var lane = new TestStreamLane(deviceIndex);
+                    lanes.Add(lane);
+                    return lane;
+                });
+
+        using (execution)
+        {
+            using IDisposable scope = execution.Enter();
+            Assert.Same(execution, ExecutionSession.Current);
+            Assert.Equal([3, 5], execution.Options.CudaDevices);
+
+            using (var training = new NNtrain.Training.Execution.TrainingSession(
+                execution,
+                ownsExecutionSession: false,
+                lastCommittedStep: 27))
+            {
+                Assert.Equal(27, training.LastCommittedStep);
+                Assert.Same(execution, training.ExecutionSession);
+            }
+
+            Assert.False(execution.IsDisposed);
+            Assert.All(lanes, lane => Assert.False(lane.Disposed));
+        }
+
+        Assert.All(lanes, lane => Assert.True(lane.Disposed));
+    }
+
     [Fact]
     public void WikiCudaRouteCreatesSessionOwnedDataParallelEngine()
     {
@@ -21,7 +189,8 @@ public sealed class WikiLanguageModelCommandTests
             using var session =
                 WikiLanguageModelCommand.CreateCudaDataParallelSession(
                     config,
-                    TensorPrecisionMode.Mix16_32);
+                    TensorPrecisionMode.Mix16_32,
+                    static deviceIndex => new TestStreamLane(deviceIndex));
 
             Assert.NotNull(session);
             Assert.Equal(
@@ -49,6 +218,43 @@ public sealed class WikiLanguageModelCommandTests
             Tensor.ExecutionDevice = previousDevice;
             Tensor.CudaDeviceIndices = previousIndices;
         }
+    }
+
+    private sealed class TestStreamLane(int deviceIndex)
+        : IStreamExecutionLane
+    {
+        public bool Disposed { get; private set; }
+        public ExecutionDeviceKind DeviceKind => ExecutionDeviceKind.Cuda;
+        public int DeviceIndex { get; } = deviceIndex;
+        public IDeviceMemoryManager MemoryManager { get; } =
+            new TestMemoryManager(deviceIndex);
+        public IKernelCapabilitySet Capabilities { get; } =
+            new CudaKernelCapabilities(
+                8,
+                6,
+                CudaKernelFeature.TensorCores);
+        public IExecutionProfiler Profiler => NullExecutionProfiler.Instance;
+        public nint ComputeStreamHandle => (nint)(DeviceIndex * 2 + 1);
+        public nint CommunicationStreamHandle => (nint)(DeviceIndex * 2 + 2);
+        public void ActivateComputeStream() { }
+        public void SynchronizeComputeStream() { }
+        public void SynchronizeCommunicationStream() { }
+        public T OwnResource<T>(T resource) where T : class, IDisposable
+            => resource;
+        public void Dispose()
+        {
+            Disposed = true;
+            MemoryManager.Dispose();
+        }
+    }
+
+    private sealed class TestMemoryManager(int deviceIndex)
+        : IDeviceMemoryManager
+    {
+        public int DeviceIndex { get; } = deviceIndex;
+        public long AllocationCount => 0;
+        public long AllocatedBytes => 0;
+        public void Dispose() { }
     }
 
     [Fact]
@@ -411,6 +617,12 @@ public sealed class WikiLanguageModelCommandTests
                     })
                     .ToArray(),
             };
+            var expectedShardState = new CudaAdaptiveShardState(
+                CudaAdaptiveShardState.CurrentFormatVersion,
+                Devices: [0, 1],
+                LastAllocation: [5, 3],
+                ThroughputEma: [1.25d, 0.75d],
+                HasObservation: true);
             WikiLanguageModelCommand.SaveTrainingCheckpoint(
                 config,
                 config.VocabularySize,
@@ -421,7 +633,8 @@ public sealed class WikiLanguageModelCommandTests
                 source,
                 sourceOptimizer,
                 sourceScheduler,
-                globalStep: 7);
+                globalStep: 7,
+                adaptiveCudaShardState: expectedShardState);
             WikiLanguageModelCommand.WikiModelCheckpoint manifest =
                 torch.load<WikiLanguageModelCommand.WikiModelCheckpoint>(
                     checkpointPath);
@@ -469,6 +682,17 @@ public sealed class WikiLanguageModelCommandTests
             Assert.Equal(1.25f, bestLoss);
             Assert.Equal(7, globalStep);
             Assert.Null(bestState);
+            Assert.NotNull(position.AdaptiveCudaShardState);
+            Assert.Equal(
+                expectedShardState.Devices,
+                position.AdaptiveCudaShardState.Devices);
+            Assert.Equal(
+                expectedShardState.LastAllocation,
+                position.AdaptiveCudaShardState.LastAllocation);
+            Assert.Equal(
+                expectedShardState.ThroughputEma,
+                position.AdaptiveCudaShardState.ThroughputEma);
+            Assert.True(position.AdaptiveCudaShardState.HasObservation);
             Assert.Equal(
                 expectedCurrent.Parameters[0].Values,
                 restored.state_dict().Parameters[0].Values);
@@ -532,6 +756,175 @@ public sealed class WikiLanguageModelCommandTests
                         File.Delete(optimizerBinaryArtifact);
                 }
             }
+        }
+    }
+
+    [Fact]
+    public void WikiMidEpochResumeRestoresDropoutRandomStateAndSeed()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            $"nntrain-wiki-rng-resume-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        string checkpointPath = Path.Combine(directory, "checkpoint.json");
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cpu;
+            var config = new WikiTrainingConfiguration
+            {
+                CheckpointPath = checkpointPath,
+                ResumeFromCheckpoint = true,
+                Epochs = 2,
+                ContextLength = 2,
+                ModelWidth = 4,
+                Heads = 1,
+                HiddenSize = 8,
+                Layers = 1,
+                VocabularySize = BpeTokenizer.BaseVocabularySize,
+                ModelArchitecture =
+                    WikiTrainingConfiguration.TransformerArchitecture,
+                Optimizer = WikiTrainingConfiguration.AdamWOptimizer,
+                LearningRate = 0.001f,
+                Dropout = 0.25f,
+                Seed = 73,
+            };
+
+            static void TrainStep(
+                LanguageModel model,
+                IOptimizer optimizer,
+                WarmupCosineProgressLRScheduler scheduler,
+                int[] input,
+                int[] target,
+                double progress)
+            {
+                model.train();
+                optimizer.zero_grad();
+                Tensor loss = model.forward_loss(
+                    input,
+                    target,
+                    batch_size: 1,
+                    sequence_length: 2);
+                loss.backward();
+                scheduler.step(progress);
+                optimizer.step();
+            }
+
+            LanguageModel uninterrupted =
+                WikiLanguageModelCommand.CreateModel(
+                    config,
+                    config.VocabularySize);
+            IOptimizer uninterruptedOptimizer =
+                WikiLanguageModelCommand.CreateOptimizer(
+                    uninterrupted,
+                    config);
+            WarmupCosineProgressLRScheduler uninterruptedScheduler =
+                lr_scheduler.WarmupCosineProgressLR(
+                    uninterruptedOptimizer,
+                    config.WarmupPercent);
+
+            TrainStep(
+                uninterrupted,
+                uninterruptedOptimizer,
+                uninterruptedScheduler,
+                [1, 2],
+                [2, 3],
+                progress: 0.25d);
+            WikiLanguageModelCommand.SaveTrainingCheckpoint(
+                config,
+                config.VocabularySize,
+                completedEpoch: 0,
+                uninterrupted.state_dict(),
+                bestLoss: 10f,
+                bestEpoch: 0,
+                uninterrupted,
+                uninterruptedOptimizer,
+                uninterruptedScheduler,
+                globalStep: 1,
+                currentEpoch: 1,
+                completedBatchesInEpoch: 1,
+                currentLossSum: 2d,
+                currentTargetCount: 2);
+
+            InvalidDataException seedMismatch =
+                Assert.Throws<InvalidDataException>(() =>
+                    WikiLanguageModelCommand.ResolvePrecisionForTraining(
+                        config with { Seed = config.Seed + 1 }));
+            Assert.Contains("checkpoint seed", seedMismatch.Message);
+
+            TrainStep(
+                uninterrupted,
+                uninterruptedOptimizer,
+                uninterruptedScheduler,
+                [3, 4],
+                [4, 5],
+                progress: 0.5d);
+            ModuleState expectedModel = uninterrupted.state_dict();
+            OptimizerStateDictionary expectedOptimizer =
+                uninterruptedOptimizer.state_dict();
+            LRSchedulerStateDictionary expectedScheduler =
+                uninterruptedScheduler.state_dict();
+
+            LanguageModel resumed = WikiLanguageModelCommand.CreateModel(
+                config,
+                config.VocabularySize);
+            IOptimizer resumedOptimizer =
+                WikiLanguageModelCommand.CreateOptimizer(resumed, config);
+            WarmupCosineProgressLRScheduler resumedScheduler =
+                lr_scheduler.WarmupCosineProgressLR(
+                    resumedOptimizer,
+                    config.WarmupPercent);
+            ModuleState? bestState = null;
+            float bestLoss = float.PositiveInfinity;
+            int bestEpoch = 0;
+            long globalStep = 0;
+            using var output = new StringWriter();
+
+            WikiLanguageModelCommand.WikiResumePosition position =
+                WikiLanguageModelCommand.RestoreTrainingCheckpoint(
+                    config,
+                    resumed,
+                    resumedOptimizer,
+                    resumedScheduler,
+                    ref bestState,
+                    ref bestLoss,
+                    ref bestEpoch,
+                    ref globalStep,
+                    output);
+            Assert.Equal(1, position.Epoch);
+            Assert.Equal(1, position.CompletedBatches);
+            Assert.Equal(1, globalStep);
+
+            TrainStep(
+                resumed,
+                resumedOptimizer,
+                resumedScheduler,
+                [3, 4],
+                [4, 5],
+                progress: 0.5d);
+
+            ModuleState actualModel = resumed.state_dict();
+            Assert.Equal(
+                expectedModel.Parameters.Length,
+                actualModel.Parameters.Length);
+            for (int index = 0; index < expectedModel.Parameters.Length;
+                index++)
+            {
+                Assert.Equal(
+                    expectedModel.Parameters[index].Values,
+                    actualModel.Parameters[index].Values);
+            }
+            Assert.Equal(
+                expectedOptimizer.StateJsonText,
+                resumedOptimizer.state_dict().StateJsonText);
+            Assert.Equal(
+                expectedScheduler,
+                resumedScheduler.state_dict());
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Directory.Delete(directory, recursive: true);
         }
     }
 

@@ -69,6 +69,9 @@ public sealed class Bfp8QuantizationTests
         PrecisionPolicy policy = PrecisionPolicy.Mix8_32;
         Assert.Equal(NumericFormat.Bfp8, policy.ParameterStorage);
         Assert.Equal(NumericFormat.Bfp8, policy.MatrixOperand);
+        Assert.Equal(
+            GemmExecutionFormat.BFloat16,
+            policy.GemmExecutionFormats);
         Assert.Equal(NumericFormat.Float32, policy.Accumulation);
         Assert.Equal(NumericFormat.Float32, policy.Reduction);
         Assert.Equal(NumericFormat.Float32, policy.Normalization);
@@ -76,6 +79,13 @@ public sealed class Bfp8QuantizationTests
         Assert.Equal(NumericFormat.Float32, policy.Gradient);
         Assert.Equal(NumericFormat.Float32, policy.MasterWeight);
         Assert.Equal(NumericFormat.Float32, policy.OptimizerState);
+
+        Assert.Equal(
+            GemmExecutionFormat.Int8 | GemmExecutionFormat.BFloat16,
+            PrecisionPolicy.Bfp8.GemmExecutionFormats);
+        Assert.Equal(
+            PrecisionPolicy.Mix16_32,
+            PrecisionPolicy.Parse("fp16_32"));
     }
 
     [Fact]

@@ -4,6 +4,24 @@ using Xunit;
 public sealed class TensorPrecisionModeTests
 {
     [Fact]
+    public void PureBfp8ParameterHasNoFloat32MasterWhileMix8Does()
+    {
+        var pure = new Parameter(
+            [0.25f, -0.5f],
+            [2],
+            "pure",
+            WeightDecayPolicy.Apply,
+            TensorDType.Bfp8);
+        Assert.False(pure.T.HasFloat32MasterData);
+
+        pure.T.ConvertStorageInPlace(
+            TensorDType.Bfp8,
+            Bfp8QuantizationDescriptor.Block(64),
+            preserveFloat32Master: true);
+        Assert.True(pure.T.HasFloat32MasterData);
+    }
+
+    [Fact]
     public void BFloat16StorageUsesFloat32Accumulation()
     {
         var tensor = new Tensor([1f, -2f], [2], dtype: TensorDType.BFloat16);
@@ -47,6 +65,17 @@ public sealed class TensorPrecisionModeTests
             () => TensorPrecisionModeNames.Parse("float16"));
 
         Assert.Contains("mix16_32", exception.Message);
+    }
+
+    [Fact]
+    public void PrecisionModeParserAcceptsFp16_32CompatibilityAlias()
+    {
+        Assert.Equal(
+            TensorPrecisionMode.Mix16_32,
+            TensorPrecisionModeNames.Parse("fp16_32"));
+        Assert.Equal(
+            "mix16_32",
+            TensorPrecisionModeNames.Format(TensorPrecisionMode.Mix16_32));
     }
 
     [Fact]
@@ -179,6 +208,41 @@ public sealed class TensorPrecisionModeTests
 
         Assert.Equal(TensorPrecisionMode.Float32, model.PrecisionMode);
         Assert.All(tensors, tensor => Assert.Equal(TensorDType.Float32, tensor.DType));
+    }
+
+    [Theory]
+    [InlineData(TensorPrecisionMode.Bfp8)]
+    [InlineData(TensorPrecisionMode.Mix8_32)]
+    public void ModuleStateRoundTripsBfp8WithoutChangingItsNumericContract(
+        TensorPrecisionMode mode)
+    {
+        var source = new Linear(16, 4, new Random(37));
+        source.to(mode, bfp8_block_size: 32);
+        ModuleState state = source.state_dict();
+        var destination = new Linear(16, 4, new Random(41));
+        destination.to(mode, bfp8_block_size: 32);
+
+        destination.load_state_dict(state);
+
+        Assert.Equal(mode, destination.PrecisionMode);
+        Tensor[] expected = source.parameters()
+            .Select(parameter => parameter.T)
+            .ToArray();
+        Tensor[] actual = destination.parameters()
+            .Select(parameter => parameter.T)
+            .ToArray();
+        Assert.Equal(expected.Length, actual.Length);
+        for (int index = 0; index < expected.Length; index++)
+        {
+            Assert.Equal(TensorDType.Bfp8, actual[index].DType);
+            Assert.Equal(
+                expected[index].Bfp8Quantization,
+                actual[index].Bfp8Quantization);
+            Assert.Equal(expected[index].Data, actual[index].Data);
+            Assert.Equal(
+                mode == TensorPrecisionMode.Bfp8,
+                actual[index].RequiresTwoPassBfp8CheckpointRestore);
+        }
     }
 
     private sealed class BFloat16ToleranceComparer : IEqualityComparer<float>

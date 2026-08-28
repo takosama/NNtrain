@@ -219,6 +219,316 @@ public sealed class CudaMemoryManagerLifecycleTests
             () => lease.SetReleaseFence(new FakeFence()));
     }
 
+    [Fact]
+    public void ExactSizeRentIsReusedWithinLaneAndFreedOnManagerDispose()
+    {
+        var allocator = new FakeAllocator();
+        var manager = new CudaMemoryManager(3, allocator);
+
+        CudaMemoryLease first = manager.Rent(
+            96,
+            CudaMemoryKind.Transient);
+        nint pointer = first.Pointer;
+        first.Dispose();
+
+        Assert.Equal(1, manager.CachedAllocationCount);
+        Assert.Equal(96, manager.CachedBytes);
+        Assert.Equal(1, manager.AllocationCount);
+        Assert.Empty(allocator.Releases);
+
+        using (CudaMemoryLease second = manager.Rent(
+                   96,
+                   CudaMemoryKind.Transient))
+        {
+            Assert.Equal(pointer, second.Pointer);
+            Assert.Equal(1, allocator.AllocationAttempts);
+            Assert.Equal(1, manager.ActiveAllocationCount);
+            Assert.Equal(0, manager.CachedAllocationCount);
+        }
+
+        Assert.Equal(1, manager.CachedAllocationCount);
+        manager.Dispose();
+
+        FakeRelease release = Assert.Single(allocator.Releases);
+        Assert.Equal(pointer, release.Pointer);
+        Assert.Equal(CudaMemoryKind.Transient, release.Kind);
+        Assert.Equal(0, manager.AllocationCount);
+        Assert.Equal(0, manager.AllocatedBytes);
+    }
+
+    [Fact]
+    public void ReusableFenceBecomesCacheOnlyAfterCompletion()
+    {
+        var allocator = new FakeAllocator();
+        using var manager = new CudaMemoryManager(0, allocator);
+        var fence = new FakeFence();
+        CudaMemoryLease lease = manager.Rent(
+            128,
+            CudaMemoryKind.Workspace);
+
+        lease.DisposeAfter(fence);
+        Assert.Equal(1, manager.PendingAllocationCount);
+        Assert.Equal(0, manager.CachedAllocationCount);
+
+        fence.Complete();
+        Assert.Equal(1, manager.CollectCompleted());
+        Assert.Equal(0, manager.PendingAllocationCount);
+        Assert.Equal(1, manager.CachedAllocationCount);
+        Assert.Empty(allocator.Releases);
+        Assert.Equal(1, fence.DisposeCount);
+    }
+
+    [Fact]
+    public void OomTrimsReusableCacheBeforeSingleRetry()
+    {
+        var allocator = new FakeAllocator();
+        using var manager = new CudaMemoryManager(0, allocator);
+        CudaMemoryLease cached = manager.Rent(
+            64,
+            CudaMemoryKind.Transient);
+        cached.Dispose();
+        allocator.FailAllocationAttempts.Enqueue(true);
+
+        using CudaMemoryLease result = manager.Rent(
+            256,
+            CudaMemoryKind.Workspace);
+
+        Assert.Equal(3, allocator.AllocationAttempts);
+        Assert.Single(allocator.Releases);
+        Assert.Equal(0, manager.CachedAllocationCount);
+        Assert.Equal(1, manager.ActiveAllocationCount);
+    }
+
+    [Fact]
+    public void RentRejectsPersistentAndPinnedKinds()
+    {
+        using var manager = new CudaMemoryManager(0, new FakeAllocator());
+
+        Assert.Throws<ArgumentException>(
+            () => manager.Rent(8, CudaMemoryKind.Persistent));
+        Assert.Throws<ArgumentException>(
+            () => manager.Rent(8, CudaMemoryKind.PinnedStaging));
+    }
+
+    [Fact]
+    public void ReusableCacheEvictsOldestEntriesWithinByteAndCountBudgets()
+    {
+        var allocator = new FakeAllocator();
+        using var manager = new CudaMemoryManager(
+            0,
+            allocator,
+            oomRecovery: null,
+            maximumReusableCacheBytes: 192,
+            maximumReusableCacheEntries: 2);
+
+        CudaMemoryLease first = manager.Rent(
+            64, CudaMemoryKind.Transient);
+        nint firstPointer = first.Pointer;
+        first.Dispose();
+        CudaMemoryLease second = manager.Rent(
+            80, CudaMemoryKind.Transient);
+        second.Dispose();
+        CudaMemoryLease third = manager.Rent(
+            96, CudaMemoryKind.Workspace);
+        third.Dispose();
+
+        Assert.Equal(2, manager.CachedAllocationCount);
+        Assert.Equal(176, manager.CachedBytes);
+        FakeRelease evicted = Assert.Single(allocator.Releases);
+        Assert.Equal(firstPointer, evicted.Pointer);
+        Assert.Equal((nuint)64, evicted.ByteLength);
+    }
+
+    [Fact]
+    public void OversizedReusableAllocationIsReleasedInsteadOfCached()
+    {
+        var allocator = new FakeAllocator();
+        using var manager = new CudaMemoryManager(
+            0,
+            allocator,
+            oomRecovery: null,
+            maximumReusableCacheBytes: 128,
+            maximumReusableCacheEntries: 4);
+
+        CudaMemoryLease lease = manager.Rent(
+            256, CudaMemoryKind.Transient);
+        nint pointer = lease.Pointer;
+        lease.Dispose();
+
+        Assert.Equal(0, manager.CachedAllocationCount);
+        Assert.Equal(0, manager.CachedBytes);
+        FakeRelease released = Assert.Single(allocator.Releases);
+        Assert.Equal(pointer, released.Pointer);
+        Assert.Equal((nuint)256, released.ByteLength);
+    }
+
+    [Fact]
+    public void ProtectedLanguageModelHeadSurvivesSmallCachePressure()
+    {
+        const long mib = 1024L * 1024;
+        const long headBytes = 404 * mib;
+        const long smallBytes = 4 * mib;
+        var allocator = new FakeAllocator();
+        using var manager = new CudaMemoryManager(0, allocator);
+
+        CudaMemoryLease head = manager.Rent(
+            (nuint)headBytes,
+            CudaMemoryKind.Transient);
+        nint headPointer = head.Pointer;
+        head.Dispose();
+
+        // Keep all small leases active until the head is cached, then return
+        // more than the remaining 108 MiB byte budget.
+        CudaMemoryLease[] small = Enumerable.Range(0, 40)
+            .Select(_ => manager.Rent(
+                (nuint)smallBytes,
+                CudaMemoryKind.Transient))
+            .ToArray();
+        foreach (CudaMemoryLease lease in small)
+        {
+            lease.Dispose();
+            Assert.InRange(
+                manager.CachedBytes,
+                0,
+                manager.MaximumReusableCacheBytes);
+            Assert.InRange(
+                manager.CachedAllocationCount,
+                0,
+                manager.MaximumReusableCacheEntries);
+        }
+
+        Assert.Equal(512 * mib, manager.CachedBytes);
+        Assert.Equal(28, manager.CachedAllocationCount);
+        int allocationAttemptsBeforeReuse = allocator.AllocationAttempts;
+
+        using CudaMemoryLease reusedHead = manager.Rent(
+            (nuint)headBytes,
+            CudaMemoryKind.Transient);
+
+        Assert.Equal(headPointer, reusedHead.Pointer);
+        Assert.Equal(
+            allocationAttemptsBeforeReuse,
+            allocator.AllocationAttempts);
+        Assert.DoesNotContain(
+            allocator.Releases,
+            release => release.Pointer == headPointer);
+    }
+
+    [Fact]
+    public void DefaultEntryBudgetRetainsTransformerActivationHighWater()
+    {
+        const int activationCount = 314;
+        const int activationBytes = 4096;
+        var allocator = new FakeAllocator();
+        using var manager = new CudaMemoryManager(0, allocator);
+
+        CudaMemoryLease[] warmup = Enumerable.Range(0, activationCount)
+            .Select(_ => manager.Rent(
+                activationBytes,
+                CudaMemoryKind.Transient))
+            .ToArray();
+        foreach (CudaMemoryLease lease in warmup)
+            lease.Dispose();
+
+        Assert.Equal(activationCount, manager.CachedAllocationCount);
+        int nativeAllocationsAfterWarmup = allocator.AllocationAttempts;
+
+        CudaMemoryLease[] steady = Enumerable.Range(0, activationCount)
+            .Select(_ => manager.Rent(
+                activationBytes,
+                CudaMemoryKind.Transient))
+            .ToArray();
+
+        Assert.Equal(
+            nativeAllocationsAfterWarmup,
+            allocator.AllocationAttempts);
+        foreach (CudaMemoryLease lease in steady)
+            lease.Dispose();
+        Assert.Equal(activationCount, manager.CachedAllocationCount);
+    }
+
+    [Fact]
+    public void NewProtectedLargeShapeReplacesPreviousLargeShape()
+    {
+        const long mib = 1024L * 1024;
+        const long oldShapeBytes = 404 * mib;
+        const long newShapeBytes = 396 * mib;
+        var allocator = new FakeAllocator();
+        using var manager = new CudaMemoryManager(0, allocator);
+
+        CudaMemoryLease oldShape = manager.Rent(
+            (nuint)oldShapeBytes,
+            CudaMemoryKind.Transient);
+        nint oldPointer = oldShape.Pointer;
+        oldShape.Dispose();
+
+        CudaMemoryLease newShape = manager.Rent(
+            (nuint)newShapeBytes,
+            CudaMemoryKind.Transient);
+        nint newPointer = newShape.Pointer;
+        newShape.Dispose();
+
+        FakeRelease replaced = Assert.Single(
+            allocator.Releases,
+            release => release.Pointer == oldPointer);
+        Assert.Equal((nuint)oldShapeBytes, replaced.ByteLength);
+        Assert.Equal(newShapeBytes, manager.CachedBytes);
+        Assert.Equal(1, manager.CachedAllocationCount);
+
+        int allocationAttemptsBeforeReuse = allocator.AllocationAttempts;
+        using CudaMemoryLease reusedNewShape = manager.Rent(
+            (nuint)newShapeBytes,
+            CudaMemoryKind.Transient);
+        Assert.Equal(newPointer, reusedNewShape.Pointer);
+        Assert.Equal(
+            allocationAttemptsBeforeReuse,
+            allocator.AllocationAttempts);
+    }
+
+    [Fact]
+    public void TrimAndDisposeReleaseProtectedAndSmallCacheEntries()
+    {
+        const long mib = 1024L * 1024;
+        var allocator = new FakeAllocator();
+        var manager = new CudaMemoryManager(0, allocator);
+
+        CudaMemoryLease protectedLarge = manager.Rent(
+            (nuint)(404 * mib),
+            CudaMemoryKind.Transient);
+        protectedLarge.Dispose();
+        CudaMemoryLease[] small = Enumerable.Range(0, 4)
+            .Select(_ => manager.Rent(
+                (nuint)(8 * mib),
+                CudaMemoryKind.Workspace))
+            .ToArray();
+        foreach (CudaMemoryLease lease in small)
+            lease.Dispose();
+
+        long cachedBeforeTrim = manager.CachedAllocationCount;
+        Assert.Equal(cachedBeforeTrim, manager.TrimReusableCache());
+        Assert.Equal(0, manager.CachedAllocationCount);
+        Assert.Equal(0, manager.CachedBytes);
+        Assert.Equal(0, manager.AllocationCount);
+        Assert.Equal(
+            cachedBeforeTrim,
+            allocator.Releases.Select(static release => release.Pointer)
+                .Distinct()
+                .Count());
+
+        CudaMemoryLease afterTrim = manager.Rent(
+            (nuint)(404 * mib),
+            CudaMemoryKind.Transient);
+        nint afterTrimPointer = afterTrim.Pointer;
+        afterTrim.Dispose();
+        manager.Dispose();
+
+        Assert.Equal(0, manager.AllocationCount);
+        Assert.Equal(0, manager.AllocatedBytes);
+        Assert.Single(
+            allocator.Releases,
+            release => release.Pointer == afterTrimPointer);
+    }
+
     private sealed class FakeAllocator : ICudaMemoryAllocator
     {
         private long _nextPointer;

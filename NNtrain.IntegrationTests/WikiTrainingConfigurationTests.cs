@@ -470,9 +470,12 @@ public sealed class WikiTrainingConfigurationTests
     }
 
     [Theory]
+    [InlineData("fp16_32", TensorDType.BFloat16)]
     [InlineData("mix16_32", TensorDType.BFloat16)]
     [InlineData("bfloat16", TensorDType.BFloat16)]
     [InlineData("float32", TensorDType.Float32)]
+    [InlineData("bfp8", TensorDType.Bfp8)]
+    [InlineData("mix8_32", TensorDType.Bfp8)]
     public void AllowsTransformerPrecisionModes(
         string configuredMode,
         TensorDType expectedDType)
@@ -487,6 +490,32 @@ public sealed class WikiTrainingConfigurationTests
         configuration.Validate();
 
         Assert.Equal(expectedDType, configuration.GetModelDType());
+    }
+
+    [Theory]
+    [InlineData("bfp8", "gainshareadamw")]
+    [InlineData("bfp8", "lion")]
+    [InlineData("mix8_32", "gainshareadamw")]
+    [InlineData("mix8_32", "lion")]
+    public void RejectsBfp8OptimizersWithoutResidentCudaUpdates(
+        string precisionMode,
+        string optimizer)
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            ModelArchitecture =
+                WikiTrainingConfiguration.TransformerArchitecture,
+            PrecisionMode = precisionMode,
+            Optimizer = optimizer,
+        };
+
+        ArgumentException exception = Assert.Throws<ArgumentException>(
+            configuration.Validate);
+
+        Assert.Equal("Optimizer", exception.ParamName);
+        Assert.Contains("adamw", exception.Message);
+        Assert.Contains("nekomuon", exception.Message);
+        Assert.Contains("not have a resident CUDA", exception.Message);
     }
 
     [Fact]
@@ -633,6 +662,21 @@ public sealed class WikiTrainingConfigurationTests
         Assert.Equal(
             "NekoMuonNewtonSchulzInterval",
             exception.ParamName);
+    }
+
+    [Fact]
+    public void RejectsNonPositiveCudaGraphCacheBudget()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            CudaGraphCacheBudgetMiB = 0,
+        };
+
+        ArgumentOutOfRangeException exception =
+            Assert.Throws<ArgumentOutOfRangeException>(
+                configuration.Validate);
+
+        Assert.Equal("CudaGraphCacheBudgetMiB", exception.ParamName);
     }
 
     [Fact]

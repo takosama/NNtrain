@@ -4,6 +4,52 @@ using Xunit;
 public sealed class AutogradLeaseTests
 {
     [Fact]
+    public void TraversalWorkspaceCacheStaysBoundedUnderParallelBackward()
+    {
+        Parallel.For(0, 128, _ =>
+        {
+            Tensor left = Tensor.Scalar(2f);
+            Tensor right = Tensor.Scalar(3f);
+            (left * right).BackwardAndRelease();
+        });
+
+        AutogradTraversalWorkspaceTelemetry telemetry =
+            AutogradEngine.TraversalWorkspaceTelemetry;
+        Assert.InRange(
+            telemetry.TopologicalOrderCount,
+            0,
+            AutogradEngine.MaximumCachedTraversalWorkspaces);
+        Assert.InRange(
+            telemetry.VisitedSetCount,
+            0,
+            AutogradEngine.MaximumCachedTraversalWorkspaces);
+        Assert.InRange(
+            telemetry.PendingStackCount,
+            0,
+            AutogradEngine.MaximumCachedTraversalWorkspaces);
+    }
+
+    [Fact]
+    public void OneShotBackwardScopeIsVisibleOnlyDuringReleasedTraversal()
+    {
+        bool retainedSawRelease = true;
+        Tensor retained = Tensor.Scalar(1f);
+        retained.Node.BackwardAction = () =>
+            retainedSawRelease = AutogradEngine.IsReleasingGraph;
+        retained.Backward();
+
+        bool oneShotSawRelease = false;
+        Tensor oneShot = Tensor.Scalar(1f);
+        oneShot.Node.BackwardAction = () =>
+            oneShotSawRelease = AutogradEngine.IsReleasingGraph;
+        oneShot.BackwardAndRelease();
+
+        Assert.False(retainedSawRelease);
+        Assert.True(oneShotSawRelease);
+        Assert.False(AutogradEngine.IsReleasingGraph);
+    }
+
+    [Fact]
     public void OwnedLeasePublishesMetadataAndReleasesExactlyOnce()
     {
         var context = new TrackedContext();

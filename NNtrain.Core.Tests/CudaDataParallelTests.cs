@@ -89,7 +89,56 @@ public sealed class CudaDataParallelTests
     }
 
     [Fact]
-    public void PureBfp8DataParallelTrainingRequiresBfp8GradientReducer()
+    public void StableTwoGpuShapeReusesCompiledShardPlan()
+    {
+        if (Tensor.CudaDeviceCount < 2)
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            Tensor.CudaDeviceIndices = [0, 1];
+            var model = new GptRinWikiJp(
+                vocabularySize: 32,
+                contextLength: 4,
+                dModel: 8,
+                numHeads: 2,
+                dHidden: 16,
+                numLayers: 1,
+                rng: new Random(211),
+                dropout: 0f,
+                dtype: TensorDType.BFloat16);
+            using var engine = new CudaDataParallelEngine(
+                model,
+                [0, 1],
+                new CudaAdaptiveShardingOptions { Enabled = false });
+            int[] input = [1, 2, 3, 4, 5, 6, 7, 8];
+            int[] target = [2, 3, 4, 5, 6, 7, 8, 9];
+
+            for (int step = 0; step < 3; step++)
+            {
+                model.ZeroGrad();
+                Assert.True(float.IsFinite(engine.ForwardBackward(
+                    input,
+                    target,
+                    batchSize: 2,
+                    sequenceLength: 4)));
+            }
+
+            Assert.Equal(1, engine.TrainingShapePlanBuildCount);
+            Assert.Equal(1, engine.CachedTrainingShapePlanCount);
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndices = previousIndices;
+        }
+    }
+
+    [Fact]
+    public void PureBfp8SingleGpuPublishesLocalGradientsWithoutHostFallback()
     {
         if (Tensor.CudaDeviceCount == 0)
             return;
@@ -114,13 +163,46 @@ public sealed class CudaDataParallelTests
             Tensor.ExecutionDevice = TensorDevice.Cuda;
             Tensor.CudaDeviceIndices = [0];
             using var engine = new CudaDataParallelEngine(model, [0]);
-            NotSupportedException error = Assert.Throws<NotSupportedException>(
-                () => engine.ForwardBackward(
-                    [1, 2, 3, 4],
-                    [2, 3, 4, 5],
-                    batchSize: 1,
-                    sequenceLength: 4));
-            Assert.Contains("BFP8 gradient reducer", error.Message);
+            _ = engine.ForwardBackward(
+                [1, 2, 3, 4],
+                [2, 3, 4, 5],
+                batchSize: 1,
+                sequenceLength: 4);
+            model.zero_grad();
+
+            NativeCudaTransferTelemetry before =
+                NativeCudaRuntime.TransferTelemetry;
+            float loss = engine.ForwardBackward(
+                [1, 2, 3, 4],
+                [2, 3, 4, 5],
+                batchSize: 1,
+                sequenceLength: 4);
+            NativeCudaTransferTelemetry transfer =
+                NativeCudaRuntime.TransferTelemetry - before;
+
+            Assert.True(float.IsFinite(loss));
+            Parameter[] parameters = model.Parameters().ToArray();
+            Assert.NotEmpty(parameters);
+            foreach (Parameter parameter in parameters)
+            {
+                CudaGradientCoherenceSnapshot snapshot =
+                    parameter.T.GetCudaGradientCoherenceSnapshot();
+                Assert.Equal(CudaGradientCoherenceKind.Local, snapshot.Kind);
+                Assert.Equal(0, snapshot.LocalDeviceIndex);
+                Assert.False(snapshot.PendingStamp.IsValid);
+                Assert.True(parameter.T.HasAuthoritativeCudaBfp8Gradient);
+            }
+
+            // H2D is input/target only. The autograd root seed is now passed
+            // as a CUDA kernel argument and never uploaded as tensor data.
+            // D2H is one graph-wide finite scalar, one norm scalar, and loss;
+            // no parameter-sized gradient payload returns to the host.
+            Assert.Equal(
+                2 * 4 * sizeof(int),
+                transfer.HostToDeviceBytes);
+            Assert.Equal(
+                sizeof(int) + sizeof(double) + sizeof(float),
+                transfer.DeviceToHostBytes);
         }
         finally
         {

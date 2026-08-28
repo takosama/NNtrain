@@ -35,9 +35,11 @@ internal static class GenerationKvCacheProfiler
 
         (double Milliseconds, int[] Tokens) Measure(bool disableCache)
         {
-            Environment.SetEnvironmentVariable(
-                "NNTRAIN_DISABLE_KV_CACHE",
-                disableCache ? "1" : null);
+            using IDisposable dispatch = CudaDispatchPolicy.Push(
+                CudaDispatchPolicy.Defaults with
+                {
+                    DisableKvCache = disableCache,
+                });
             int[] tokens = [];
             var samples = new double[iterations];
             for (int run = -warmup; run < iterations; ++run)
@@ -58,23 +60,15 @@ internal static class GenerationKvCacheProfiler
             return (samples.Average(), tokens);
         }
 
-        try
-        {
-            var full = Measure(disableCache: true);
-            var cached = Measure(disableCache: false);
-            Console.WriteLine(
-                $"generation BF16 CUDA [prompt={promptLength}," +
-                $"new={generatedTokens},context={context},width={width}," +
-                $"heads={heads},layers={layers}]: full-window " +
-                $"{full.Milliseconds:F2} ms, K/V cache " +
-                $"{cached.Milliseconds:F2} ms, speedup " +
-                $"{full.Milliseconds / cached.Milliseconds:F2}x, " +
-                $"greedy-match={full.Tokens.SequenceEqual(cached.Tokens)}");
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(
-                "NNTRAIN_DISABLE_KV_CACHE", null);
-        }
+        var full = Measure(disableCache: true);
+        var cached = Measure(disableCache: false);
+        Console.WriteLine(
+            $"generation BF16 CUDA [prompt={promptLength}," +
+            $"new={generatedTokens},context={context},width={width}," +
+            $"heads={heads},layers={layers}]: full-window " +
+            $"{full.Milliseconds:F2} ms, K/V cache " +
+            $"{cached.Milliseconds:F2} ms, speedup " +
+            $"{full.Milliseconds / cached.Milliseconds:F2}x, " +
+            $"greedy-match={full.Tokens.SequenceEqual(cached.Tokens)}");
     }
 }

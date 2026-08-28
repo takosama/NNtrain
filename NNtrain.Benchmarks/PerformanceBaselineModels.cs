@@ -4,7 +4,7 @@ namespace NNtrain.Benchmarks;
 
 internal static class PerformanceBaselineSchema
 {
-    internal const string Version = "nntrain.performance-baseline/v1";
+    internal const string Version = "nntrain.performance-baseline/v2";
 }
 
 internal sealed record PerformanceBaselineDocument(
@@ -34,7 +34,8 @@ internal sealed record BaselineScenarioResult(
     IReadOnlyList<BaselineRunResult> Runs,
     BaselineDistribution AggregateStep,
     BaselinePhaseProbe? PhaseProbe,
-    IReadOnlyList<string> Notes);
+    IReadOnlyList<string> Notes,
+    BaselineValidationResult? Validation = null);
 
 internal sealed record BaselineConditions(
     string Scenario,
@@ -46,6 +47,8 @@ internal sealed record BaselineConditions(
     IReadOnlyList<BaselineGpu> Gpus,
     string Precision,
     string StorageDType,
+    int? Bfp8BlockSize,
+    string TrainingExecutionPlan,
     int Batch,
     int Sequence,
     int Vocabulary,
@@ -60,14 +63,27 @@ internal sealed record BaselineConditions(
     int WarmupSteps,
     int MeasuredSteps,
     int Repetitions,
+    string? PerformanceGateStatistic,
+    double? FrozenBaselineStepP50Milliseconds,
+    double? MaximumBaselineRatio,
+    double? MaximumAllowedStepP50Milliseconds,
     int Seed,
     bool AdaptiveCudaSharding,
     double CudaShardEmaAlpha,
     double CudaMinimumRelativeShardSize,
     int CudaMaximumBatchAdjustmentPerStep,
+    int CudaGraphCacheBudgetMiB,
     long ExpectedHostToDeviceBytesPerStep,
     long ExpectedLossReadbackBytesPerStep,
-    string InputSource);
+    string InputSource,
+    IReadOnlyList<BaselineEffectiveOverride> EffectiveOverrides);
+
+internal sealed record BaselineEffectiveOverride(
+    string Setting,
+    string ConfiguredValue,
+    string EffectiveValue,
+    bool Changed,
+    string Reason);
 
 internal sealed record BaselineRunResult(
     int Repetition,
@@ -86,12 +102,37 @@ internal sealed record BaselineRunResult(
     BaselineDistribution NekoMuon,
     BaselineDistribution AdamW,
     BaselineDistribution ManagedAllocationBytes,
+    BaselineDistribution NativeAllocationCount,
     BaselineDistribution NativeAllocationBytes,
+    BaselineDistribution NativeFreeCount,
+    BaselineDistribution NativeFreeBytes,
+    BaselineDistribution HostToDeviceCopyCount,
+    BaselineDistribution HostToDeviceBytes,
+    BaselineDistribution DeviceToHostCopyCount,
+    BaselineDistribution DeviceToHostBytes,
+    IReadOnlyList<BaselineDeviceMemorySummary> DeviceMemory,
     IReadOnlyList<int> FinalShardBatchSizes,
+    BaselineTrainingGraphTelemetry? TrainingGraph,
     IReadOnlyList<BaselineStepMeasurement> Measurements);
+
+internal sealed record BaselineTrainingGraphTelemetry(
+    long CaptureCount,
+    long ReplayCount,
+    long FallbackCount,
+    int CachedCompiledPlanCount,
+    long GraphPinnedBytes,
+    long CapturedReadyEventRecordCount,
+    double CapturedReadyEventRecordMilliseconds,
+    long MeasuredCaptureCount,
+    long MeasuredReplayCount,
+    long MeasuredFallbackCount,
+    long MeasuredReadyEventRecordCount,
+    double MeasuredReadyEventRecordMilliseconds,
+    bool MeasuredIntervalFullyCompiledReplay);
 
 internal sealed record BaselineStepMeasurement(
     int Step,
+    bool IsWarmup,
     double Loss,
     double TotalMilliseconds,
     double ZeroGradMilliseconds,
@@ -109,7 +150,52 @@ internal sealed record BaselineStepMeasurement(
     long NativeAllocationCount,
     long NativeAllocationBytes,
     long NativeFreeCount,
-    long NativeFreeBytes);
+    long NativeFreeBytes,
+    long HostToDeviceCopyCount,
+    long HostToDeviceBytes,
+    long DeviceToHostCopyCount,
+    long DeviceToHostBytes,
+    IReadOnlyList<BaselineDeviceMemoryObservation> DeviceMemory)
+{
+    public long GradientCollectiveHostToDeviceCopyCount { get; init; }
+
+    public long GradientCollectiveHostToDeviceBytes { get; init; }
+
+    public long GradientCollectiveDeviceToHostCopyCount { get; init; }
+
+    public long GradientCollectiveDeviceToHostBytes { get; init; }
+}
+
+internal sealed record BaselineDeviceMemoryObservation(
+    int Device,
+    long? TotalBytes,
+    long? FreeBytes,
+    long? UsedBytes,
+    string? Error);
+
+internal sealed record BaselineDeviceMemorySummary(
+    int Device,
+    long TotalBytes,
+    long StartUsedBytes,
+    long PeakUsedBytes,
+    long EndUsedBytes,
+    long PeakGrowthBytes,
+    int ObservationCount);
+
+internal sealed record BaselineTransferTelemetry(
+    long HostToDeviceCopyCount,
+    long HostToDeviceBytes,
+    long DeviceToHostCopyCount,
+    long DeviceToHostBytes)
+{
+    public long GradientCollectiveHostToDeviceCopyCount { get; init; }
+
+    public long GradientCollectiveHostToDeviceBytes { get; init; }
+
+    public long GradientCollectiveDeviceToHostCopyCount { get; init; }
+
+    public long GradientCollectiveDeviceToHostBytes { get; init; }
+}
 
 internal sealed record BaselinePhaseProbe(
     string MeasurementKind,
@@ -123,6 +209,7 @@ internal sealed record BaselinePhaseProbe(
     double? TransferMilliseconds,
     double? HostDataPreparationMilliseconds,
     string TransferStatus,
+    BaselineTransferTelemetry Transfers,
     IReadOnlyList<BaselineShardProbe> Shards);
 
 internal sealed record BaselineShardProbe(
@@ -172,7 +259,8 @@ internal sealed record BaselineWorkerJob(
     BaselineScenario Scenario,
     IReadOnlyList<BaselineGpu> Gpus,
     string? ConfigurationPath,
-    string? ConfigurationSha256);
+    string? ConfigurationSha256,
+    IReadOnlyList<BaselineEffectiveOverride>? EffectiveOverrides = null);
 
 internal sealed record BaselineScenario(
     string Name,
@@ -181,7 +269,104 @@ internal sealed record BaselineScenario(
     int WarmupSteps,
     int MeasuredSteps,
     int Repetitions,
-    bool CollectPhaseProbe);
+    bool CollectPhaseProbe,
+    BaselineSoakConfiguration? Soak = null,
+    BaselinePerformanceGateConfiguration? PerformanceGate = null);
+
+internal sealed record BaselinePerformanceGateConfiguration(
+    int RequiredCudaDeviceCount,
+    int RequiredWarmupSteps,
+    int RequiredMeasuredSteps,
+    int RequiredRepetitions,
+    int RequiredBatch,
+    int RequiredSequence,
+    string RequiredPrecision,
+    string RequiredNewtonSchulzDepthMode,
+    int RequiredNewtonSchulzSteps,
+    double FrozenStepP50Milliseconds,
+    double MaximumBaselineRatio)
+{
+    internal double MaximumAllowedStepP50Milliseconds
+        => FrozenStepP50Milliseconds * MaximumBaselineRatio;
+}
+
+internal sealed record BaselineSoakConfiguration(
+    int TotalCommittedSteps,
+    int PerformanceWarmupSteps,
+    int TrendWindowSteps,
+    int GenerationStep,
+    int GenerationTokens,
+    int RestartStep,
+    long MaximumPostWarmupVramGrowthBytes,
+    double MaximumLastToFirstP50Ratio,
+    bool InjectCheckpointFailureAfterFirstArtifact = false);
+
+internal sealed record BaselineValidationResult(
+    string Scope,
+    bool Passed,
+    IReadOnlyList<BaselineGateResult> Gates,
+    BaselineSoakResult? Soak);
+
+internal sealed record BaselineGateResult(
+    string Name,
+    bool? Passed,
+    string Actual,
+    string Required,
+    string? Detail = null);
+
+internal sealed record BaselineSoakResult(
+    int RequestedCommittedSteps,
+    int CompletedCommittedSteps,
+    int PerformanceWarmupSteps,
+    int TrendWindowSteps,
+    BaselineDistribution FirstWindow,
+    BaselineDistribution LastWindow,
+    double LastToFirstP50Ratio,
+    int GenerationStep,
+    bool GenerationObserved,
+    int GeneratedTokens,
+    double? GenerationMilliseconds,
+    int RestartStep,
+    bool RestartObserved,
+    bool ResumeArtifactValidated,
+    long ResumeArtifactBytes,
+    string? ResumeArtifactSha256,
+    BaselineCheckpointResult Checkpoint,
+    int SidecarEntriesBeforeRestart,
+    int SidecarEntriesAfterResume,
+    bool SidecarContinuityValidated,
+    bool HtmlContinuityChecked,
+    bool HtmlContinuityValidated,
+    string HtmlContinuityStatus,
+    IReadOnlyList<BaselineDeviceMemorySummary> PostWarmupDeviceMemory,
+    bool ZeroShardObserved,
+    IReadOnlyList<string> RuntimeErrors);
+
+internal sealed record BaselineCheckpointResult(
+    int FormatVersion,
+    bool Validated,
+    double? SaveMilliseconds,
+    double? LoadMilliseconds,
+    long TotalBytes,
+    IReadOnlyList<BaselineCheckpointArtifact> Artifacts,
+    bool ArtifactFirstManifestLastValidated,
+    bool CursorValidated,
+    bool TrainingRandomValidated,
+    bool SchedulerValidated,
+    bool AdaptiveShardStateValidated,
+    bool ModelValidated,
+    bool OptimizerValidated,
+    bool PrecisionValidated,
+    bool Bfp8BlockSizeValidated,
+    bool DeviceResidencyValidated,
+    bool OldFixtureDisposedBeforeReload,
+    bool ArtifactsRetainedAfterFailure,
+    string? ArtifactDirectory);
+
+internal sealed record BaselineCheckpointArtifact(
+    string Name,
+    long Bytes,
+    string Sha256);
 
 [JsonConverter(typeof(JsonStringEnumConverter<BaselineDeviceKind>))]
 internal enum BaselineDeviceKind
@@ -206,8 +391,12 @@ internal sealed record BaselineModelConfiguration(
     float LearningRate,
     float AuxiliaryLearningRate,
     float WeightDecay,
+    string NewtonSchulzDepthMode,
+    int NewtonSchulzDepth,
     int NewtonSchulzInterval,
     bool AdaptiveCudaSharding,
     double CudaShardEmaAlpha,
     double CudaMinimumRelativeShardSize,
-    int CudaMaximumBatchAdjustmentPerStep);
+    int CudaMaximumBatchAdjustmentPerStep,
+    int CudaGraphCacheBudgetMiB,
+    int Bfp8BlockSize);

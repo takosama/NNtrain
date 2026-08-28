@@ -137,6 +137,39 @@ public sealed class OptimizerBundleTests
         Assert.Equal("default", bundle.Groups[0].Name);
     }
 
+    [Fact]
+    public void NamedBundleStateRoundTripPreservesLeafBytesAndOrder()
+    {
+        Parameter sourceHidden = CreateParameter("hidden", 0.25f);
+        Parameter sourceAuxiliary = CreateParameter("auxiliary", -0.5f);
+        sourceHidden.T.MutableGrad[0] = 0.75f;
+        sourceAuxiliary.T.MutableGrad[0] = -0.25f;
+        var source = new OptimizerBundle(
+        [
+            new OptimizerGroup("hidden", new NekoMuon([sourceHidden])),
+            new OptimizerGroup("auxiliary", new AdamW([sourceAuxiliary])),
+        ]);
+        source.step();
+
+        var restored = new OptimizerBundle(
+        [
+            new OptimizerGroup(
+                "hidden",
+                new NekoMuon([CreateParameter("hidden", 0.25f)])),
+            new OptimizerGroup(
+                "auxiliary",
+                new AdamW([CreateParameter("auxiliary", -0.5f)])),
+        ]);
+        restored.load_state_dict(source.state_dict());
+
+        Assert.Equal(
+            source.Leaves.Select(leaf => leaf.Name),
+            restored.Leaves.Select(leaf => leaf.Name));
+        AssertPayloadsEqual(
+            SerializeLeaves(source),
+            SerializeLeaves(restored));
+    }
+
     private static byte[][] SerializeLeaves(IOptimizer optimizer)
         => OptimizerStateStream.GetLeafOptimizers(optimizer)
             .Select(SerializeLeaf)

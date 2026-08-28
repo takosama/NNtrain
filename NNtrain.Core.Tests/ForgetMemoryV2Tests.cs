@@ -4,6 +4,50 @@ using Xunit;
 public sealed class ForgetMemoryV2Tests
 {
     [Fact]
+    public void RecurrentStateMatchesFullCpuForwardAndResetsDeterministically()
+    {
+        TensorDevice previous = Tensor.ExecutionDevice;
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cpu;
+            var model = new ForgetMemoryV2Gpt(
+                vocabularySize: 17,
+                contextLength: 8,
+                modelWidth: 8,
+                hiddenWidth: 12,
+                numLayers: 2,
+                keyWidth: 3,
+                valueWidth: 4,
+                random: new Random(91),
+                dtype: TensorDType.Float32);
+            int[] tokens = [2, 5, 7, 3];
+            Tensor expected;
+            Tensor actual;
+            using (AutogradContext.NoGrad())
+            {
+                expected = model.Forward(tokens, 1, tokens.Length);
+                using ForgetMemoryV2RecurrentState state =
+                    model.CreateRecurrentState();
+                actual = model.Advance(tokens, state);
+
+                Assert.Equal(tokens.Length, state.TokensSeen);
+                Assert.True(state.PeakMagnitude() > 0f);
+                Assert.Equal(expected.Data, actual.Data);
+
+                state.Reset();
+                Assert.Equal(0, state.TokensSeen);
+                Assert.Equal(0f, state.PeakMagnitude());
+                Tensor replay = model.Advance(tokens, state);
+                Assert.Equal(expected.Data, replay.Data);
+            }
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previous;
+        }
+    }
+
+    [Fact]
     public void SingleTokenImplementsStableDeltaMemoryAndReadout()
     {
         float valueLogit = 0.5f * MathF.Log(3f);

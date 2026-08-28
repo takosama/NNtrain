@@ -356,6 +356,8 @@ public sealed class CudaDeviceSelectionTests
 
             CudaGradientBuckets.HostPipelineExchange(
                 destination,
+                sourceDevice,
+                length,
                 pipeline,
                 local,
                 remote,

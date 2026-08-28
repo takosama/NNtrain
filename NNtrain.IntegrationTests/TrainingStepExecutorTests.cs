@@ -186,6 +186,49 @@ public sealed class TrainingStepExecutorTests
     }
 
     [Fact]
+    public void PreparationRunsOnceBeforeCudaTransferGuard()
+    {
+        using var execution = new ExecutionSession(new ExecutionOptions
+        {
+            Device = ExecutionDeviceKind.Cuda,
+            CudaDevices = new DeviceSet(0),
+        });
+        using var session = new TrainingSession(execution);
+        var executor = new TrainingStepExecutor(session);
+        var operations = new TypedOperations(
+            TrainingGradientExecutionMode.Separate);
+
+        executor.Execute(operations);
+        executor.Execute(operations);
+
+        Assert.Equal(1, operations.PrepareCalls);
+        Assert.True(operations.PreparationObservedOutsideGuard);
+        Assert.Equal(2, operations.OptimizerCalls);
+        Assert.Null(DeviceTransferGuard.CurrentSnapshot);
+    }
+
+    [Fact]
+    public void FailedPreparationCanRetryWithoutStartingOrFaultingStep()
+    {
+        using var fixture = new Fixture();
+        var operations = new TypedOperations(
+            TrainingGradientExecutionMode.Separate)
+        {
+            PreparationFailuresRemaining = 1,
+        };
+
+        Assert.Throws<TestStepException>(
+            () => fixture.Executor.Execute(operations));
+        Assert.Null(fixture.Executor.State);
+        Assert.False(fixture.Session.IsFaulted);
+
+        TrainingStepState committed = fixture.Executor.Execute(operations);
+
+        Assert.Equal(2, operations.PrepareCalls);
+        Assert.Equal(TrainingStepPhase.MetricsCommitted, committed.Phase);
+    }
+
+    [Fact]
     public void TypedFusedGradientFailureDoesNotRunCommitOperations()
     {
         using var fixture = new Fixture();
@@ -252,6 +295,63 @@ public sealed class TrainingStepExecutorTests
         Assert.Equal(0, operations.FusedCalls);
     }
 
+    [Fact]
+    public void CudaTrainingStepGuardsEveryPhaseAgainstImplicitD2h()
+    {
+        using var execution = new ExecutionSession(new ExecutionOptions
+        {
+            Device = ExecutionDeviceKind.Cuda,
+            CudaDevices = new DeviceSet(0, 1),
+        });
+        using var session = new TrainingSession(execution);
+        var executor = new TrainingStepExecutor(session);
+        int guardedPhases = 0;
+        TrainingStepOperations operations = CreateOperations(_ =>
+        {
+            Assert.NotNull(DeviceTransferGuard.CurrentSnapshot);
+            guardedPhases++;
+        });
+
+        TrainingStepState committed = executor.Execute(operations);
+
+        Assert.Equal(9, guardedPhases);
+        Assert.Equal(TrainingStepPhase.MetricsCommitted, committed.Phase);
+        Assert.Null(DeviceTransferGuard.CurrentSnapshot);
+    }
+
+    [Fact]
+    public void ImplicitTensorDownloadFaultsCudaStepBeforeOptimizerCommit()
+    {
+        using var execution = new ExecutionSession(new ExecutionOptions
+        {
+            Device = ExecutionDeviceKind.Cuda,
+            CudaDevices = new DeviceSet(0),
+        });
+        using var session = new TrainingSession(execution);
+        var executor = new TrainingStepExecutor(session);
+        bool optimizerCommitted = false;
+        TrainingStepOperations operations = CreateOperations(phase =>
+        {
+            if (phase == "forward")
+            {
+                DeviceTransferGuard.BeforeDeviceToHost(
+                    4096,
+                    "activation materialization");
+            }
+            if (phase == "optimizer")
+                optimizerCommitted = true;
+        });
+
+        InvalidOperationException failure = Assert.Throws<InvalidOperationException>(
+            () => executor.Execute(operations));
+
+        Assert.Contains("implicit D2H", failure.Message);
+        Assert.False(optimizerCommitted);
+        Assert.Equal(TrainingStepPhase.Faulted, executor.State!.Phase);
+        Assert.False(session.CanPublishCheckpoint);
+        Assert.Null(DeviceTransferGuard.CurrentSnapshot);
+    }
+
     private static TrainingStepOperations CreateOperations(
         Action<string> execute)
         => new(
@@ -293,6 +393,9 @@ public sealed class TrainingStepExecutorTests
         : ITrainingStepOperations
     {
         internal Exception? Failure { get; init; }
+        internal int PreparationFailuresRemaining { get; set; }
+        internal int PrepareCalls { get; private set; }
+        internal bool PreparationObservedOutsideGuard { get; private set; }
         internal int AcquireCalls { get; private set; }
         internal int ClearCalls { get; private set; }
         internal int ForwardCalls { get; private set; }
@@ -306,6 +409,18 @@ public sealed class TrainingStepExecutorTests
 
         public TrainingGradientExecutionMode GradientExecutionMode
             => mode;
+
+        public void Prepare()
+        {
+            PrepareCalls++;
+            PreparationObservedOutsideGuard =
+                DeviceTransferGuard.CurrentSnapshot is null;
+            if (PreparationFailuresRemaining > 0)
+            {
+                PreparationFailuresRemaining--;
+                throw new TestStepException("prepare");
+            }
+        }
 
         public void AcquireBatch() => AcquireCalls++;
 

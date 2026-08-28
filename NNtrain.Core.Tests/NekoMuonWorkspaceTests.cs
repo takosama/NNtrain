@@ -30,16 +30,12 @@ public sealed class NekoMuonWorkspaceTests
 
         TensorDevice previousDevice = Tensor.ExecutionDevice;
         int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
-        string? previousBatchSize = Environment.GetEnvironmentVariable(
-            "NNTRAIN_NEKOMUON_BATCH_SIZE");
-        string? previousDisable = Environment.GetEnvironmentVariable(
-            "NNTRAIN_DISABLE_BATCHED_NEKOMUON");
         try
         {
-            Environment.SetEnvironmentVariable(
-                "NNTRAIN_NEKOMUON_BATCH_SIZE", "4");
-            Environment.SetEnvironmentVariable(
-                "NNTRAIN_DISABLE_BATCHED_NEKOMUON", null);
+            CudaDispatchPolicy dispatch = CudaDispatchPolicy.Defaults with
+            {
+                NekoMuonBatchSize = 4,
+            };
             (float[][] Data, NekoMuonState State, int CpuWorkspaces) Run(
                 TensorDevice device)
             {
@@ -72,12 +68,17 @@ public sealed class NekoMuonWorkspaceTests
                             NekoMuonNewtonSchulzDepthMode.Minimum,
                         NewtonSchulzDepth = 1.5f,
                         WeightDecay = 0.01f,
-                    });
+                    },
+                    dispatch);
 
                 for (int step = 0; step < 2; step++)
                 {
-                    wide.T.Backward(Values(60, 31 + step * 7));
-                    tall.T.Backward(Values(60, 53 + step * 11));
+                    wide.T.Backward(BFloat16(Values(
+                        60,
+                        31 + step * 7)));
+                    tall.T.Backward(BFloat16(Values(
+                        60,
+                        53 + step * 11)));
                     optimizer.Step();
                     optimizer.ZeroGrad();
                 }
@@ -113,10 +114,6 @@ public sealed class NekoMuonWorkspaceTests
         {
             Tensor.CudaDeviceIndices = previousIndices;
             Tensor.ExecutionDevice = previousDevice;
-            Environment.SetEnvironmentVariable(
-                "NNTRAIN_NEKOMUON_BATCH_SIZE", previousBatchSize);
-            Environment.SetEnvironmentVariable(
-                "NNTRAIN_DISABLE_BATCHED_NEKOMUON", previousDisable);
         }
     }
 
@@ -128,16 +125,12 @@ public sealed class NekoMuonWorkspaceTests
 
         TensorDevice previousDevice = Tensor.ExecutionDevice;
         int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
-        string? previousBatchSize = Environment.GetEnvironmentVariable(
-            "NNTRAIN_NEKOMUON_BATCH_SIZE");
-        string? previousDisable = Environment.GetEnvironmentVariable(
-            "NNTRAIN_DISABLE_BATCHED_NEKOMUON");
         try
         {
-            Environment.SetEnvironmentVariable(
-                "NNTRAIN_NEKOMUON_BATCH_SIZE", "8");
-            Environment.SetEnvironmentVariable(
-                "NNTRAIN_DISABLE_BATCHED_NEKOMUON", null);
+            CudaDispatchPolicy dispatch = CudaDispatchPolicy.Defaults with
+            {
+                NekoMuonBatchSize = 8,
+            };
 
             (float[][] Data, NekoMuonState State) Run(TensorDevice device)
             {
@@ -168,13 +161,14 @@ public sealed class NekoMuonWorkspaceTests
                             NekoMuonNewtonSchulzDepthMode.Fixed,
                         NewtonSchulzDepth = 2f,
                         WeightDecay = 0f,
-                    });
+                    },
+                    dispatch);
 
                 Assert.Equal(8, optimizer.CudaBatchCapacity);
                 for (int step = 0; step < 2; step++)
                 {
                     foreach (Parameter parameter in parameters)
-                        parameter.T.Backward(gradient);
+                        parameter.T.Backward(BFloat16(gradient));
                     optimizer.Step();
                     optimizer.ZeroGrad();
                 }
@@ -211,10 +205,6 @@ public sealed class NekoMuonWorkspaceTests
         {
             Tensor.CudaDeviceIndices = previousIndices;
             Tensor.ExecutionDevice = previousDevice;
-            Environment.SetEnvironmentVariable(
-                "NNTRAIN_NEKOMUON_BATCH_SIZE", previousBatchSize);
-            Environment.SetEnvironmentVariable(
-                "NNTRAIN_DISABLE_BATCHED_NEKOMUON", previousDisable);
         }
     }
 
@@ -298,4 +288,7 @@ public sealed class NekoMuonWorkspaceTests
         => Enumerable.Range(0, length)
             .Select(index => MathF.Sin((index + offset) * 0.17f) * 0.25f)
             .ToArray();
+
+    private static float[] BFloat16(IEnumerable<float> values)
+        => values.Select(TensorStorageCodec.RoundToBFloat16).ToArray();
 }

@@ -207,13 +207,113 @@ public sealed class CudaBfp8GemmTests
             Tensor weight = Bfp8(rightValues, [n, k]);
             Tensor bias = Bfp8(biasValues, [n]);
             MoveToCuda(input, weight, bias);
+            CudaBfp8GemmTelemetrySnapshot linearBefore =
+                CudaBfp8GemmTelemetry.Snapshot;
             Tensor linear = input.LinearLastDim(weight, bias, applyRelu: false);
             linear.Backward(seed);
+            CudaBfp8GemmTelemetrySnapshot linearTelemetry =
+                CudaBfp8GemmTelemetry.Snapshot - linearBefore;
+            // Forward decodes input, weight, and bias exactly once. A
+            // non-ReLU backward must not decode the very large output merely
+            // to encode its gradient.
+            Assert.Equal(3, linearTelemetry.BFloat16DecodeCacheMisses);
             AssertClose(cpuLinear.Output, linear.Data, 0.08f);
             AssertClose(cpuLinear.InputGradient, input.Grad, 0.08f);
             AssertClose(cpuLinear.WeightGradient, weight.Grad, 0.08f);
             AssertClose(cpuLinear.BiasGradient, bias.Grad, 0.08f);
             DisposeCuda(linear, input, weight, bias);
+        });
+    }
+
+    [Fact]
+    public void Mix8ReluBackwardUsesPayloadMaskWithoutOutputDecode()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        const int rows = 8;
+        const int inputWidth = 32;
+        const int outputWidth = 8;
+        float[] inputValues = Values(rows * inputWidth, 101, 0.31f);
+        float[] weightValues = Values(
+            outputWidth * inputWidth, 137, 0.27f);
+        float[] biasValues = Values(outputWidth, 173, 0.04f);
+        float[] seed = Values(rows * outputWidth, 191, 0.13f);
+        LinearRun cpu = CpuLinear(
+            inputValues,
+            weightValues,
+            biasValues,
+            rows,
+            inputWidth,
+            outputWidth,
+            Bfp8QuantizationDescriptor.Mix8_32,
+            applyRelu: true,
+            seed);
+
+        WithCuda(() =>
+        {
+            Tensor input = Bfp8(inputValues, [rows, inputWidth]);
+            Tensor weight = Bfp8(
+                weightValues, [outputWidth, inputWidth]);
+            Tensor bias = Bfp8(biasValues, [outputWidth]);
+            MoveToCuda(input, weight, bias);
+            CudaBfp8GemmTelemetrySnapshot decodeBefore =
+                CudaBfp8GemmTelemetry.Snapshot;
+            CudaBlasLtTelemetrySnapshot blasBefore = CudaBlasLt.Telemetry;
+
+            Tensor output = input.LinearLastDim(
+                weight, bias, applyRelu: true);
+            output.Backward(seed);
+            CudaBfp8GemmTelemetrySnapshot decode =
+                CudaBfp8GemmTelemetry.Snapshot - decodeBefore;
+            CudaBlasLtTelemetrySnapshot blas =
+                CudaBlasLt.Telemetry - blasBefore;
+
+            Assert.Equal(3, decode.BFloat16DecodeCacheMisses);
+            Assert.Equal(2, blas.AccumulatingBackwardCublasExecutions);
+            AssertClose(cpu.Output, output.Data, 0.08f);
+            AssertClose(cpu.InputGradient, input.Grad, 0.08f);
+            AssertClose(cpu.WeightGradient, weight.Grad, 0.08f);
+            AssertClose(cpu.BiasGradient, bias.Grad, 0.08f);
+            DisposeCuda(output, input, weight, bias);
+        });
+    }
+
+    [Fact]
+    public void Mix8ProductionHiddenTailUsesBFloat16HmmaPlan()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        WithCuda(() =>
+        {
+            const int rows = 8;
+            const int inputWidth = 512;
+            const int outputWidth = 1538;
+            Tensor input = Bfp8(
+                Values(rows * inputWidth, 211, 0.08f),
+                [rows, inputWidth]);
+            Tensor weight = Bfp8(
+                Values(outputWidth * inputWidth, 223, 0.05f),
+                [outputWidth, inputWidth]);
+            Tensor bias = Bfp8(
+                Values(outputWidth, 227, 0.02f),
+                [outputWidth]);
+            MoveToCuda(input, weight, bias);
+            CudaBlasLtTelemetrySnapshot before = CudaBlasLt.Telemetry;
+
+            Tensor output = input.LinearLastDim(
+                weight, bias, applyRelu: true);
+            ForgetMemoryV2Cuda.GetAccelerator(0).Synchronize();
+            CudaBlasLtTelemetrySnapshot telemetry =
+                CudaBlasLt.Telemetry - before;
+
+            Assert.Equal(1, telemetry.ForwardTensorCoreExecutions);
+            Assert.NotEqual(
+                0UL,
+                telemetry.LastForwardNumericalImplementationFlags & 0x02UL);
+            Assert.Equal([rows, outputWidth], output.Shape);
+            DisposeCuda(output, input, weight, bias);
         });
     }
 
@@ -252,7 +352,48 @@ public sealed class CudaBfp8GemmTests
     }
 
     [Fact]
-    public void PureBfp8BackwardRefusesSilentFloat32GradientPublication()
+    public void NonLeafBFloat16DecodeIsTransientWhileLeafOperandIsCached()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        WithCuda(() =>
+        {
+            const int m = 7;
+            const int k = 31;
+            const int n = 9;
+            Tensor source = Bfp8(Values(m * k, 13, 0.3f), [m, k]);
+            Tensor zero = Bfp8(new float[m * k], [m, k]);
+            Tensor right = Bfp8(Values(k * n, 47, 0.2f), [k, n]);
+            MoveToCuda(source, zero, right);
+            Tensor activation = source + zero;
+            CudaBfp8GemmTelemetrySnapshot before =
+                CudaBfp8GemmTelemetry.Snapshot;
+
+            Tensor first = activation.MatMul(right);
+            ForgetMemoryV2Cuda.GetAccelerator(0).Synchronize();
+            CudaBfp8GemmTelemetrySnapshot afterFirst =
+                CudaBfp8GemmTelemetry.Snapshot;
+            Tensor second = activation.MatMul(right);
+            ForgetMemoryV2Cuda.GetAccelerator(0).Synchronize();
+            CudaBfp8GemmTelemetrySnapshot afterSecond =
+                CudaBfp8GemmTelemetry.Snapshot;
+
+            // The first pass decodes the transient activation and the leaf
+            // weight. Only the activation is decoded again on the second pass.
+            Assert.Equal(2,
+                (afterFirst - before).BFloat16DecodeCacheMisses);
+            Assert.Equal(1,
+                (afterSecond - afterFirst).BFloat16DecodeCacheMisses);
+            DisposeCuda(first, second, activation, source, zero, right);
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PureBfp8BackwardPublishesLeavesWithFiniteAndNormScalars(
+        bool releaseGraph)
     {
         if (!Tensor.IsCudaAvailable())
             return;
@@ -266,13 +407,74 @@ public sealed class CudaBfp8GemmTests
                 Values(m * k, 19, 0.22f), [m, k], tensorWide: true);
             Tensor right = Bfp8(
                 Values(k * n, 53, 0.19f), [k, n], tensorWide: true);
+            float[] seed = Values(m * n, 89, 0.1f);
+            MatrixRun cpu = CpuMatMul(
+                left.Data.ToArray(),
+                right.Data.ToArray(),
+                m,
+                k,
+                n,
+                Bfp8QuantizationDescriptor.TensorWide,
+                seed);
             MoveToCuda(left, right);
             Tensor output = left.MatMul(right);
+            NativeCudaTransferTelemetry before =
+                NativeCudaRuntime.TransferTelemetry;
 
-            NotSupportedException exception = Assert.Throws<NotSupportedException>(
-                () => output.Backward(Values(m * n, 89, 0.1f)));
-            Assert.Contains("publishing", exception.Message);
-            Assert.Contains("mix8_32", exception.Message);
+            if (releaseGraph)
+                output.BackwardAndRelease(seed);
+            else
+                output.Backward(seed);
+
+            NativeCudaTransferTelemetry transfers =
+                NativeCudaRuntime.TransferTelemetry - before;
+            Assert.Equal(
+                sizeof(int) + sizeof(double),
+                transfers.DeviceToHostBytes);
+            Assert.True(left.HasAuthoritativeCudaBfp8Gradient);
+            Assert.True(right.HasAuthoritativeCudaBfp8Gradient);
+            AssertClose(cpu.LeftGradient, left.Grad, 0.01f);
+            AssertClose(cpu.RightGradient, right.Grad, 0.01f);
+
+            DisposeCuda(output, left, right);
+        });
+    }
+
+    [Fact]
+    public void PureBfp8BackwardRejectsDeviceNonFiniteOncePerGraph()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        WithCuda(() =>
+        {
+            const int m = 8;
+            const int k = 32;
+            const int n = 8;
+            Tensor left = Bfp8(
+                Values(m * k, 23, 0.2f), [m, k], tensorWide: true);
+            Tensor right = Bfp8(
+                Values(k * n, 61, 0.17f), [k, n], tensorWide: true);
+            MoveToCuda(left, right);
+            Tensor output = left.MatMul(right);
+            float[] seed = Values(m * n, 97, 0.1f);
+            seed[^1] = float.NaN;
+            NativeCudaTransferTelemetry before =
+                NativeCudaRuntime.TransferTelemetry;
+
+            InvalidOperationException exception =
+                Assert.Throws<InvalidOperationException>(
+                    () => output.Backward(seed));
+
+            NativeCudaTransferTelemetry transfers =
+                NativeCudaRuntime.TransferTelemetry - before;
+            Assert.Equal(
+                sizeof(int) + sizeof(double),
+                transfers.DeviceToHostBytes);
+            Assert.Contains("Non-finite CUDA gradient", exception.Message);
+            Assert.Contains("device 0", exception.Message);
+            Assert.False(left.HasAuthoritativeCudaBfp8Gradient);
+            Assert.False(right.HasAuthoritativeCudaBfp8Gradient);
 
             DisposeCuda(output, left, right);
         });

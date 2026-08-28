@@ -287,6 +287,31 @@ public sealed class CudaTensorStateRegressionTests
         Assert.True(third.DisposeCalled);
     }
 
+    [Fact]
+    public void InferenceScopesSupportOutOfOrderAndDoubleDispose()
+    {
+        var outerResource = new CallbackDisposable();
+        var innerResource = new CallbackDisposable();
+        var afterOuterDispose = new CallbackDisposable();
+        CudaInferenceScope outer = CudaInferenceScope.Begin();
+        Assert.True(CudaInferenceScope.TrackResource(outerResource));
+        CudaInferenceScope inner = CudaInferenceScope.Begin();
+        Assert.True(CudaInferenceScope.TrackResource(innerResource));
+
+        outer.Dispose();
+        outer.Dispose();
+        Assert.True(outerResource.DisposeCalled);
+        Assert.False(innerResource.DisposeCalled);
+        Assert.True(CudaInferenceScope.TrackResource(afterOuterDispose));
+
+        inner.Dispose();
+        inner.Dispose();
+        Assert.True(innerResource.DisposeCalled);
+        Assert.True(afterOuterDispose.DisposeCalled);
+        Assert.False(CudaInferenceScope.TrackResource(
+            new CallbackDisposable()));
+    }
+
     private sealed class CallbackDisposable(Action? onDispose = null)
         : IDisposable
     {

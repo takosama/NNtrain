@@ -43,6 +43,281 @@ public sealed class CheckpointTransactionCompatibilityTests
     }
 
     [Fact]
+    public void ClassificationArtifactCheckpointStreamsModelOptimizerAndBest()
+    {
+        using var directory = new TemporaryDirectory();
+        string checkpointPath = Path.Combine(directory.Root, "training.json");
+        var source = new VectorCheckpointModule(
+            Enumerable.Range(0, 4097)
+                .Select(index => (index - 2000) / 4097f)
+                .ToArray());
+        var sourceOptimizer = new AdamW(
+            source.parameters(),
+            new AdamWOptions { LearningRate = 0.01f, WeightDecay = 0f });
+        source.parameters().Single().T.Sum().Backward();
+        sourceOptimizer.step();
+        ClassificationTrainingCheckpoint checkpoint =
+            CreateClassificationCheckpoint(1, 0f);
+
+        ClassificationCheckpoint.Save(
+            checkpointPath,
+            source,
+            sourceOptimizer,
+            checkpoint,
+            publishCurrentAsBest: true);
+
+        ClassificationTrainingCheckpoint manifest =
+            torch.load<ClassificationTrainingCheckpoint>(checkpointPath);
+        Assert.Empty(manifest.Model.Parameters);
+        Assert.Null(manifest.BestModel);
+        Assert.Equal("ArtifactStream", manifest.Optimizer.OptimizerType);
+        Assert.NotNull(manifest.OptimizerStateTypes);
+        Assert.Equal(["AdamW"], manifest.OptimizerStateTypes);
+        Assert.NotNull(manifest.OptimizerLeafNames);
+        Assert.Equal(["default/0000"], manifest.OptimizerLeafNames);
+        Assert.Equal(0, manifest.ArtifactSlot);
+        Assert.Equal(0, manifest.BestArtifactSlot);
+        string currentArtifact =
+            ClassificationCheckpoint.GetCurrentModelArtifactPath(
+                checkpointPath,
+                manifest.ArtifactSlot);
+        string bestArtifact = ClassificationCheckpoint.GetBestModelArtifactPath(
+            checkpointPath,
+            manifest.BestArtifactSlot);
+        string optimizerArtifact = ClassificationCheckpoint.GetOptimizerArtifactPath(
+            checkpointPath,
+            manifest.ArtifactSlot,
+            0);
+        Assert.True(File.Exists(currentArtifact));
+        Assert.Equal(
+            File.ReadAllBytes(currentArtifact),
+            File.ReadAllBytes(bestArtifact));
+        Assert.True(File.Exists(optimizerArtifact));
+
+        var destination = new VectorCheckpointModule(new float[4097]);
+        var destinationOptimizer = new AdamW(
+            destination.parameters(),
+            new AdamWOptions { LearningRate = 0.01f, WeightDecay = 0f });
+        ClassificationTrainingCheckpoint resumed =
+            ClassificationCheckpoint.LoadIntoModel(
+                checkpointPath,
+                destination,
+                destinationOptimizer);
+
+        Assert.Empty(resumed.Model.Parameters);
+        Assert.Equal(
+            source.parameters().Single().T.Data,
+            destination.parameters().Single().T.Data);
+        Assert.Equal(
+            sourceOptimizer.state_dict().StateJsonText,
+            destinationOptimizer.state_dict().StateJsonText);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void ClassificationLegacyResumeStreamsAndMigratesBestSidecar(
+        int formatVersion)
+    {
+        using var directory = new TemporaryDirectory();
+        string checkpointPath = Path.Combine(directory.Root, "legacy-v2.json");
+        var source = new TinyCheckpointModule(0.625f);
+        var sourceOptimizer = new AdamW(
+            source.parameters(),
+            new AdamWOptions { WeightDecay = 0f });
+        source.parameters().Single().T.Sum().Backward();
+        sourceOptimizer.step();
+        ModuleState sourceState = source.state_dict();
+        ClassificationTrainingCheckpoint legacy =
+            CreateClassificationCheckpoint(1, 0.625f) with
+            {
+                FormatVersion = formatVersion,
+                Model = sourceState,
+                Optimizer = sourceOptimizer.state_dict(),
+                BestModel = sourceState,
+            };
+        ClassificationCheckpoint.Save(checkpointPath, legacy);
+
+        var destination = new TinyCheckpointModule(-10f);
+        var destinationOptimizer = new AdamW(
+            destination.parameters(),
+            new AdamWOptions { WeightDecay = 0f });
+        ClassificationTrainingCheckpoint resumed =
+            ClassificationCheckpoint.LoadIntoModel(
+                checkpointPath,
+                destination,
+                destinationOptimizer);
+
+        Assert.Equal(
+            sourceState.Parameters.Single().Values,
+            destination.state_dict().Parameters.Single().Values);
+        Assert.Equal(
+            sourceOptimizer.state_dict().StateJsonText,
+            destinationOptimizer.state_dict().StateJsonText);
+        Assert.Equal(0, resumed.BestArtifactSlot);
+        Assert.True(
+            File.Exists(
+                ClassificationCheckpoint.GetBestModelArtifactPath(
+                    checkpointPath,
+                    resumed.BestArtifactSlot)));
+    }
+
+    [Fact]
+    public void ClassificationArtifactSlotsRetainBestAcrossCurrentUpdates()
+    {
+        using var directory = new TemporaryDirectory();
+        string checkpointPath = Path.Combine(directory.Root, "slots.json");
+        var model = new TinyCheckpointModule(1f);
+        var optimizer = new AdamW(
+            model.parameters(),
+            new AdamWOptions { WeightDecay = 0f });
+        ClassificationTrainingCheckpoint first =
+            CreateClassificationCheckpoint(1, 1f);
+        ClassificationCheckpoint.Save(
+            checkpointPath,
+            model,
+            optimizer,
+            first,
+            publishCurrentAsBest: true);
+
+        model.load_state_dict(CreateSingleValueState(2f));
+        ClassificationCheckpoint.Save(
+            checkpointPath,
+            model,
+            optimizer,
+            first with { CompletedEpoch = 2 },
+            publishCurrentAsBest: false);
+        ClassificationTrainingCheckpoint secondManifest =
+            torch.load<ClassificationTrainingCheckpoint>(checkpointPath);
+        Assert.Equal(1, secondManifest.ArtifactSlot);
+        Assert.Equal(0, secondManifest.BestArtifactSlot);
+
+        ClassificationCheckpoint.LoadBestModel(checkpointPath, model);
+        Assert.Equal(
+            [1f],
+            model.state_dict().Parameters.Single().Values);
+
+        model.load_state_dict(CreateSingleValueState(3f));
+        ClassificationCheckpoint.Save(
+            checkpointPath,
+            model,
+            optimizer,
+            first with
+            {
+                CompletedEpoch = 3,
+                BestEpoch = 3,
+                BestEvaluationLoss = 0.5f,
+            },
+            publishCurrentAsBest: true);
+        ClassificationTrainingCheckpoint thirdManifest =
+            torch.load<ClassificationTrainingCheckpoint>(checkpointPath);
+        Assert.Equal(0, thirdManifest.ArtifactSlot);
+        Assert.Equal(1, thirdManifest.BestArtifactSlot);
+        ClassificationCheckpoint.LoadBestModel(checkpointPath, model);
+        Assert.Equal(
+            [3f],
+            model.state_dict().Parameters.Single().Values);
+    }
+
+    [Fact]
+    public void ClassificationArtifactFailureBeforeManifestKeepsCommittedSlot()
+    {
+        using var directory = new TemporaryDirectory();
+        string checkpointPath = Path.Combine(directory.Root, "slot-fault.json");
+        var model = new TinyCheckpointModule(1f);
+        var optimizer = new AdamW(
+            model.parameters(),
+            new AdamWOptions { WeightDecay = 0f });
+        ClassificationTrainingCheckpoint checkpoint =
+            CreateClassificationCheckpoint(1, 1f);
+        ClassificationCheckpoint.Save(
+            checkpointPath,
+            model,
+            optimizer,
+            checkpoint,
+            publishCurrentAsBest: true);
+        model.load_state_dict(CreateSingleValueState(2f));
+        ClassificationCheckpoint.Save(
+            checkpointPath,
+            model,
+            optimizer,
+            checkpoint with { CompletedEpoch = 2 },
+            publishCurrentAsBest: false);
+        byte[] committedManifest = File.ReadAllBytes(checkpointPath);
+
+        model.load_state_dict(CreateSingleValueState(3f));
+        Assert.Throws<InjectedCheckpointFailure>(() =>
+            ClassificationCheckpoint.Save(
+                checkpointPath,
+                model,
+                optimizer,
+                checkpoint with { CompletedEpoch = 3 },
+                publishCurrentAsBest: false,
+                faultInjector: new ThrowAtFaultPoint(
+                    CheckpointFaultPoint.BeforeManifestPublish)));
+
+        Assert.Equal(committedManifest, File.ReadAllBytes(checkpointPath));
+        var destination = new TinyCheckpointModule(-1f);
+        var destinationOptimizer = new AdamW(
+            destination.parameters(),
+            new AdamWOptions { WeightDecay = 0f });
+        ClassificationTrainingCheckpoint resumed =
+            ClassificationCheckpoint.LoadIntoModel(
+                checkpointPath,
+                destination,
+                destinationOptimizer);
+        Assert.Equal(2, resumed.CompletedEpoch);
+        Assert.Equal(
+            [2f],
+            destination.state_dict().Parameters.Single().Values);
+    }
+
+    [Fact]
+    public void ClassificationLegacyPureBfp8BestMigrationUsesTwoPassRestore()
+    {
+        using var directory = new TemporaryDirectory();
+        string checkpointPath = Path.Combine(directory.Root, "legacy-bfp8.json");
+        float[] values = Enumerable.Range(0, 257)
+            .Select(index => (index - 128) / 31f)
+            .ToArray();
+        var source = new VectorCheckpointModule(values);
+        source.to(TensorPrecisionMode.Bfp8, 128);
+        var sourceOptimizer = new AdamW(
+            source.parameters(),
+            new AdamWOptions { WeightDecay = 0f });
+        ModuleState state = source.state_dict();
+        ClassificationTrainingCheckpoint legacy =
+            CreateClassificationCheckpoint(1, 0f) with
+            {
+                Model = state,
+                BestModel = state,
+                Optimizer = sourceOptimizer.state_dict(),
+            };
+        ClassificationCheckpoint.Save(checkpointPath, legacy);
+
+        var destination = new VectorCheckpointModule(new float[values.Length]);
+        destination.to(TensorPrecisionMode.Bfp8, 128);
+        var destinationOptimizer = new AdamW(
+            destination.parameters(),
+            new AdamWOptions { WeightDecay = 0f });
+        ClassificationTrainingCheckpoint resumed =
+            ClassificationCheckpoint.LoadIntoModel(
+                checkpointPath,
+                destination,
+                destinationOptimizer);
+        ModuleState expected = state;
+
+        Assert.Equal(
+            expected.Parameters.Single().Values,
+            destination.state_dict().Parameters.Single().Values);
+        ClassificationCheckpoint.LoadBestModel(checkpointPath, destination);
+        Assert.Equal(
+            expected.Parameters.Single().Values,
+            destination.state_dict().Parameters.Single().Values);
+        Assert.Equal(0, resumed.BestArtifactSlot);
+    }
+
+    [Fact]
     public void ClassificationStreamingResumePreservesBFloat16MasterValue()
     {
         using var directory = new TemporaryDirectory();
@@ -329,6 +604,17 @@ public sealed class CheckpointTransactionCompatibilityTests
                     : parameter)
                 .ToArray(),
         };
+
+    private static ModuleState CreateSingleValueState(float value)
+        => new(
+            ModuleState.CurrentFormatVersion,
+            [
+                new ModuleParameterState(
+                    0,
+                    "weight",
+                    [1],
+                    [value]),
+            ]);
 
     private sealed class ThrowAtFaultPoint(CheckpointFaultPoint point)
         : ICheckpointFaultInjector

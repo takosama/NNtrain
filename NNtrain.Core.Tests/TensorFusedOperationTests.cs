@@ -309,6 +309,30 @@ public sealed class TensorFusedOperationTests
     }
 
     [Fact]
+    public void CrossEntropyFlattensAllLeadingDimensions()
+    {
+        const int batch = 2;
+        const int sequence = 3;
+        const int classes = 5;
+        float[] values = Pattern(batch * sequence * classes, 29, 0.09f);
+        int[] labels = [0, 2, 4, 1, 3, 0];
+        var shapedInput = new Tensor(
+            values,
+            [batch, sequence, classes]);
+        var flatInput = new Tensor(
+            values,
+            [batch * sequence, classes]);
+
+        Tensor shapedLoss = shapedInput.CrossEntropyWithLogits(labels);
+        Tensor flatLoss = flatInput.CrossEntropyWithLogits(labels);
+        shapedLoss.Backward();
+        flatLoss.Backward();
+
+        AssertClose(flatLoss.Data, shapedLoss.Data, 2e-5f);
+        AssertClose(flatInput.Grad, shapedInput.Grad, 2e-5f);
+    }
+
+    [Fact]
     public void CrossEntropyIgnoresMinusOneLabelsByDefault()
     {
         const int classes = 4;

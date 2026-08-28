@@ -4,6 +4,25 @@ using Xunit;
 public sealed class BoundedDisposableLeaseCacheTests
 {
     [Fact]
+    public void RemoveDefersDisposalUntilOutstandingLeaseReturns()
+    {
+        var cache = new BoundedDisposableLeaseCache<int, TrackedDisposable>(1);
+        using BoundedDisposableLeaseCache<int, TrackedDisposable>.Lease lease =
+            Assert.IsType<
+                BoundedDisposableLeaseCache<int, TrackedDisposable>.Lease>(
+                cache.Acquire(3, static _ => new TrackedDisposable()));
+
+        Assert.True(cache.Remove(3));
+        Assert.Equal(0, cache.Count);
+        Assert.Equal(0, lease.Value.DisposeCount);
+
+        lease.Dispose();
+
+        Assert.Equal(1, lease.Value.DisposeCount);
+        Assert.False(cache.Remove(3));
+    }
+
+    [Fact]
     public void EvictsLeastRecentlyUsedIdleValue()
     {
         using var cache =

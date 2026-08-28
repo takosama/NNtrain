@@ -35,8 +35,8 @@ public sealed class CudaTrainingKernelTests
                     [4],
                     dtype: TensorDType.BFloat16);
                 Tensor output = input.LinearLastDim(weight, bias, applyRelu: true);
-                output.Backward(
-                    [0.2f, -0.1f, 0.3f, 0.4f, -0.2f, 0.5f, 0.1f, -0.3f]);
+                output.Backward(BFloat16(
+                    [0.2f, -0.1f, 0.3f, 0.4f, -0.2f, 0.5f, 0.1f, -0.3f]));
                 return (
                     output.Data.ToArray(),
                     input.Grad.ToArray(),
@@ -47,9 +47,9 @@ public sealed class CudaTrainingKernelTests
             var cpuDense = Dense(TensorDevice.Cpu);
             var cudaDense = Dense(TensorDevice.Cuda);
             AssertClose(cpuDense.Output, cudaDense.Output, 1e-5f);
-            AssertClose(cpuDense.Input, cudaDense.Input, 1e-5f);
-            AssertClose(cpuDense.Weight, cudaDense.Weight, 1e-5f);
-            AssertClose(cpuDense.Bias, cudaDense.Bias, 1e-5f);
+            AssertClose(BFloat16(cpuDense.Input), cudaDense.Input, 1e-5f);
+            AssertClose(BFloat16(cpuDense.Weight), cudaDense.Weight, 1e-5f);
+            AssertClose(BFloat16(cpuDense.Bias), cudaDense.Bias, 1e-5f);
 
             (float[] Output, float[] Input, float[] Gamma, float[] Beta)
                 Norm(TensorDevice device)
@@ -68,7 +68,8 @@ public sealed class CudaTrainingKernelTests
                     [3],
                     dtype: TensorDType.BFloat16);
                 Tensor output = input.LayerNormLastDim(gamma, beta);
-                output.Backward([0.2f, -0.1f, 0.3f, 0.4f, -0.2f, 0.5f]);
+                output.Backward(BFloat16(
+                    [0.2f, -0.1f, 0.3f, 0.4f, -0.2f, 0.5f]));
                 return (
                     output.Data.ToArray(),
                     input.Grad.ToArray(),
@@ -79,9 +80,9 @@ public sealed class CudaTrainingKernelTests
             var cpuNorm = Norm(TensorDevice.Cpu);
             var cudaNorm = Norm(TensorDevice.Cuda);
             AssertClose(cpuNorm.Output, cudaNorm.Output, 1e-5f);
-            AssertClose(cpuNorm.Input, cudaNorm.Input, 2e-5f);
-            AssertClose(cpuNorm.Gamma, cudaNorm.Gamma, 1e-5f);
-            AssertClose(cpuNorm.Beta, cudaNorm.Beta, 1e-5f);
+            AssertClose(BFloat16(cpuNorm.Input), cudaNorm.Input, 2e-5f);
+            AssertClose(BFloat16(cpuNorm.Gamma), cudaNorm.Gamma, 1e-5f);
+            AssertClose(BFloat16(cpuNorm.Beta), cudaNorm.Beta, 1e-5f);
 
             (float Loss, float[] Gradient) Loss(TensorDevice device)
             {
@@ -93,17 +94,16 @@ public sealed class CudaTrainingKernelTests
                 Tensor loss = logits.CrossEntropyWithLogits(
                     [2, 0],
                     labelSmoothing: 0.1f);
-                loss.Backward([0.75f]);
+                loss.Backward(BFloat16([0.75f]));
                 return (loss.item(), logits.Grad.ToArray());
             }
 
             var cpuLoss = Loss(TensorDevice.Cpu);
             var cudaLoss = Loss(TensorDevice.Cuda);
             Assert.InRange(MathF.Abs(cpuLoss.Loss - cudaLoss.Loss), 0f, 2e-5f);
-            // BF16 logits are the softmax operands while PrecisionPolicy keeps
-            // accumulated gradients in FP32. Validate the operand-quantized
-            // forward/backward result rather than exact Float32 identity.
-            AssertClose(cpuLoss.Gradient, cudaLoss.Gradient, 1e-3f);
+            // Pure bfloat16 publishes the operand-quantized logits gradient
+            // in BF16. Stable softmax/reduction math remains FP32.
+            AssertClose(BFloat16(cpuLoss.Gradient), cudaLoss.Gradient, 1e-3f);
         }
         finally
         {
@@ -119,7 +119,9 @@ public sealed class CudaTrainingKernelTests
             return;
 
         const int rows = 1031;
-        const int columns = 384;
+        // Exercises the production-width one-warp-per-row fused kernel and a
+        // 256-row parameter-reduction tail (1031 is intentionally uneven).
+        const int columns = 512;
         float[] residualValues = Enumerable.Range(0, rows * columns)
             .Select(index => (index % 53 - 26) * 0.007f)
             .ToArray();
@@ -157,7 +159,7 @@ public sealed class CudaTrainingKernelTests
                     betaValues, [columns], dtype: TensorDType.BFloat16);
                 Tensor output = residual.AddDropoutLayerNormLastDim(
                     branch, gamma, beta, 0.25f, new Random(71));
-                output.Backward(seedGradient);
+                output.Backward(BFloat16(seedGradient));
                 return (
                     output.Data.ToArray(), residual.Grad.ToArray(),
                     branch.Grad.ToArray(), gamma.Grad.ToArray(),
@@ -167,10 +169,10 @@ public sealed class CudaTrainingKernelTests
             var cpu = Run(TensorDevice.Cpu);
             var cuda = Run(TensorDevice.Cuda);
             AssertClose(cpu.Output, cuda.Output, 2e-4f);
-            AssertClose(cpu.Residual, cuda.Residual, 2e-4f);
-            AssertClose(cpu.Branch, cuda.Branch, 3e-4f);
-            AssertClose(cpu.Gamma, cuda.Gamma, 8e-4f);
-            AssertClose(cpu.Beta, cuda.Beta, 8e-4f);
+            AssertClose(BFloat16(cpu.Residual), cuda.Residual, 2e-4f);
+            AssertClose(BFloat16(cpu.Branch), cuda.Branch, 3e-4f);
+            AssertClose(BFloat16(cpu.Gamma), cuda.Gamma, 8e-4f);
+            AssertClose(BFloat16(cpu.Beta), cuda.Beta, 8e-4f);
         }
         finally
         {
@@ -339,7 +341,10 @@ public sealed class CudaTrainingKernelTests
             var cpuEmbedding = Embedding(TensorDevice.Cpu);
             var cudaEmbedding = Embedding(TensorDevice.Cuda);
             AssertClose(cpuEmbedding.Output, cudaEmbedding.Output, 1e-5f);
-            AssertClose(cpuEmbedding.Gradient, cudaEmbedding.Gradient, 1e-5f);
+            AssertClose(
+                BFloat16(cpuEmbedding.Gradient),
+                cudaEmbedding.Gradient,
+                1e-5f);
 
             (float[] Output, float[] Input) Dropout(TensorDevice device)
             {
@@ -356,7 +361,7 @@ public sealed class CudaTrainingKernelTests
             var cpuDropout = Dropout(TensorDevice.Cpu);
             var cudaDropout = Dropout(TensorDevice.Cuda);
             AssertClose(cpuDropout.Output, cudaDropout.Output, 1e-5f);
-            AssertClose(cpuDropout.Input, cudaDropout.Input, 1e-5f);
+            AssertClose(BFloat16(cpuDropout.Input), cudaDropout.Input, 1e-5f);
         }
         finally
         {
@@ -381,4 +386,7 @@ public sealed class CudaTrainingKernelTests
                 $"tolerance {tolerance:R}.");
         }
     }
+
+    private static float[] BFloat16(IEnumerable<float> values)
+        => values.Select(TensorStorageCodec.RoundToBFloat16).ToArray();
 }

@@ -68,6 +68,37 @@ public sealed class RuntimeBoundaryTests
     }
 
     [Fact]
+    public void BeforeDisposeFailuresDoNotSkipReplicaOrOwnedResourceCleanup()
+    {
+        var events = new List<string>();
+        var session = new ExecutionSession(new ExecutionOptions());
+        _ = session.RegisterBeforeDispose(() =>
+        {
+            events.Add("replica-a");
+            throw new InvalidOperationException("expected retirement failure");
+        });
+        _ = session.RegisterBeforeDispose(() => events.Add("replica-b"));
+        session.Own(new CallbackDisposable(
+            () => events.Add("owned-resource")));
+
+        AggregateException failure = Assert.Throws<AggregateException>(
+            session.Dispose);
+
+        Assert.Contains(
+            failure.Flatten().InnerExceptions,
+            exception => exception.Message.Contains(
+                "expected retirement failure",
+                StringComparison.Ordinal));
+        Assert.Contains("replica-a", events);
+        Assert.Contains("replica-b", events);
+        Assert.Contains("owned-resource", events);
+        Assert.True(
+            events.IndexOf("owned-resource") > events.IndexOf("replica-a"));
+        Assert.True(
+            events.IndexOf("owned-resource") > events.IndexOf("replica-b"));
+    }
+
+    [Fact]
     public void TrainingStepRequiresOrderedCommitBeforeCheckpoint()
     {
         using var execution = new ExecutionSession(new ExecutionOptions());
@@ -169,5 +200,13 @@ public sealed class RuntimeBoundaryTests
             if (pointer == failPointer)
                 throw new InvalidOperationException("Expected test failure.");
         }
+    }
+
+    private sealed class CallbackDisposable(Action callback) : IDisposable
+    {
+        private Action? _callback = callback;
+
+        public void Dispose()
+            => Interlocked.Exchange(ref _callback, null)?.Invoke();
     }
 }
