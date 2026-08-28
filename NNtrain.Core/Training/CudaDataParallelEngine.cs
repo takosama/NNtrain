@@ -1970,6 +1970,10 @@ public sealed class CudaDataParallelEngine : IDisposable
                         inputScope = inputs.PushCaptureScope();
                     try
                     {
+                        using CudaGraphBfp8ParameterRefreshScope
+                            parameterRefreshScope =
+                                CudaGraphBfp8ParameterRefreshScope.Begin(
+                                    device);
                         using CudaGraphDropoutCaptureScope dropoutScope =
                             CudaGraphDropoutCaptureScope.Begin(
                                 rng,

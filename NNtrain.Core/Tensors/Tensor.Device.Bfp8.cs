@@ -728,8 +728,19 @@ public partial class Tensor
             ObjectDisposedException.ThrowIf(
                 Volatile.Read(ref _disposed) != 0,
                 this);
+            // A compiled CUDA training graph retains the cache pointer, but
+            // managed version checks do not execute during replay. Record one
+            // dequantization node per leaf replica into the graph even when
+            // this cache is current at capture time. Without it, optimizer
+            // updates leave the graph reading an old BF16 snapshot until an
+            // unrelated inference call happens to refresh the same cache.
+            bool recordGraphRefresh =
+                CudaGraphBfp8ParameterRefreshScope.Register(
+                    deviceIndex,
+                    this);
             if (_bfloat16Cache is not null
-                && _bfloat16CacheVersion == _version)
+                && _bfloat16CacheVersion == _version
+                && !recordGraphRefresh)
             {
                 return _bfloat16Cache;
             }

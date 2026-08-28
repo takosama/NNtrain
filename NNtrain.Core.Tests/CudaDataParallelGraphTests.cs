@@ -172,6 +172,117 @@ public sealed class CudaDataParallelGraphTests
     }
 
     [Fact]
+    public void Mix8GraphReplayKeepsLossStableAcrossInferenceTransition()
+    {
+        if (Tensor.CudaDeviceCount < 2)
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        AdamW? optimizer = null;
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cpu;
+            var random = new CheckpointableRandom(1753);
+            var model = new GptRinWikiJp(
+                vocabularySize: 32,
+                contextLength: 4,
+                dModel: 8,
+                numHeads: 2,
+                dHidden: 16,
+                numLayers: 1,
+                rng: random,
+                dropout: 0f,
+                dtype: TensorDType.Float32,
+                tieWordEmbeddings: true);
+            random.BeginRuntime();
+            model.AttachTrainingRandom(random);
+            model.to(TensorPrecisionMode.Mix8_32);
+
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            Tensor.CudaDeviceIndices = [0, 1];
+            using var execution = new ExecutionSession(
+                new ExecutionOptions
+                {
+                    Device = ExecutionDeviceKind.Cuda,
+                    CudaDevices = new DeviceSet(0, 1),
+                    Precision = PrecisionPolicy.Mix8_32,
+                },
+                [
+                    CudaExecutionLaneFactory.Create(0),
+                    CudaExecutionLaneFactory.Create(1),
+                ]);
+            using IDisposable sessionScope = execution.Enter();
+            using var engine = new CudaDataParallelEngine(
+                model,
+                [0, 1],
+                new CudaAdaptiveShardingOptions { Enabled = false });
+            optimizer = new AdamW(
+                model.Parameters(),
+                new AdamWOptions
+                {
+                    LearningRate = 0.02f,
+                    WeightDecay = 0f,
+                });
+            optimizer.prepare();
+            int[] input = [1, 2, 3, 4, 5, 6, 7, 8];
+            int[] target = [2, 3, 4, 5, 6, 7, 8, 9];
+            engine.PrepareForTraining(batchSize: 2);
+
+            // Move the encoded weights far enough from their capture-time
+            // values that refreshing a stale BF16 leaf cache is observable.
+            for (int step = 0; step < 12; step++)
+            {
+                optimizer.zero_grad();
+                _ = engine.ForwardBackward(
+                    input,
+                    target,
+                    2,
+                    4,
+                    Tensor.DefaultCrossEntropyIgnoreIndex,
+                    globalStep: step);
+                optimizer.step();
+            }
+
+            optimizer.zero_grad();
+            float beforeInference = engine.ForwardBackward(
+                input,
+                target,
+                2,
+                4,
+                Tensor.DefaultCrossEntropyIgnoreIndex,
+                globalStep: 100);
+            optimizer.zero_grad();
+            int[] generated = model.GenerateTokenIds(
+                input[..4],
+                maxNewTokens: 1,
+                temperature: 0f,
+                topK: 1,
+                stopTokenId: null,
+                random: new Random(1753));
+            float afterInference = engine.ForwardBackward(
+                input,
+                target,
+                2,
+                4,
+                Tensor.DefaultCrossEntropyIgnoreIndex,
+                globalStep: 100);
+
+            Assert.Equal(5, generated.Length);
+            Assert.True(model.IsTraining);
+            Assert.Equal(beforeInference, afterInference);
+            Assert.Equal(1, engine.TrainingGraphTelemetry.CaptureCount);
+            Assert.Equal(0, engine.TrainingGraphTelemetry.FallbackCount);
+        }
+        finally
+        {
+            optimizer?.DisposeCudaResources();
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndices = previousIndices;
+        }
+    }
+
+    [Fact]
     public void ProfiledStepRetiresCompiledGraphBeforeEagerExecution()
     {
         if (Tensor.CudaDeviceCount == 0)
