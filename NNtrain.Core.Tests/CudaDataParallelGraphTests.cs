@@ -172,6 +172,92 @@ public sealed class CudaDataParallelGraphTests
     }
 
     [Fact]
+    public void ProfiledStepRetiresCompiledGraphBeforeEagerExecution()
+    {
+        if (Tensor.CudaDeviceCount == 0)
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cpu;
+            var random = new CheckpointableRandom(1811);
+            var model = new GptRinWikiJp(
+                vocabularySize: 32,
+                contextLength: 4,
+                dModel: 8,
+                numHeads: 2,
+                dHidden: 16,
+                numLayers: 1,
+                rng: random,
+                dropout: 0.2f,
+                dtype: TensorDType.Float32);
+            random.BeginRuntime();
+            model.AttachTrainingRandom(random);
+            model.to(TensorPrecisionMode.Mix8_32);
+
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            Tensor.CudaDeviceIndices = [0];
+            using var execution = new ExecutionSession(
+                new ExecutionOptions
+                {
+                    Device = ExecutionDeviceKind.Cuda,
+                    CudaDevices = new DeviceSet(0),
+                    Precision = PrecisionPolicy.Mix8_32,
+                },
+                [CudaExecutionLaneFactory.Create(0)]);
+            using IDisposable sessionScope = execution.Enter();
+            using var engine = new CudaDataParallelEngine(model, [0]);
+            int[] input = [1, 2, 3, 4];
+            int[] target = [2, 3, 4, 5];
+
+            model.ZeroGrad();
+            _ = engine.ForwardBackward(
+                input,
+                target,
+                1,
+                4,
+                Tensor.DefaultCrossEntropyIgnoreIndex,
+                globalStep: 0);
+            CudaTrainingGraphTelemetry compiled =
+                engine.TrainingGraphTelemetry;
+            Assert.Equal(1, compiled.CachedCompiledPlanCount);
+            Assert.True(compiled.GraphPinnedBytes > 0);
+
+            model.ZeroGrad();
+            CudaDataParallelProfile profile =
+                engine.ForwardBackwardProfiled(input, target, 1, 4);
+            CudaTrainingGraphTelemetry afterProbe =
+                engine.TrainingGraphTelemetry;
+
+            Assert.True(float.IsFinite(profile.Loss));
+            Assert.Equal(0, afterProbe.CachedCompiledPlanCount);
+            Assert.Equal(0, afterProbe.GraphPinnedBytes);
+            Assert.Equal(compiled.CaptureCount, afterProbe.CaptureCount);
+            Assert.Equal(compiled.ReplayCount, afterProbe.ReplayCount);
+
+            model.ZeroGrad();
+            _ = engine.ForwardBackward(
+                input,
+                target,
+                1,
+                4,
+                Tensor.DefaultCrossEntropyIgnoreIndex,
+                globalStep: 1);
+            CudaTrainingGraphTelemetry recaptured =
+                engine.TrainingGraphTelemetry;
+            Assert.Equal(2, recaptured.CaptureCount);
+            Assert.Equal(1, recaptured.CachedCompiledPlanCount);
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndices = previousIndices;
+        }
+    }
+
+    [Fact]
     public void Mix8TwoGpuCapturePublishesReducedGradientsWithoutRepack()
     {
         if (Tensor.CudaDeviceCount < 2)

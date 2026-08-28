@@ -48,6 +48,7 @@ internal static class PerformanceBaselineRunner
                     execution);
             }
             var runs = new List<BaselineRunResult>(scenario.Repetitions);
+            BaselinePhaseProbe? probe = null;
             for (int repetition = 1; repetition <= scenario.Repetitions;
                 repetition++)
             {
@@ -112,34 +113,22 @@ internal static class PerformanceBaselineRunner
                         graphAfterMeasurement,
                         scenario.MeasuredSteps),
                     measurements));
-            }
-
-            BaselinePhaseProbe? probe = null;
-            if (scenario.CollectPhaseProbe)
-            {
-                using BaselineFixture probeFixture = CreateFixture(
-                    configuration,
-                    precision,
-                    storageDType,
-                    scenario);
-                if (scenario.Device == BaselineDeviceKind.Cuda)
+                if (scenario.CollectPhaseProbe
+                    && repetition == scenario.Repetitions)
                 {
-                    for (int warmup = 0;
-                        warmup < scenario.WarmupSteps;
-                        warmup++)
-                    {
-                        _ = MeasureStep(
-                            probeFixture,
-                            configuration,
-                            scenario,
-                            diagnosticLabel: $"probe-warmup-{warmup + 1}");
-                    }
+                    // Reuse the already-warmed final fixture. Constructing a
+                    // fourth full model/optimizer/graph after the official
+                    // three runs can retain enough session-generation memory
+                    // to make the diagnostic eager backward fail even though
+                    // every measured run itself completed. The probe remains
+                    // outside all measured intervals and runs only after the
+                    // final BaselineRunResult has been committed.
+                    probe = CreatePhaseProbe(
+                        fixture,
+                        configuration,
+                        scenario,
+                        runs);
                 }
-                probe = CreatePhaseProbe(
-                    probeFixture,
-                    configuration,
-                    scenario,
-                    runs);
             }
             BaselineConditions conditions = CreateConditions(
                 job, precision, storageDType, selectedGpus);

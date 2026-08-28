@@ -552,6 +552,15 @@ public sealed class CudaDataParallelEngine : IDisposable
         lock (_sync)
         {
             ThrowIfDisposed();
+            // A profiled step deliberately executes the eager autograd path so
+            // each phase can be synchronized independently. Keeping a compiled
+            // training graph alive here pins its capture reservation while the
+            // eager path asks the same lane for a second activation workspace.
+            // At production shapes that unnecessary overlap can exhaust VRAM
+            // after an otherwise successful benchmark. Retire only the cached
+            // shape/graph resources; parameters, optimizer state and gradient
+            // reduction plans remain resident and warm.
+            ReleaseTrainingShapePlans();
             PrepareParameterResidency();
             using IDisposable precisionScope =
                 TensorExecutionContext.PushPrecisionPolicy(
@@ -701,11 +710,7 @@ public sealed class CudaDataParallelEngine : IDisposable
                 return;
 
             List<Exception>? failures = null;
-            while (_trainingShapePlans.First is { } shapeNode)
-            {
-                _trainingShapePlans.RemoveFirst();
-                DisposeTrainingShapePlan(shapeNode.Value, ref failures);
-            }
+            ReleaseTrainingShapePlans(ref failures);
             try
             {
                 _bfp8GradientPlan?.Dispose();
@@ -757,6 +762,28 @@ public sealed class CudaDataParallelEngine : IDisposable
                     "One or more CUDA data-parallel resources failed to dispose.",
                     failures);
             }
+        }
+    }
+
+    private void ReleaseTrainingShapePlans()
+    {
+        List<Exception>? failures = null;
+        ReleaseTrainingShapePlans(ref failures);
+        if (failures is not null)
+        {
+            throw new AggregateException(
+                "CUDA training shape cleanup failed before the profiled " +
+                "eager step.",
+                failures);
+        }
+    }
+
+    private void ReleaseTrainingShapePlans(ref List<Exception>? failures)
+    {
+        while (_trainingShapePlans.First is { } shapeNode)
+        {
+            _trainingShapePlans.RemoveFirst();
+            DisposeTrainingShapePlan(shapeNode.Value, ref failures);
         }
     }
 
