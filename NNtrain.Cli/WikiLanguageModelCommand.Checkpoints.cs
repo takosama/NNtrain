@@ -256,16 +256,14 @@ internal static partial class WikiLanguageModelCommand
         if (checkpointMode == TensorPrecisionMode.Mix8_32
             && checkpoint.Bfp8BlockSize is int checkpointBlockSize)
         {
-            if (config.HasExplicitBfp8BlockSize
-                && config.Bfp8BlockSize != checkpointBlockSize)
-            {
-                throw new InvalidDataException(
-                    $"Configured bfp8_block_size '{config.Bfp8BlockSize}' " +
-                    $"does not match checkpoint BFP8 block size " +
-                    $"'{checkpointBlockSize}'. Remove bfp8_block_size to " +
-                    "inherit the checkpoint value, or use a matching value.");
-            }
-            bfp8BlockSize = checkpointBlockSize;
+            // An omitted setting preserves the checkpoint's exact payload
+            // contract. An explicit setting is a requested precision
+            // migration: the FP32 master stored in the checkpoint is loaded
+            // into a model created with the requested descriptor and safely
+            // requantized once, before CUDA residency is prepared.
+            bfp8BlockSize = config.HasExplicitBfp8BlockSize
+                ? config.Bfp8BlockSize
+                : checkpointBlockSize;
         }
         return new WikiPrecisionSelection(
             checkpointMode,

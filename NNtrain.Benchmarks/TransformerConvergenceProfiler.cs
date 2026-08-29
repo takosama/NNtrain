@@ -50,6 +50,10 @@ internal static class TransformerConvergenceProfiler
             .GetProperty("optimizer");
         TensorPrecisionMode precisionMode = PrecisionModeConfiguration.Read(root);
         TensorDType dtype = precisionMode.ToStorageDType();
+        int bfp8BlockSize = root.TryGetProperty(
+            "bfp8_block_size", out JsonElement configuredBlockSize)
+            ? configuredBlockSize.GetInt32()
+            : Bfp8QuantizationDescriptor.DefaultBlockSize;
         int batch = root.GetProperty("batchSize").GetInt32();
         int sequence = root.GetProperty("contextLength").GetInt32();
         int seed = root.GetProperty("seed").GetInt32();
@@ -108,6 +112,8 @@ internal static class TransformerConvergenceProfiler
             CudaDataParallel.ConfigureAdaptiveSharding(
                 ReadAdaptiveSharding(root));
 
+            bool bfp8Mode = precisionMode is TensorPrecisionMode.Bfp8
+                or TensorPrecisionMode.Mix8_32;
             var model = new GptRinWikiJp(
                 tokenizer.VocabularySize,
                 sequence,
@@ -118,9 +124,12 @@ internal static class TransformerConvergenceProfiler
                 new Random(seed),
                 root.GetProperty("initializationScale").GetSingle(),
                 root.GetProperty("dropout").GetSingle(),
-                dtype,
+                bfp8Mode ? TensorDType.Float32 : dtype,
                 root.GetProperty("tieWordEmbeddings").GetBoolean());
-            model.SetPrecisionMode(precisionMode);
+            if (bfp8Mode)
+                model.to(precisionMode, bfp8BlockSize);
+            else
+                model.SetPrecisionMode(precisionMode);
             ModuleState? state = safetensors.torch.load_file(modelArtifact);
             model.load_state_dict(state);
             state = null;
