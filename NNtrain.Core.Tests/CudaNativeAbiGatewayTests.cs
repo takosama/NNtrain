@@ -80,6 +80,7 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_optimizer_adamw",
         "nntrain_optimizer_adamw_bfp8_moments",
         "nntrain_optimizer_adamw_bfp8_apply",
+        "nntrain_optimizer_adamw_multi_tensor_bfp8",
         "nntrain_optimizer_adamw_bf16_state",
         "nntrain_optimizer_adamw_publish",
         "nntrain_optimizer_adamw_bf16_state_publish",
@@ -105,6 +106,19 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_optimizer_symmetric_gram_bf16_operands",
         "nntrain_optimizer_newton_schulz",
         "nntrain_optimizer_newton_schulz_bf16_operands",
+        "nntrain_lion_multi_tensor_f32",
+        "nntrain_lion_multi_tensor_bf16",
+        "nntrain_lion_multi_tensor_mix8",
+        "nntrain_lion_multi_tensor_bfp8",
+        "nntrain_gainshare_prepare_fp32",
+        "nntrain_gainshare_prepare_bf16",
+        "nntrain_gainshare_moments_fp32",
+        "nntrain_gainshare_direction_fp32",
+        "nntrain_gainshare_prepare_bfp8_multi_tensor",
+        "nntrain_gainshare_apply_bfp8_multi_tensor",
+        "nntrain_gainshare_compute_scales",
+        "nntrain_gainshare_apply_fp32",
+        "nntrain_gainshare_apply_bf16",
         "nntrain_gradient_comm_create",
         "nntrain_gradient_event_create",
         "nntrain_gradient_pack_bf16",
@@ -502,6 +516,7 @@ public sealed class CudaNativeAbiGatewayTests
         Assert.Equal(21, CudaAbiVersion.LayerNormOneScanMinor);
         Assert.Equal(22, CudaAbiVersion.DirectBfp8LayerNormMinor);
         Assert.Equal(23, CudaAbiVersion.BlockBfp8OptimizerStateMinor);
+        Assert.Equal(24, CudaAbiVersion.FusedFirstOrderOptimizerMinor);
         Assert.Equal(
             CudaKernelFeature.None,
             CudaNativeGateway.RequiredFeatures(
@@ -604,6 +619,8 @@ public sealed class CudaNativeAbiGatewayTests
         Assert.True(capabilities.Supports(CudaKernelFeature.Bfp8Quantization));
         Assert.True(capabilities.Supports(CudaKernelFeature.Int8TensorCores));
         Assert.True(capabilities.Supports(CudaKernelFeature.CudaGraphs));
+        Assert.True(capabilities.Supports(
+            CudaKernelFeature.FusedFirstOrderOptimizers));
     }
 
     [Fact]

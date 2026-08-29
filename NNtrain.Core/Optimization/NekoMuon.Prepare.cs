@@ -21,7 +21,10 @@ public sealed partial class NekoMuon
         }
 
         lock (_cudaPreparationSync)
+        {
             PrepareCudaResidency(devices);
+            _cudaStateAuthorityDevice = devices[0];
+        }
     }
 
     private void PrepareCudaResidency(int[] devices)

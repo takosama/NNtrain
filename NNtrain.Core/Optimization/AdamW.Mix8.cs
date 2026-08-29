@@ -43,7 +43,8 @@ public partial class AdamW
         bool transitioned = _parameterRuntime.Any(runtime =>
             runtime.CudaBfp8State is not null
             || runtime.CudaState is null
-            || runtime.CudaBFloat16State is not null);
+            || runtime.CudaBFloat16State is not null
+            || runtime.CudaMixedState is not null);
         if (transitioned)
         {
             foreach (CudaOptimizerKernels.AdamWMultiTensorPlan plan
@@ -52,6 +53,7 @@ public partial class AdamW
                 plan.Dispose();
             }
             _cudaMultiTensorPlans.Clear();
+            DisposeCudaBfp8Plans();
         }
 
         int primaryDevice = devices[0];
@@ -68,6 +70,12 @@ public partial class AdamW
                 runtime.CudaBFloat16State.SynchronizeHost(primaryDevice);
                 runtime.CudaBFloat16State.Dispose();
                 runtime.CudaBFloat16State = null;
+            }
+            if (runtime.CudaMixedState is not null)
+            {
+                runtime.CudaMixedState.SynchronizeHost(primaryDevice);
+                runtime.CudaMixedState.Dispose();
+                runtime.CudaMixedState = null;
             }
             if (runtime.FirstMomentBFloat16 is not null)
             {

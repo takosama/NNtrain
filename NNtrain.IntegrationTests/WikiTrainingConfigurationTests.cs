@@ -497,7 +497,7 @@ public sealed class WikiTrainingConfigurationTests
     [InlineData("bfp8", "lion")]
     [InlineData("mix8_32", "gainshareadamw")]
     [InlineData("mix8_32", "lion")]
-    public void RejectsBfp8OptimizersWithoutResidentCudaUpdates(
+    public void AllowsBfp8OptimizersWithResidentCudaUpdates(
         string precisionMode,
         string optimizer)
     {
@@ -509,13 +509,11 @@ public sealed class WikiTrainingConfigurationTests
             Optimizer = optimizer,
         };
 
-        ArgumentException exception = Assert.Throws<ArgumentException>(
-            configuration.Validate);
+        configuration.Validate();
 
-        Assert.Equal("Optimizer", exception.ParamName);
-        Assert.Contains("adamw", exception.Message);
-        Assert.Contains("nekomuon", exception.Message);
-        Assert.Contains("not have a resident CUDA", exception.Message);
+        Assert.Equal(
+            TensorPrecisionModeNames.Parse(precisionMode),
+            configuration.GetPrecisionMode());
     }
 
     [Fact]

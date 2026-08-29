@@ -325,6 +325,184 @@ internal static partial class CudaOptimizerKernels
         }
     }
 
+    /// <summary>
+    /// CUDA-resident AdamW state for the legal asymmetric configurations
+    /// where exactly one moment is BF16 and the other is FP32.  The managed
+    /// arrays remain checkpoint shadows; no decode or replacement array is
+    /// created by a training step.
+    /// </summary>
+    internal sealed class AdamWMixedResidentState : IDisposable
+    {
+        private readonly float[] _firstFloatHost;
+        private readonly short[]? _firstBFloat16Host;
+        private readonly float[] _secondFloatHost;
+        private readonly short[]? _secondBFloat16Host;
+        private readonly Dictionary<int, Buffers> _buffers = [];
+
+        internal AdamWMixedResidentState(
+            float[] firstFloatHost,
+            short[]? firstBFloat16Host,
+            float[] secondFloatHost,
+            short[]? secondBFloat16Host)
+        {
+            ArgumentNullException.ThrowIfNull(firstFloatHost);
+            ArgumentNullException.ThrowIfNull(secondFloatHost);
+            if ((firstBFloat16Host is null)
+                == (secondBFloat16Host is null))
+            {
+                throw new ArgumentException(
+                    "Mixed AdamW state requires exactly one BF16 moment.");
+            }
+
+            int firstLength = firstBFloat16Host?.Length
+                ?? firstFloatHost.Length;
+            int secondLength = secondBFloat16Host?.Length
+                ?? secondFloatHost.Length;
+            if (firstLength <= 0 || firstLength != secondLength)
+            {
+                throw new ArgumentException(
+                    "AdamW moment buffers must have the same positive " +
+                    "length.");
+            }
+
+            _firstFloatHost = firstFloatHost;
+            _firstBFloat16Host = firstBFloat16Host;
+            _secondFloatHost = secondFloatHost;
+            _secondBFloat16Host = secondBFloat16Host;
+        }
+
+        internal bool FirstMomentBFloat16
+            => _firstBFloat16Host is not null;
+
+        internal bool SecondMomentBFloat16
+            => _secondBFloat16Host is not null;
+
+        internal Buffers GetOrCreate(int deviceIndex)
+        {
+            if (_buffers.TryGetValue(deviceIndex, out Buffers? buffers))
+                return buffers;
+            NativeCudaDevice accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+            buffers = AllocateCudaResources(own =>
+            {
+                NativeCudaBuffer<float>? firstFloat = null;
+                NativeCudaBuffer<short>? firstBFloat16 = null;
+                NativeCudaBuffer<float>? secondFloat = null;
+                NativeCudaBuffer<short>? secondBFloat16 = null;
+                if (_firstBFloat16Host is not null)
+                {
+                    firstBFloat16 = AllocateStateBuffer(
+                        accelerator, _firstBFloat16Host);
+                    own(firstBFloat16);
+                }
+                else
+                {
+                    firstFloat = AllocateStateBuffer(
+                        accelerator, _firstFloatHost);
+                    own(firstFloat);
+                }
+                if (_secondBFloat16Host is not null)
+                {
+                    secondBFloat16 = AllocateStateBuffer(
+                        accelerator, _secondBFloat16Host);
+                    own(secondBFloat16);
+                }
+                else
+                {
+                    secondFloat = AllocateStateBuffer(
+                        accelerator, _secondFloatHost);
+                    own(secondFloat);
+                }
+                var created = new Buffers(
+                    firstFloat,
+                    firstBFloat16,
+                    secondFloat,
+                    secondBFloat16);
+                _buffers.Add(deviceIndex, created);
+                return created;
+            });
+            return buffers;
+        }
+
+        internal void SynchronizeHost(int deviceIndex)
+        {
+            if (!_buffers.TryGetValue(deviceIndex, out Buffers? buffers))
+                return;
+            if (_firstBFloat16Host is not null)
+                buffers.FirstBFloat16!.CopyToCPU(_firstBFloat16Host);
+            else
+                buffers.FirstFloat!.CopyToCPU(_firstFloatHost);
+            if (_secondBFloat16Host is not null)
+                buffers.SecondBFloat16!.CopyToCPU(_secondBFloat16Host);
+            else
+                buffers.SecondFloat!.CopyToCPU(_secondFloatHost);
+        }
+
+        public void Dispose()
+        {
+            List<Exception>? failures = null;
+            foreach (Buffers buffers in _buffers.Values)
+            {
+                try
+                {
+                    buffers.Dispose();
+                }
+                catch (Exception exception)
+                {
+                    (failures ??= []).Add(exception);
+                }
+            }
+            _buffers.Clear();
+            if (failures is not null)
+            {
+                throw new AggregateException(
+                    "Mixed AdamW CUDA state cleanup failed.", failures);
+            }
+        }
+
+        internal sealed class Buffers(
+            NativeCudaBuffer<float>? firstFloat,
+            NativeCudaBuffer<short>? firstBFloat16,
+            NativeCudaBuffer<float>? secondFloat,
+            NativeCudaBuffer<short>? secondBFloat16) : IDisposable
+        {
+            internal NativeCudaBuffer<float>? FirstFloat { get; } =
+                firstFloat;
+            internal NativeCudaBuffer<short>? FirstBFloat16 { get; } =
+                firstBFloat16;
+            internal NativeCudaBuffer<float>? SecondFloat { get; } =
+                secondFloat;
+            internal NativeCudaBuffer<short>? SecondBFloat16 { get; } =
+                secondBFloat16;
+
+            internal object FirstOwner
+                => (object?)FirstBFloat16 ?? FirstFloat!;
+
+            internal object SecondOwner
+                => (object?)SecondBFloat16 ?? SecondFloat!;
+
+            internal nint FirstPointer
+                => FirstBFloat16?.NativePtr ?? FirstFloat!.NativePtr;
+
+            internal nint SecondPointer
+                => SecondBFloat16?.NativePtr ?? SecondFloat!.NativePtr;
+
+            public void Dispose()
+            {
+                try
+                {
+                    FirstFloat?.Dispose();
+                    FirstBFloat16?.Dispose();
+                }
+                finally
+                {
+                    SecondFloat?.Dispose();
+                    SecondBFloat16?.Dispose();
+                }
+            }
+        }
+    }
+
     internal sealed class AdamWBfp8ResidentState : IDisposable
     {
         // These arrays are checkpoint shadows only. Once a device buffer is
@@ -594,6 +772,250 @@ internal static partial class CudaOptimizerKernels
         }
     }
 
+    internal sealed record AdamWBfp8MultiTensorItem(
+        Tensor Parameter,
+        AdamWBfp8ResidentState State,
+        bool ApplyWeightDecay);
+
+    /// <summary>
+    /// Immutable tensor-wide BFP8 AdamW descriptor plan. The native update
+    /// uses five launches for the complete parameter set and only six FP32
+    /// reduction scalars per tensor; no full-size decode workspace exists.
+    /// </summary>
+    internal sealed class AdamWBfp8MultiTensorPlan : IDisposable
+    {
+        private const int ChunkElements = 4096;
+        private const int ReductionValuesPerTensor = 6;
+        private readonly int _deviceIndex;
+        private readonly PlanItemSignature[] _signatures;
+        private readonly NativeCudaBuffer<
+            CudaOptimizerNative.AdamWBfp8TensorDescriptor> _tensors;
+        private readonly NativeCudaBuffer<float> _reduction;
+        private readonly int _maximumChunks;
+
+        internal AdamWBfp8MultiTensorPlan(
+            int deviceIndex,
+            IReadOnlyList<AdamWBfp8MultiTensorItem> items)
+        {
+            ArgumentNullException.ThrowIfNull(items);
+            if (items.Count is <= 0 or > 65_535)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(items),
+                    "Pure BFP8 AdamW requires 1..65535 tensors per plan.");
+            }
+            _deviceIndex = deviceIndex;
+            _signatures = new PlanItemSignature[items.Count];
+            var descriptors = new CudaOptimizerNative
+                .AdamWBfp8TensorDescriptor[items.Count];
+            int maximumChunks = 0;
+            for (int index = 0; index < items.Count; index++)
+            {
+                AdamWBfp8MultiTensorItem item = items[index];
+                PlanItemSignature signature = CreateSignature(
+                    deviceIndex, item);
+                _signatures[index] = signature;
+                descriptors[index] = new CudaOptimizerNative
+                    .AdamWBfp8TensorDescriptor(
+                        signature.Data.Payload.NativePtr,
+                        signature.Data.Scales.NativePtr,
+                        signature.Gradient.Payload.NativePtr,
+                        signature.Gradient.Scales.NativePtr,
+                        signature.State.First.Payload.NativePtr,
+                        signature.State.First.Scales.NativePtr,
+                        signature.State.Second.Payload.NativePtr,
+                        signature.State.Second.Scales.NativePtr,
+                        item.Parameter.Numel,
+                        item.ApplyWeightDecay ? 1 : 0);
+                maximumChunks = Math.Max(
+                    maximumChunks,
+                    checked((item.Parameter.Numel + ChunkElements - 1)
+                        / ChunkElements));
+            }
+            _maximumChunks = maximumChunks;
+
+            NativeCudaDevice accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+            NativeCudaBuffer<CudaOptimizerNative
+                .AdamWBfp8TensorDescriptor>? tensorBuffer = null;
+            NativeCudaBuffer<float>? reduction = null;
+            try
+            {
+                tensorBuffer = accelerator.Allocate1D(descriptors);
+                reduction = accelerator.Allocate1D<float>(checked(
+                    items.Count * ReductionValuesPerTensor));
+                _tensors = tensorBuffer;
+                _reduction = reduction;
+                tensorBuffer = null;
+                reduction = null;
+            }
+            finally
+            {
+                tensorBuffer?.Dispose();
+                reduction?.Dispose();
+            }
+        }
+
+        internal bool Matches(
+            IReadOnlyList<AdamWBfp8MultiTensorItem> items)
+        {
+            if (items.Count != _signatures.Length)
+                return false;
+            try
+            {
+                for (int index = 0; index < items.Count; index++)
+                {
+                    if (!_signatures[index].Matches(CreateSignature(
+                            _deviceIndex, items[index])))
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
+        }
+
+        internal void Execute(
+            float beta1,
+            float beta2,
+            float learningRate,
+            float weightDecay,
+            float updateScale,
+            float scaledEpsilon,
+            NativeCudaBuffer<int> finiteStatus)
+        {
+            ArgumentNullException.ThrowIfNull(finiteStatus);
+            if (finiteStatus.Device.Index != _deviceIndex
+                || finiteStatus.Length != 1)
+            {
+                throw new ArgumentException(
+                    "Pure BFP8 AdamW finite status must be a scalar on the " +
+                    "plan device.",
+                    nameof(finiteStatus));
+            }
+            NativeCudaDevice accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(_deviceIndex);
+            CudaOptimizerNative.AdamWMultiTensorBfp8(
+                _deviceIndex,
+                _tensors.NativePtr,
+                _tensors.Length,
+                beta1,
+                beta2,
+                learningRate,
+                weightDecay,
+                updateScale,
+                scaledEpsilon,
+                _reduction.NativePtr,
+                _maximumChunks,
+                finiteStatus.NativePtr,
+                accelerator.DefaultStream);
+        }
+
+        private static PlanItemSignature CreateSignature(
+            int deviceIndex,
+            AdamWBfp8MultiTensorItem item)
+        {
+            Tensor parameter = item.Parameter;
+            CudaBfp8BufferView data =
+                parameter.EnsureCudaBfp8Buffer(deviceIndex);
+            if (data.Descriptor != Bfp8QuantizationDescriptor.TensorWide)
+            {
+                throw new InvalidOperationException(
+                    "Pure BFP8 AdamW requires tensor-wide parameter scales.");
+            }
+            if (!parameter.TryGetCudaBfp8GradientBuffer(
+                    deviceIndex,
+                    out CudaBfp8BufferView gradient))
+            {
+                throw new InvalidOperationException(
+                    $"Pure BFP8 AdamW requires an authoritative BFP8 " +
+                    $"gradient for '{parameter.Name}' on CUDA device " +
+                    $"{deviceIndex}.");
+            }
+            if (gradient.Descriptor
+                != Bfp8QuantizationDescriptor.TensorWide)
+            {
+                throw new InvalidOperationException(
+                    "Pure BFP8 AdamW requires tensor-wide gradient scales.");
+            }
+            AdamWBfp8ResidentState.Buffers state =
+                item.State.GetOrCreate(deviceIndex);
+            if (state.First.Descriptor
+                    != Bfp8QuantizationDescriptor.TensorWide
+                || state.Second.Descriptor
+                    != Bfp8QuantizationDescriptor.TensorWide)
+            {
+                throw new InvalidOperationException(
+                    "Pure BFP8 AdamW requires tensor-wide moment scales.");
+            }
+            return new PlanItemSignature(
+                parameter,
+                item.State,
+                item.ApplyWeightDecay,
+                data,
+                gradient,
+                state);
+        }
+
+        public void Dispose()
+        {
+            List<Exception>? failures = null;
+            try
+            {
+                _tensors.Dispose();
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+            try
+            {
+                _reduction.Dispose();
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+            if (failures is not null)
+            {
+                throw new AggregateException(
+                    "Pure BFP8 AdamW plan cleanup failed.", failures);
+            }
+        }
+
+        private readonly record struct PlanItemSignature(
+            Tensor Parameter,
+            AdamWBfp8ResidentState StateOwner,
+            bool ApplyWeightDecay,
+            CudaBfp8BufferView Data,
+            CudaBfp8BufferView Gradient,
+            AdamWBfp8ResidentState.Buffers State)
+        {
+            internal bool Matches(PlanItemSignature other)
+                => ReferenceEquals(Parameter, other.Parameter)
+                    && ReferenceEquals(StateOwner, other.StateOwner)
+                    && ApplyWeightDecay == other.ApplyWeightDecay
+                    && ReferenceEquals(Data.Payload, other.Data.Payload)
+                    && ReferenceEquals(Data.Scales, other.Data.Scales)
+                    && ReferenceEquals(
+                        Gradient.Payload, other.Gradient.Payload)
+                    && ReferenceEquals(
+                        Gradient.Scales, other.Gradient.Scales)
+                    && ReferenceEquals(
+                        State.First.Payload, other.State.First.Payload)
+                    && ReferenceEquals(
+                        State.First.Scales, other.State.First.Scales)
+                    && ReferenceEquals(
+                        State.Second.Payload, other.State.Second.Payload)
+                    && ReferenceEquals(
+                        State.Second.Scales, other.State.Second.Scales);
+        }
+    }
+
     /// <summary>
     /// Four Float32 decode/update buffers shared by all AdamW leaves on one
     /// device. Capacity is the largest managed leaf, so native workspace
@@ -725,7 +1147,8 @@ internal static partial class CudaOptimizerKernels
         AdamWResidentState? FloatState,
         AdamWBFloat16ResidentState? BFloat16State,
         bool ApplyWeightDecay,
-        bool PureBFloat16);
+        bool PureBFloat16,
+        AdamWMixedResidentState? MixedState = null);
 
     internal sealed class AdamWMultiTensorPlan : IDisposable
     {
@@ -767,7 +1190,14 @@ internal static partial class CudaOptimizerKernels
                             length,
                             item.ApplyWeightDecay ? 1 : 0,
                             signature.PhysicalBFloat16 ? 1 : 0,
-                            signature.BFloat16State ? 1 : 0,
+                            (signature.FirstMomentBFloat16
+                                ? CudaOptimizerNative.AdamWChunkDescriptor
+                                    .FirstMomentBFloat16
+                                : 0)
+                            | (signature.SecondMomentBFloat16
+                                ? CudaOptimizerNative.AdamWChunkDescriptor
+                                    .SecondMomentBFloat16
+                                : 0),
                             signature.PureBFloat16 ? 1 : 0));
                 }
             }
@@ -870,7 +1300,8 @@ internal static partial class CudaOptimizerKernels
             object secondOwner;
             nint firstPointer;
             nint secondPointer;
-            bool bfloat16State;
+            bool firstMomentBFloat16;
+            bool secondMomentBFloat16;
             object stateOwner;
             if (item.FloatState is not null)
             {
@@ -881,7 +1312,8 @@ internal static partial class CudaOptimizerKernels
                 secondOwner = state.Second;
                 firstPointer = state.First.NativePtr;
                 secondPointer = state.Second.NativePtr;
-                bfloat16State = false;
+                firstMomentBFloat16 = false;
+                secondMomentBFloat16 = false;
             }
             else if (item.BFloat16State is not null)
             {
@@ -892,12 +1324,35 @@ internal static partial class CudaOptimizerKernels
                 secondOwner = state.Second;
                 firstPointer = state.First.NativePtr;
                 secondPointer = state.Second.NativePtr;
-                bfloat16State = true;
+                firstMomentBFloat16 = true;
+                secondMomentBFloat16 = true;
+            }
+            else if (item.MixedState is not null)
+            {
+                AdamWMixedResidentState.Buffers state =
+                    item.MixedState.GetOrCreate(deviceIndex);
+                stateOwner = item.MixedState;
+                firstOwner = state.FirstOwner;
+                secondOwner = state.SecondOwner;
+                firstPointer = state.FirstPointer;
+                secondPointer = state.SecondPointer;
+                firstMomentBFloat16 =
+                    item.MixedState.FirstMomentBFloat16;
+                secondMomentBFloat16 =
+                    item.MixedState.SecondMomentBFloat16;
             }
             else
             {
                 throw new ArgumentException(
                     "AdamW plan items require resident optimizer state.",
+                    nameof(item));
+            }
+            if (item.PureBFloat16
+                && (!firstMomentBFloat16 || !secondMomentBFloat16))
+            {
+                throw new ArgumentException(
+                    "Pure BF16 AdamW requires both moments to use BF16 " +
+                    "storage.",
                     nameof(item));
             }
 
@@ -911,7 +1366,8 @@ internal static partial class CudaOptimizerKernels
                 parameter.Bfp8Quantization,
                 parameter.Shape,
                 item.ApplyWeightDecay,
-                bfloat16State,
+                firstMomentBFloat16,
+                secondMomentBFloat16,
                 item.PureBFloat16,
                 stateOwner,
                 data,
@@ -933,7 +1389,8 @@ internal static partial class CudaOptimizerKernels
             Bfp8QuantizationDescriptor? Bfp8Descriptor,
             IReadOnlyList<int> Shape,
             bool ApplyWeightDecay,
-            bool BFloat16State,
+            bool FirstMomentBFloat16,
+            bool SecondMomentBFloat16,
             bool PureBFloat16,
             object StateOwner,
             object Data,
@@ -954,7 +1411,10 @@ internal static partial class CudaOptimizerKernels
                     && Bfp8Descriptor == other.Bfp8Descriptor
                     && ShapesEqual(Shape, other.Shape)
                     && ApplyWeightDecay == other.ApplyWeightDecay
-                    && BFloat16State == other.BFloat16State
+                    && FirstMomentBFloat16
+                        == other.FirstMomentBFloat16
+                    && SecondMomentBFloat16
+                        == other.SecondMomentBFloat16
                     && PureBFloat16 == other.PureBFloat16
                     && ReferenceEquals(StateOwner, other.StateOwner)
                     && ReferenceEquals(Data, other.Data)

@@ -674,19 +674,6 @@ sealed record WikiTrainingConfiguration
                 $"'{GainShareAdamWOptimizer}', and '{LionOptimizer}'.",
                 nameof(Optimizer));
         }
-        TensorPrecisionMode selectedPrecision = GetPrecisionMode();
-        if ((selectedPrecision is TensorPrecisionMode.Bfp8
-                or TensorPrecisionMode.Mix8_32)
-            && (IsOptimizer(GainShareAdamWOptimizer)
-                || IsOptimizer(LionOptimizer)))
-        {
-            throw new ArgumentException(
-                $"Optimizer '{Optimizer}' does not have a resident CUDA " +
-                $"{TensorPrecisionModeNames.Format(selectedPrecision)} " +
-                "update path. Use 'adamw' or 'nekomuon' so BFP8 weights, " +
-                "gradients, and optimizer state are not materialized on the host.",
-                nameof(Optimizer));
-        }
         ValidateGainShareSettings();
         if (!float.IsFinite(LearningRate) || LearningRate <= 0f)
             throw new ArgumentOutOfRangeException(nameof(LearningRate));

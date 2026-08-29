@@ -22,7 +22,10 @@ public partial class AdamW
         }
 
         lock (_cudaPreparationSync)
+        {
             PrepareCudaResidency(devices);
+            _cudaStateAuthorityDevice = devices[0];
+        }
     }
 
     private void PrepareCudaResidency(int[] devices)
@@ -106,7 +109,17 @@ public partial class AdamW
                         runtime.SecondMomentBFloat16);
                 foreach (int deviceIndex in devices)
                     runtime.CudaBFloat16State.GetOrCreate(deviceIndex);
+                continue;
             }
+
+            runtime.CudaMixedState ??=
+                new CudaOptimizerKernels.AdamWMixedResidentState(
+                    runtime.FirstMoment,
+                    runtime.FirstMomentBFloat16,
+                    runtime.SecondMoment,
+                    runtime.SecondMomentBFloat16);
+            foreach (int deviceIndex in devices)
+                runtime.CudaMixedState.GetOrCreate(deviceIndex);
         }
 
         CudaOptimizerKernels.AdamWMultiTensorItem[] items =
@@ -131,9 +144,13 @@ public partial class AdamW
         bool transitioned = _parameterRuntime.Any(runtime =>
             runtime.CudaBfp8State is not null
             || runtime.CudaState is null
-            || runtime.CudaBFloat16State is not null);
+            || runtime.CudaBFloat16State is not null
+            || runtime.CudaMixedState is not null);
         if (transitioned)
+        {
             DisposeCudaPlans();
+            DisposeCudaBfp8Plans();
+        }
 
         int primaryDevice = devices[0];
         foreach (AdamWParameterRuntime runtime in _parameterRuntime)
@@ -153,6 +170,12 @@ public partial class AdamW
                 runtime.CudaBFloat16State.SynchronizeHost(primaryDevice);
                 runtime.CudaBFloat16State.Dispose();
                 runtime.CudaBFloat16State = null;
+            }
+            if (runtime.CudaMixedState is not null)
+            {
+                runtime.CudaMixedState.SynchronizeHost(primaryDevice);
+                runtime.CudaMixedState.Dispose();
+                runtime.CudaMixedState = null;
             }
             if (runtime.FirstMomentBFloat16 is not null)
             {
@@ -188,21 +211,25 @@ public partial class AdamW
         bool transitioned = _parameterRuntime.Any(runtime =>
             runtime.CudaBfp8State is null);
         if (transitioned)
+        {
             DisposeCudaPlans();
+            DisposeCudaBfp8Plans();
+        }
 
         int primaryDevice = devices[0];
-        int maximumLeafLength = _parameterRuntime.Max(
-            runtime => runtime.Parameter.T.Numel);
         foreach (AdamWParameterRuntime runtime in _parameterRuntime)
         {
             if (runtime.CudaBfp8State is null)
             {
                 runtime.CudaState?.SynchronizeHost(primaryDevice);
                 runtime.CudaBFloat16State?.SynchronizeHost(primaryDevice);
+                runtime.CudaMixedState?.SynchronizeHost(primaryDevice);
                 runtime.CudaState?.Dispose();
                 runtime.CudaState = null;
                 runtime.CudaBFloat16State?.Dispose();
                 runtime.CudaBFloat16State = null;
+                runtime.CudaMixedState?.Dispose();
+                runtime.CudaMixedState = null;
 
                 if (runtime.FirstMomentBFloat16 is not null)
                 {
@@ -239,12 +266,15 @@ public partial class AdamW
                 runtime.CudaBfp8State.GetOrCreate(deviceIndex);
                 _ = GetOrCreateBfp8FiniteStatus(deviceIndex);
                 _ = GetOrCreateBfp8FiniteReadback(deviceIndex);
-                CudaOptimizerKernels.AdamWBfp8DeviceScratch scratch =
-                    GetOrCreateBfp8Scratch(
-                        deviceIndex,
-                        maximumLeafLength);
-                _ = scratch.Get(runtime.Parameter.T.Numel);
             }
+        }
+        bool gradientsReady = _parameterRuntime.All(runtime =>
+            devices.All(deviceIndex => runtime.Parameter.T
+                .TryGetCudaBfp8GradientBuffer(deviceIndex, out _)));
+        if (gradientsReady)
+        {
+            _ = PrepareCudaBfp8Plans(
+                devices, CreateCudaBfp8PlanItems());
         }
     }
 
@@ -254,13 +284,15 @@ public partial class AdamW
         bool pureBFloat16 = UsesPureBFloat16OptimizerState();
         return _parameterRuntime
             .Where(runtime => runtime.CudaState is not null
-                || runtime.CudaBFloat16State is not null)
+                || runtime.CudaBFloat16State is not null
+                || runtime.CudaMixedState is not null)
             .Select(runtime => new CudaOptimizerKernels.AdamWMultiTensorItem(
                 runtime.Parameter.T,
                 runtime.CudaState,
                 runtime.CudaBFloat16State,
                 runtime.ApplyWeightDecay,
-                pureBFloat16))
+                pureBFloat16,
+                runtime.CudaMixedState))
             .ToArray();
     }
 

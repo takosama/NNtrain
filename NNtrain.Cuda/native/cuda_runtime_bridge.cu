@@ -14,7 +14,7 @@
 
 namespace {
 constexpr std::uint32_t nntrain_abi_major = 1;
-constexpr std::uint32_t nntrain_abi_minor = 23;
+constexpr std::uint32_t nntrain_abi_minor = 24;
 constexpr std::uint32_t nntrain_abi_version_value =
     (nntrain_abi_major << 16) | nntrain_abi_minor;
 
@@ -1176,6 +1176,7 @@ NNTRAIN_EXPORT int nntrain_capability_bitmap(
     constexpr unsigned long long cuda_graphs = 1ull << 7;
     constexpr unsigned long long bfp8_quantization = 1ull << 8;
     constexpr unsigned long long int8_tensor_cores = 1ull << 9;
+    constexpr unsigned long long fused_first_order_optimizers = 1ull << 10;
 
     unsigned long long features = 0;
     // The distributed binary contains native cubins for SM80/86/89/90 and a
@@ -1190,7 +1191,8 @@ NNTRAIN_EXPORT int nntrain_capability_bitmap(
             asynchronous_gradient_reduction |
             cuda_graphs |
             bfp8_quantization |
-            int8_tensor_cores;
+            int8_tensor_cores |
+            fused_first_order_optimizers;
     }
 
     *bitmap = features;

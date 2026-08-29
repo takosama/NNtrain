@@ -71,6 +71,63 @@ internal static class CudaOptimizerNative
             finiteStatus), "scale-aware pure BFP8 AdamW update");
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    internal readonly struct AdamWBfp8TensorDescriptor(
+        nint dataPayload,
+        nint dataScale,
+        nint gradientPayload,
+        nint gradientScale,
+        nint firstMomentPayload,
+        nint firstMomentScale,
+        nint secondMomentPayload,
+        nint secondMomentScale,
+        int length,
+        int applyWeightDecay)
+    {
+        internal readonly nint DataPayload = dataPayload;
+        internal readonly nint DataScale = dataScale;
+        internal readonly nint GradientPayload = gradientPayload;
+        internal readonly nint GradientScale = gradientScale;
+        internal readonly nint FirstMomentPayload = firstMomentPayload;
+        internal readonly nint FirstMomentScale = firstMomentScale;
+        internal readonly nint SecondMomentPayload = secondMomentPayload;
+        internal readonly nint SecondMomentScale = secondMomentScale;
+        internal readonly int Length = length;
+        internal readonly int ApplyWeightDecay = applyWeightDecay;
+    }
+
+    internal static void AdamWMultiTensorBfp8(
+        int device,
+        nint tensors,
+        int tensorCount,
+        float beta1,
+        float beta2,
+        float learningRate,
+        float weightDecay,
+        float updateScale,
+        float scaledEpsilon,
+        nint reduction,
+        int maximumChunks,
+        nint finiteStatus,
+        nint stream)
+    {
+        Select(device);
+        Check(CudaNativeGateway.OptimizerAdamWMultiTensorBfp8(
+            device,
+            tensors,
+            tensorCount,
+            beta1,
+            beta2,
+            learningRate,
+            weightDecay,
+            updateScale,
+            scaledEpsilon,
+            reduction,
+            maximumChunks,
+            finiteStatus,
+            stream), "multi-tensor pure BFP8 AdamW update");
+    }
+
     internal static void AdamWBlockBfp8State(
         int device,
         nint data,
@@ -207,9 +264,12 @@ internal static class CudaOptimizerNative
         int length,
         int applyWeightDecay,
         int physicalBFloat16,
-        int bfloat16State,
+        int momentFormatFlags,
         int pureBFloat16)
     {
+        internal const int FirstMomentBFloat16 = 1 << 0;
+        internal const int SecondMomentBFloat16 = 1 << 1;
+
         internal readonly nint Data = data;
         internal readonly nint Gradient = gradient;
         internal readonly nint FirstMoment = firstMoment;
@@ -219,7 +279,9 @@ internal static class CudaOptimizerNative
         internal readonly int Length = length;
         internal readonly int ApplyWeightDecay = applyWeightDecay;
         internal readonly int PhysicalBFloat16 = physicalBFloat16;
-        internal readonly int BFloat16State = bfloat16State;
+        // Two independent bits preserve the 64-byte native ABI while
+        // allowing either AdamW moment to use BF16 storage independently.
+        internal readonly int MomentFormatFlags = momentFormatFlags;
         internal readonly int PureBFloat16 = pureBFloat16;
     }
 

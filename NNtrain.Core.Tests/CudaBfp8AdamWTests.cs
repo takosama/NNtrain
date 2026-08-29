@@ -85,13 +85,19 @@ public sealed class CudaBfp8AdamWTests
                 PublishGradient(parameter, Values(257, 29, 0.08f), 0);
                 NativeCudaTransferTelemetry before =
                     NativeCudaRuntime.TransferTelemetry;
+                NativeCudaAllocationTelemetry allocationBefore =
+                    NativeCudaRuntime.AllocationTelemetry;
 
                 optimizer.step();
 
                 NativeCudaTransferTelemetry transfer =
                     NativeCudaRuntime.TransferTelemetry - before;
+                NativeCudaAllocationTelemetry allocation =
+                    NativeCudaRuntime.AllocationTelemetry - allocationBefore;
                 Assert.Equal(0, transfer.HostToDeviceBytes);
                 Assert.Equal(sizeof(int), transfer.DeviceToHostBytes);
+                Assert.Equal(0, allocation.AllocationCount);
+                Assert.Equal(0, allocation.FreeCount);
                 Assert.False(parameter.T.HasCudaMasterFloat32Buffer(0));
             }
             finally
@@ -236,7 +242,7 @@ public sealed class CudaBfp8AdamWTests
     }
 
     [Fact]
-    public void SharedScratchDependsOnMaximumLeafNotParameterCountAndFreesAll()
+    public void MultiTensorPlanUsesOnlyScalarReductionStateAndFreesAll()
     {
         if (!Tensor.IsCudaAvailable())
             return;
@@ -253,14 +259,28 @@ public sealed class CudaBfp8AdamWTests
             var optimizer = new AdamW(parameters, Options());
             try
             {
+                var expected = new (Bfp8EncodedStorage Data,
+                    Bfp8EncodedStorage First,
+                    Bfp8EncodedStorage Second)[parameters.Length];
                 foreach ((Parameter parameter, int index)
                     in parameters.Select((parameter, index) =>
                         (parameter, index)))
                 {
+                    Bfp8EncodedStorage initial = Read(
+                        parameter.T.EnsureCudaBfp8Buffer(0));
                     PublishGradient(
                         parameter,
                         Values(parameter.T.Numel, index * 13 + 7, 0.05f),
                         0);
+                    Assert.True(parameter.T.TryGetCudaBfp8GradientBuffer(
+                        0, out CudaBfp8BufferView gradient));
+                    expected[index] = ReferenceStep(
+                        initial,
+                        Read(gradient),
+                        Zero(parameter.T.Numel),
+                        Zero(parameter.T.Numel),
+                        Options(),
+                        step: 1);
                 }
                 NativeCudaAllocationTelemetry before =
                     NativeCudaRuntime.AllocationTelemetry;
@@ -271,13 +291,26 @@ public sealed class CudaBfp8AdamWTests
                     NativeCudaRuntime.AllocationTelemetry - before;
                 long expectedStateBytes = lengths.Sum(
                     length => 2L * (length + sizeof(float)));
-                long expectedScratchBytes =
-                    4L * lengths.Max() * sizeof(float);
+                long expectedPlanBytes = lengths.Length * (
+                    System.Runtime.InteropServices.Marshal.SizeOf<
+                        CudaOptimizerNative.AdamWBfp8TensorDescriptor>()
+                    + 6L * sizeof(float));
                 long expectedBytes = expectedStateBytes
-                    + expectedScratchBytes
+                    + expectedPlanBytes
                     + sizeof(int);
-                Assert.Equal(4L * lengths.Length + 5, allocated.AllocationCount);
+                Assert.Equal(4L * lengths.Length + 3, allocated.AllocationCount);
                 Assert.Equal(expectedBytes, allocated.AllocationBytes);
+                for (int index = 0; index < parameters.Length; index++)
+                {
+                    AssertEncodedWithinScaleUlps(
+                        expected[index].Data,
+                        Read(parameters[index].T.EnsureCudaBfp8Buffer(0)));
+                    var moments = optimizer.GetCudaBfp8Moments(index, 0);
+                    AssertEncodedWithinScaleUlps(
+                        expected[index].First, Read(moments.First));
+                    AssertEncodedWithinScaleUlps(
+                        expected[index].Second, Read(moments.Second));
+                }
 
                 NativeCudaAllocationTelemetry beforeDispose =
                     NativeCudaRuntime.AllocationTelemetry;
@@ -482,6 +515,28 @@ public sealed class CudaBfp8AdamWTests
         Assert.Equal(expected.Descriptor, actual.Descriptor);
         Assert.Equal(expected.Payload.ToArray(), actual.Payload.ToArray());
         Assert.Equal(expected.Scales.ToArray(), actual.Scales.ToArray());
+    }
+
+    private static void AssertEncodedWithinScaleUlps(
+        Bfp8EncodedStorage expected,
+        Bfp8EncodedStorage actual)
+    {
+        Assert.Equal(expected.Descriptor, actual.Descriptor);
+        Assert.Equal(expected.Payload.ToArray(), actual.Payload.ToArray());
+        Assert.Equal(expected.Scales.Length, actual.Scales.Length);
+        for (int index = 0; index < expected.Scales.Length; index++)
+        {
+            float expectedScale = expected.Scales.Span[index];
+            float actualScale = actual.Scales.Span[index];
+            Assert.True(expectedScale > 0f && actualScale > 0f);
+            int ulps = Math.Abs(
+                BitConverter.SingleToInt32Bits(expectedScale)
+                - BitConverter.SingleToInt32Bits(actualScale));
+            Assert.True(
+                ulps <= 1,
+                $"Scale {index} differs by {ulps} ULPs: "
+                + $"expected {expectedScale:R}, actual {actualScale:R}.");
+        }
     }
 
     private static void WithCuda(int[] devices, Action action)

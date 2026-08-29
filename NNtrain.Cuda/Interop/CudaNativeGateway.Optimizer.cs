@@ -60,6 +60,43 @@ public static partial class CudaNativeGateway
             device);
     }
 
+    public static int OptimizerAdamWMultiTensorBfp8(
+        int device,
+        nint tensors,
+        int tensorCount,
+        float beta1,
+        float beta2,
+        float learningRate,
+        float weightDecay,
+        float updateScale,
+        float scaledEpsilon,
+        nint reduction,
+        int maximumChunks,
+        nint finiteStatus,
+        nint stream)
+    {
+        EnsureMinimumAbiMinor(
+            CudaAbiVersion.FusedFirstOrderOptimizerMinor,
+            "multi-tensor BFP8 AdamW");
+        return Complete(
+            OptimizerNativeMethods.AdamWMultiTensorBfp8(
+                device,
+                tensors,
+                tensorCount,
+                beta1,
+                beta2,
+                learningRate,
+                weightDecay,
+                updateScale,
+                scaledEpsilon,
+                reduction,
+                maximumChunks,
+                finiteStatus,
+                stream),
+            CudaNativeOperation.OptimizerBfp8,
+            device);
+    }
+
     public static int OptimizerAdamWAndPublish(
         int device, nint data, nint gradient, nint first, nint second,
         nint compute, bool physicalBFloat16, int length, float beta1,
@@ -306,6 +343,8 @@ public static partial class CudaNativeGateway
         internal static extern int AdamWBfp8Moments(nint gradient, nint first, nint second, int length, float beta1, float beta2, nint finiteStatus);
         [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_adamw_bfp8_apply", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int AdamWBfp8Apply(nint data, nint first, nint second, nint secondScale, int secondScaleBlockSize, int length, float learningRate, float weightDecay, float updateScale, float scaledEpsilon, int applyWeightDecay, nint finiteStatus);
+        [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_adamw_multi_tensor_bfp8", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int AdamWMultiTensorBfp8(int device, nint tensors, int tensorCount, float beta1, float beta2, float learningRate, float weightDecay, float updateScale, float scaledEpsilon, nint reduction, int maximumChunks, nint finiteStatus, nint stream);
         [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_adamw_bf16_state", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int AdamWBFloat16State(nint data, nint gradient, nint first, nint second, int length, float beta1, float beta2, float learningRate, float weightDecay, float updateScale, float scaledEpsilon, int applyWeightDecay);
         [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_adamw_publish", CallingConvention = CallingConvention.Cdecl)]

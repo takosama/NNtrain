@@ -27,6 +27,7 @@ public readonly record struct CudaAbiVersion(int Major, int Minor)
     public const int LayerNormOneScanMinor = 21;
     public const int DirectBfp8LayerNormMinor = 22;
     public const int BlockBfp8OptimizerStateMinor = 23;
+    public const int FusedFirstOrderOptimizerMinor = 24;
 
     public uint Packed =>
         ((uint)(ushort)Major << 16) | (ushort)Minor;
@@ -204,7 +205,8 @@ public static partial class CudaNativeGateway
             CudaKernelFeature.AsynchronousGradientReduction |
             CudaKernelFeature.CudaGraphs |
             CudaKernelFeature.Bfp8Quantization |
-            CudaKernelFeature.Int8TensorCores);
+            CudaKernelFeature.Int8TensorCores |
+            CudaKernelFeature.FusedFirstOrderOptimizers);
 
     private static readonly Lazy<CudaAbiVersion> CompatibleAbi = new(
         LoadAndValidateAbi,

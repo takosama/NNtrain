@@ -158,10 +158,51 @@ public sealed partial class NekoMuon
             });
         }
 
-        var confidences = new float[devices.Length, _parameters.Count];
+        float[,]? confidences = deviceOnlyFixedFive
+            ? null
+            : new float[devices.Length, _parameters.Count];
         Parallel.For(0, devices.Length, deviceSlot =>
         {
             int deviceIndex = devices[deviceSlot];
+            if (deviceOnlyFixedFive)
+            {
+                var batchItems = new CudaOptimizerKernels
+                    .NekoMuonBFloat16BatchItem[_parameters.Count];
+                for (int parameterIndex = 0;
+                    parameterIndex < _parameters.Count;
+                    parameterIndex++)
+                {
+                    Parameter parameter = _parameters[parameterIndex];
+                    GetMatrixShape(
+                        parameter,
+                        out int originalRows,
+                        out int originalColumns);
+                    bool applyWeightDecay =
+                        parameter.WeightDecay == WeightDecayPolicy.Apply
+                        || (options.Decay1D && parameter.T.Rank == 1);
+                    batchItems[parameterIndex] = new CudaOptimizerKernels
+                        .NekoMuonBFloat16BatchItem(
+                            parameter.T,
+                            _cudaBFloat16States[parameterIndex]!,
+                            originalRows,
+                            originalColumns,
+                            applyWeightDecay);
+                }
+                CudaOptimizerKernels
+                    .NekoMuonFinishFixedFiveBFloat16GroupedDeviceResident(
+                        deviceIndex,
+                        batchItems,
+                        scratch[deviceSlot],
+                        statuses[deviceSlot],
+                        fastCorrection,
+                        options.Epsilon,
+                        NewtonSchulzA,
+                        NewtonSchulzB,
+                        NewtonSchulzC,
+                        options.LearningRate,
+                        options.WeightDecay);
+                return;
+            }
             for (int parameterIndex = 0;
                 parameterIndex < _parameters.Count;
                 parameterIndex++)
@@ -174,7 +215,7 @@ public sealed partial class NekoMuon
                 bool applyWeightDecay =
                     parameter.WeightDecay == WeightDecayPolicy.Apply
                     || (options.Decay1D && parameter.T.Rank == 1);
-                confidences[deviceSlot, parameterIndex] =
+                confidences![deviceSlot, parameterIndex] =
                     CudaOptimizerKernels
                         .NekoMuonFinishBFloat16StepResident(
                             parameter.T,
@@ -224,7 +265,7 @@ public sealed partial class NekoMuon
                         _state.ParameterStates[parameterIndex] =
                             parameterState with
                             {
-                                Confidence = confidences[
+                                Confidence = confidences![
                                     finalPrimarySlot, parameterIndex],
                             };
                     }

@@ -1,9 +1,11 @@
 namespace NNtrain;
 
-public sealed class Lion : IOptimizer, ILearningRateAdjustable
+public sealed class Lion : IOptimizer, ILearningRateAdjustable, IDisposable
 {
     private readonly List<Parameter> _parameters;
+    private readonly object _cudaSync = new();
     private LionState _state;
+    private CudaLionOptimizer? _cudaOptimizer;
 
     internal IReadOnlyList<Parameter> Parameters => _parameters;
 
@@ -43,9 +45,13 @@ public sealed class Lion : IOptimizer, ILearningRateAdjustable
     }
 
     public LionState CaptureState()
-        => CloneState(_state);
+        => CloneState(CaptureStateForStreaming());
 
-    internal LionState CaptureStateForStreaming() => _state;
+    internal LionState CaptureStateForStreaming()
+    {
+        SynchronizeCudaStateForCheckpoint();
+        return _state;
+    }
 
     public float LearningRate => _state.Options.LearningRate;
 
@@ -72,6 +78,7 @@ public sealed class Lion : IOptimizer, ILearningRateAdjustable
     {
         ArgumentNullException.ThrowIfNull(state);
         ValidateState(state);
+        DisposeCudaResources();
         _state = takeOwnership ? state : CloneState(state);
     }
 
@@ -80,6 +87,12 @@ public sealed class Lion : IOptimizer, ILearningRateAdjustable
 
     internal void ZeroGrad()
     {
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            foreach (Parameter parameter in _parameters)
+                parameter.T.ClearGradient();
+            return;
+        }
         foreach (Parameter parameter in _parameters)
             parameter.ZeroGrad();
     }
@@ -94,8 +107,28 @@ public sealed class Lion : IOptimizer, ILearningRateAdjustable
                 "Lion cannot advance beyond Int32.MaxValue steps.");
         }
 
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            CudaGradientOptimizerGuard.ValidateAndConsume(
+                _parameters,
+                Tensor.CudaDeviceIndices);
+        }
+        else
+        {
+            MakeCpuStateAuthoritative();
+        }
+
         _state = _state with { Step = _state.Step + 1 };
         LionOptions options = _state.Options;
+
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            GetOrCreateCudaOptimizer().Step(
+                Tensor.CudaDeviceIndices,
+                options,
+                _state.Step);
+            return;
+        }
 
         void UpdateParameter(int parameterIndex)
         {
@@ -204,6 +237,17 @@ public sealed class Lion : IOptimizer, ILearningRateAdjustable
 
     public void step() => Step();
 
+    /// <summary>
+    /// Materializes persistent Lion moment storage and fused multi-tensor
+    /// plans before a transfer-guarded CUDA training step.
+    /// </summary>
+    public void prepare()
+    {
+        if (Tensor.ExecutionDevice != TensorDevice.Cuda)
+            return;
+        GetOrCreateCudaOptimizer().Prepare(Tensor.CudaDeviceIndices);
+    }
+
     public OptimizerStateDictionary state_dict()
         => OptimizerStateDictionary.Create("Lion", CaptureState());
 
@@ -211,6 +255,65 @@ public sealed class Lion : IOptimizer, ILearningRateAdjustable
     {
         ArgumentNullException.ThrowIfNull(state);
         RestoreStateOwned(state.Read<LionState>("Lion"));
+    }
+
+    internal void DisposeCudaResources()
+    {
+        CudaLionOptimizer? optimizer;
+        lock (_cudaSync)
+        {
+            optimizer = _cudaOptimizer;
+            _cudaOptimizer = null;
+        }
+        optimizer?.Dispose();
+    }
+
+    public void Dispose() => DisposeCudaResources();
+
+    private CudaLionOptimizer GetOrCreateCudaOptimizer()
+    {
+        lock (_cudaSync)
+        {
+            return _cudaOptimizer ??= new CudaLionOptimizer(
+                _parameters,
+                _state.ParameterStates);
+        }
+    }
+
+    private void SynchronizeCudaStateForCheckpoint()
+    {
+        CudaLionOptimizer? optimizer;
+        lock (_cudaSync)
+            optimizer = _cudaOptimizer;
+        if (optimizer is null)
+            return;
+        int primaryDevice = Tensor.CudaDeviceIndices.Count > 0
+            ? Tensor.CudaDeviceIndices[0]
+            : Tensor.CudaDeviceIndex;
+        optimizer.SynchronizeHost(primaryDevice);
+    }
+
+    private void MakeCpuStateAuthoritative()
+    {
+        CudaLionOptimizer? optimizer;
+        lock (_cudaSync)
+        {
+            optimizer = _cudaOptimizer;
+            _cudaOptimizer = null;
+        }
+        if (optimizer is null)
+            return;
+        try
+        {
+            int primaryDevice = Tensor.CudaDeviceIndices.Count > 0
+                ? Tensor.CudaDeviceIndices[0]
+                : Tensor.CudaDeviceIndex;
+            optimizer.SynchronizeHost(primaryDevice);
+        }
+        finally
+        {
+            optimizer.Dispose();
+        }
     }
 
     private static LionState CreateInitialState(

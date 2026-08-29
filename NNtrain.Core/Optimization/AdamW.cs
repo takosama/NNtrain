@@ -8,6 +8,9 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
     private readonly AdamWWorkItem[] _workItems;
     private readonly Dictionary<int, CudaOptimizerKernels.AdamWMultiTensorPlan>
         _cudaMultiTensorPlans = [];
+    private readonly Dictionary<int,
+        CudaOptimizerKernels.AdamWBfp8MultiTensorPlan>
+        _cudaBfp8MultiTensorPlans = [];
     private readonly Dictionary<int, NativeCudaBuffer<int>>
         _cudaBfp8FiniteStatus = [];
     private readonly Dictionary<int, CudaOptimizerFiniteStatusReadback>
@@ -24,6 +27,11 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
     private float _stepScaledEpsilon;
     private int _step;
     private int _cudaMultiTensorPlanBuildCount;
+    // The execution device can change to CPU while optimizer state is still
+    // resident. Keep the device that owns the last prepared/updated replica
+    // instead of consulting the current global execution device at checkpoint
+    // or CPU-continuation time.
+    private int? _cudaStateAuthorityDevice;
 
     internal IReadOnlyList<Parameter> Parameters => _parameters;
     internal int CudaMultiTensorPlanBuildCount
@@ -144,14 +152,13 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
     /// </summary>
     internal void SynchronizeStateForStreaming()
     {
-        if (Tensor.ExecutionDevice != TensorDevice.Cuda)
+        if (_cudaStateAuthorityDevice is not int primaryDevice)
             return;
-
-        int primaryDevice = Tensor.CudaDeviceIndex;
         foreach (AdamWParameterRuntime runtime in _parameterRuntime)
         {
             runtime.CudaState?.SynchronizeHost(primaryDevice);
             runtime.CudaBFloat16State?.SynchronizeHost(primaryDevice);
+            runtime.CudaMixedState?.SynchronizeHost(primaryDevice);
             runtime.CudaBfp8State?.SynchronizeHost(primaryDevice);
         }
     }
@@ -310,6 +317,10 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                 _parameters,
                 Tensor.CudaDeviceIndices);
         }
+        else
+        {
+            MakeCpuStateAuthoritative();
+        }
 
         _step++;
         AdamWOptions options = _options;
@@ -324,6 +335,12 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
         {
             int[] devices = Tensor.CudaDeviceIndices.ToArray();
+            if (devices.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    "CUDA AdamW requires at least one device.");
+            }
+            _cudaStateAuthorityDevice = devices[0];
             bool pureBFloat16 = UsesPureBFloat16OptimizerState();
             if (TensorExecutionContext.ActivePrecisionPolicy?.OptimizerState
                     == NNtrain.Runtime.Execution.NumericFormat.BFloat16
@@ -406,46 +423,29 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                     continue;
                 }
 
-                float[] first = runtime.FirstMomentBFloat16 is null
-                    ? runtime.FirstMoment
-                    : DecodeBFloat16(runtime.FirstMomentBFloat16);
-                float[] second = runtime.SecondMomentBFloat16 is null
-                    ? runtime.SecondMoment
-                    : DecodeBFloat16(runtime.SecondMomentBFloat16);
-                CudaOptimizerKernels.AdamWUpdate(
-                    runtime.Data,
-                    runtime.Parameter.T.GradientBuffer,
-                    first,
-                    second,
-                    options.Beta1,
-                    options.Beta2,
-                    options.LearningRate,
-                    options.WeightDecay,
-                    _stepUpdateScale,
-                    _stepScaledEpsilon,
-                    runtime.ApplyWeightDecay);
-                if (runtime.FirstMomentBFloat16 is not null)
-                    runtime.FirstMomentBFloat16 = EncodeBFloat16(first);
-                if (runtime.SecondMomentBFloat16 is not null)
-                    runtime.SecondMomentBFloat16 = EncodeBFloat16(second);
-                if (runtime.FirstMomentBFloat16 is not null
-                    || runtime.SecondMomentBFloat16 is not null)
-                {
-                    runtime.Parameter.CompleteUpdate();
-                }
+                runtime.CudaMixedState ??=
+                    new CudaOptimizerKernels.AdamWMixedResidentState(
+                        runtime.FirstMoment,
+                        runtime.FirstMomentBFloat16,
+                        runtime.SecondMoment,
+                        runtime.SecondMomentBFloat16);
+                foreach (int deviceIndex in devices)
+                    runtime.CudaMixedState.GetOrCreate(deviceIndex);
             }
 
             CudaOptimizerKernels.AdamWMultiTensorItem[] multiTensorItems =
                 _parameterRuntime
                     .Where(runtime => runtime.CudaState is not null
-                        || runtime.CudaBFloat16State is not null)
+                        || runtime.CudaBFloat16State is not null
+                        || runtime.CudaMixedState is not null)
                     .Select(runtime => new CudaOptimizerKernels
                         .AdamWMultiTensorItem(
                             runtime.Parameter.T,
                             runtime.CudaState,
                             runtime.CudaBFloat16State,
                             runtime.ApplyWeightDecay,
-                            pureBFloat16))
+                            pureBFloat16,
+                            runtime.CudaMixedState))
                     .ToArray();
             if (multiTensorItems.Length > 0)
             {
@@ -476,9 +476,8 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
 
                 // One launch per GPU updates all AdamW tensors. Each worker
                 // stays bound to one device, so both GPUs advance
-                // concurrently. A checkpoint may contain a legacy mixed
-                // moment representation; in that case the loop above has
-                // already updated it and this array is intentionally empty.
+                // concurrently. FP32, BF16, and asymmetric FP32/BF16 moment
+                // pairs all use this same fully resident launch path.
                 Parallel.For(0, devices.Length, deviceSlot =>
                 {
                     plans[deviceSlot].Execute(
@@ -566,6 +565,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                 plan.Dispose();
             }
             _cudaMultiTensorPlans.Clear();
+            DisposeCudaBfp8Plans();
         }
 
         int primaryDevice = devices[0];
@@ -575,10 +575,13 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
             {
                 runtime.CudaState?.SynchronizeHost(primaryDevice);
                 runtime.CudaBFloat16State?.SynchronizeHost(primaryDevice);
+                runtime.CudaMixedState?.SynchronizeHost(primaryDevice);
                 runtime.CudaState?.Dispose();
                 runtime.CudaState = null;
                 runtime.CudaBFloat16State?.Dispose();
                 runtime.CudaBFloat16State = null;
+                runtime.CudaMixedState?.Dispose();
+                runtime.CudaMixedState = null;
 
                 if (runtime.FirstMomentBFloat16 is not null)
                 {
@@ -610,33 +613,44 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         }
 
         var statuses = new NativeCudaBuffer<int>[devices.Length];
-        var scratch = new CudaOptimizerKernels
-            .AdamWBfp8DeviceScratch?[devices.Length];
-        int maximumLeafLength = _parameterRuntime.Max(
-            runtime => runtime.Parameter.T.Numel);
         for (int deviceSlot = 0; deviceSlot < devices.Length; deviceSlot++)
         {
             int deviceIndex = devices[deviceSlot];
             statuses[deviceSlot] = GetOrCreateBfp8FiniteStatus(deviceIndex);
-            if (!mixedBlockState)
-            {
-                scratch[deviceSlot] = GetOrCreateBfp8Scratch(
-                    deviceIndex, maximumLeafLength);
-            }
             statuses[deviceSlot].MemSetToZero();
+        }
+
+        CudaOptimizerKernels.AdamWBfp8MultiTensorPlan[]? purePlans = null;
+        if (!mixedBlockState)
+        {
+            CudaOptimizerKernels.AdamWBfp8MultiTensorItem[] items =
+                CreateCudaBfp8PlanItems();
+            purePlans = PrepareCudaBfp8Plans(devices, items);
         }
 
         Parallel.For(0, devices.Length, deviceSlot =>
         {
             int deviceIndex = devices[deviceSlot];
             NativeCudaBuffer<int> finiteStatus = statuses[deviceSlot];
+            if (!mixedBlockState)
+            {
+                purePlans![deviceSlot].Execute(
+                    options.Beta1,
+                    options.Beta2,
+                    options.LearningRate,
+                    options.WeightDecay,
+                    _stepUpdateScale,
+                    _stepScaledEpsilon,
+                    finiteStatus);
+                return;
+            }
             foreach (AdamWParameterRuntime runtime in _parameterRuntime)
             {
                 runtime.CudaBfp8State!.Execute(
                     runtime.Parameter.T,
                     deviceIndex,
                     finiteStatus,
-                    scratch[deviceSlot],
+                    scratch: null,
                     options.Beta1,
                     options.Beta2,
                     options.LearningRate,
@@ -644,7 +658,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                     _stepUpdateScale,
                     _stepScaledEpsilon,
                     runtime.ApplyWeightDecay,
-                    mixedBlockState);
+                    mixedBlockState: true);
             }
         });
 
@@ -691,6 +705,59 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                         .MarkCudaBfp8DataReplicasSynchronized(devices);
                 }
             });
+    }
+
+    private CudaOptimizerKernels.AdamWBfp8MultiTensorItem[]
+        CreateCudaBfp8PlanItems()
+        => _parameterRuntime
+            .Select(runtime => new CudaOptimizerKernels
+                .AdamWBfp8MultiTensorItem(
+                    runtime.Parameter.T,
+                    runtime.CudaBfp8State
+                        ?? throw new InvalidOperationException(
+                            "Pure BFP8 AdamW state was not prepared."),
+                    runtime.ApplyWeightDecay))
+            .ToArray();
+
+    private CudaOptimizerKernels.AdamWBfp8MultiTensorPlan[]
+        PrepareCudaBfp8Plans(
+            IReadOnlyList<int> devices,
+            IReadOnlyList<CudaOptimizerKernels.AdamWBfp8MultiTensorItem>
+                items)
+    {
+        var plans = new CudaOptimizerKernels.AdamWBfp8MultiTensorPlan[
+            devices.Count];
+        for (int slot = 0; slot < devices.Count; slot++)
+        {
+            int deviceIndex = devices[slot];
+            if (!_cudaBfp8MultiTensorPlans.TryGetValue(
+                    deviceIndex,
+                    out CudaOptimizerKernels.AdamWBfp8MultiTensorPlan? plan)
+                || !plan.Matches(items))
+            {
+                if (plan is not null)
+                {
+                    plan.Dispose();
+                    _cudaBfp8MultiTensorPlans.Remove(deviceIndex);
+                }
+                plan = new CudaOptimizerKernels.AdamWBfp8MultiTensorPlan(
+                    deviceIndex, items);
+                _cudaBfp8MultiTensorPlans.Add(deviceIndex, plan);
+                _cudaMultiTensorPlanBuildCount++;
+            }
+            plans[slot] = plan;
+        }
+        return plans;
+    }
+
+    private void DisposeCudaBfp8Plans()
+    {
+        foreach (CudaOptimizerKernels.AdamWBfp8MultiTensorPlan plan
+            in _cudaBfp8MultiTensorPlans.Values)
+        {
+            plan.Dispose();
+        }
+        _cudaBfp8MultiTensorPlans.Clear();
     }
 
     private NativeCudaBuffer<int> GetOrCreateBfp8FiniteStatus(int deviceIndex)
@@ -807,16 +874,25 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
             TryDisposeCudaResource(plan, ref failures);
         }
         _cudaMultiTensorPlans.Clear();
+        foreach (CudaOptimizerKernels.AdamWBfp8MultiTensorPlan plan
+            in _cudaBfp8MultiTensorPlans.Values)
+        {
+            TryDisposeCudaResource(plan, ref failures);
+        }
+        _cudaBfp8MultiTensorPlans.Clear();
         foreach (AdamWParameterRuntime runtime in _parameterRuntime)
         {
             if (runtime.CudaState is not null)
                 TryDisposeCudaResource(runtime.CudaState, ref failures);
             if (runtime.CudaBFloat16State is not null)
                 TryDisposeCudaResource(runtime.CudaBFloat16State, ref failures);
+            if (runtime.CudaMixedState is not null)
+                TryDisposeCudaResource(runtime.CudaMixedState, ref failures);
             if (runtime.CudaBfp8State is not null)
                 TryDisposeCudaResource(runtime.CudaBfp8State, ref failures);
             runtime.CudaState = null;
             runtime.CudaBFloat16State = null;
+            runtime.CudaMixedState = null;
             runtime.CudaBfp8State = null;
         }
         try
@@ -835,6 +911,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         {
             (failures ??= []).Add(exception);
         }
+        _cudaStateAuthorityDevice = null;
         if (failures is not null)
         {
             throw new AggregateException(
@@ -854,6 +931,21 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         {
             (failures ??= []).Add(exception);
         }
+    }
+
+    /// <summary>
+    /// Transfers resident moments to their existing managed backing arrays,
+    /// then drops plans and device buffers before a CPU update. This is a
+    /// precision-preserving authority handoff; BF16 and BFP8 state is decoded
+    /// only by the same resident-state codecs used for checkpoint streaming.
+    /// </summary>
+    private void MakeCpuStateAuthoritative()
+    {
+        if (_cudaStateAuthorityDevice is null)
+            return;
+
+        SynchronizeStateForStreaming();
+        DisposeCudaResources();
     }
 
     internal (CudaBfp8BufferView First, CudaBfp8BufferView Second)

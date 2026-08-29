@@ -305,6 +305,12 @@ public partial class AdamW
             get;
             set;
         }
+        internal CudaOptimizerKernels.AdamWMixedResidentState?
+            CudaMixedState
+        {
+            get;
+            set;
+        }
         internal CudaOptimizerKernels.AdamWBfp8ResidentState? CudaBfp8State
         {
             get;
