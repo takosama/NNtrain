@@ -44,6 +44,8 @@ public sealed class CudaDataParallelEngine : IDisposable
     private TensorCudaKernels.FlatGradientPlan? _flatGradientPlan;
     private CudaBFloat16GradientAllReducePlan? _bfloat16GradientPlan;
     private CudaBfp8GradientAllReducePlan? _bfp8GradientPlan;
+    private readonly Dictionary<int, NativeCudaBuffer<float>>
+        _accumulatedLossBuffers = [];
     private int _flatGradientPlanBuildCount;
     private int _bfloat16GradientPlanBuildCount;
     private int _trainingShapePlanBuildCount;
@@ -803,6 +805,19 @@ public sealed class CudaDataParallelEngine : IDisposable
             {
                 _flatGradientPlan = null;
             }
+            foreach (NativeCudaBuffer<float> lossBuffer
+                in _accumulatedLossBuffers.Values)
+            {
+                try
+                {
+                    lossBuffer.Dispose();
+                }
+                catch (Exception exception)
+                {
+                    (failures ??= []).Add(exception);
+                }
+            }
+            _accumulatedLossBuffers.Clear();
             try
             {
                 _replicaExecutor.Dispose();
@@ -1110,6 +1125,8 @@ public sealed class CudaDataParallelEngine : IDisposable
         long reductionStepId = BeginReductionStep(
             bfp8Plan,
             bfloat16Plan);
+        NativeCudaBuffer<float>[] accumulatedLossBuffers =
+            GetAccumulatedLossBuffers(devices);
         double weightedLoss = 0d;
         try
         {
@@ -1141,7 +1158,9 @@ public sealed class CudaDataParallelEngine : IDisposable
                     reductionStepId,
                     totalValid,
                     ignoreIndex,
-                    beginReductionDeviceStep: index == 0);
+                    beginReductionDeviceStep: index == 0,
+                    accumulatedLossBuffers: accumulatedLossBuffers,
+                    completeAccumulatedLoss: publishGradients);
                 ExecuteReplicas(shapePlan, devices.Length);
                 weightedLoss += shapePlan.WeightedLosses.Sum();
 
@@ -1181,6 +1200,30 @@ public sealed class CudaDataParallelEngine : IDisposable
 
         _ = globalStep;
         return (float)(weightedLoss / totalValid);
+    }
+
+    private NativeCudaBuffer<float>[] GetAccumulatedLossBuffers(
+        IReadOnlyList<int> devices)
+    {
+        var result = new NativeCudaBuffer<float>[devices.Count];
+        for (int index = 0; index < devices.Count; index++)
+        {
+            int device = devices[index];
+            if (!_accumulatedLossBuffers.TryGetValue(
+                    device,
+                    out NativeCudaBuffer<float>? buffer)
+                || !buffer.IsAlive)
+            {
+                buffer?.Dispose();
+                buffer = ForgetMemoryV2Cuda.GetAccelerator(device)
+                    .Allocate1D<float>(
+                        1,
+                        CudaMemoryKind.Persistent);
+                _accumulatedLossBuffers[device] = buffer;
+            }
+            result[index] = buffer;
+        }
+        return result;
     }
 
     private sealed class DeferredGradientReductionPlan
@@ -1699,6 +1742,8 @@ public sealed class CudaDataParallelEngine : IDisposable
         private bool _useFixedInputs;
         private bool _readEagerLoss;
         private bool _beginReductionDeviceStep;
+        private NativeCudaBuffer<float>[]? _accumulatedLossBuffers;
+        private bool _completeAccumulatedLoss;
         private bool _graphDisabled;
         private int _disposed;
         private WorkPhase _phase;
@@ -1772,7 +1817,9 @@ public sealed class CudaDataParallelEngine : IDisposable
             int totalValid,
             int ignoreIndex,
             bool useFixedInputs = false,
-            bool beginReductionDeviceStep = true)
+            bool beginReductionDeviceStep = true,
+            NativeCudaBuffer<float>[]? accumulatedLossBuffers = null,
+            bool completeAccumulatedLoss = false)
         {
             _bfp8Plan = bfp8Plan;
             _bfloat16Plan = bfloat16Plan;
@@ -1783,6 +1830,8 @@ public sealed class CudaDataParallelEngine : IDisposable
             _useFixedInputs = useFixedInputs;
             _readEagerLoss = !useFixedInputs;
             _beginReductionDeviceStep = beginReductionDeviceStep;
+            _accumulatedLossBuffers = accumulatedLossBuffers;
+            _completeAccumulatedLoss = completeAccumulatedLoss;
             _phase = WorkPhase.Eager;
         }
 
@@ -1944,6 +1993,7 @@ public sealed class CudaDataParallelEngine : IDisposable
             {
                 _bfp8Plan?.BeginDeviceStep(_reductionStepId, device);
                 _bfloat16Plan?.BeginDeviceStep(_reductionStepId, device);
+                _accumulatedLossBuffers?[replicaIndex].MemSetToZero();
             }
             using IDisposable? reductionScope = _reductionPlan is null
                 ? null
@@ -1977,7 +2027,31 @@ public sealed class CudaDataParallelEngine : IDisposable
                 }
                 float weight = (float)shardValid / _totalValid;
                 NativeCudaScalarReadback? readback = null;
-                if (_readEagerLoss)
+                bool accumulatedLoss =
+                    _accumulatedLossBuffers is not null;
+                if (accumulatedLoss)
+                {
+                    NativeCudaBuffer<float> lossBuffer =
+                        loss.EnsureCudaFloat32Buffer(device);
+                    CudaTensorNative.Scale(
+                        device,
+                        lossBuffer.NativePtr,
+                        1,
+                        shardValid);
+                    CudaTensorNative.Accumulate(
+                        device,
+                        lossBuffer.NativePtr,
+                        _accumulatedLossBuffers![replicaIndex].NativePtr,
+                        1);
+                    if (_completeAccumulatedLoss)
+                    {
+                        readback = NativeCudaScalarReadback.Rent(device);
+                        readback.Begin(
+                            _accumulatedLossBuffers[replicaIndex].NativePtr,
+                            accelerator.DefaultStream);
+                    }
+                }
+                else if (_readEagerLoss)
                 {
                     readback = NativeCudaScalarReadback.Rent(device);
                     readback.Begin(
@@ -1997,7 +2071,8 @@ public sealed class CudaDataParallelEngine : IDisposable
                 }
                 WeightedLosses[replicaIndex] = readback is null
                     ? 0d
-                    : readback.CompleteAndReturn() * shardValid;
+                    : readback.CompleteAndReturn()
+                        * (accumulatedLoss ? 1 : shardValid);
             }
             finally
             {

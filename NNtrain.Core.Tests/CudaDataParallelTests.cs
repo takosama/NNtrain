@@ -309,14 +309,16 @@ public sealed class CudaDataParallelTests
         try
         {
             const int sequence = 4;
-            int[] input =
-            [
-                1, 2, 3, 4,
-                5, 6, 7, 8,
-                9, 10, 11, 12,
-                13, 14, 15, 16,
-            ];
-            int[] target = input.Select(value => value + 1).ToArray();
+            const int microBatchSize = 2;
+            const int accumulationSteps = 12;
+            const int effectiveBatchSize =
+                microBatchSize * accumulationSteps;
+            int[] input = Enumerable.Range(
+                    0,
+                    effectiveBatchSize * sequence)
+                .Select(index => index % 30 + 1)
+                .ToArray();
+            int[] target = input.Select(value => value % 31 + 1).ToArray();
 
             (float Loss, float[][] Gradients) Run(bool accumulated)
             {
@@ -340,24 +342,52 @@ public sealed class CudaDataParallelTests
                     [0, 1],
                     new CudaAdaptiveShardingOptions { Enabled = false }))
                 {
+                    engine.PrepareForTraining(
+                        accumulated
+                            ? microBatchSize
+                            : effectiveBatchSize);
                     if (accumulated)
                     {
+                        CudaLanguageModelMicroBatch[] microBatches =
+                            Enumerable.Range(0, accumulationSteps)
+                                .Select(index =>
+                                {
+                                    int start = checked(
+                                        index
+                                        * microBatchSize
+                                        * sequence);
+                                    int end = checked(
+                                        start
+                                        + microBatchSize
+                                        * sequence);
+                                    return new CudaLanguageModelMicroBatch(
+                                        input[start..end],
+                                        target[start..end],
+                                        microBatchSize,
+                                        sequence);
+                                })
+                                .ToArray();
+                        using IDisposable transferGuard =
+                            DeviceTransferGuard.EnterTrainingStep(2);
                         loss = engine.ForwardBackwardAccumulated(
-                        [
-                            new CudaLanguageModelMicroBatch(
-                                input[..8], target[..8], 2, sequence),
-                            new CudaLanguageModelMicroBatch(
-                                input[8..], target[8..], 2, sequence),
-                        ],
-                        Tensor.DefaultCrossEntropyIgnoreIndex,
-                        globalStep: 0);
+                            microBatches,
+                            Tensor.DefaultCrossEntropyIgnoreIndex,
+                            globalStep: 0);
+                        DeviceTransferSnapshot transfer = Assert.NotNull(
+                            DeviceTransferGuard.CurrentSnapshot);
+                        Assert.Equal(
+                            3,
+                            transfer.DeviceToHostCopyCount);
+                        Assert.Equal(
+                            2 * sizeof(float) + sizeof(double),
+                            transfer.DeviceToHostBytes);
                     }
                     else
                     {
                         loss = engine.ForwardBackward(
                             input,
                             target,
-                            batchSize: 4,
+                            batchSize: effectiveBatchSize,
                             sequenceLength: sequence,
                             Tensor.DefaultCrossEntropyIgnoreIndex,
                             globalStep: 0);
