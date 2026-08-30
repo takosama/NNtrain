@@ -333,8 +333,13 @@ internal static partial class WikiLanguageModelCommand
         int batchesPerEpoch = TrainingRunner.DivideRoundUp(
             trainingSequences,
             config.BatchSize);
+        int fullBatchesPerEpoch = trainingSequences / config.BatchSize;
+        int updatesPerEpoch = TrainingRunner.DivideRoundUp(
+            fullBatchesPerEpoch,
+            config.GradientAccumulationSteps)
+            + (trainingSequences % config.BatchSize == 0 ? 0 : 1);
         long totalTrainingSteps = checked(
-            (long)config.Epochs * batchesPerEpoch);
+            (long)config.Epochs * updatesPerEpoch);
         ModuleState? bestState = null;
         float bestLoss = float.PositiveInfinity;
         int bestEpoch = 0;
@@ -391,11 +396,14 @@ internal static partial class WikiLanguageModelCommand
                 "resume CUDA shard EMA = restored from checkpoint");
         }
         var stepExecutor = new TrainingStepExecutor(trainingSession);
-        var batchCursor = new FixedWikiTrainingDataCursor(
+        var microBatchCursor = new FixedWikiTrainingDataCursor(
             tokens,
             order,
             config.BatchSize,
             config.ContextLength);
+        var batchCursor = new FixedWikiTrainingUpdateCursor(
+            microBatchCursor,
+            config.GradientAccumulationSteps);
         var stepOperations = new FixedWikiTrainingStepOperations(
             model,
             optimizer,
@@ -409,7 +417,7 @@ internal static partial class WikiLanguageModelCommand
             config.ContextLength,
             globalStep);
         var cursorStepOperations =
-            new CursorTrainingStepOperations<WikiTrainingBatch>(
+            new CursorTrainingStepOperations<WikiTrainingUpdate>(
                 batchCursor,
                 stepOperations);
         var runProgress = new TrainingProgress();
@@ -443,7 +451,7 @@ internal static partial class WikiLanguageModelCommand
                 epochStartingTargets);
             var timer = Stopwatch.StartNew();
 
-            for (int batch = firstBatch; batch < batchTotal; batch++)
+            while (stepOperations.CompletedBatches < batchTotal)
             {
                 TrainingStepState committedStep = stepExecutor.Execute(
                     checked(globalStep + 1),
@@ -496,11 +504,14 @@ internal static partial class WikiLanguageModelCommand
                     output.WriteLine(
                         $"model snapshot = {snapshotPath}");
                 }
-                if ((batch + 1) % config.LogEveryBatches == 0
+                if (globalStep % config.LogEveryBatches == 0
                     || epochEnd)
                 {
                     output.WriteLine(
-                        $"epoch {epoch}, batch {batch + 1}/{batchTotal}, " +
+                        $"epoch {epoch}, step {globalStep:N0}, " +
+                        $"batches {completedBatches}/{batchTotal}, " +
+                        $"accumulation {stepOperations.MicroBatchCount}/" +
+                        $"{config.GradientAccumulationSteps}, " +
                         $"loss = {lossValue:F6}, " +
                         $"lr = {string.Join('/', learningRates.Select(rate => $"{rate:G6}"))}, " +
                         $"grad norm = {gradientNorm:G6}, " +
@@ -842,8 +853,11 @@ internal static partial class WikiLanguageModelCommand
                 : 0;
             int completedBatchesInEpoch = epochRun.ResumeUnit;
             var timer = Stopwatch.StartNew();
-            var batchCursor = new StreamingWikiTrainingDataCursor(buffer);
-            batchCursor.StartEpoch(completedBatchesInEpoch);
+            var microBatchCursor = new StreamingWikiTrainingDataCursor(buffer);
+            microBatchCursor.StartEpoch(completedBatchesInEpoch);
+            var updateCursor = new BufferedWikiTrainingUpdateCursor();
+            var pendingMicroBatches = new List<WikiTrainingBatch>(
+                config.GradientAccumulationSteps);
             var stepOperations = new StreamingWikiTrainingStepOperations(
                 model,
                 optimizer,
@@ -860,8 +874,8 @@ internal static partial class WikiLanguageModelCommand
                 graphWindowLoss,
                 graphWindowTargets);
             var cursorStepOperations =
-                new CursorTrainingStepOperations<WikiTrainingBatch>(
-                    batchCursor,
+                new CursorTrainingStepOperations<WikiTrainingUpdate>(
+                    updateCursor,
                     stepOperations);
             stepOperations.StartEpoch(
                 epoch,
@@ -869,14 +883,12 @@ internal static partial class WikiLanguageModelCommand
                 completedTargets,
                 completedBatchesInEpoch);
 
-            void TrainBatch(
-                int batchSize,
-                int sequenceLength)
+            void CommitPendingUpdate()
             {
-                batchCursor.ConfigureNext(
-                    batchSize,
-                    sequenceLength,
-                    documentsProcessed);
+                if (pendingMicroBatches.Count == 0)
+                    return;
+                updateCursor.ConfigureNext(pendingMicroBatches.ToArray());
+                pendingMicroBatches.Clear();
                 TrainingStepState committedStep = stepExecutor.Execute(
                     checked(globalStep + 1),
                     cursorStepOperations);
@@ -901,6 +913,8 @@ internal static partial class WikiLanguageModelCommand
                         $"epoch {epoch}, step {globalStep:N0}, " +
                         $"documents {documentsProcessed:N0}/" +
                         $"{documentsPerEpoch:N0}, loss = {lossValue:F6}, " +
+                        $"accumulation {stepOperations.MicroBatchCount}/" +
+                        $"{config.GradientAccumulationSteps}, " +
                         $"lr = {string.Join('/', learningRates.Select(rate => $"{rate:G6}"))}, " +
                         $"grad norm = {gradientNorm:G6}, " +
                         $"clip = {MathF.Min(1f, 1f / MathF.Max(gradientNorm, 1e-12f)):G6}, " +
@@ -910,6 +924,41 @@ internal static partial class WikiLanguageModelCommand
                                 string.Join('/', shardBatches)
                             : string.Empty) +
                         FormatOptimizerDiagnostics(optimizer));
+                }
+                ProductionTrainingSessionFactory
+                    .EnsureCanPublishCheckpoint(
+                        trainingSession,
+                        globalStep);
+                RunDatasetContinuationAfterCommittedStep(
+                    globalStep,
+                    model,
+                    tokenizer,
+                    sampleDocuments,
+                    config,
+                    generationRandom,
+                    output,
+                    error);
+            }
+
+            void TrainBatch(
+                int batchSize,
+                int sequenceLength)
+            {
+                microBatchCursor.ConfigureNext(
+                    batchSize,
+                    sequenceLength,
+                    documentsProcessed);
+                WikiTrainingBatch next = microBatchCursor.AcquireNext();
+                if (pendingMicroBatches.Count > 0
+                    && pendingMicroBatches[0].BatchSize != next.BatchSize)
+                {
+                    CommitPendingUpdate();
+                }
+                pendingMicroBatches.Add(next);
+                if (pendingMicroBatches.Count
+                    == config.GradientAccumulationSteps)
+                {
+                    CommitPendingUpdate();
                 }
             }
 
@@ -969,6 +1018,7 @@ internal static partial class WikiLanguageModelCommand
 
                 void SaveDocumentCheckpoint()
                 {
+                    CommitPendingUpdate();
                     ProductionTrainingSessionFactory
                         .EnsureCanPublishCheckpoint(
                             trainingSession,
@@ -1023,19 +1073,6 @@ internal static partial class WikiLanguageModelCommand
                     {
                         SaveDocumentCheckpoint();
                     }
-                    ProductionTrainingSessionFactory
-                        .EnsureCanPublishCheckpoint(
-                            trainingSession,
-                            globalStep);
-                    RunDatasetContinuationAfterCommittedStep(
-                        globalStep,
-                        model,
-                        tokenizer,
-                        sampleDocuments,
-                        config,
-                        generationRandom,
-                        output,
-                        error);
                 }
                 if (shouldSaveDocumentCheckpoint
                     && !documentCheckpointSaved)
@@ -1054,20 +1091,8 @@ internal static partial class WikiLanguageModelCommand
                     config.BatchSize,
                     remainingSequences);
                 TrainBatch(batchSize, config.ContextLength);
-                ProductionTrainingSessionFactory
-                    .EnsureCanPublishCheckpoint(
-                        trainingSession,
-                        globalStep);
-                RunDatasetContinuationAfterCommittedStep(
-                    globalStep,
-                    model,
-                    tokenizer,
-                    sampleDocuments,
-                    config,
-                    generationRandom,
-                    output,
-                    error);
             }
+            CommitPendingUpdate();
 
             if (completedTargets == 0)
             {
@@ -1276,7 +1301,10 @@ internal static partial class WikiLanguageModelCommand
                     : string.Empty;
         output.WriteLine(
             $"effective training = epochs {config.Epochs}, " +
-            $"batch {config.BatchSize}, context {config.ContextLength}, " +
+            $"microbatch {config.BatchSize}, accumulation " +
+            $"{config.GradientAccumulationSteps}, effective batch " +
+            $"{checked(config.BatchSize * config.GradientAccumulationSteps)}, " +
+            $"context {config.ContextLength}, " +
             $"{FormatDocumentTokenLimit(config.MaxDocumentTokens)}");
         output.WriteLine(
             $"checkpoint = {config.CheckpointPath}, " +

@@ -418,7 +418,8 @@ public sealed class WikiLanguageModelCommandTests
                 "thread parallelism = Parallel.For",
                 output.ToString());
             Assert.Contains(
-                "effective training = epochs 5, batch 7, context 12",
+                "effective training = epochs 5, microbatch 7, " +
+                "accumulation 1, effective batch 7, context 12",
                 output.ToString());
             Assert.Contains(
                 "effective model = forgetmemoryv3, vocabulary 2048, " +

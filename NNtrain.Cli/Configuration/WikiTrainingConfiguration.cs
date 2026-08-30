@@ -84,6 +84,13 @@ sealed record WikiTrainingConfiguration
 
     public int BatchSize { get; init; } = 2;
 
+    /// <summary>
+    /// Number of microbatches whose gradients form one optimizer update.
+    /// BatchSize remains the CUDA microbatch size; the effective batch size is
+    /// BatchSize multiplied by this value.
+    /// </summary>
+    public int GradientAccumulationSteps { get; init; } = 1;
+
     public int ContextLength { get; init; } = 64;
 
     public int ModelWidth { get; init; } = 128;
@@ -519,6 +526,16 @@ sealed record WikiTrainingConfiguration
         ValidateNonNegative(ShuffleBufferSize, nameof(ShuffleBufferSize));
         ValidatePositive(Epochs, nameof(Epochs));
         ValidatePositive(BatchSize, nameof(BatchSize));
+        ValidatePositive(
+            GradientAccumulationSteps,
+            nameof(GradientAccumulationSteps));
+        if ((long)BatchSize * GradientAccumulationSteps > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(GradientAccumulationSteps),
+                GradientAccumulationSteps,
+                "Effective batch size must not exceed Int32.MaxValue.");
+        }
         ValidatePositive(ContextLength, nameof(ContextLength));
         ValidatePositive(ModelWidth, nameof(ModelWidth));
         ValidatePositive(Heads, nameof(Heads));

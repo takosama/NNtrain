@@ -11,6 +11,104 @@ internal static partial class WikiLanguageModelCommand
         int SequenceLength,
         long DocumentsProcessed);
 
+    internal readonly record struct WikiTrainingUpdate(
+        IReadOnlyList<WikiTrainingBatch> MicroBatches)
+    {
+        internal int Count => MicroBatches?.Count ?? 0;
+
+        internal WikiTrainingBatch Last
+            => Count == 0
+                ? throw new InvalidOperationException(
+                    "The Wiki training update has no microbatches.")
+                : MicroBatches[Count - 1];
+    }
+
+    internal sealed class FixedWikiTrainingUpdateCursor
+        : ITrainingDataCursor<WikiTrainingUpdate>
+    {
+        private readonly FixedWikiTrainingDataCursor _microBatches;
+        private readonly int _accumulationSteps;
+
+        internal FixedWikiTrainingUpdateCursor(
+            FixedWikiTrainingDataCursor microBatches,
+            int accumulationSteps)
+        {
+            _microBatches = microBatches
+                ?? throw new ArgumentNullException(nameof(microBatches));
+            if (accumulationSteps <= 0)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(accumulationSteps));
+            }
+            _accumulationSteps = accumulationSteps;
+        }
+
+        public long Position => _microBatches.Position;
+
+        internal void StartEpoch(int completedBatches)
+            => _microBatches.StartEpoch(completedBatches);
+
+        public WikiTrainingUpdate AcquireNext()
+        {
+            int firstBatchSize = _microBatches.NextBatchSize;
+            if (firstBatchSize == 0)
+            {
+                throw new InvalidOperationException(
+                    "The fixed Wiki update cursor is at the end of its epoch.");
+            }
+            var batches = new List<WikiTrainingBatch>(
+                _accumulationSteps);
+            while (batches.Count < _accumulationSteps
+                && _microBatches.NextBatchSize == firstBatchSize)
+            {
+                batches.Add(_microBatches.AcquireNext());
+            }
+            return new WikiTrainingUpdate(batches);
+        }
+    }
+
+    internal sealed class BufferedWikiTrainingUpdateCursor
+        : ITrainingDataCursor<WikiTrainingUpdate>
+    {
+        private WikiTrainingUpdate _next;
+        private long _position;
+        private bool _configured;
+
+        public long Position => _position;
+
+        internal void ConfigureNext(IReadOnlyList<WikiTrainingBatch> batches)
+        {
+            ArgumentNullException.ThrowIfNull(batches);
+            if (batches.Count == 0)
+            {
+                throw new ArgumentException(
+                    "An update cannot be empty.",
+                    nameof(batches));
+            }
+            if (_configured)
+            {
+                throw new InvalidOperationException(
+                    "The previous buffered Wiki update was not acquired.");
+            }
+            _next = new WikiTrainingUpdate(batches);
+            _configured = true;
+        }
+
+        public WikiTrainingUpdate AcquireNext()
+        {
+            if (!_configured)
+            {
+                throw new InvalidOperationException(
+                    "The buffered Wiki update cursor has no configured update.");
+            }
+            WikiTrainingUpdate result = _next;
+            _next = default;
+            _configured = false;
+            _position++;
+            return result;
+        }
+    }
+
     internal sealed class FixedWikiTrainingDataCursor
         : ITrainingDataCursor<WikiTrainingBatch>
     {

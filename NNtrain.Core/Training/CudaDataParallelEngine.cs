@@ -14,6 +14,17 @@ internal readonly record struct CudaTrainingGraphTelemetry(
     double CapturedReadyEventRecordMilliseconds);
 
 /// <summary>
+/// One language-model microbatch in a gradient-accumulation update.
+/// Token and target arrays remain host-side batch inputs; model state,
+/// activations, and accumulated gradients remain resident on their CUDA lane.
+/// </summary>
+public readonly record struct CudaLanguageModelMicroBatch(
+    int[] Input,
+    int[] Target,
+    int BatchSize,
+    int SequenceLength);
+
+/// <summary>
 /// Owns the reusable CUDA data-parallel resources for one language model.
 /// Dispose the engine before ending a training session so gradient arenas,
 /// reduction buffers, streams, and events are released deterministically.
@@ -536,6 +547,51 @@ public sealed class CudaDataParallelEngine : IDisposable
     }
 
     /// <summary>
+    /// Accumulates several microbatches locally on every CUDA device and
+    /// performs exactly one gradient reduction. Loss-root weights are based
+    /// on the total number of valid targets, so the result is equivalent to
+    /// one larger mean-loss batch even when the last microbatch is smaller.
+    /// </summary>
+    public float ForwardBackwardAccumulated(
+        IReadOnlyList<CudaLanguageModelMicroBatch> microBatches,
+        int ignoreIndex,
+        long globalStep)
+    {
+        ArgumentNullException.ThrowIfNull(microBatches);
+        ArgumentOutOfRangeException.ThrowIfNegative(globalStep);
+        if (microBatches.Count == 0)
+        {
+            throw new ArgumentException(
+                "At least one CUDA microbatch is required.",
+                nameof(microBatches));
+        }
+        if (microBatches.Count == 1)
+        {
+            CudaLanguageModelMicroBatch single = microBatches[0];
+            return ForwardBackward(
+                single.Input,
+                single.Target,
+                single.BatchSize,
+                single.SequenceLength,
+                ignoreIndex,
+                globalStep);
+        }
+
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            PrepareParameterResidency();
+            using IDisposable precisionScope =
+                TensorExecutionContext.PushPrecisionPolicy(
+                    ResolvePrecisionPolicy(_model.PrecisionMode));
+            return ForwardBackwardAccumulatedCore(
+                microBatches,
+                ignoreIndex,
+                globalStep);
+        }
+    }
+
+    /// <summary>
     /// Diagnostic variant that synchronizes CUDA after every major phase.
     /// It deliberately calls the same ForwardLoss entry point as compiled
     /// training so BFP8 models retain their direct-BF16 loss head. The old
@@ -988,6 +1044,164 @@ public sealed class CudaDataParallelEngine : IDisposable
                 parameters, devices, plan);
         }
         return (float)(weightedLosses.Sum() / totalValid);
+    }
+
+    private float ForwardBackwardAccumulatedCore(
+        IReadOnlyList<CudaLanguageModelMicroBatch> microBatches,
+        int ignoreIndex,
+        long globalStep)
+    {
+        CudaLanguageModelMicroBatch first = microBatches[0];
+        ValidateBatch(
+            first.Input,
+            first.Target,
+            first.BatchSize,
+            first.SequenceLength);
+        int[] devices = GetDevices(first.BatchSize);
+        long totalValidLong = 0;
+        foreach (CudaLanguageModelMicroBatch microBatch in microBatches)
+        {
+            ValidateBatch(
+                microBatch.Input,
+                microBatch.Target,
+                microBatch.BatchSize,
+                microBatch.SequenceLength);
+            if (!GetDevices(microBatch.BatchSize).SequenceEqual(devices))
+            {
+                throw new ArgumentException(
+                    "Every accumulated microbatch must use the same CUDA " +
+                    "device set. Flush accumulation before a smaller tail " +
+                    "batch changes the active device count.",
+                    nameof(microBatches));
+            }
+            totalValidLong = checked(
+                totalValidLong + microBatch.Target.Count(
+                    value => value != ignoreIndex));
+        }
+        if (totalValidLong == 0)
+        {
+            throw new ArgumentException(
+                "At least one accumulated target must be valid.",
+                nameof(microBatches));
+        }
+        if (totalValidLong > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(microBatches),
+                "An accumulated update has too many valid targets.");
+        }
+        int totalValid = (int)totalValidLong;
+
+        Parameter[] parameters = _parameters;
+        CudaBFloat16GradientAllReducePlan? bfloat16Plan = devices.Length > 1
+            ? GetBFloat16GradientPlan(parameters, devices)
+            : null;
+        CudaBfp8GradientAllReducePlan? bfp8Plan = devices.Length > 1
+            ? GetBfp8GradientPlan(parameters, devices)
+            : null;
+        ICudaGradientReductionPlan? reductionPlan =
+            (ICudaGradientReductionPlan?)bfp8Plan ?? bfloat16Plan;
+        if (devices.Length > 1 && reductionPlan is null)
+        {
+            foreach (Parameter parameter in parameters)
+                parameter.T.PrepareCudaGradientBuffers(devices);
+        }
+
+        long reductionStepId = BeginReductionStep(
+            bfp8Plan,
+            bfloat16Plan);
+        double weightedLoss = 0d;
+        try
+        {
+            for (int index = 0; index < microBatches.Count; index++)
+            {
+                CudaLanguageModelMicroBatch microBatch = microBatches[index];
+                int[] shardBatches = AllocateShardBatches(
+                    microBatch.BatchSize,
+                    devices);
+                CudaTrainingShapePlan shapePlan =
+                    GetOrCreateTrainingShapePlan(
+                        microBatch.BatchSize,
+                        microBatch.SequenceLength,
+                        devices,
+                        shardBatches);
+                shapePlan.PrepareBatch(
+                    microBatch.Input,
+                    microBatch.Target,
+                    ignoreIndex);
+                bool publishGradients = index == microBatches.Count - 1;
+                ICudaGradientReductionPlan? activeReductionPlan =
+                    publishGradients
+                        ? reductionPlan
+                        : DeferredGradientReductionPlan.Instance;
+                shapePlan.PrepareEager(
+                    bfp8Plan,
+                    bfloat16Plan,
+                    activeReductionPlan,
+                    reductionStepId,
+                    totalValid,
+                    ignoreIndex,
+                    beginReductionDeviceStep: index == 0);
+                ExecuteReplicas(shapePlan, devices.Length);
+                weightedLoss += shapePlan.WeightedLosses.Sum();
+
+                bool canMeasureShardRuntime = bfp8Plan is null
+                    && (bfloat16Plan is null
+                        || bfloat16Plan.DefersExchangeUntilBackward);
+                if (canMeasureShardRuntime)
+                {
+                    shapePlan.PrepareSynchronization();
+                    ExecuteReplicas(shapePlan, devices.Length);
+                    _adaptiveShardScheduler.Observe(
+                        shardBatches,
+                        shapePlan.ShardElapsed);
+                }
+            }
+
+            if (bfp8Plan is not null)
+                bfp8Plan.Complete(reductionStepId);
+            else if (bfloat16Plan is not null)
+                bfloat16Plan.Complete(reductionStepId);
+            else if (devices.Length > 1)
+            {
+                TensorCudaKernels.FlatGradientPlan plan =
+                    GetFlatGradientPlan(parameters, devices);
+                TensorCudaKernels.AllReduceGradientsResident(
+                    parameters,
+                    devices,
+                    plan);
+            }
+        }
+        catch
+        {
+            bfp8Plan?.Abort(reductionStepId);
+            bfloat16Plan?.Abort(reductionStepId);
+            throw;
+        }
+
+        _ = globalStep;
+        return (float)(weightedLoss / totalValid);
+    }
+
+    private sealed class DeferredGradientReductionPlan
+        : ICudaGradientReductionPlan
+    {
+        internal static DeferredGradientReductionPlan Instance { get; } =
+            new();
+
+        private DeferredGradientReductionPlan()
+        {
+        }
+
+        public void NotifyGradientReady(
+            Tensor tensor,
+            int deviceIndex,
+            long stepId)
+        {
+            // Earlier microbatches accumulate into the reducer-owned local
+            // gradient arena. The final backward publishes every leaf once,
+            // which starts the single reduction for the whole update.
+        }
     }
 
     private void ExecuteReplicas(
@@ -1484,6 +1698,7 @@ public sealed class CudaDataParallelEngine : IDisposable
         private bool _reuseCaptureInputs;
         private bool _useFixedInputs;
         private bool _readEagerLoss;
+        private bool _beginReductionDeviceStep;
         private bool _graphDisabled;
         private int _disposed;
         private WorkPhase _phase;
@@ -1556,7 +1771,8 @@ public sealed class CudaDataParallelEngine : IDisposable
             long reductionStepId,
             int totalValid,
             int ignoreIndex,
-            bool useFixedInputs = false)
+            bool useFixedInputs = false,
+            bool beginReductionDeviceStep = true)
         {
             _bfp8Plan = bfp8Plan;
             _bfloat16Plan = bfloat16Plan;
@@ -1566,6 +1782,7 @@ public sealed class CudaDataParallelEngine : IDisposable
             _ignoreIndex = ignoreIndex;
             _useFixedInputs = useFixedInputs;
             _readEagerLoss = !useFixedInputs;
+            _beginReductionDeviceStep = beginReductionDeviceStep;
             _phase = WorkPhase.Eager;
         }
 
@@ -1723,8 +1940,11 @@ public sealed class CudaDataParallelEngine : IDisposable
             int[] shardTarget = ShardTargets[replicaIndex];
             int shardValid = ShardValidTargets[replicaIndex];
 
-            _bfp8Plan?.BeginDeviceStep(_reductionStepId, device);
-            _bfloat16Plan?.BeginDeviceStep(_reductionStepId, device);
+            if (_beginReductionDeviceStep)
+            {
+                _bfp8Plan?.BeginDeviceStep(_reductionStepId, device);
+                _bfloat16Plan?.BeginDeviceStep(_reductionStepId, device);
+            }
             using IDisposable? reductionScope = _reductionPlan is null
                 ? null
                 : CudaGradientReductionContext.Push(

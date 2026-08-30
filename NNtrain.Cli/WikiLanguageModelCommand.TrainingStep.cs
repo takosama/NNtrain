@@ -6,12 +6,13 @@ namespace NNtrain;
 internal static partial class WikiLanguageModelCommand
 {
     private abstract class WikiTrainingStepOperations
-        : ITrainingTaskAdapter<WikiTrainingBatch>
+        : ITrainingTaskAdapter<WikiTrainingUpdate>
     {
         private readonly LanguageModel _model;
         private readonly IOptimizer _optimizer;
         private readonly Parameter[] _trainingParameters;
         private readonly CudaDataParallelEngine? _dataParallelEngine;
+        private IReadOnlyList<WikiTrainingBatch> _microBatches = [];
         private LanguageBatch _batch;
         private Tensor? _loss;
         private NativeCudaScalarReadback? _lossReadback;
@@ -45,10 +46,7 @@ internal static partial class WikiLanguageModelCommand
         }
 
         public TrainingGradientExecutionMode GradientExecutionMode
-            => _dataParallelEngine is not null && BatchSize > 1
-                ? TrainingGradientExecutionMode
-                    .FusedForwardBackwardReduced
-                : TrainingGradientExecutionMode.Separate;
+            => TrainingGradientExecutionMode.FusedForwardBackwardReduced;
 
         internal int BatchSize { get; private set; }
 
@@ -61,6 +59,10 @@ internal static partial class WikiLanguageModelCommand
         internal long GlobalStep { get; set; }
 
         internal float LossValue { get; private set; }
+
+        internal int MicroBatchCount => _microBatches.Count;
+
+        internal int ValidTargetCount { get; private set; }
 
         internal float GradientNorm { get; private set; }
 
@@ -78,19 +80,41 @@ internal static partial class WikiLanguageModelCommand
             _optimizer.prepare();
         }
 
-        public void AcceptBatch(WikiTrainingBatch batch)
+        public void AcceptBatch(WikiTrainingUpdate update)
         {
-            _batch = batch.Values;
-            BatchIndex = batch.BatchIndex;
-            BatchSize = batch.BatchSize;
-            SequenceLength = batch.SequenceLength;
-            DocumentsProcessed = batch.DocumentsProcessed;
-            if (_batch.Input.Length != checked(BatchSize * SequenceLength)
-                || _batch.Target.Length != _batch.Input.Length)
+            if (update.Count == 0)
             {
                 throw new InvalidOperationException(
-                    "The acquired language batch does not match its configured shape.");
+                    "The acquired Wiki update has no microbatches.");
             }
+            _microBatches = update.MicroBatches;
+            WikiTrainingBatch last = update.Last;
+            _batch = last.Values;
+            BatchIndex = last.BatchIndex;
+            BatchSize = last.BatchSize;
+            SequenceLength = last.SequenceLength;
+            DocumentsProcessed = last.DocumentsProcessed;
+            int validTargets = 0;
+            foreach (WikiTrainingBatch microBatch in _microBatches)
+            {
+                LanguageBatch values = microBatch.Values;
+                if (values.Input.Length != checked(
+                        microBatch.BatchSize * microBatch.SequenceLength)
+                    || values.Target.Length != values.Input.Length)
+                {
+                    throw new InvalidOperationException(
+                        "An acquired language microbatch does not match " +
+                        "its configured shape.");
+                }
+                validTargets = checked(
+                    validTargets + values.ValidTargetCount);
+            }
+            if (validTargets == 0)
+            {
+                throw new InvalidOperationException(
+                    "The acquired Wiki update has no valid targets.");
+            }
+            ValidTargetCount = validTargets;
             _loss = null;
             LossValue = 0f;
             GradientNorm = 0f;
@@ -183,16 +207,101 @@ internal static partial class WikiLanguageModelCommand
 
         public void ForwardBackwardReduced()
         {
-            CudaDataParallelEngine engine = _dataParallelEngine
-                ?? throw new InvalidOperationException(
-                    "A fused data-parallel step requires a session-owned engine.");
-            LossValue = engine.ForwardBackward(
-                _batch.Input,
-                _batch.Target,
-                BatchSize,
-                SequenceLength,
-                Tensor.DefaultCrossEntropyIgnoreIndex,
-                GlobalStep);
+            if (_dataParallelEngine is { } engine)
+            {
+                var cudaBatches = new CudaLanguageModelMicroBatch[
+                    _microBatches.Count];
+                for (int index = 0; index < _microBatches.Count; index++)
+                {
+                    WikiTrainingBatch microBatch = _microBatches[index];
+                    cudaBatches[index] = new CudaLanguageModelMicroBatch(
+                        microBatch.Values.Input,
+                        microBatch.Values.Target,
+                        microBatch.BatchSize,
+                        microBatch.SequenceLength);
+                }
+                LossValue = engine.ForwardBackwardAccumulated(
+                    cudaBatches,
+                    Tensor.DefaultCrossEntropyIgnoreIndex,
+                    GlobalStep);
+                return;
+            }
+
+            double weightedLoss = 0d;
+            foreach (WikiTrainingBatch microBatch in _microBatches)
+            {
+                LanguageBatch values = microBatch.Values;
+                Tensor loss = _model.forward_loss(
+                    values.Input,
+                    values.Target,
+                    microBatch.BatchSize,
+                    microBatch.SequenceLength);
+                float gradientWeight =
+                    (float)values.ValidTargetCount / ValidTargetCount;
+                float microBatchLoss = BackwardAndReadLoss(
+                    loss,
+                    gradientWeight);
+                weightedLoss += microBatchLoss * values.ValidTargetCount;
+            }
+            LossValue = (float)(weightedLoss / ValidTargetCount);
+        }
+
+        private static float BackwardAndReadLoss(
+            Tensor loss,
+            float gradientWeight)
+        {
+            if (Tensor.ExecutionDevice != TensorDevice.Cuda)
+            {
+                float cpuValue = loss.item();
+                loss.backward([gradientWeight]);
+                return cpuValue;
+            }
+
+            int deviceIndex = Tensor.CudaDeviceIndex;
+            NativeCudaDevice accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+            NativeCudaScalarReadback readback =
+                NativeCudaScalarReadback.Rent(deviceIndex);
+            readback.Begin(
+                loss.EnsureCudaFloat32Buffer(deviceIndex).NativePtr,
+                accelerator.DefaultStream);
+            Exception? backwardFailure = null;
+            try
+            {
+                loss.BackwardAndRelease([gradientWeight]);
+            }
+            catch (Exception exception)
+            {
+                backwardFailure = exception;
+            }
+            float value = 0f;
+            Exception? readbackFailure = null;
+            try
+            {
+                value = readback.CompleteAndReturn();
+            }
+            catch (Exception exception)
+            {
+                readbackFailure = exception;
+            }
+            if (backwardFailure is not null && readbackFailure is not null)
+            {
+                throw new AggregateException(
+                    "CUDA accumulated backward and loss readback failed.",
+                    backwardFailure,
+                    readbackFailure);
+            }
+            if (backwardFailure is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                    .Capture(backwardFailure).Throw();
+            }
+            if (readbackFailure is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                    .Capture(readbackFailure).Throw();
+            }
+            return value;
         }
 
         public void ClipGradients()
@@ -280,7 +389,7 @@ internal static partial class WikiLanguageModelCommand
         public override void CommitMetrics()
         {
             long nextGlobalStep = checked(GlobalStep + 1);
-            int validTargets = Batch.ValidTargetCount;
+            int validTargets = ValidTargetCount;
             float contribution = LossValue * validTargets;
             double nextTotalLoss = TotalLoss + contribution;
             long nextCompletedTargets = CompletedTargets + validTargets;
@@ -396,7 +505,7 @@ internal static partial class WikiLanguageModelCommand
         public override void CommitMetrics()
         {
             long nextGlobalStep = checked(GlobalStep + 1);
-            long targets = Batch.ValidTargetCount;
+            long targets = ValidTargetCount;
             double contribution = LossValue * targets;
             double nextTotalLoss = TotalLoss + contribution;
             long nextCompletedTargets = checked(CompletedTargets + targets);
@@ -421,7 +530,8 @@ internal static partial class WikiLanguageModelCommand
 
             TotalLoss = nextTotalLoss;
             CompletedTargets = nextCompletedTargets;
-            CompletedBatches++;
+            CompletedBatches = checked(
+                CompletedBatches + MicroBatchCount);
             GlobalStep = nextGlobalStep;
             GraphWindowLoss = flushGraph ? 0d : nextGraphWindowLoss;
             GraphWindowTargets = flushGraph

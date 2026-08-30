@@ -38,6 +38,7 @@ public sealed class WikiTrainingConfigurationTests
               "training": {
                 "epochs": 2,
                 "batchSize": 1,
+                "gradientAccumulationSteps": 4,
                 "validationFraction": 0.0
               },
               "runtime": { "device": "cpu", "seed": 29 },
@@ -58,6 +59,7 @@ public sealed class WikiTrainingConfigurationTests
 
         Assert.True(WikiTrainingConfiguration.IsWikiConfiguration(path));
         Assert.Equal(2, configuration.Epochs);
+        Assert.Equal(4, configuration.GradientAccumulationSteps);
         Assert.Equal(29, configuration.Seed);
         Assert.Equal(8, configuration.ModelWidth);
         Assert.Equal(
@@ -675,6 +677,21 @@ public sealed class WikiTrainingConfigurationTests
                 configuration.Validate);
 
         Assert.Equal("CudaGraphCacheBudgetMiB", exception.ParamName);
+    }
+
+    [Fact]
+    public void RejectsNonPositiveGradientAccumulation()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            GradientAccumulationSteps = 0,
+        };
+
+        ArgumentOutOfRangeException exception =
+            Assert.Throws<ArgumentOutOfRangeException>(
+                configuration.Validate);
+
+        Assert.Equal("GradientAccumulationSteps", exception.ParamName);
     }
 
     [Fact]
