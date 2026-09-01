@@ -385,6 +385,63 @@ public sealed class CudaDataParallelEngine : IDisposable
     internal long TrainingShapePlanEvictionCount
         => Interlocked.Read(ref _trainingShapePlanEvictionCount);
 
+    /// <summary>
+    /// Retires compiled activation graphs and idle lane allocations after a
+    /// checkpoint has been published. Checkpoint serialization itself is
+    /// bounded, but keeping its synchronized step's graph reservation alive
+    /// leaves too little headroom for the first eager step at near-capacity
+    /// batch sizes. Parameters, optimizer state, gradient reducers, and shard
+    /// EMA remain resident.
+    /// </summary>
+    internal int ReleaseCheckpointTransientMemory()
+    {
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            int retiredPlanCount = _trainingShapePlans.Count;
+            List<Exception>? failures = null;
+            ReleaseTrainingShapePlans(ref failures);
+
+            ExecutionSession? session = ExecutionSession.Current;
+            foreach (int deviceIndex in _cudaDeviceIndices)
+            {
+                try
+                {
+                    if (session is not null
+                        && session.TryGetLane(
+                            ExecutionDeviceKind.Cuda,
+                            deviceIndex,
+                            out IExecutionLane? executionLane)
+                        && executionLane is CudaExecutionLane lane)
+                    {
+                        lane.SynchronizeComputeStream();
+                        lane.SynchronizeCommunicationStream();
+                        Tensor.ClearCudaFloatBufferPool(deviceIndex);
+                        lane.Memory.CollectCompleted();
+                        lane.Memory.TrimReusableCache();
+                    }
+                    else
+                    {
+                        ForgetMemoryV2Cuda.GetAccelerator(deviceIndex)
+                            .Synchronize();
+                        Tensor.ClearCudaFloatBufferPool(deviceIndex);
+                    }
+                }
+                catch (Exception exception)
+                {
+                    (failures ??= []).Add(exception);
+                }
+            }
+            if (failures is not null)
+            {
+                throw new AggregateException(
+                    "CUDA checkpoint transient-memory cleanup failed.",
+                    failures);
+            }
+            return retiredPlanCount;
+        }
+    }
+
     internal long GraphCacheBudgetBytes => _graphCacheBudgetBytes;
 
     internal CudaReplicaExecutorTelemetrySnapshot ReplicaExecutorTelemetry

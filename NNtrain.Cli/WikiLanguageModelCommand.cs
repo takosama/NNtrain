@@ -507,6 +507,9 @@ internal static partial class WikiLanguageModelCommand
                         model);
                     output.WriteLine(
                         $"model snapshot = {snapshotPath}");
+                    ReleaseCheckpointCudaMemory(
+                        dataParallelEngine,
+                        output);
                 }
                 if (globalStep % config.LogEveryBatches == 0
                     || epochEnd)
@@ -601,6 +604,7 @@ internal static partial class WikiLanguageModelCommand
                 model);
             output.WriteLine(
                 $"model snapshot = {epochSnapshotPath}");
+            ReleaseCheckpointCudaMemory(dataParallelEngine, output);
             ProductionTrainingSessionFactory
                 .EnsureCanPublishCheckpoint(
                     trainingSession,
@@ -1064,6 +1068,9 @@ internal static partial class WikiLanguageModelCommand
                         model);
                     output.WriteLine(
                         $"model snapshot = {snapshotPath}");
+                    ReleaseCheckpointCudaMemory(
+                        dataParallelEngine,
+                        output);
                     documentCheckpointSaved = true;
                 }
 
@@ -1161,6 +1168,7 @@ internal static partial class WikiLanguageModelCommand
                 model);
             output.WriteLine(
                 $"model snapshot = {epochSnapshotPath}");
+            ReleaseCheckpointCudaMemory(dataParallelEngine, output);
         }
 
         if (bestEpoch == 0)
@@ -1350,6 +1358,20 @@ internal static partial class WikiLanguageModelCommand
             $"{BpeTokenizer.BosTokenId}, {BpeTokenizer.EosToken}:" +
             $"{BpeTokenizer.EosTokenId}; padded targets use ignoreIndex " +
             $"{Tensor.DefaultCrossEntropyIgnoreIndex}");
+    }
+
+    private static void ReleaseCheckpointCudaMemory(
+        CudaDataParallelEngine? dataParallelEngine,
+        TextWriter output)
+    {
+        if (dataParallelEngine is null)
+            return;
+        int retiredPlans =
+            dataParallelEngine.ReleaseCheckpointTransientMemory();
+        output.WriteLine(
+            $"checkpoint CUDA cache = retired {retiredPlans} training " +
+            "shape plan(s); parameters, optimizer, gradients, and shard " +
+            "EMA remain resident");
     }
 
     private static string TakeHead(string text, int count)

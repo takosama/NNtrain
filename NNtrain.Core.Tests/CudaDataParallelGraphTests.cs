@@ -163,6 +163,24 @@ public sealed class CudaDataParallelGraphTests
             Assert.Equal(2L * input.Length * sizeof(int), transfers.HostToDeviceBytes);
             Assert.Equal(1, transfers.DeviceToHostCopyCount);
             Assert.Equal(sizeof(float), transfers.DeviceToHostBytes);
+
+            int retiredPlans =
+                engine.ReleaseCheckpointTransientMemory();
+            Assert.Equal(1, retiredPlans);
+            Assert.Equal(0, engine.CachedTrainingShapePlanCount);
+            Assert.Equal(0, engine.TrainingGraphTelemetry.GraphPinnedBytes);
+
+            model.ZeroGrad();
+            float afterCheckpoint = engine.ForwardBackward(
+                input,
+                target,
+                1,
+                4,
+                Tensor.DefaultCrossEntropyIgnoreIndex,
+                globalStep: 2);
+            Assert.True(float.IsFinite(afterCheckpoint));
+            Assert.Equal(2, engine.TrainingShapePlanBuildCount);
+            Assert.Equal(1, engine.CachedTrainingShapePlanCount);
         }
         finally
         {
