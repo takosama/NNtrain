@@ -94,6 +94,17 @@ else if (args.Length > 0
     Bfp8CudaGemmProfiler.Run(warmup, iterations, m, k, n);
 }
 else if (args.Length > 0
+    && string.Equals(args[0], "--benchmark-bfp8-codec", StringComparison.Ordinal))
+{
+    int warmup = args.Length > 1 ? int.Parse(args[1]) : 2;
+    int iterations = args.Length > 2 ? int.Parse(args[2]) : 10;
+    int length = args.Length > 3 ? int.Parse(args[3]) : 41_287_680;
+    int blockSize = args.Length > 4 ? int.Parse(args[4]) : 32;
+    string? outputPath = args.Length > 5 ? args[5] : null;
+    Bfp8CudaCodecProfiler.Run(
+        warmup, iterations, length, blockSize, outputPath);
+}
+else if (args.Length > 0
     && string.Equals(
         args[0], "--profile-pure-bfp8-stability", StringComparison.Ordinal))
 {

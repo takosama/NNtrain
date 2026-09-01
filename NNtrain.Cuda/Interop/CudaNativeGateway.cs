@@ -28,6 +28,8 @@ public readonly record struct CudaAbiVersion(int Major, int Minor)
     public const int DirectBfp8LayerNormMinor = 22;
     public const int BlockBfp8OptimizerStateMinor = 23;
     public const int FusedFirstOrderOptimizerMinor = 24;
+    public const int DirectBfp8LayerNormBlock32x384Minor = 25;
+    public const int DirectBfp8FfnGradientMinor = 26;
 
     public uint Packed =>
         ((uint)(ushort)Major << 16) | (ushort)Minor;

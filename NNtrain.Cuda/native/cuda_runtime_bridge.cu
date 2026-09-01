@@ -14,7 +14,7 @@
 
 namespace {
 constexpr std::uint32_t nntrain_abi_major = 1;
-constexpr std::uint32_t nntrain_abi_minor = 24;
+constexpr std::uint32_t nntrain_abi_minor = 26;
 constexpr std::uint32_t nntrain_abi_version_value =
     (nntrain_abi_major << 16) | nntrain_abi_minor;
 
@@ -478,11 +478,108 @@ __global__ void bfp8_dequantize_bf16_kernel(
     destination[index] = __float2bfloat16_rn(value);
 }
 
-// mix8_32 uses one scale per 128 values. Assign one warp to each scale block
-// so the scale is read once per warp and the runtime integer division in the
-// scalar kernel disappears. Eight independent scale blocks share a CTA; this
-// also reduces scheduling overhead for production-sized activations.
+// Assign one warp to each common mix8_32 scale block so the scale is read once
+// per warp and the runtime integer division in the scalar kernels disappears.
+// Eight independent scale blocks share a CTA; this is especially important for
+// 32-value blocks, where the generic one-CTA-per-scale implementation otherwise
+// leaves seven eighths of a 256-thread CTA idle.
 constexpr int kBfp8ScaleBlocksPerCta = 8;
+
+__global__ void bfp8_dequantize_f32_block32_kernel(
+    const signed char* payload,
+    const float* scales,
+    float* destination,
+    int length) {
+    const int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= length)
+        return;
+    // A 256-thread CTA contains eight warps, and each aligned warp owns one
+    // complete 32-value scale block. The shift is the compile-time-specialized
+    // form of the generic runtime division.
+    destination[index] =
+        static_cast<float>(payload[index]) * scales[index >> 5];
+}
+
+__global__ void bfp8_dequantize_bf16_block32_kernel(
+    const signed char* payload,
+    const float* scales,
+    __nv_bfloat16* destination,
+    int length) {
+    const int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= length)
+        return;
+    destination[index] = __float2bfloat16_rn(
+        static_cast<float>(payload[index]) * scales[index >> 5]);
+}
+
+template <int QuantizationBlockSize>
+__global__ void bfp8_quantize_f32_warp_blocks_kernel(
+    const float* source,
+    signed char* payload,
+    float* scales,
+    int length,
+    int scale_count) {
+    const int warp = threadIdx.x / warpSize;
+    const int lane = threadIdx.x & (warpSize - 1);
+    const int scale_index =
+        blockIdx.x * kBfp8ScaleBlocksPerCta + warp;
+    if (scale_index >= scale_count)
+        return;
+    const int start = scale_index * QuantizationBlockSize;
+    const int end = min(length, start + QuantizationBlockSize);
+    float maximum = 0.f;
+    for (int index = start + lane; index < end; index += warpSize) {
+        maximum = fmaxf(maximum, fabsf(source[index]));
+    }
+    for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
+        maximum = fmaxf(
+            maximum,
+            __shfl_down_sync(0xffffffffu, maximum, offset));
+    }
+    const float scale = bfp8_scale_from_maximum(
+        __shfl_sync(0xffffffffu, maximum, 0));
+    if (lane == 0)
+        scales[scale_index] = scale;
+    for (int index = start + lane; index < end; index += warpSize) {
+        payload[index] = static_cast<signed char>(
+            bfp8_quantized_code(source[index], scale));
+    }
+}
+
+template <int QuantizationBlockSize>
+__global__ void bfp8_quantize_f32_roundtrip_warp_blocks_kernel(
+    float* source,
+    signed char* payload,
+    float* scales,
+    int length,
+    int scale_count) {
+    const int warp = threadIdx.x / warpSize;
+    const int lane = threadIdx.x & (warpSize - 1);
+    const int scale_index =
+        blockIdx.x * kBfp8ScaleBlocksPerCta + warp;
+    if (scale_index >= scale_count)
+        return;
+    const int start = scale_index * QuantizationBlockSize;
+    const int end = min(length, start + QuantizationBlockSize);
+    float maximum = 0.f;
+    for (int index = start + lane; index < end; index += warpSize) {
+        maximum = fmaxf(maximum, fabsf(source[index]));
+    }
+    for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
+        maximum = fmaxf(
+            maximum,
+            __shfl_down_sync(0xffffffffu, maximum, offset));
+    }
+    const float scale = bfp8_scale_from_maximum(
+        __shfl_sync(0xffffffffu, maximum, 0));
+    if (lane == 0)
+        scales[scale_index] = scale;
+    for (int index = start + lane; index < end; index += warpSize) {
+        const int quantized = bfp8_quantized_code(source[index], scale);
+        payload[index] = static_cast<signed char>(quantized);
+        source[index] = static_cast<float>(quantized) * scale;
+    }
+}
 
 template <int QuantizationBlockSize>
 __global__ void bfp8_dequantize_bf16_warp_blocks_kernel(
@@ -1257,6 +1354,16 @@ NNTRAIN_EXPORT int nntrain_cuda_bfp8_quantize_f32(
                 source, payload, scales, length);
         bfp8_finalize_tensor_scale_kernel<<<1, 1, 0, cuda_stream>>>(scales);
     }
+    else if (quantization_block_size == 32) {
+        constexpr int threads = kBfp8ScaleBlocksPerCta * 32;
+        const int scale_count = static_cast<int>(blocks64);
+        const int scale_block_grid =
+            (scale_count + kBfp8ScaleBlocksPerCta - 1) /
+            kBfp8ScaleBlocksPerCta;
+        bfp8_quantize_f32_warp_blocks_kernel<32><<<
+            scale_block_grid, threads, 0, cuda_stream>>>(
+                source, payload, scales, length, scale_count);
+    }
     else {
         bfp8_quantize_f32_kernel<<<
             static_cast<int>(blocks64),
@@ -1299,17 +1406,26 @@ NNTRAIN_EXPORT int nntrain_cuda_bfp8_dequantize_f32(
     }
 
     constexpr int threads = 256;
-    const int blocks = (length + threads - 1) / threads;
-    bfp8_dequantize_f32_kernel<<<
-        blocks,
-        threads,
-        0,
-        reinterpret_cast<cudaStream_t>(stream)>>>(
-            payload,
-            scales,
-            destination,
-            length,
-            quantization_block_size);
+    cudaStream_t cuda_stream = reinterpret_cast<cudaStream_t>(stream);
+    if (quantization_block_size == 32) {
+        const int blocks = (length + threads - 1) / threads;
+        bfp8_dequantize_f32_block32_kernel<<<
+            blocks, threads, 0, cuda_stream>>>(
+                payload, scales, destination, length);
+    }
+    else {
+        const int blocks = (length + threads - 1) / threads;
+        bfp8_dequantize_f32_kernel<<<
+            blocks,
+            threads,
+            0,
+            cuda_stream>>>(
+                payload,
+                scales,
+                destination,
+                length,
+                quantization_block_size);
+    }
     return complete(
         nntrain_operation_bfp8_dequantize_f32,
         device,
@@ -1345,16 +1461,29 @@ NNTRAIN_EXPORT int nntrain_cuda_bfp8_quantize_f32_roundtrip(
             device,
             static_cast<int>(cudaErrorInvalidConfiguration));
     }
-    bfp8_quantize_f32_roundtrip_kernel<<<
-        static_cast<int>(blocks64),
-        256,
-        0,
-        reinterpret_cast<cudaStream_t>(stream)>>>(
-            source,
-            payload,
-            scales,
-            length,
-            quantization_block_size);
+    cudaStream_t cuda_stream = reinterpret_cast<cudaStream_t>(stream);
+    if (quantization_block_size == 32) {
+        constexpr int threads = kBfp8ScaleBlocksPerCta * 32;
+        const int scale_count = static_cast<int>(blocks64);
+        const int scale_block_grid =
+            (scale_count + kBfp8ScaleBlocksPerCta - 1) /
+            kBfp8ScaleBlocksPerCta;
+        bfp8_quantize_f32_roundtrip_warp_blocks_kernel<32><<<
+            scale_block_grid, threads, 0, cuda_stream>>>(
+                source, payload, scales, length, scale_count);
+    }
+    else {
+        bfp8_quantize_f32_roundtrip_kernel<<<
+            static_cast<int>(blocks64),
+            256,
+            0,
+            cuda_stream>>>(
+                source,
+                payload,
+                scales,
+                length,
+                quantization_block_size);
+    }
     return complete(
         nntrain_operation_bfp8_quantize,
         device,
@@ -1504,6 +1633,11 @@ NNTRAIN_EXPORT int nntrain_cuda_bfp8_dequantize_bf16(
             scale_block_grid, threads, 0, cuda_stream>>>(
                 payload, scales, destination, length, scale_count);
     }
+    else if (quantization_block_size == 32) {
+        bfp8_dequantize_bf16_block32_kernel<<<
+            blocks, threads, 0, cuda_stream>>>(
+                payload, scales, destination, length);
+    }
     else if (quantization_block_size >= length) {
         bfp8_dequantize_bf16_tensor_kernel<<<
             blocks, threads, 0, cuda_stream>>>(
@@ -1588,6 +1722,17 @@ NNTRAIN_EXPORT int nntrain_cuda_bfp8_quantize_bf16(
             (scale_count + kBfp8ScaleBlocksPerCta - 1) /
             kBfp8ScaleBlocksPerCta;
         bfp8_quantize_bf16_warp_blocks_kernel<128><<<
+            scale_block_grid, threads, 0, cuda_stream>>>(
+                source, payload, scales, length, scale_count);
+    }
+    else if (quantization_block_size == 32) {
+        constexpr int threads =
+            kBfp8ScaleBlocksPerCta * 32;
+        const int scale_count = static_cast<int>(blocks64);
+        const int scale_block_grid =
+            (scale_count + kBfp8ScaleBlocksPerCta - 1) /
+            kBfp8ScaleBlocksPerCta;
+        bfp8_quantize_bf16_warp_blocks_kernel<32><<<
             scale_block_grid, threads, 0, cuda_stream>>>(
                 source, payload, scales, length, scale_count);
     }

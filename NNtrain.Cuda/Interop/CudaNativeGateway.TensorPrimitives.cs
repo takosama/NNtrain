@@ -214,6 +214,29 @@ public static partial class CudaNativeGateway
             device);
     }
 
+    public static int TensorLinearMaskBfp8ReluBFloat16GradientInPlace(
+        int device,
+        nint gradient,
+        nint outputPayload,
+        int length)
+    {
+        EnsureCompatibleAbi();
+        if (AbiVersion.Minor < CudaAbiVersion.DirectBfp8FfnGradientMinor)
+        {
+            throw new NotSupportedException(
+                $"CUDA ABI {CudaAbiVersion.DirectBfp8FfnGradientMinor} " +
+                "or newer is required for direct BFP8 FFN gradients.");
+        }
+        return Complete(
+            TensorPrimitiveNativeMethods
+                .LinearMaskBfp8ReluBFloat16GradientInPlace(
+                    gradient,
+                    outputPayload,
+                    length),
+            CudaNativeOperation.TensorPrimitiveBFloat16,
+            device);
+    }
+
     public static int TensorLinearBiasBackward(
         int device, nint outputGradient, nint biasGradient, int rows,
         int width, bool bfloat16)
@@ -420,6 +443,8 @@ public static partial class CudaNativeGateway
         internal static extern int LinearEncodeBfp8Relu(nint outputGradient, nint outputPayload, nint encoded, int length);
         [DllImport(LibraryName, EntryPoint = "nntrain_tensor_linear_mask_bf16_gradient", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int LinearMaskBFloat16Gradient(nint outputGradient, nint output, nint masked, int length);
+        [DllImport(LibraryName, EntryPoint = "nntrain_tensor_linear_mask_bfp8_relu_bf16_gradient_in_place", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int LinearMaskBfp8ReluBFloat16GradientInPlace(nint gradient, nint outputPayload, int length);
         [DllImport(LibraryName, EntryPoint = "nntrain_tensor_linear_bias_backward_float", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int LinearBiasBackwardFloat32(nint outputGradient, nint biasGradient, int rows, int width);
         [DllImport(LibraryName, EntryPoint = "nntrain_tensor_linear_bias_backward_bf16", CallingConvention = CallingConvention.Cdecl)]

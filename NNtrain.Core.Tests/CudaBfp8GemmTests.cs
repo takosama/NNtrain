@@ -1,5 +1,7 @@
 using NNtrain;
+using NNtrain.Cuda.Execution;
 using NNtrain.Cuda.Quantization;
+using NNtrain.Runtime.Execution;
 using Xunit;
 
 public sealed class CudaBfp8GemmTests
@@ -280,6 +282,176 @@ public sealed class CudaBfp8GemmTests
     }
 
     [Fact]
+    public void ExclusiveMix8FfnDirectGradientMatchesLegacyAndKeepsLeavesFloat32()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        const int rows = 8;
+        const int width = 32;
+        const int hiddenWidth = 64;
+        float[] inputValues = Values(rows * width, 1201, 0.13f);
+        float[] firstWeightValues = Values(
+            hiddenWidth * width, 1213, 0.035f);
+        float[] firstBiasValues = Enumerable.Range(0, hiddenWidth)
+            .Select(index => index % 2 == 0 ? -1f : 0.15f)
+            .ToArray();
+        float[] secondWeightValues = Values(
+            width * hiddenWidth, 1229, 0.041f);
+        float[] secondBiasValues = Values(width, 1237, 0.02f);
+        float[] seed = Values(rows * width, 1249, 0.11f);
+
+        FfnRun cpu = RunCpuFfn(
+            inputValues,
+            firstWeightValues,
+            firstBiasValues,
+            secondWeightValues,
+            secondBiasValues,
+            seed,
+            rows,
+            width,
+            hiddenWidth);
+        FfnRun legacy = WithCuda(() => RunCudaFfn(
+            inputValues,
+            firstWeightValues,
+            firstBiasValues,
+            secondWeightValues,
+            secondBiasValues,
+            seed,
+            rows,
+            width,
+            hiddenWidth,
+            exclusive: true,
+            disableDirect: true));
+        FfnRun direct = WithCuda(() => RunCudaFfn(
+            inputValues,
+            firstWeightValues,
+            firstBiasValues,
+            secondWeightValues,
+            secondBiasValues,
+            seed,
+            rows,
+            width,
+            hiddenWidth,
+            exclusive: true,
+            disableDirect: false));
+        FfnRun general = WithCuda(() => RunCudaFfn(
+            inputValues,
+            firstWeightValues,
+            firstBiasValues,
+            secondWeightValues,
+            secondBiasValues,
+            seed,
+            rows,
+            width,
+            hiddenWidth,
+            exclusive: false,
+            disableDirect: false));
+
+        Assert.Equal(0, legacy.Telemetry.DirectBFloat16FfnInputGradientExecutions);
+        Assert.Equal(0, legacy.Telemetry.Bfp8ReluBFloat16MaskExecutions);
+        Assert.Equal(1, direct.Telemetry.DirectBFloat16FfnInputGradientExecutions);
+        Assert.Equal(1, direct.Telemetry.Bfp8ReluBFloat16MaskExecutions);
+        Assert.Equal(0, general.Telemetry.DirectBFloat16FfnInputGradientExecutions);
+        Assert.Equal(0, general.Telemetry.Bfp8ReluBFloat16MaskExecutions);
+        Assert.True(direct.HiddenHasBFloat16Gradient);
+        Assert.False(direct.InputHasBFloat16Gradient);
+        Assert.False(direct.AnyParameterHasBFloat16Gradient);
+
+        AssertFfnClose(legacy, direct, 0.025f);
+        AssertFfnClose(cpu, direct, 0.10f);
+        for (int hidden = 0; hidden < hiddenWidth; hidden += 2)
+        {
+            Assert.Equal(0f, direct.FirstBiasGradient[hidden]);
+            int rowStart = hidden * width;
+            for (int column = 0; column < width; column++)
+                Assert.Equal(0f, direct.FirstWeightGradient[rowStart + column]);
+        }
+    }
+
+    [Fact]
+    public void ExclusiveMix8FfnFailureReturnsEveryTransientLaneLease()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        WithCuda(() =>
+        {
+            const int rows = 4;
+            const int width = 32;
+            const int hiddenWidth = 64;
+            CudaExecutionLane lane = CudaExecutionLaneFactory.Create(0);
+            using var execution = new ExecutionSession(
+                new ExecutionOptions
+                {
+                    Device = ExecutionDeviceKind.Cuda,
+                    CudaDevices = new DeviceSet([0]),
+                    Precision = PrecisionPolicy.Mix8_32,
+                },
+                [lane]);
+            using IDisposable sessionScope = execution.Enter();
+            Tensor input = Bfp8(
+                Values(rows * width, 1301, 0.11f), [rows, width]);
+            Tensor firstWeight = Bfp8(
+                Values(hiddenWidth * width, 1307, 0.03f),
+                [hiddenWidth, width]);
+            Tensor firstBias = Bfp8(
+                Values(hiddenWidth, 1319, 0.02f), [hiddenWidth]);
+            Tensor secondWeight = Bfp8(
+                Values(width * hiddenWidth, 1321, 0.03f),
+                [width, hiddenWidth]);
+            Tensor secondBias = Bfp8(
+                Values(width, 1327, 0.02f), [width]);
+            MoveToCuda(
+                input,
+                firstWeight,
+                firstBias,
+                secondWeight,
+                secondBias);
+            Tensor hidden =
+                input.LinearLastDimReluExclusiveBfp8OutputGradient(
+                    firstWeight,
+                    firstBias);
+            Tensor projected =
+                hidden.LinearLastDimExclusiveBfp8InputGradient(
+                    secondWeight,
+                    secondBias);
+            _ = projected.EnsureCudaGradientBuffer(0);
+            var before = lane.Memory.Telemetry;
+            using IDisposable policy = CudaDispatchPolicy.Push(
+                CudaDispatchPolicy.Defaults with
+                {
+                    ThrowAfterDirectBfp8FfnGradientAllocationsForTest = true,
+                });
+
+            InvalidOperationException failure = Assert.Throws<
+                InvalidOperationException>(() => projected.Backward(
+                    Values(rows * width, 1331, 0.07f)));
+            Assert.Contains("Injected failure", failure.Message);
+            lane.SynchronizeComputeStream();
+            var after = lane.Memory.Telemetry;
+            // Backward owns one new persistent FP32 output-gradient seed.
+            // Every BF16 encoded/direct/decode transient acquired before the
+            // injected failure must already have left the active set.
+            Assert.Equal(
+                before.ActiveAllocationCount + 1,
+                after.ActiveAllocationCount);
+            Assert.Equal(
+                before.ActiveBytes + checked((long)projected.Numel * sizeof(float)),
+                after.ActiveBytes);
+
+            DisposeCuda(
+                projected,
+                hidden,
+                input,
+                firstWeight,
+                firstBias,
+                secondWeight,
+                secondBias);
+        });
+    }
+
+    [Fact]
     public void Mix8ProductionHiddenTailUsesBFloat16HmmaPlan()
     {
         if (!Tensor.IsCudaAvailable())
@@ -545,6 +717,171 @@ public sealed class CudaBfp8GemmTests
         }
     }
 
+    private static FfnRun RunCpuFfn(
+        float[] inputValues,
+        float[] firstWeightValues,
+        float[] firstBiasValues,
+        float[] secondWeightValues,
+        float[] secondBiasValues,
+        float[] seed,
+        int rows,
+        int width,
+        int hiddenWidth)
+    {
+        TensorDevice previous = Tensor.ExecutionDevice;
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cpu;
+            Tensor input = Bfp8(inputValues, [rows, width]);
+            Tensor firstWeight = Bfp8(
+                firstWeightValues, [hiddenWidth, width]);
+            Tensor firstBias = Bfp8(firstBiasValues, [hiddenWidth]);
+            Tensor secondWeight = Bfp8(
+                secondWeightValues, [width, hiddenWidth]);
+            Tensor secondBias = Bfp8(secondBiasValues, [width]);
+            Tensor hidden = input.LinearLastDim(
+                firstWeight, firstBias, applyRelu: true);
+            Tensor projected = hidden.LinearLastDim(
+                secondWeight, secondBias, applyRelu: false);
+            Tensor output = projected + input;
+            output.Backward(seed);
+            return SnapshotFfn(
+                output,
+                hidden,
+                input,
+                firstWeight,
+                firstBias,
+                secondWeight,
+                secondBias,
+                default);
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previous;
+        }
+    }
+
+    private static FfnRun RunCudaFfn(
+        float[] inputValues,
+        float[] firstWeightValues,
+        float[] firstBiasValues,
+        float[] secondWeightValues,
+        float[] secondBiasValues,
+        float[] seed,
+        int rows,
+        int width,
+        int hiddenWidth,
+        bool exclusive,
+        bool disableDirect)
+    {
+        Tensor input = Bfp8(inputValues, [rows, width]);
+        Tensor firstWeight = Bfp8(
+            firstWeightValues, [hiddenWidth, width]);
+        Tensor firstBias = Bfp8(firstBiasValues, [hiddenWidth]);
+        Tensor secondWeight = Bfp8(
+            secondWeightValues, [width, hiddenWidth]);
+        Tensor secondBias = Bfp8(secondBiasValues, [width]);
+        MoveToCuda(input, firstWeight, firstBias, secondWeight, secondBias);
+        using IDisposable policy = CudaDispatchPolicy.Push(
+            CudaDispatchPolicy.Defaults with
+            {
+                DisableDirectBfp8FfnGradient = disableDirect,
+            });
+        CudaBfp8GemmTelemetrySnapshot before =
+            CudaBfp8GemmTelemetry.Snapshot;
+        Tensor hidden = exclusive
+            ? input.LinearLastDimReluExclusiveBfp8OutputGradient(
+                firstWeight, firstBias)
+            : input.LinearLastDim(
+                firstWeight, firstBias, applyRelu: true);
+        Tensor projected = exclusive
+            ? hidden.LinearLastDimExclusiveBfp8InputGradient(
+                secondWeight, secondBias)
+            : hidden.LinearLastDim(
+                secondWeight, secondBias, applyRelu: false);
+        Tensor output = projected + input;
+        output.Backward(seed);
+        ForgetMemoryV2Cuda.GetAccelerator(0).Synchronize();
+        CudaBfp8GemmTelemetrySnapshot telemetry =
+            CudaBfp8GemmTelemetry.Snapshot - before;
+        FfnRun run = SnapshotFfn(
+            output,
+            hidden,
+            input,
+            firstWeight,
+            firstBias,
+            secondWeight,
+            secondBias,
+            telemetry);
+        DisposeCuda(
+            output,
+            projected,
+            hidden,
+            input,
+            firstWeight,
+            firstBias,
+            secondWeight,
+            secondBias);
+        return run;
+    }
+
+    private static FfnRun SnapshotFfn(
+        Tensor output,
+        Tensor hidden,
+        Tensor input,
+        Tensor firstWeight,
+        Tensor firstBias,
+        Tensor secondWeight,
+        Tensor secondBias,
+        CudaBfp8GemmTelemetrySnapshot telemetry)
+    {
+        bool hiddenBFloat16 = hidden.HasAuthoritativeCudaBFloat16Gradient;
+        bool inputBFloat16 = input.HasAuthoritativeCudaBFloat16Gradient;
+        bool parameterBFloat16 = new[]
+        {
+            firstWeight,
+            firstBias,
+            secondWeight,
+            secondBias,
+        }.Any(tensor => tensor.HasAuthoritativeCudaBFloat16Gradient);
+        return new FfnRun(
+            output.Data.ToArray(),
+            input.Grad.ToArray(),
+            firstWeight.Grad.ToArray(),
+            firstBias.Grad.ToArray(),
+            secondWeight.Grad.ToArray(),
+            secondBias.Grad.ToArray(),
+            hiddenBFloat16,
+            inputBFloat16,
+            parameterBFloat16,
+            telemetry);
+    }
+
+    private static void AssertFfnClose(
+        FfnRun expected,
+        FfnRun actual,
+        float tolerance)
+    {
+        AssertClose(expected.Output, actual.Output, tolerance);
+        AssertClose(expected.InputGradient, actual.InputGradient, tolerance);
+        AssertClose(
+            expected.FirstWeightGradient,
+            actual.FirstWeightGradient,
+            tolerance);
+        AssertClose(
+            expected.FirstBiasGradient,
+            actual.FirstBiasGradient,
+            tolerance);
+        AssertClose(
+            expected.SecondWeightGradient,
+            actual.SecondWeightGradient,
+            tolerance);
+        AssertClose(
+            expected.SecondBiasGradient,
+            actual.SecondBiasGradient,
+            tolerance);
+    }
+
     private static Tensor Bfp8(
         float[] values,
         int[] shape,
@@ -592,6 +929,23 @@ public sealed class CudaBfp8GemmTests
         }
     }
 
+    private static T WithCuda<T>(Func<T> action)
+    {
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            Tensor.CudaDeviceIndices = [0];
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            return action();
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndices = previousIndices;
+        }
+    }
+
     private static void AssertClose(
         IReadOnlyList<float> expected,
         IReadOnlyList<float> actual,
@@ -617,4 +971,16 @@ public sealed class CudaBfp8GemmTests
         float[] InputGradient,
         float[] WeightGradient,
         float[] BiasGradient);
+
+    private sealed record FfnRun(
+        float[] Output,
+        float[] InputGradient,
+        float[] FirstWeightGradient,
+        float[] FirstBiasGradient,
+        float[] SecondWeightGradient,
+        float[] SecondBiasGradient,
+        bool HiddenHasBFloat16Gradient,
+        bool InputHasBFloat16Gradient,
+        bool AnyParameterHasBFloat16Gradient,
+        CudaBfp8GemmTelemetrySnapshot Telemetry);
 }

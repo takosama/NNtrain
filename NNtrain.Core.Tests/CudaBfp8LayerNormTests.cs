@@ -1,4 +1,5 @@
 using NNtrain;
+using NNtrain.Cuda.Execution;
 using Xunit;
 using static TensorCharacterizationTests;
 
@@ -68,13 +69,15 @@ public sealed class CudaBfp8LayerNormTests
     }
 
     [Theory]
-    [InlineData(false, 0.0, false, 257)]
-    [InlineData(true, 0.25, false, 384)]
-    [InlineData(false, 0.20, true, 515)]
-    [InlineData(true, 0.0, true, 128)]
-    [InlineData(true, 0.25, true, 512)]
+    [InlineData(0, 0.0, false, 257)]
+    [InlineData(128, 0.25, false, 384)]
+    [InlineData(0, 0.20, true, 515)]
+    [InlineData(128, 0.0, true, 128)]
+    [InlineData(128, 0.25, true, 512)]
+    [InlineData(32, 0.25, false, 384)]
+    [InlineData(32, 0.20, true, 384)]
     public void ResidentResidualDropoutLayerNormPreservesDropoutAndParentSemantics(
-        bool blockScaled,
+        int blockSize,
         double probabilityValue,
         bool sameParent,
         int columns)
@@ -85,7 +88,7 @@ public sealed class CudaBfp8LayerNormTests
         const int rows = 3;
         const int randomSeed = 197;
         float probability = (float)probabilityValue;
-        Bfp8QuantizationDescriptor descriptor = Descriptor(blockScaled);
+        Bfp8QuantizationDescriptor descriptor = Descriptor(blockSize);
         float[] residualValues = Values(rows * columns, 61, 0.12f);
         float[] branchValues = sameParent
             ? residualValues
@@ -218,6 +221,88 @@ public sealed class CudaBfp8LayerNormTests
         });
     }
 
+    [Fact]
+    public void Block32x384GraphResidualDropoutLayerNormIsFiniteAndResident()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        const int rows = 3;
+        const int columns = 384;
+        const int length = rows * columns;
+        Bfp8QuantizationDescriptor descriptor =
+            Bfp8QuantizationDescriptor.Block(32);
+
+        WithCuda(() =>
+        {
+            Tensor residual = Bfp8Tensor(
+                Values(length, 223, 0.12f), [rows, columns], descriptor);
+            Tensor branch = Bfp8Tensor(
+                Values(length, 227, 0.09f), [rows, columns], descriptor);
+            Tensor gamma = Bfp8Tensor(
+                Enumerable.Range(0, columns)
+                    .Select(index => 0.79f + (index % 19) * 0.012f)
+                    .ToArray(),
+                [columns],
+                descriptor);
+            Tensor beta = Bfp8Tensor(
+                Values(columns, 229, 0.019f), [columns], descriptor);
+            Tensor? output = null;
+            MakeResident(residual, branch, gamma, beta);
+            try
+            {
+                using CudaExecutionLane lane =
+                    CudaExecutionLaneFactory.Create(0);
+                using CudaGraphRngState rng =
+                    CudaGraphRngState.Create(lane, 233);
+                NativeCudaTransferTelemetry before =
+                    NativeCudaRuntime.TransferTelemetry;
+                using (CudaGraphDropoutCaptureScope.Begin(
+                           rng,
+                           baseSeed: 0x4246_5038_4c4e_3332UL))
+                {
+                    output = residual.AddDropoutLayerNormLastDim(
+                        branch,
+                        gamma,
+                        beta,
+                        probability: 0.2f,
+                        random: new Random(239));
+                }
+                lane.SynchronizeComputeStream();
+                NativeCudaTransferTelemetry forwardTransfers =
+                    NativeCudaRuntime.TransferTelemetry - before;
+                Assert.Equal(0, forwardTransfers.HostToDeviceBytes);
+                Assert.Equal(0, forwardTransfers.DeviceToHostBytes);
+
+                output.BackwardAndRelease(Values(length, 241, 0.027f));
+                lane.SynchronizeComputeStream();
+                Assert.Equal(TensorDType.Bfp8, output.DType);
+                Assert.Equal(descriptor, output.Bfp8Quantization);
+                Assert.All(
+                    output.Data,
+                    static value => Assert.True(float.IsFinite(value)));
+                Assert.All(
+                    residual.Grad,
+                    static value => Assert.True(float.IsFinite(value)));
+                Assert.All(
+                    branch.Grad,
+                    static value => Assert.True(float.IsFinite(value)));
+                Assert.All(
+                    gamma.Grad,
+                    static value => Assert.True(float.IsFinite(value)));
+                Assert.All(
+                    beta.Grad,
+                    static value => Assert.True(float.IsFinite(value)));
+            }
+            finally
+            {
+                if (output is not null)
+                    output.InvalidateCudaBuffers();
+                Release(residual, branch, gamma, beta);
+            }
+        });
+    }
+
     private static void RunInference(
         Tensor input,
         Tensor branch,
@@ -339,6 +424,11 @@ public sealed class CudaBfp8LayerNormTests
     private static Bfp8QuantizationDescriptor Descriptor(bool blockScaled)
         => blockScaled
             ? Bfp8QuantizationDescriptor.Mix8_32
+            : Bfp8QuantizationDescriptor.TensorWide;
+
+    private static Bfp8QuantizationDescriptor Descriptor(int blockSize)
+        => blockSize > 0
+            ? Bfp8QuantizationDescriptor.Block(blockSize)
             : Bfp8QuantizationDescriptor.TensorWide;
 
     private static float[] Values(int length, int offset, float scale)

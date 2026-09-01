@@ -6,16 +6,18 @@ using Xunit;
 public sealed class CudaBfp8KernelTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void NativeQuantizeAndDequantizeMatchesCpuReference(bool block128)
+    [InlineData(0)]
+    [InlineData(32)]
+    [InlineData(96)]
+    [InlineData(128)]
+    public void NativeQuantizeAndDequantizeMatchesCpuReference(int blockSize)
     {
         if (!Tensor.IsCudaAvailable())
             return;
 
-        Bfp8QuantizationDescriptor descriptor = block128
-            ? Bfp8QuantizationDescriptor.Mix8_32
-            : Bfp8QuantizationDescriptor.TensorWide;
+        Bfp8QuantizationDescriptor descriptor = blockSize == 0
+            ? Bfp8QuantizationDescriptor.TensorWide
+            : Bfp8QuantizationDescriptor.Block(blockSize);
         float[] source = Enumerable.Range(0, 515)
             .Select(index =>
                 MathF.Sin(index * 0.071f) * (0.5f + (index % 137) * 0.03f))
@@ -55,15 +57,19 @@ public sealed class CudaBfp8KernelTests
         AssertClose(reference, actualDecoded);
     }
 
-    [Fact]
-    public void NativeBlockQuantizeRoundtripPublishesEncodedStateInOnePass()
+    [Theory]
+    [InlineData(32)]
+    [InlineData(96)]
+    [InlineData(128)]
+    public void NativeBlockQuantizeRoundtripPublishesEncodedStateInOnePass(
+        int blockSize)
     {
         if (!Tensor.IsCudaAvailable())
             return;
 
         const int length = 515;
         Bfp8QuantizationDescriptor descriptor =
-            Bfp8QuantizationDescriptor.Mix8_32;
+            Bfp8QuantizationDescriptor.Block(blockSize);
         float[] source = Enumerable.Range(0, length)
             .Select(index =>
                 MathF.Sin(index * 0.043f) *
@@ -136,15 +142,19 @@ public sealed class CudaBfp8KernelTests
                 TensorStorageCodec.DecodeBFloat16(value))));
     }
 
-    [Fact]
-    public void NativeBFloat16Block128RoundTripMatchesCpuCodesAndBits()
+    [Theory]
+    [InlineData(32)]
+    [InlineData(96)]
+    [InlineData(128)]
+    public void NativeBFloat16BlockRoundTripMatchesCpuCodesAndBits(
+        int blockSize)
     {
         if (!Tensor.IsCudaAvailable())
             return;
 
         const int length = 515;
         Bfp8QuantizationDescriptor descriptor =
-            Bfp8QuantizationDescriptor.Mix8_32;
+            Bfp8QuantizationDescriptor.Block(blockSize);
         ushort[] sourceBits = Enumerable.Range(0, length)
             .Select(index => TensorStorageCodec.EncodeBFloat16(
                 MathF.Sin(index * 0.037f) *

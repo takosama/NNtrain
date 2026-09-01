@@ -33,7 +33,9 @@ public sealed class CudaDispatchPolicyTests
             ["NNTRAIN_DISABLE_DIRECT_ATTENTION_BF16_GRADIENT"] = "1",
             ["NNTRAIN_DISABLE_DIRECT_LAYERNORM_BF16_BRANCH_GRADIENT"] = "1",
             ["NNTRAIN_DISABLE_DIRECT_LINEAR_BF16_GRADIENT"] = "1",
+            ["NNTRAIN_DISABLE_DIRECT_BFP8_FFN_GRADIENT"] = "1",
             ["NNTRAIN_DISABLE_KV_CACHE"] = "1",
+            ["NNTRAIN_DISABLE_CUDA_GRAPHS"] = "1",
             ["NNTRAIN_CUDA_SYNC_PHASES"] = "1",
             ["NNTRAIN_DISABLE_BF16_GRADIENT_BUCKETS"] = "1",
             ["NNTRAIN_ENABLE_BLOCK_BFP8_OPTIMIZER_STATE"] = "1",
@@ -63,7 +65,9 @@ public sealed class CudaDispatchPolicyTests
         Assert.True(policy.DisableDirectAttentionBFloat16Gradient);
         Assert.True(policy.DisableDirectLayerNormBFloat16BranchGradient);
         Assert.True(policy.DisableDirectLinearBFloat16Gradient);
+        Assert.True(policy.DisableDirectBfp8FfnGradient);
         Assert.True(policy.DisableKvCache);
+        Assert.True(policy.DisableCudaGraphs);
         Assert.True(policy.SynchronizeDataParallelPhases);
         Assert.True(policy.DisableBFloat16GradientBuckets);
         Assert.True(policy.EnableBlockBfp8OptimizerState);

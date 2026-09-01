@@ -64,6 +64,7 @@ $requiredGatewayExports = @(
     'nntrain_abi_version',
     'nntrain_tensor_accumulate_scalar',
     'nntrain_tensor_linear_encode_bfp8_relu',
+    'nntrain_tensor_linear_mask_bfp8_relu_bf16_gradient_in_place',
     'nntrain_tensor_embedding_backward_reduced',
     'nntrain_tensor_embedding_positions_backward_reduced',
     'nntrain_tensor_topk_float',

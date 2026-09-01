@@ -80,4 +80,25 @@ class Linear : Module
         return x.LinearLastDim(W.T, B.T, applyRelu: true);
     }
 
+    /// <summary>
+    /// FFN-only projection whose input is an exclusive activation. CUDA BFP8
+    /// backward may therefore publish dX as BF16 for the immediately preceding
+    /// ReLU-linear node. Public/general linear calls retain FP32 dX authority.
+    /// </summary>
+    internal Tensor ForwardBatchExclusiveInputGradient(Tensor x)
+    {
+        ArgumentNullException.ThrowIfNull(x);
+        return x.LinearLastDimExclusiveBfp8InputGradient(W.T, B.T);
+    }
+
+    /// <summary>
+    /// FFN-only ReLU projection whose output gradient is consumed exactly once
+    /// by this node, allowing an in-place BFP8-payload ReLU mask on BF16 dY.
+    /// </summary>
+    internal Tensor ForwardBatchReluExclusiveOutputGradient(Tensor x)
+    {
+        ArgumentNullException.ThrowIfNull(x);
+        return x.LinearLastDimReluExclusiveBfp8OutputGradient(W.T, B.T);
+    }
+
 }

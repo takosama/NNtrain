@@ -62,6 +62,7 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_tensor_linear_encode_bf16",
         "nntrain_tensor_linear_encode_bfp8_relu",
         "nntrain_tensor_linear_mask_bf16_gradient",
+        "nntrain_tensor_linear_mask_bfp8_relu_bf16_gradient_in_place",
         "nntrain_tensor_linear_bias_backward_float",
         "nntrain_tensor_linear_bias_backward_bf16",
         "nntrain_tensor_scale",
@@ -517,6 +518,16 @@ public sealed class CudaNativeAbiGatewayTests
         Assert.Equal(22, CudaAbiVersion.DirectBfp8LayerNormMinor);
         Assert.Equal(23, CudaAbiVersion.BlockBfp8OptimizerStateMinor);
         Assert.Equal(24, CudaAbiVersion.FusedFirstOrderOptimizerMinor);
+        Assert.Equal(
+            25,
+            CudaAbiVersion.DirectBfp8LayerNormBlock32x384Minor);
+        Assert.Equal(26, CudaAbiVersion.DirectBfp8FfnGradientMinor);
+        Assert.False(CudaTensorNative.SupportsDirectBfp8FfnGradientAbi(
+            new CudaAbiVersion(1, 25)));
+        Assert.True(CudaTensorNative.SupportsDirectBfp8FfnGradientAbi(
+            new CudaAbiVersion(1, 26)));
+        Assert.False(CudaTensorNative.SupportsDirectBfp8FfnGradientAbi(
+            new CudaAbiVersion(2, 26)));
         Assert.Equal(
             CudaKernelFeature.None,
             CudaNativeGateway.RequiredFeatures(

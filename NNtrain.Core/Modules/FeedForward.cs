@@ -22,7 +22,8 @@ class FeedForward : Module
 
     public Tensor Forward(Tensor x) // (T, D)
     {
-        return Fc2.ForwardBatch(Fc1.ForwardBatchRelu(x));
+        Tensor expanded = Fc1.ForwardBatchReluExclusiveOutputGradient(x);
+        return Fc2.ForwardBatchExclusiveInputGradient(expanded);
     }
 
 }

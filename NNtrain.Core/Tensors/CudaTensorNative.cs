@@ -8,6 +8,14 @@ namespace NNtrain;
 /// </summary>
 internal static class CudaTensorNative
 {
+    internal static bool SupportsDirectBfp8FfnGradient
+        => SupportsDirectBfp8FfnGradientAbi(CudaNativeGateway.AbiVersion);
+
+    internal static bool SupportsDirectBfp8FfnGradientAbi(
+        CudaAbiVersion version)
+        => version.Major == CudaAbiVersion.SupportedMajor
+            && version.Minor >= CudaAbiVersion.DirectBfp8FfnGradientMinor;
+
     internal static void Add(int device, nint left, nint right, nint output,
         int length, bool bfloat16)
     {
@@ -210,6 +218,22 @@ internal static class CudaTensorNative
             masked,
             length),
             "linear BF16 gradient mask");
+    }
+
+    internal static void LinearMaskBfp8ReluBFloat16GradientInPlace(
+        int device,
+        nint gradient,
+        nint outputPayload,
+        int length)
+    {
+        Select(device);
+        Check(CudaNativeGateway
+            .TensorLinearMaskBfp8ReluBFloat16GradientInPlace(
+                device,
+                gradient,
+                outputPayload,
+                length),
+            "linear BFP8 ReLU BF16 gradient in-place mask");
     }
 
     internal static void LinearBiasBackward(int device, nint outputGradient,

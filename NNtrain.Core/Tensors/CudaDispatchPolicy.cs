@@ -34,7 +34,11 @@ internal sealed record CudaDispatchPolicy
     internal bool DisableDirectLayerNormBFloat16BranchGradient { get; init; }
     internal bool EnableLayerNormOneScan512 { get; init; }
     internal bool DisableDirectLinearBFloat16Gradient { get; init; }
+    internal bool DisableDirectBfp8FfnGradient { get; init; }
+    internal bool ThrowAfterDirectBfp8FfnGradientAllocationsForTest
+        { get; init; }
     internal bool DisableKvCache { get; init; }
+    internal bool DisableCudaGraphs { get; init; }
     internal bool SynchronizeDataParallelPhases { get; init; }
     internal bool DisableBFloat16GradientBuckets { get; init; }
     internal bool EnableBlockBfp8OptimizerState { get; init; }
@@ -160,9 +164,15 @@ internal sealed record CudaDispatchPolicy
             DisableDirectLinearBFloat16Gradient = ReadFlag(
                 readEnvironment,
                 "NNTRAIN_DISABLE_DIRECT_LINEAR_BF16_GRADIENT"),
+            DisableDirectBfp8FfnGradient = ReadFlag(
+                readEnvironment,
+                "NNTRAIN_DISABLE_DIRECT_BFP8_FFN_GRADIENT"),
             DisableKvCache = ReadFlag(
                 readEnvironment,
                 "NNTRAIN_DISABLE_KV_CACHE"),
+            DisableCudaGraphs = ReadFlag(
+                readEnvironment,
+                "NNTRAIN_DISABLE_CUDA_GRAPHS"),
             SynchronizeDataParallelPhases = ReadFlag(
                 readEnvironment,
                 "NNTRAIN_CUDA_SYNC_PHASES"),

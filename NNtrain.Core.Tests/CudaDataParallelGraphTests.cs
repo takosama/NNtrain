@@ -669,6 +669,312 @@ public sealed class CudaDataParallelGraphTests
         }
     }
 
+    [Theory]
+    [InlineData(TensorPrecisionMode.BFloat16)]
+    [InlineData(TensorPrecisionMode.Mix8_32)]
+    public void AccumulatedGraphReplaysEveryMicroBatchAndMatchesLargeBatch(
+        TensorPrecisionMode precisionMode)
+    {
+        if (Tensor.CudaDeviceCount < 2)
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            const int sequence = 4;
+            const int microBatchSize = 2;
+            const int accumulationSteps = 4;
+            const int effectiveBatchSize =
+                microBatchSize * accumulationSteps;
+            int[] devices = [0, 1];
+            int[] input = Enumerable.Range(
+                    0,
+                    effectiveBatchSize * sequence)
+                .Select(index => index % 30 + 1)
+                .ToArray();
+            int[] target = input.Select(value => value % 31 + 1).ToArray();
+
+            Tensor.ExecutionDevice = TensorDevice.Cpu;
+            GptRinWikiJp largeModel = CreateAccumulationModel(
+                seed: 2381,
+                precisionMode,
+                attachTrainingRandom: false);
+            GptRinWikiJp graphModel = CreateAccumulationModel(
+                seed: 2381,
+                precisionMode,
+                attachTrainingRandom: true);
+
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            Tensor.CudaDeviceIndices = devices;
+            using var execution = new ExecutionSession(
+                new ExecutionOptions
+                {
+                    Device = ExecutionDeviceKind.Cuda,
+                    CudaDevices = new DeviceSet(devices),
+                    Precision = precisionMode
+                        == TensorPrecisionMode.BFloat16
+                            ? PrecisionPolicy.BFloat16
+                            : PrecisionPolicy.Mix8_32,
+                },
+                devices.Select(device =>
+                    CudaExecutionLaneFactory.Create(device)).ToArray());
+            using IDisposable sessionScope = execution.Enter();
+
+            CudaBfp8GemmTelemetrySnapshot bfp8RouteBefore =
+                CudaBfp8GemmTelemetry.Snapshot;
+            float largeLoss;
+            float[][] largeGradients;
+            using (var largeEngine = new CudaDataParallelEngine(
+                largeModel,
+                devices,
+                new CudaAdaptiveShardingOptions { Enabled = false }))
+            {
+                largeEngine.PrepareForTraining(effectiveBatchSize);
+                largeModel.ZeroGrad();
+                largeLoss = largeEngine.ForwardBackward(
+                    input,
+                    target,
+                    effectiveBatchSize,
+                    sequence,
+                    Tensor.DefaultCrossEntropyIgnoreIndex,
+                    globalStep: 0);
+                largeGradients = SnapshotGradients(largeModel);
+            }
+
+            CudaLanguageModelMicroBatch[] microBatches = Enumerable
+                .Range(0, accumulationSteps)
+                .Select(index =>
+                {
+                    int start = checked(
+                        index * microBatchSize * sequence);
+                    int end = checked(start + microBatchSize * sequence);
+                    return new CudaLanguageModelMicroBatch(
+                        input[start..end],
+                        target[start..end],
+                        microBatchSize,
+                        sequence);
+                })
+                .ToArray();
+            float graphLoss;
+            float[][] graphGradients;
+            CudaTrainingGraphTelemetry telemetry;
+            using (var graphEngine = new CudaDataParallelEngine(
+                graphModel,
+                devices,
+                new CudaAdaptiveShardingOptions { Enabled = false }))
+            {
+                graphEngine.PrepareForTraining(microBatchSize);
+                graphModel.ZeroGrad();
+                graphLoss = graphEngine.ForwardBackwardAccumulated(
+                    microBatches,
+                    Tensor.DefaultCrossEntropyIgnoreIndex,
+                    globalStep: 0);
+                graphGradients = SnapshotGradients(graphModel);
+                telemetry = graphEngine.TrainingGraphTelemetry;
+
+                Assert.True(
+                    telemetry.CaptureCount == 1,
+                    graphEngine.LastGraphFailure?.ToString()
+                        ?? $"capture count was {telemetry.CaptureCount}");
+                Assert.Equal(accumulationSteps, telemetry.ReplayCount);
+                Assert.Equal(0, telemetry.FallbackCount);
+                Assert.Equal(1, telemetry.CachedCompiledPlanCount);
+                Assert.True(telemetry.GraphPinnedBytes > 0);
+            }
+
+            Assert.InRange(MathF.Abs(largeLoss - graphLoss), 0f, 3e-3f);
+            AssertGradientClose(
+                largeGradients,
+                graphGradients,
+                precisionMode == TensorPrecisionMode.Mix8_32
+                    ? 8e-2f
+                    : 8e-3f);
+            if (precisionMode == TensorPrecisionMode.Mix8_32)
+            {
+                CudaBfp8GemmTelemetrySnapshot route =
+                    CudaBfp8GemmTelemetry.Snapshot - bfp8RouteBefore;
+                Assert.True(
+                    route.DirectBFloat16FfnInputGradientExecutions > 0);
+                Assert.True(route.Bfp8ReluBFloat16MaskExecutions > 0);
+            }
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndices = previousIndices;
+        }
+    }
+
+    [Fact]
+    public void SameShapeIgnoredTargetFlushRetiresAccumulatedGraph()
+    {
+        if (Tensor.CudaDeviceCount < 2)
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            const int sequence = 4;
+            const int microBatchSize = 2;
+            const int accumulationSteps = 2;
+            int[] devices = [0, 1];
+            Tensor.ExecutionDevice = TensorDevice.Cpu;
+            GptRinWikiJp model = CreateAccumulationModel(
+                seed: 2411,
+                TensorPrecisionMode.Mix8_32,
+                attachTrainingRandom: true);
+
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            Tensor.CudaDeviceIndices = devices;
+            using var execution = new ExecutionSession(
+                new ExecutionOptions
+                {
+                    Device = ExecutionDeviceKind.Cuda,
+                    CudaDevices = new DeviceSet(devices),
+                    Precision = PrecisionPolicy.Mix8_32,
+                },
+                devices.Select(device =>
+                    CudaExecutionLaneFactory.Create(device)).ToArray());
+            using IDisposable sessionScope = execution.Enter();
+            using var engine = new CudaDataParallelEngine(
+                model,
+                devices,
+                new CudaAdaptiveShardingOptions { Enabled = false });
+            engine.PrepareForTraining(microBatchSize);
+
+            CudaLanguageModelMicroBatch[] full = Enumerable
+                .Range(0, accumulationSteps)
+                .Select(index => CreateMicroBatch(
+                    index,
+                    microBatchSize,
+                    sequence,
+                    ignoredTargetIndex: null))
+                .ToArray();
+            model.ZeroGrad();
+            float compiledLoss = engine.ForwardBackwardAccumulated(
+                full,
+                Tensor.DefaultCrossEntropyIgnoreIndex,
+                globalStep: 0);
+            CudaTrainingGraphTelemetry compiled =
+                engine.TrainingGraphTelemetry;
+
+            CudaLanguageModelMicroBatch[] partial = Enumerable
+                .Range(0, accumulationSteps)
+                .Select(index => CreateMicroBatch(
+                    index,
+                    microBatchSize,
+                    sequence,
+                    ignoredTargetIndex: index == 0 ? 0 : null))
+                .ToArray();
+            model.ZeroGrad();
+            float partialLoss = engine.ForwardBackwardAccumulated(
+                partial,
+                Tensor.DefaultCrossEntropyIgnoreIndex,
+                globalStep: 1);
+            CudaTrainingGraphTelemetry retired =
+                engine.TrainingGraphTelemetry;
+
+            Assert.True(float.IsFinite(compiledLoss));
+            Assert.True(float.IsFinite(partialLoss));
+            Assert.Equal(1, compiled.CaptureCount);
+            Assert.Equal(accumulationSteps, compiled.ReplayCount);
+            Assert.Equal(1, compiled.CachedCompiledPlanCount);
+            Assert.True(compiled.GraphPinnedBytes > 0);
+            Assert.Equal(0, retired.CachedCompiledPlanCount);
+            Assert.Equal(0, retired.GraphPinnedBytes);
+            Assert.Equal(compiled.CaptureCount, retired.CaptureCount);
+            Assert.Equal(compiled.ReplayCount, retired.ReplayCount);
+            Assert.All(
+                SnapshotGradients(model).SelectMany(
+                    static gradient => gradient),
+                value => Assert.True(float.IsFinite(value)));
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndices = previousIndices;
+        }
+    }
+
+    [Fact]
+    public void PureBfp8AccumulatedGraphPublishesOnlyAfterFinalReplay()
+    {
+        if (Tensor.CudaDeviceCount == 0)
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            const int sequence = 4;
+            const int microBatchSize = 1;
+            const int accumulationSteps = 4;
+            Tensor.ExecutionDevice = TensorDevice.Cpu;
+            GptRinWikiJp model = CreateAccumulationModel(
+                seed: 2441,
+                TensorPrecisionMode.Bfp8,
+                attachTrainingRandom: true);
+
+            Tensor.ExecutionDevice = TensorDevice.Cuda;
+            Tensor.CudaDeviceIndices = [0];
+            using var execution = new ExecutionSession(
+                new ExecutionOptions
+                {
+                    Device = ExecutionDeviceKind.Cuda,
+                    CudaDevices = new DeviceSet(0),
+                    Precision = PrecisionPolicy.Bfp8,
+                },
+                [CudaExecutionLaneFactory.Create(0)]);
+            using IDisposable sessionScope = execution.Enter();
+            using var engine = new CudaDataParallelEngine(
+                model,
+                [0],
+                new CudaAdaptiveShardingOptions { Enabled = false });
+            engine.PrepareForTraining(microBatchSize);
+            CudaLanguageModelMicroBatch[] microBatches = Enumerable
+                .Range(0, accumulationSteps)
+                .Select(index => CreateMicroBatch(
+                    index,
+                    microBatchSize,
+                    sequence,
+                    ignoredTargetIndex: null))
+                .ToArray();
+
+            model.ZeroGrad();
+            float loss;
+            DeviceTransferSnapshot transfers;
+            using (DeviceTransferGuard.EnterTrainingStep(1))
+            {
+                loss = engine.ForwardBackwardAccumulated(
+                    microBatches,
+                    Tensor.DefaultCrossEntropyIgnoreIndex,
+                    globalStep: 0);
+                transfers = Assert.NotNull(
+                    DeviceTransferGuard.CurrentSnapshot);
+            }
+            CudaTrainingGraphTelemetry telemetry =
+                engine.TrainingGraphTelemetry;
+
+            Assert.True(float.IsFinite(loss));
+            Assert.Equal(1, telemetry.CaptureCount);
+            Assert.Equal(accumulationSteps, telemetry.ReplayCount);
+            Assert.Equal(0, telemetry.FallbackCount);
+            Assert.Equal(1, telemetry.CachedCompiledPlanCount);
+            Assert.True(telemetry.GraphPinnedBytes > 0);
+            Assert.Equal(3, transfers.DeviceToHostCopyCount);
+            Assert.Equal(
+                2L * sizeof(float) + sizeof(double),
+                transfers.DeviceToHostBytes);
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndices = previousIndices;
+        }
+    }
+
     [Fact]
     public void StableGraphShapeCacheEvictsToMostRecentThreePlans()
     {
@@ -927,6 +1233,82 @@ public sealed class CudaDataParallelGraphTests
         {
             Tensor.ExecutionDevice = previousDevice;
             Tensor.CudaDeviceIndices = previousIndices;
+        }
+    }
+
+    private static GptRinWikiJp CreateAccumulationModel(
+        int seed,
+        TensorPrecisionMode precisionMode,
+        bool attachTrainingRandom)
+    {
+        var random = new CheckpointableRandom(seed);
+        var model = new GptRinWikiJp(
+            vocabularySize: 32,
+            contextLength: 4,
+            dModel: 8,
+            numHeads: 2,
+            dHidden: 16,
+            numLayers: 1,
+            rng: random,
+            dropout: 0f,
+            dtype: TensorDType.Float32,
+            tieWordEmbeddings: true);
+        random.BeginRuntime();
+        if (attachTrainingRandom)
+            model.AttachTrainingRandom(random);
+        model.to(precisionMode, bfp8_block_size: 32);
+        return model;
+    }
+
+    private static CudaLanguageModelMicroBatch CreateMicroBatch(
+        int microBatchIndex,
+        int batchSize,
+        int sequenceLength,
+        int? ignoredTargetIndex)
+    {
+        int elementCount = checked(batchSize * sequenceLength);
+        int offset = checked(microBatchIndex * elementCount);
+        int[] input = Enumerable.Range(offset, elementCount)
+            .Select(index => index % 30 + 1)
+            .ToArray();
+        int[] target = input.Select(value => value % 31 + 1).ToArray();
+        if (ignoredTargetIndex.HasValue)
+        {
+            target[ignoredTargetIndex.Value] =
+                Tensor.DefaultCrossEntropyIgnoreIndex;
+        }
+        return new CudaLanguageModelMicroBatch(
+            input,
+            target,
+            batchSize,
+            sequenceLength);
+    }
+
+    private static float[][] SnapshotGradients(LanguageModel model)
+        => model.Parameters()
+            .Select(parameter => parameter.T.Grad.ToArray())
+            .ToArray();
+
+    private static void AssertGradientClose(
+        IReadOnlyList<float[]> expected,
+        IReadOnlyList<float[]> actual,
+        float tolerance)
+    {
+        Assert.Equal(expected.Count, actual.Count);
+        for (int tensor = 0; tensor < expected.Count; tensor++)
+        {
+            Assert.Equal(expected[tensor].Length, actual[tensor].Length);
+            for (int index = 0; index < expected[tensor].Length; index++)
+            {
+                float difference = MathF.Abs(
+                    expected[tensor][index] - actual[tensor][index]);
+                Assert.True(
+                    difference <= tolerance,
+                    $"Parameter {tensor}, index {index}: " +
+                    $"expected={expected[tensor][index]:R}, " +
+                    $"actual={actual[tensor][index]:R}, " +
+                    $"difference={difference:R}.");
+            }
         }
     }
 }

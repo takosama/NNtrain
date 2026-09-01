@@ -829,6 +829,19 @@ __global__ void linear_mask_bf16_gradient_kernel(
         : 0;
 }
 
+__global__ void linear_mask_bfp8_relu_bf16_gradient_in_place_kernel(
+    unsigned short* gradient,
+    const signed char* output_payload,
+    int length) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= length)
+        return;
+    // The forward ReLU payload is already quantized. Every BFP8 scale is
+    // positive, so payload > 0 is exactly the stored activation predicate.
+    if (output_payload[index] <= 0)
+        gradient[index] = 0;
+}
+
 template <typename T>
 __global__ void linear_bias_backward_kernel(const T* output_gradient,
     float* bias_gradient, int rows, int width) {
@@ -2685,6 +2698,19 @@ NNTRAIN_EXPORT int nntrain_tensor_linear_mask_bf16_gradient(
         output_gradient,
         output,
         masked,
+        length);
+}
+
+NNTRAIN_EXPORT int
+nntrain_tensor_linear_mask_bfp8_relu_bf16_gradient_in_place(
+    unsigned short* gradient,
+    const signed char* output_payload,
+    int length) {
+    NNTRAIN_LAUNCH_1D(
+        linear_mask_bfp8_relu_bf16_gradient_in_place_kernel,
+        length,
+        gradient,
+        output_payload,
         length);
 }
 

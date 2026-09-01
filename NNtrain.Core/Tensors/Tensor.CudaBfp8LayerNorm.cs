@@ -1,4 +1,5 @@
 using System.Runtime.ExceptionServices;
+using NNtrain.Cuda.Interop;
 
 namespace NNtrain;
 
@@ -530,19 +531,41 @@ internal static partial class TensorCudaKernels
         Tensor beta,
         Bfp8QuantizationDescriptor? outputDescriptor,
         int columns)
-        => columns == 512
-            && IsBlock128(residual.Bfp8Quantization, residual.Numel)
-            && IsBlock128(branch.Bfp8Quantization, branch.Numel)
-            && IsBlock128(gamma.Bfp8Quantization, gamma.Numel)
-            && IsBlock128(beta.Bfp8Quantization, beta.Numel)
-            && IsBlock128(outputDescriptor, residual.Numel);
+    {
+        int blockSize;
+        if (columns == 512)
+        {
+            blockSize = 128;
+        }
+        else if (columns == 384
+            && CudaNativeGateway.AbiVersion.Minor
+                >= CudaAbiVersion.DirectBfp8LayerNormBlock32x384Minor)
+        {
+            blockSize = 32;
+        }
+        else
+        {
+            return false;
+        }
 
-    private static bool IsBlock128(
+        return IsBlockSize(
+                residual.Bfp8Quantization, residual.Numel, blockSize)
+            && IsBlockSize(
+                branch.Bfp8Quantization, branch.Numel, blockSize)
+            && IsBlockSize(
+                gamma.Bfp8Quantization, gamma.Numel, blockSize)
+            && IsBlockSize(
+                beta.Bfp8Quantization, beta.Numel, blockSize)
+            && IsBlockSize(outputDescriptor, residual.Numel, blockSize);
+    }
+
+    private static bool IsBlockSize(
         Bfp8QuantizationDescriptor? descriptor,
-        int length)
+        int length,
+        int blockSize)
         => descriptor is not null
             && descriptor.Granularity == Bfp8ScaleGranularity.Block
-            && descriptor.GetEffectiveBlockSize(length) == 128;
+            && descriptor.GetEffectiveBlockSize(length) == blockSize;
 
     private static void DecodeLayerNormOperand(
         Tensor tensor,

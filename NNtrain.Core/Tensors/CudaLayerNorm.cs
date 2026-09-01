@@ -181,7 +181,8 @@ internal static class CudaLayerNorm
         CudaGraphDropoutToken? graphToken = null)
     {
         accelerator.Bind();
-        const int blockSize = 128;
+        int blockSize = output.Descriptor.GetEffectiveBlockSize(
+            output.Payload.Length);
         if (graphToken is { } token)
         {
             token.RngState
@@ -453,7 +454,8 @@ internal static class CudaLayerNorm
         accelerator.Bind();
         using ParameterScratchLease parameterScratch = GetParameterScratch(
             accelerator, rows, columns);
-        const int blockSize = 128;
+        int blockSize = residual.Descriptor.GetEffectiveBlockSize(
+            residual.Payload.Length);
         if (graphToken is { } token)
         {
             token.RngState
