@@ -208,7 +208,8 @@ internal static partial class WikiLanguageModelCommand
         if (!Directory.Exists(config.DataPath))
         {
             throw new DirectoryNotFoundException(
-                $"Wikipedia data directory was not found at " +
+                $"{config.GetDatasetDisplayName()} data directory was not " +
+                "found at " +
                 $"'{config.DataPath}'.");
         }
 
@@ -239,6 +240,7 @@ internal static partial class WikiLanguageModelCommand
             var timer = Stopwatch.StartNew();
             tokenizer = tokenizers.train_bpe(
                 ReadDocuments(
+                    config.Dataset,
                     config.DataPath,
                     config.TextColumn,
                     config.TokenizerTrainingDocuments),
@@ -264,7 +266,8 @@ internal static partial class WikiLanguageModelCommand
                 precision);
         }
 
-        output.WriteLine("loading and tokenizing Wikipedia documents...");
+        output.WriteLine(
+            $"loading and tokenizing {config.GetDatasetDisplayName()} documents...");
         TrainingCorpus corpus = LoadTrainingCorpus(config, tokenizer, output);
         int[] tokens = corpus.Tokens;
         int sequenceCount = TrainingRunner.DivideRoundUp(
@@ -273,7 +276,8 @@ internal static partial class WikiLanguageModelCommand
         if (sequenceCount < 2)
         {
             throw new InvalidDataException(
-                "The selected Wikipedia data does not contain two complete " +
+                $"The selected {config.GetDatasetDisplayName()} data does " +
+                "not contain two complete " +
                 "training sequences.");
         }
 
@@ -713,13 +717,17 @@ internal static partial class WikiLanguageModelCommand
         WikiPrecisionSelection precision)
     {
         TensorPrecisionMode precisionMode = precision.Mode;
-        long availableDocuments = WikiParquetCorpus.CountRowsAsync(
-            config.DataPath).GetAwaiter().GetResult();
+        long availableDocuments = config.IsFineWebDataset()
+            ? FineWebParquetCorpus.CountRowsAsync(
+                config.DataPath).GetAwaiter().GetResult()
+            : WikiParquetCorpus.CountRowsAsync(
+                config.DataPath).GetAwaiter().GetResult();
         long documentsPerEpoch = config.MaxTrainingDocuments == 0
             ? availableDocuments
             : Math.Min(availableDocuments, config.MaxTrainingDocuments);
         output.WriteLine(
-            $"streaming corpus = {documentsPerEpoch:N0} documents/epoch, " +
+            $"streaming corpus = {config.Dataset}, " +
+            $"{documentsPerEpoch:N0} documents/epoch, " +
             $"{FormatDocumentTokenLimit(config.MaxDocumentTokens)}");
 
         using ExecutionSession executionSession =
@@ -978,6 +986,7 @@ internal static partial class WikiLanguageModelCommand
                 CorpusShuffleSeedSalt);
             foreach (string document in ShuffleDocuments(
                 ReadDocuments(
+                    config.Dataset,
                     config.DataPath,
                     config.TextColumn,
                     maximumDocuments,
@@ -1097,7 +1106,8 @@ internal static partial class WikiLanguageModelCommand
             if (completedTargets == 0)
             {
                 throw new InvalidDataException(
-                    "Wikipedia corpus did not produce trainable token pairs.");
+                    $"{config.GetDatasetDisplayName()} corpus did not produce " +
+                    "trainable token pairs.");
             }
             float trainingLoss = (float)(totalLoss / completedTargets);
             timer.Stop();
@@ -1191,6 +1201,7 @@ internal static partial class WikiLanguageModelCommand
             CorpusShuffleSeedSalt);
         foreach (string document in ShuffleDocuments(
             ReadDocuments(
+                config.Dataset,
                 config.DataPath,
                 config.TextColumn,
                 config.MaxTrainingDocuments == 0
@@ -1306,6 +1317,9 @@ internal static partial class WikiLanguageModelCommand
             $"{checked(config.BatchSize * config.GradientAccumulationSteps)}, " +
             $"context {config.ContextLength}, " +
             $"{FormatDocumentTokenLimit(config.MaxDocumentTokens)}");
+        output.WriteLine(
+            $"dataset = {config.Dataset}, path {config.DataPath}, " +
+            $"text column {config.TextColumn}");
         output.WriteLine(
             $"checkpoint = {config.CheckpointPath}, " +
             $"resume {(config.ResumeFromCheckpoint ? "enabled" : "disabled")}, " +

@@ -3,6 +3,71 @@ using Xunit;
 
 public sealed class WikiTrainingConfigurationTests
 {
+    [Fact]
+    public void FineWebSelectsFineWebDefaultsFromVersionTwoDataSection()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.Write(
+            """
+            {
+              "schemaVersion": 2,
+              "task": { "type": "wiki-language-model" },
+              "data": { "dataset": "fineweb" }
+            }
+            """);
+
+        WikiTrainingConfiguration configuration =
+            WikiTrainingConfiguration.Load(path);
+
+        Assert.Equal("fineweb", configuration.Dataset);
+        Assert.True(configuration.IsFineWebDataset());
+        Assert.Equal(
+            Path.Combine(directory.Root, "data", "fineweb"),
+            configuration.DataPath);
+        Assert.Equal(
+            Path.Combine(directory.Root, "fineweb-bpe.json"),
+            configuration.TokenizerPath);
+    }
+
+    [Fact]
+    public void FineWebHonorsExplicitDataAndTokenizerPaths()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.Write(
+            """
+            {
+              "task": "gpt_rin_wiki_jp",
+              "dataset": "fineweb",
+              "dataPath": "corpus/custom",
+              "tokenizerPath": "tokenizers/custom.json"
+            }
+            """);
+
+        WikiTrainingConfiguration configuration =
+            WikiTrainingConfiguration.Load(path);
+
+        Assert.Equal(
+            Path.Combine(directory.Root, "corpus", "custom"),
+            configuration.DataPath);
+        Assert.Equal(
+            Path.Combine(directory.Root, "tokenizers", "custom.json"),
+            configuration.TokenizerPath);
+    }
+
+    [Fact]
+    public void RejectsUnsupportedDataset()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            Dataset = "commoncrawl",
+        };
+
+        ArgumentException exception = Assert.Throws<ArgumentException>(
+            configuration.Validate);
+
+        Assert.Equal("Dataset", exception.ParamName);
+    }
+
     [Theory]
     [InlineData("training.example.json")]
     [InlineData("training.transformer.json")]

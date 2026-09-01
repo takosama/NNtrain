@@ -199,18 +199,27 @@ internal static partial class WikiLanguageModelCommand
     }
 
     private static IEnumerable<string> ReadDocuments(
+        string dataset,
         string path,
         string textColumn,
         int? maxDocuments,
         int? corpusShuffleSeed = null)
     {
-        IAsyncEnumerator<string> enumerator = datasets
-            .wikipedia(
+        IAsyncEnumerable<string> documents = string.Equals(
+            dataset,
+            WikiTrainingConfiguration.FineWebDataset,
+            StringComparison.OrdinalIgnoreCase)
+            ? datasets.fineweb(
                 root: path,
                 text_column: textColumn,
                 max_documents: maxDocuments,
                 shuffle_seed: corpusShuffleSeed)
-            .GetAsyncEnumerator();
+            : datasets.wikipedia(
+                root: path,
+                text_column: textColumn,
+                max_documents: maxDocuments,
+                shuffle_seed: corpusShuffleSeed);
+        IAsyncEnumerator<string> enumerator = documents.GetAsyncEnumerator();
         try
         {
             while (enumerator.MoveNextAsync().AsTask().GetAwaiter().GetResult())

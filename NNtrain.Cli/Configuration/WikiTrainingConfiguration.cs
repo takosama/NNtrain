@@ -6,6 +6,9 @@ namespace NNtrain;
 sealed record WikiTrainingConfiguration
 {
     internal const string TaskName = "gpt_rin_wiki_jp";
+    internal const string WikipediaDataset = "wikipedia";
+    internal const string WikipediaDatasetAlias = "wiki";
+    internal const string FineWebDataset = "fineweb";
     internal const string NekoMuonOptimizer = "nekomuon";
     internal const string AdamWOptimizer = "adamw";
     internal const string GainShareAdamWOptimizer = "gainshareadamw";
@@ -42,7 +45,22 @@ sealed record WikiTrainingConfiguration
 
     public string Task { get; init; } = TaskName;
 
-    public string DataPath { get; init; } = "data/wiki";
+    public string Dataset { get; init; } = WikipediaDataset;
+
+    private string _dataPath = "data/wiki";
+    private bool _dataPathWasSet;
+
+    public string DataPath
+    {
+        get => _dataPath;
+        init
+        {
+            _dataPath = value;
+            _dataPathWasSet = true;
+        }
+    }
+
+    internal bool HasExplicitDataPath => _dataPathWasSet;
 
     public string TextColumn { get; init; } = "text";
 
@@ -316,12 +334,20 @@ sealed record WikiTrainingConfiguration
 
         string directory = Path.GetDirectoryName(fullPath)
             ?? Environment.CurrentDirectory;
+        string dataPath = configuration.HasExplicitDataPath
+            ? configuration.DataPath
+            : configuration.IsFineWebDataset()
+                ? "data/fineweb"
+                : "data/wiki";
+        string defaultTokenizer = configuration.IsFineWebDataset()
+            ? "fineweb-bpe.json"
+            : "wiki-jp-bpe.json";
         return configuration with
         {
-            DataPath = Path.GetFullPath(configuration.DataPath, directory),
+            DataPath = Path.GetFullPath(dataPath, directory),
             TokenizerPath = string.IsNullOrWhiteSpace(
                 configuration.TokenizerPath)
-                ? Path.Combine(directory, "wiki-jp-bpe.json")
+                ? Path.Combine(directory, defaultTokenizer)
                 : Path.GetFullPath(configuration.TokenizerPath, directory),
             CheckpointPath = ResolveCheckpointPath(
                 configuration,
@@ -506,10 +532,28 @@ sealed record WikiTrainingConfiguration
                 $"Wiki task must be '{TaskName}'.",
                 nameof(Task));
         }
+        if (!string.Equals(
+                Dataset,
+                WikipediaDataset,
+                StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(
+                Dataset,
+                WikipediaDatasetAlias,
+                StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(
+                Dataset,
+                FineWebDataset,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"Dataset must be '{WikipediaDataset}' or " +
+                $"'{FineWebDataset}'.",
+                nameof(Dataset));
+        }
         if (string.IsNullOrWhiteSpace(DataPath))
-            throw new ArgumentException("Wiki data path is required.", nameof(DataPath));
+            throw new ArgumentException("Training data path is required.", nameof(DataPath));
         if (string.IsNullOrWhiteSpace(TextColumn))
-            throw new ArgumentException("Wiki text column is required.", nameof(TextColumn));
+            throw new ArgumentException("Training text column is required.", nameof(TextColumn));
         if (VocabularySize < BpeTokenizer.BaseVocabularySize)
         {
             throw new ArgumentOutOfRangeException(
@@ -886,6 +930,15 @@ sealed record WikiTrainingConfiguration
             Optimizer,
             expectedOptimizer,
             StringComparison.OrdinalIgnoreCase);
+
+    internal bool IsFineWebDataset()
+        => string.Equals(
+            Dataset,
+            FineWebDataset,
+            StringComparison.OrdinalIgnoreCase);
+
+    internal string GetDatasetDisplayName()
+        => IsFineWebDataset() ? "FineWeb" : "Wikipedia";
 
     internal bool HasNekoMuonNewtonSchulzDepthPolicyOverride
         => NekoMuonNewtonSchulzDepthMode is not null;
