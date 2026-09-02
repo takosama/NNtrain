@@ -63,6 +63,7 @@ internal static class TransformerCudaProfiler
             controls.Bfp8BlockSize,
             controls.NewtonSchulzDepthMode,
             controls.NewtonSchulzDepth,
+            controls.NekoMuonBetaFast,
             ordinaryMuon);
     }
 
@@ -139,7 +140,8 @@ internal static class TransformerCudaProfiler
             bfp8BlockSize: controls.Bfp8BlockSize,
             newtonSchulzDepthMode: controls.NewtonSchulzDepthMode,
             newtonSchulzDepth: controls.NewtonSchulzDepth,
-            ordinaryMuon: ordinaryMuon);
+            ordinaryMuon: ordinaryMuon,
+            nekoMuonBetaFast: controls.NekoMuonBetaFast);
     }
 
     internal static TransformerProfileTrainingControls ReadTrainingControls(
@@ -242,11 +244,23 @@ internal static class TransformerCudaProfiler
             }
         }
 
+        float betaFast = optimizer.TryGetProperty(
+            "nekoMuonBetaFast",
+            out JsonElement betaFastElement)
+                ? betaFastElement.GetSingle()
+                : 0.9f;
+        if (!float.IsFinite(betaFast) || betaFast < 0f || betaFast >= 1f)
+        {
+            throw new InvalidDataException(
+                "NekoMuon beta fast must be finite and in [0, 1).");
+        }
+
         return new TransformerProfileTrainingControls(
             gradientAccumulationSteps,
             bfp8BlockSize,
             depthMode,
-            depth);
+            depth,
+            betaFast);
     }
 
     private static bool IsOrdinaryMuon(string optimizerType)
@@ -327,7 +341,8 @@ internal static class TransformerCudaProfiler
         NekoMuonNewtonSchulzDepthMode newtonSchulzDepthMode =
             NekoMuonNewtonSchulzDepthMode.Adaptive,
         float newtonSchulzDepth = 0f,
-        bool ordinaryMuon = false)
+        bool ordinaryMuon = false,
+        float nekoMuonBetaFast = 0.9f)
     {
         if (gradientAccumulationSteps <= 0)
         {
@@ -369,6 +384,7 @@ internal static class TransformerCudaProfiler
                     newtonSchulzInterval,
                     newtonSchulzDepthMode,
                     newtonSchulzDepth,
+                    nekoMuonBetaFast,
                     ordinaryMuon),
                 new AdamW(
                     model.AuxiliaryParameters,
@@ -742,6 +758,7 @@ internal static class TransformerCudaProfiler
         int newtonSchulzInterval,
         NekoMuonNewtonSchulzDepthMode newtonSchulzDepthMode,
         float newtonSchulzDepth,
+        float betaFast,
         bool ordinaryMuon)
     {
         var optimizer = new NekoMuon(
@@ -749,6 +766,7 @@ internal static class TransformerCudaProfiler
             new NekoMuonOptions
             {
                 LearningRate = learningRate,
+                BetaFast = betaFast,
                 WeightDecay = weightDecay,
                 MaxNewtonSchulzSteps = 5,
                 NewtonSchulzInterval = newtonSchulzInterval,
@@ -787,6 +805,7 @@ internal static class TransformerCudaProfiler
         int bfp8BlockSize,
         NekoMuonNewtonSchulzDepthMode newtonSchulzDepthMode,
         float newtonSchulzDepth,
+        float betaFast,
         bool ordinaryMuon)
     {
         if (measuredSteps <= 0)
@@ -819,6 +838,7 @@ internal static class TransformerCudaProfiler
             newtonSchulzInterval,
             newtonSchulzDepthMode,
             newtonSchulzDepth,
+            betaFast,
             ordinaryMuon);
         var adamW = new AdamW(
             model.AuxiliaryParameters,
@@ -858,7 +878,8 @@ internal static class TransformerCudaProfiler
             $"GPUs=[{string.Join(',', devices)}]");
         Console.WriteLine(
             $"optimizer={(ordinaryMuon ? "Muon" : "NekoMuon")}" +
-            $"(interval={newtonSchulzInterval})+AdamW " +
+            $"(beta-fast={(ordinaryMuon ? 0.95f : betaFast):G}, " +
+            $"interval={newtonSchulzInterval})+AdamW " +
             $"(moments={(adamFirstMomentBFloat16 ? "bf16" : "fp32")}/" +
             $"{(adamSecondMomentBFloat16 ? "bf16" : "fp32")})" +
             (skipOptimizer ? " [optimizer step skipped]" : ""));
@@ -1051,4 +1072,5 @@ internal readonly record struct TransformerProfileTrainingControls(
     int GradientAccumulationSteps,
     int Bfp8BlockSize,
     NekoMuonNewtonSchulzDepthMode NewtonSchulzDepthMode,
-    float NewtonSchulzDepth);
+    float NewtonSchulzDepth,
+    float NekoMuonBetaFast);

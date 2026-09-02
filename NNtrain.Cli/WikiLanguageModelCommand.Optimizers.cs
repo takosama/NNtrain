@@ -80,6 +80,7 @@ internal static partial class WikiLanguageModelCommand
             IOptimizer nekoMuon = optim.NekoMuon(
                 model.HiddenWeightParameters,
                 lr: config.LearningRate,
+                beta_fast: config.NekoMuonBetaFast,
                 newton_schulz_interval:
                     config.NekoMuonNewtonSchulzInterval,
                 weight_decay: config.WeightDecay,
@@ -161,7 +162,9 @@ internal static partial class WikiLanguageModelCommand
             output.WriteLine(
                 $"optimizer = NekoMuon " +
                 $"({model.HiddenWeightParameters.Count} matrix parameters, " +
-                $"lr {config.LearningRate:G}, Newton-Schulz every " +
+                $"lr {config.LearningRate:G}, " +
+                $"beta fast {config.NekoMuonBetaFast:G}, " +
+                "Newton-Schulz every " +
                 $"{config.NekoMuonNewtonSchulzInterval} steps, " +
                 $"{FormatNekoMuonNewtonSchulzDepthPolicy(config)}) + " +
                 "AdamW " +

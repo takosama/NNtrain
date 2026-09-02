@@ -52,6 +52,19 @@ internal static class TransformerConvergenceProfiler
             optimizerConfiguration.GetProperty("type").GetString(),
             "muon",
             StringComparison.OrdinalIgnoreCase);
+        float? betaFastOverride = optimizerConfiguration.TryGetProperty(
+            "nekoMuonBetaFast",
+            out JsonElement betaFastElement)
+                ? betaFastElement.GetSingle()
+                : null;
+        if (betaFastOverride is float betaFast
+            && (!float.IsFinite(betaFast)
+                || betaFast < 0f
+                || betaFast >= 1f))
+        {
+            throw new InvalidDataException(
+                "NekoMuon beta fast must be finite and in [0, 1).");
+        }
         TensorPrecisionMode precisionMode = PrecisionModeConfiguration.Read(root);
         TensorDType dtype = precisionMode.ToStorageDType();
         int bfp8BlockSize = root.TryGetProperty(
@@ -143,6 +156,7 @@ internal static class TransformerConvergenceProfiler
                 new NekoMuonOptions
                 {
                     LearningRate = matrixLearningRate,
+                    BetaFast = betaFastOverride ?? 0.9f,
                     WeightDecay = optimizerConfiguration
                         .GetProperty("weightDecay").GetSingle(),
                     MaxNewtonSchulzSteps = 5,
@@ -171,7 +185,11 @@ internal static class TransformerConvergenceProfiler
             if (ordinaryMuon)
                 nekoMuon.SetOrdinaryMuonPolicy();
             else
+            {
+                if (betaFastOverride.HasValue)
+                    nekoMuon.SetBetaFast(betaFastOverride.Value);
                 nekoMuon.ForceFullNewtonSchulz = forceFullNewtonSchulz;
+            }
             var optimizer = new CompositeOptimizer(nekoMuon, adamW);
 
             Parameter hiddenProbe = model.HiddenWeightParameters[0];

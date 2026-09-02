@@ -369,6 +369,10 @@ internal static partial class WikiLanguageModelCommand
                 config,
                 optimizer,
                 output);
+            ApplyNekoMuonBetaFastOverride(
+                config,
+                optimizer,
+                output);
             ApplyNekoMuonNewtonSchulzDepthPolicyOverride(
                 config,
                 optimizer,
@@ -449,6 +453,41 @@ internal static partial class WikiLanguageModelCommand
         output.WriteLine(
             "resume Muon policy = momentum 0.95, Nesterov, " +
             "fixed NS5 every step (runtime override)");
+    }
+
+    internal static void ApplyNekoMuonBetaFastOverride(
+        WikiTrainingConfiguration config,
+        IOptimizer optimizer,
+        TextWriter output)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(optimizer);
+        ArgumentNullException.ThrowIfNull(output);
+        if (!config.IsOptimizer(WikiTrainingConfiguration.NekoMuonOptimizer)
+            || !config.HasNekoMuonBetaFastOverride)
+        {
+            return;
+        }
+
+        int applied = 0;
+        foreach (NekoMuon nekoMuon in OptimizerBundle
+            .GetCheckpointLeafOptimizers(optimizer)
+            .OfType<NekoMuon>())
+        {
+            nekoMuon.SetBetaFast(config.NekoMuonBetaFast);
+            applied++;
+        }
+
+        if (applied == 0)
+        {
+            throw new InvalidDataException(
+                "A NekoMuon beta-fast override was configured, but the " +
+                "restored optimizer has no NekoMuon state.");
+        }
+
+        output.WriteLine(
+            $"resume NekoMuon beta fast = {config.NekoMuonBetaFast:G} " +
+            "(runtime override)");
     }
 
     internal static void ApplyNekoMuonNewtonSchulzDepthPolicyOverride(

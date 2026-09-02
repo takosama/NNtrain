@@ -2021,6 +2021,7 @@ internal static class PerformanceBaselineRunner
             new NekoMuonOptions
             {
                 LearningRate = configuration.LearningRate,
+                BetaFast = configuration.NekoMuonBetaFast,
                 WeightDecay = configuration.WeightDecay,
                 MaxNewtonSchulzSteps = configuration.NewtonSchulzDepth,
                 NewtonSchulzInterval = configuration.NewtonSchulzInterval,

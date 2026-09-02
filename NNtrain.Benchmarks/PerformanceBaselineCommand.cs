@@ -597,6 +597,11 @@ internal static class PerformanceBaselineCommand
             TensorPrecisionModeNames.Format(precision),
             optimizer.GetProperty("learningRate").GetSingle(),
             optimizer.GetProperty("auxiliaryLearningRate").GetSingle(),
+            optimizer.TryGetProperty(
+                "nekoMuonBetaFast",
+                out JsonElement betaFast)
+                    ? ValidateNekoMuonBetaFast(betaFast.GetSingle())
+                    : 0.9f,
             optimizer.GetProperty("weightDecay").GetSingle(),
             depthMode,
             depth,
@@ -646,6 +651,7 @@ internal static class PerformanceBaselineCommand
             Precision: TensorPrecisionModeNames.Mix16_32,
             LearningRate: 0.001f,
             AuxiliaryLearningRate: 0.003f,
+            NekoMuonBetaFast: 0.9f,
             WeightDecay: 0.01f,
             NewtonSchulzDepthMode:
                 PerformanceBaselineGatePolicy.OfficialNewtonSchulzDepthMode,
@@ -658,6 +664,16 @@ internal static class PerformanceBaselineCommand
             CudaMaximumBatchAdjustmentPerStep: 1,
             CudaGraphCacheBudgetMiB: 512,
             Bfp8BlockSize: Bfp8QuantizationDescriptor.DefaultBlockSize);
+
+    private static float ValidateNekoMuonBetaFast(float value)
+    {
+        if (!float.IsFinite(value) || value < 0f || value >= 1f)
+        {
+            throw new InvalidDataException(
+                "NekoMuon beta fast must be finite and in [0, 1).");
+        }
+        return value;
+    }
 
     private static void LaunchWorker(string jobPath, string resultPath)
     {

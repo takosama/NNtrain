@@ -134,9 +134,56 @@ public sealed class NekoMuonResumePolicyTests
         Assert.Equal(0f, optimizer.NewtonSchulzDepth);
     }
 
+    [Fact]
+    public void ExplicitBetaFastOverridesCheckpointValueAfterResume()
+    {
+        NekoMuon optimizer = CreateOptimizer(
+            NekoMuonNewtonSchulzDepthMode.Adaptive,
+            0f,
+            betaFast: 0.9f);
+        var config = new WikiTrainingConfiguration
+        {
+            Optimizer = WikiTrainingConfiguration.NekoMuonOptimizer,
+            NekoMuonBetaFast = 0.95f,
+        };
+        using var output = new StringWriter();
+
+        WikiLanguageModelCommand.ApplyNekoMuonBetaFastOverride(
+            config,
+            optimizer,
+            output);
+
+        Assert.Equal(0.95f, optimizer.CaptureState().Options.BetaFast);
+        Assert.Contains("runtime override", output.ToString());
+        Assert.Contains("0.95", output.ToString());
+    }
+
+    [Fact]
+    public void OmittedBetaFastPreservesCheckpointValueAfterResume()
+    {
+        NekoMuon optimizer = CreateOptimizer(
+            NekoMuonNewtonSchulzDepthMode.Adaptive,
+            0f,
+            betaFast: 0.8f);
+        var config = new WikiTrainingConfiguration
+        {
+            Optimizer = WikiTrainingConfiguration.NekoMuonOptimizer,
+        };
+        using var output = new StringWriter();
+
+        WikiLanguageModelCommand.ApplyNekoMuonBetaFastOverride(
+            config,
+            optimizer,
+            output);
+
+        Assert.Equal(0.8f, optimizer.CaptureState().Options.BetaFast);
+        Assert.Equal(string.Empty, output.ToString());
+    }
+
     private static NekoMuon CreateOptimizer(
         NekoMuonNewtonSchulzDepthMode mode,
-        float depth)
+        float depth,
+        float betaFast = 0.9f)
         => new(
             [new Parameter(
                 [1f, 0f, 0f, 1f],
@@ -145,6 +192,7 @@ public sealed class NekoMuonResumePolicyTests
                 WeightDecayPolicy.Apply)],
             new NekoMuonOptions
             {
+                BetaFast = betaFast,
                 NewtonSchulzDepthMode = mode,
                 NewtonSchulzDepth = depth,
             });

@@ -15,6 +15,7 @@ public sealed class TransformerCudaProfilerConfigurationTests
               "bfp8_block_size": 32,
               "optimization": {
                 "optimizer": {
+                  "nekoMuonBetaFast": 0.95,
                   "nekoMuonNewtonSchulzDepthMode": "fixed",
                   "nekoMuonNewtonSchulzDepth": 5
                 }
@@ -34,6 +35,7 @@ public sealed class TransformerCudaProfilerConfigurationTests
             NekoMuonNewtonSchulzDepthMode.Fixed,
             controls.NewtonSchulzDepthMode);
         Assert.Equal(5f, controls.NewtonSchulzDepth);
+        Assert.Equal(0.95f, controls.NekoMuonBetaFast);
     }
 
     [Fact]
@@ -62,6 +64,7 @@ public sealed class TransformerCudaProfilerConfigurationTests
             NekoMuonNewtonSchulzDepthMode.Adaptive,
             controls.NewtonSchulzDepthMode);
         Assert.Equal(0f, controls.NewtonSchulzDepth);
+        Assert.Equal(0.9f, controls.NekoMuonBetaFast);
     }
 
     [Fact]

@@ -122,6 +122,7 @@ public sealed class OptimizerBundleProductionTests
             Optimizer = WikiTrainingConfiguration.NekoMuonOptimizer,
             LearningRate = 4e-4f,
             AuxiliaryLearningRate = 2e-4f,
+            NekoMuonBetaFast = 0.95f,
         };
 
         OptimizerBundle bundle =
@@ -136,6 +137,9 @@ public sealed class OptimizerBundleProductionTests
         Assert.Equal(
             bundle.LeafOptimizers,
             OptimizerBundle.GetCheckpointLeafOptimizers(bundle));
+        NekoMuon neko = Assert.IsType<NekoMuon>(
+            bundle.LeafOptimizers[0]);
+        Assert.Equal(0.95f, neko.CaptureState().Options.BetaFast);
         Assert.Equal(2, scheduler.step(0.1d).Count);
     }
 

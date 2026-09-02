@@ -172,6 +172,7 @@ public sealed class WikiTrainingConfigurationTests
               "optimizer": "nekomuon",
               "learningRate": 0.001,
               "auxiliaryLearningRate": 0.002,
+              "nekoMuonBetaFast": 0.94,
               "nekoMuonNewtonSchulzInterval": 7,
               "warmupPercent": 20,
               "weightDecay": 0.02,
@@ -227,6 +228,8 @@ public sealed class WikiTrainingConfigurationTests
         Assert.Equal("nekomuon", configuration.Optimizer);
         Assert.Equal(0.001f, configuration.LearningRate);
         Assert.Equal(0.002f, configuration.AuxiliaryLearningRate);
+        Assert.Equal(0.94f, configuration.NekoMuonBetaFast);
+        Assert.True(configuration.HasNekoMuonBetaFastOverride);
         Assert.Equal(7, configuration.NekoMuonNewtonSchulzInterval);
         Assert.Equal(20f, configuration.WarmupPercent);
         Assert.True(configuration.ShowLossGraph);
@@ -257,6 +260,7 @@ public sealed class WikiTrainingConfigurationTests
                   "type": "nekomuon",
                   "learningRate": 0.001,
                   "auxiliaryLearningRate": 0.002,
+                  "nekoMuonBetaFast": 0.95,
                   "weightDecay": 0.02,
                   "nekoMuonNewtonSchulzInterval": 7,
                   "nekoMuonNewtonSchulzDepthMode": "minimum",
@@ -285,6 +289,8 @@ public sealed class WikiTrainingConfigurationTests
         Assert.Equal("nekomuon", configuration.Optimizer);
         Assert.Equal(0.001f, configuration.LearningRate);
         Assert.Equal(0.002f, configuration.AuxiliaryLearningRate);
+        Assert.Equal(0.95f, configuration.NekoMuonBetaFast);
+        Assert.True(configuration.HasNekoMuonBetaFastOverride);
         Assert.Equal(0.02f, configuration.WeightDecay);
         Assert.Equal(7, configuration.NekoMuonNewtonSchulzInterval);
         Assert.True(
@@ -297,6 +303,54 @@ public sealed class WikiTrainingConfigurationTests
             TensorPrecisionMode.BFloat16,
             configuration.GetPrecisionMode());
         Assert.Equal(25f, configuration.WarmupPercent);
+    }
+
+    [Fact]
+    public void GroupedOmittedBetaFastDoesNotCreateResumeOverride()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.Write(
+            """
+            {
+              "task": "gpt_rin_wiki_jp",
+              "optimization": {
+                "optimizer": { "type": "nekomuon" },
+                "scheduler": { "type": "warmupCosineProgress" }
+              }
+            }
+            """);
+
+        WikiTrainingConfiguration configuration =
+            WikiTrainingConfiguration.Load(path);
+
+        Assert.Equal(0.9f, configuration.NekoMuonBetaFast);
+        Assert.False(configuration.HasNekoMuonBetaFastOverride);
+    }
+
+    [Fact]
+    public void VersionTwoGroupedBetaFastCreatesResumeOverride()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.Write(
+            """
+            {
+              "schemaVersion": 2,
+              "task": { "type": "wiki-language-model" },
+              "optimization": {
+                "optimizer": {
+                  "type": "nekomuon",
+                  "nekoMuonBetaFast": 0.95
+                },
+                "scheduler": { "type": "warmupCosineProgress" }
+              }
+            }
+            """);
+
+        WikiTrainingConfiguration configuration =
+            WikiTrainingConfiguration.Load(path);
+
+        Assert.Equal(0.95f, configuration.NekoMuonBetaFast);
+        Assert.True(configuration.HasNekoMuonBetaFastOverride);
     }
 
     [Fact]

@@ -197,6 +197,22 @@ sealed record WikiTrainingConfiguration
 
     public float AuxiliaryLearningRate { get; init; } = 3e-4f;
 
+    private float _nekoMuonBetaFast = 0.9f;
+    private bool _nekoMuonBetaFastWasSet;
+
+    public float NekoMuonBetaFast
+    {
+        get => _nekoMuonBetaFast;
+        init
+        {
+            _nekoMuonBetaFast = value;
+            _nekoMuonBetaFastWasSet = true;
+        }
+    }
+
+    internal bool HasNekoMuonBetaFastOverride =>
+        _nekoMuonBetaFastWasSet;
+
     public int NekoMuonNewtonSchulzInterval { get; init; } = 5;
 
     public string? NekoMuonNewtonSchulzDepthMode { get; init; }
@@ -397,6 +413,7 @@ sealed record WikiTrainingConfiguration
             "optimizer",
             "learningRate",
             "auxiliaryLearningRate",
+            "nekoMuonBetaFast",
             "weightDecay",
             "nekoMuonNewtonSchulzInterval",
             "nekoMuonNewtonSchulzDepthMode",
@@ -425,7 +442,7 @@ sealed record WikiTrainingConfiguration
                 nameof(Optimization));
         }
 
-        return configuration with
+        configuration = configuration with
         {
             Optimizer = optimizer.Type,
             LearningRate = optimizer.LearningRate,
@@ -447,6 +464,12 @@ sealed record WikiTrainingConfiguration
             GainShareMaxScale = optimizer.GainShareMaxScale,
             WarmupPercent = scheduler.WarmupPercent,
         };
+        return optimizer.HasExplicitNekoMuonBetaFast
+            ? configuration with
+            {
+                NekoMuonBetaFast = optimizer.NekoMuonBetaFast,
+            }
+            : configuration;
     }
 
     private static string ResolveCheckpointPath(
@@ -746,6 +769,15 @@ sealed record WikiTrainingConfiguration
         {
             throw new ArgumentOutOfRangeException(
                 nameof(AuxiliaryLearningRate));
+        }
+        if (!float.IsFinite(NekoMuonBetaFast)
+            || NekoMuonBetaFast < 0f
+            || NekoMuonBetaFast >= 1f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(NekoMuonBetaFast),
+                NekoMuonBetaFast,
+                "NekoMuon beta fast must be finite and in [0, 1).");
         }
         ValidatePositive(
             NekoMuonNewtonSchulzInterval,
