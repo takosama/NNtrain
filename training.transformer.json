@@ -49,6 +49,7 @@
       "type": "nekomuon",
       "learningRate": 0.0001,
       "auxiliaryLearningRate": 0.0003,
+      "nekoMuonBetaFast": 0.95,
       "nekoMuonNewtonSchulzInterval": 1,
       "nekoMuonNewtonSchulzDepthMode": "fixed",
       "nekoMuonNewtonSchulzDepth": 5,
