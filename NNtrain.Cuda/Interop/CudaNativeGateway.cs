@@ -34,6 +34,7 @@ public readonly record struct CudaAbiVersion(int Major, int Minor)
     public const int DirectBfp8AttentionOutputMinor = 28;
     public const int OrdinaryMuonNesterovMinor = 29;
     public const int Mix8DiagnosticsMinor = 30;
+    public const int DeviceAdaptiveNekoMuonMinor = 31;
 
     public uint Packed =>
         ((uint)(ushort)Major << 16) | (ushort)Minor;

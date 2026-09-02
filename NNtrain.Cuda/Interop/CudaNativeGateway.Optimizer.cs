@@ -249,6 +249,38 @@ public static partial class CudaNativeGateway
             device);
     }
 
+    public static int OptimizerNekoMuonAdaptiveAcceptBatched(
+        int device, nint current, nint candidate, nint confidences,
+        int matrixLength, int batch, int step, int maxSteps,
+        int depthMode, float configuredDepth)
+    {
+        EnsureMinimumAbiMinor(
+            CudaAbiVersion.DeviceAdaptiveNekoMuonMinor,
+            "device-resident adaptive NekoMuon");
+        return Complete(
+            OptimizerNativeMethods.NekoAdaptiveAcceptBatched(
+                current, candidate, confidences, matrixLength, batch, step,
+                maxSteps, depthMode, configuredDepth),
+            CudaNativeOperation.OptimizerNekoMuon,
+            device);
+    }
+
+    public static int OptimizerNekoMuonConfidenceSummary(
+        int device, nint confidences, int count, int maxSteps,
+        int depthMode, float configuredDepth, bool runNewtonSchulz,
+        bool forceFullDepth, nint summary)
+    {
+        EnsureMinimumAbiMinor(
+            CudaAbiVersion.DeviceAdaptiveNekoMuonMinor,
+            "device-resident NekoMuon confidence summary");
+        return Complete(
+            OptimizerNativeMethods.NekoConfidenceSummary(
+                confidences, count, maxSteps, depthMode, configuredDepth,
+                runNewtonSchulz ? 1 : 0, forceFullDepth ? 1 : 0, summary),
+            CudaNativeOperation.OptimizerNekoMuon,
+            device);
+    }
+
     public static int OptimizerNekoMuonTransposeBack(
         int device, nint source, nint destination, int length,
         int originalRows, int originalColumns)
@@ -371,6 +403,10 @@ public static partial class CudaNativeGateway
         internal static extern int NekoInitializeFromDeviceStats(nint source, nint destination, int length, int originalRows, int originalColumns, int transpose, float inverseFastCorrection, nint stats, float epsilon, nint finiteStatus);
         [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_neko_interpolate", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int NekoInterpolate(nint current, nint next, int length, float fraction);
+        [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_neko_adaptive_accept_batched", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int NekoAdaptiveAcceptBatched(nint current, nint candidate, nint confidences, int matrixLength, int batch, int step, int maxSteps, int depthMode, float configuredDepth);
+        [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_neko_confidence_summary", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int NekoConfidenceSummary(nint confidences, int count, int maxSteps, int depthMode, float configuredDepth, int runNewtonSchulz, int forceFullDepth, nint summary);
         [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_neko_transpose_back", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int NekoTransposeBack(nint source, nint destination, int length, int originalRows, int originalColumns);
         [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_neko_apply", CallingConvention = CallingConvention.Cdecl)]

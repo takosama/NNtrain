@@ -1608,6 +1608,8 @@ internal static partial class CudaOptimizerKernels
         private NativeCudaArena<float>? _bfp8Fast;
         private NativeCudaArena<float>? _bfp8Slow;
         private readonly Dictionary<int, Bfp8Buffers> _bfp8Views = [];
+        private readonly List<AdaptiveConfidencePointerBatch>
+            _adaptiveConfidencePointerBatches = [];
         private int _disposed;
 
         internal NekoMuonDeviceScratch(
@@ -1652,6 +1654,30 @@ internal static partial class CudaOptimizerKernels
         internal NativeCudaBuffer<float> Next { get; }
         internal NativeCudaBuffer<float> Gram { get; }
         internal NativeCudaBuffer<float> GramSquared { get; }
+
+        internal NativeCudaBuffer<nint> GetAdaptiveConfidencePointers(
+            ReadOnlySpan<nint> pointers)
+        {
+            ObjectDisposedException.ThrowIf(
+                Volatile.Read(ref _disposed) != 0, this);
+            foreach (AdaptiveConfidencePointerBatch batch
+                in _adaptiveConfidencePointerBatches)
+            {
+                if (pointers.SequenceEqual(batch.Pointers))
+                    return batch.DevicePointers;
+            }
+            nint[] ownedPointers = pointers.ToArray();
+            return AllocateCudaResources(own =>
+            {
+                NativeCudaBuffer<nint> devicePointers =
+                    X.Device.Allocate1D(ownedPointers);
+                own(devicePointers);
+                _adaptiveConfidencePointerBatches.Add(
+                    new AdaptiveConfidencePointerBatch(
+                        ownedPointers, devicePointers));
+                return devicePointers;
+            });
+        }
 
         internal Bfp8Buffers GetBfp8Buffers(int length)
         {
@@ -1703,6 +1729,12 @@ internal static partial class CudaOptimizerKernels
             foreach (Bfp8Buffers buffers in _bfp8Views.Values)
                 TryDispose(buffers, ref failures);
             _bfp8Views.Clear();
+            foreach (AdaptiveConfidencePointerBatch batch
+                in _adaptiveConfidencePointerBatches)
+            {
+                TryDispose(batch.DevicePointers, ref failures);
+            }
+            _adaptiveConfidencePointerBatches.Clear();
             foreach (IDisposable? resource in new IDisposable?[]
             {
                 X,
@@ -1758,6 +1790,10 @@ internal static partial class CudaOptimizerKernels
                 Slow.Dispose();
             }
         }
+
+        private sealed record AdaptiveConfidencePointerBatch(
+            nint[] Pointers,
+            NativeCudaBuffer<nint> DevicePointers);
     }
 
     internal sealed class NekoMuonResidentState : IDisposable
@@ -2092,6 +2128,98 @@ internal static partial class CudaOptimizerKernels
         }
     }
 
+    /// <summary>
+    /// Owns the stable device pointer table used both by adaptive depth
+    /// selection and by the one-record telemetry readback. No per-parameter
+    /// confidence value crosses to the host during a training step.
+    /// </summary>
+    internal sealed class NekoMuonConfidenceBatch : IDisposable
+    {
+        private readonly int _deviceIndex;
+        private readonly int _count;
+        private readonly NativeCudaBuffer<nint> _confidencePointers;
+        private readonly NativeCudaBuffer<float> _summary;
+        private readonly float[] _host = new float[4];
+
+        internal NekoMuonConfidenceBatch(
+            int deviceIndex,
+            IReadOnlyList<NekoMuonResidentState> states)
+        {
+            ArgumentOutOfRangeException.ThrowIfZero(states.Count);
+            _deviceIndex = deviceIndex;
+            _count = states.Count;
+            NativeCudaDevice accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+            nint[] pointers = states
+                .Select(state => state.GetOrCreate(deviceIndex)
+                    .Confidence.NativePtr)
+                .ToArray();
+            (_confidencePointers, _summary) = AllocateCudaResources(own =>
+            {
+                NativeCudaBuffer<nint> confidencePointers =
+                    accelerator.Allocate1D(pointers);
+                own(confidencePointers);
+                NativeCudaBuffer<float> summary =
+                    accelerator.Allocate1D<float>(4);
+                own(summary);
+                return (confidencePointers, summary);
+            });
+        }
+
+        internal (float Minimum, float Mean, float Maximum, float MeanDepth)
+            Read(
+                int maxSteps,
+                NekoMuonNewtonSchulzDepthMode depthMode,
+                float configuredDepth,
+                bool runNewtonSchulz,
+                bool forceFullDepth)
+        {
+            CudaOptimizerNative.NekoConfidenceSummary(
+                _deviceIndex,
+                _confidencePointers.NativePtr,
+                _count,
+                maxSteps,
+                depthMode,
+                configuredDepth,
+                runNewtonSchulz,
+                forceFullDepth,
+                _summary.NativePtr);
+            _summary.CopyToCPU(_host);
+            return (
+                _host[0],
+                _host[1] / _count,
+                _host[2],
+                _host[3] / _count);
+        }
+
+        public void Dispose()
+        {
+            List<Exception>? failures = null;
+            try
+            {
+                _confidencePointers.Dispose();
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+            try
+            {
+                _summary.Dispose();
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+            if (failures is not null)
+            {
+                throw new AggregateException(
+                    "NekoMuon confidence batch cleanup failed.",
+                    failures);
+            }
+        }
+    }
+
     internal sealed class NekoMuonBfp8StatsBatch : IDisposable
     {
         private readonly int _deviceIndex;
@@ -2192,6 +2320,13 @@ internal static partial class CudaOptimizerKernels
         int Columns,
         int WholeSteps,
         float Fraction,
+        bool UseBFloat16TensorCores);
+
+    private sealed record DeviceAdaptiveNekoMuonBatchItem(
+        NekoMuonBatchItem Item,
+        NekoMuonResidentState.NekoBuffers Buffers,
+        int Rows,
+        int Columns,
         bool UseBFloat16TensorCores);
 
     internal static void NekoMuonPrepareStatsResident(
@@ -3142,6 +3277,228 @@ internal static partial class CudaOptimizerKernels
                 stream);
         }
         return confidence;
+    }
+
+    /// <summary>
+    /// Completes adaptive/minimum-depth NekoMuon while normalization,
+    /// confidence, and depth selection remain resident on the device. Every
+    /// configured NS candidate is launched, but the current value is accepted,
+    /// interpolated, or frozen on-device after each candidate. This preserves
+    /// the exact fractional-depth semantics without a statistics D2H copy.
+    /// </summary>
+    internal static void NekoMuonFinishAdaptiveGroupedDeviceResident(
+        int deviceIndex,
+        IReadOnlyList<NekoMuonBatchItem> items,
+        NekoMuonDeviceScratch scratch,
+        NativeCudaBuffer<int> finiteStatus,
+        float fastCorrection,
+        float epsilon,
+        int maxNewtonSchulzSteps,
+        NekoMuonNewtonSchulzDepthMode newtonSchulzDepthMode,
+        float configuredNewtonSchulzDepth,
+        bool runNewtonSchulz,
+        float coefficientA,
+        float coefficientB,
+        float coefficientC,
+        float learningRate,
+        float weightDecay,
+        bool nesterov = false,
+        NativeCudaBuffer<CudaMix8DiagnosticAccumulator>?
+            mix8Diagnostics = null)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        if (items.Count == 0)
+            return;
+        if (newtonSchulzDepthMode == NekoMuonNewtonSchulzDepthMode.Fixed)
+        {
+            throw new ArgumentException(
+                "The device-adaptive path does not replace fixed-depth " +
+                "NekoMuon.",
+                nameof(newtonSchulzDepthMode));
+        }
+
+        var prepared = new DeviceAdaptiveNekoMuonBatchItem[items.Count];
+        for (int index = 0; index < items.Count; index++)
+        {
+            NekoMuonBatchItem item = items[index];
+            int rows = Math.Min(item.OriginalRows, item.OriginalColumns);
+            int columns = Math.Max(
+                item.OriginalRows, item.OriginalColumns);
+            prepared[index] = new DeviceAdaptiveNekoMuonBatchItem(
+                item,
+                item.State.GetOrCreate(deviceIndex),
+                rows,
+                columns,
+                item.Parameter.DType is
+                    TensorDType.BFloat16 or TensorDType.Bfp8
+                    && scratch.UseBFloat16TensorCores);
+        }
+
+        NativeCudaDevice accelerator =
+            ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+        foreach (IGrouping<
+            (int Rows, int Columns, bool UseBFloat16TensorCores),
+            DeviceAdaptiveNekoMuonBatchItem> group in prepared.GroupBy(
+                item => (
+                    item.Rows,
+                    item.Columns,
+                    item.UseBFloat16TensorCores)))
+        {
+            DeviceAdaptiveNekoMuonBatchItem[] grouped = group.ToArray();
+            for (int offset = 0; offset < grouped.Length;
+                offset += scratch.BatchCapacity)
+            {
+                int count = Math.Min(
+                    scratch.BatchCapacity, grouped.Length - offset);
+                FinishNekoMuonAdaptiveBatch(
+                    accelerator,
+                    deviceIndex,
+                    grouped.AsSpan(offset, count),
+                    scratch,
+                    finiteStatus,
+                    fastCorrection,
+                    epsilon,
+                    maxNewtonSchulzSteps,
+                    newtonSchulzDepthMode,
+                    configuredNewtonSchulzDepth,
+                    runNewtonSchulz,
+                    coefficientA,
+                    coefficientB,
+                    coefficientC,
+                    learningRate,
+                    weightDecay,
+                    nesterov,
+                    mix8Diagnostics);
+            }
+        }
+    }
+
+    private static void FinishNekoMuonAdaptiveBatch(
+        NativeCudaDevice accelerator,
+        int deviceIndex,
+        ReadOnlySpan<DeviceAdaptiveNekoMuonBatchItem> items,
+        NekoMuonDeviceScratch scratch,
+        NativeCudaBuffer<int> finiteStatus,
+        float fastCorrection,
+        float epsilon,
+        int maxNewtonSchulzSteps,
+        NekoMuonNewtonSchulzDepthMode newtonSchulzDepthMode,
+        float configuredNewtonSchulzDepth,
+        bool runNewtonSchulz,
+        float coefficientA,
+        float coefficientB,
+        float coefficientC,
+        float learningRate,
+        float weightDecay,
+        bool nesterov,
+        NativeCudaBuffer<CudaMix8DiagnosticAccumulator>?
+            mix8Diagnostics)
+    {
+        int count = items.Length;
+        int rows = items[0].Rows;
+        int columns = items[0].Columns;
+        int length = checked(rows * columns);
+        Span<nint> confidencePointers = count <= 32
+            ? stackalloc nint[count]
+            : new nint[count];
+        for (int slot = 0; slot < count; slot++)
+        {
+            DeviceAdaptiveNekoMuonBatchItem prepared = items[slot];
+            NekoMuonBatchItem item = prepared.Item;
+            confidencePointers[slot] =
+                prepared.Buffers.Confidence.NativePtr;
+            CudaOptimizerNative.NekoInitializeFromDeviceStats(
+                deviceIndex,
+                (nesterov
+                    ? prepared.Buffers.Slow
+                    : prepared.Buffers.Fast).NativePtr,
+                AddFloatOffset(scratch.X.NativePtr, slot * length),
+                length,
+                item.OriginalRows,
+                item.OriginalColumns,
+                item.OriginalRows > item.OriginalColumns,
+                nesterov ? 1f : 1f / fastCorrection,
+                prepared.Buffers.Stats.NativePtr,
+                epsilon,
+                finiteStatus.NativePtr);
+        }
+        NativeCudaBuffer<nint> deviceConfidencePointers =
+            scratch.GetAdaptiveConfidencePointers(confidencePointers);
+
+        nint current = scratch.X.NativePtr;
+        nint candidate = scratch.Next.NativePtr;
+        if (runNewtonSchulz)
+        {
+            for (int step = 0; step < maxNewtonSchulzSteps; step++)
+            {
+                NekoMuonNewtonSchulzBatched(
+                    accelerator,
+                    deviceIndex,
+                    current,
+                    candidate,
+                    scratch.Gram.NativePtr,
+                    scratch.GramSquared.NativePtr,
+                    rows,
+                    columns,
+                    count,
+                    coefficientA,
+                    coefficientB,
+                    coefficientC,
+                    items[0].UseBFloat16TensorCores);
+                CudaOptimizerNative.NekoAdaptiveAcceptBatched(
+                    deviceIndex,
+                    current,
+                    candidate,
+                    deviceConfidencePointers.NativePtr,
+                    length,
+                    count,
+                    step,
+                    maxNewtonSchulzSteps,
+                    newtonSchulzDepthMode,
+                    configuredNewtonSchulzDepth);
+            }
+        }
+
+        CudaOptimizerNative.AccumulateFiniteStatus(
+            deviceIndex,
+            current,
+            checked(length * count),
+            finiteStatus.NativePtr);
+        for (int slot = 0; slot < count; slot++)
+        {
+            DeviceAdaptiveNekoMuonBatchItem prepared = items[slot];
+            NekoMuonBatchItem item = prepared.Item;
+            nint update = AddFloatOffset(current, slot * length);
+            if (item.OriginalRows > item.OriginalColumns)
+            {
+                nint transposed = AddFloatOffset(candidate, slot * length);
+                CudaOptimizerNative.NekoTransposeBack(
+                    deviceIndex,
+                    update,
+                    transposed,
+                    length,
+                    item.OriginalRows,
+                    item.OriginalColumns);
+                update = transposed;
+            }
+            NativeCudaBuffer<float> data =
+                item.Parameter.EnsureCudaMasterFloat32Buffer(deviceIndex);
+            float finalScale = MathF.Sqrt(MathF.Max(
+                1f,
+                (float)item.OriginalRows / item.OriginalColumns));
+            ApplyNekoMuonUpdate(
+                item.Parameter,
+                deviceIndex,
+                data.NativePtr,
+                update,
+                length,
+                learningRate,
+                finalScale,
+                weightDecay,
+                item.ApplyWeightDecay,
+                mix8Diagnostics);
+            PublishMaster(item.Parameter, accelerator, deviceIndex, data);
+        }
     }
 
     internal static float[] NekoMuonFinishStepGrouped(

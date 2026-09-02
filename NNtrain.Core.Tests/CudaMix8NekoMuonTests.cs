@@ -137,6 +137,175 @@ public sealed class CudaMix8NekoMuonTests
         });
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void AdaptiveMix8OptimizerCommitKeepsD2HScalarBounded(
+        int deviceCount)
+    {
+        if (Tensor.CudaDeviceCount < deviceCount)
+            return;
+
+        int[] devices = Enumerable.Range(0, deviceCount).ToArray();
+        WithCuda(devices, () =>
+        {
+            // Reproduce the production failure exactly: the legacy packed
+            // readback was 128 parameters * 4 statistics * sizeof(float), or
+            // 2,048 bytes, in one forbidden D2H copy.
+            Parameter[] parameters = Enumerable.Range(0, 128)
+                .Select(index => CreateParameter(
+                    Values(2 * 2, 11 + index, 0.2f),
+                    [2, 2],
+                    $"adaptive.hidden.{index}",
+                    Bfp8QuantizationDescriptor.Block(32),
+                    devices))
+                .ToArray();
+            var optimizer = new NekoMuon(
+                parameters,
+                AdaptiveEveryStepOptions());
+            using var execution = new ExecutionSession(new ExecutionOptions
+            {
+                Device = ExecutionDeviceKind.Cuda,
+                CudaDevices = new DeviceSet(devices),
+                Precision = PrecisionPolicy.Mix8_32,
+            });
+            using IDisposable executionScope = execution.Enter();
+            using var session = new TrainingSession(execution);
+            var executor = new TrainingStepExecutor(session);
+            var operations = new OptimizerTrainingOperations(optimizer);
+            try
+            {
+                CudaGradientReductionStamp reductionStamp =
+                    CudaGradientReductionStampSource.CreateStandalone();
+                for (int index = 0; index < parameters.Length; index++)
+                {
+                    float[] gradient = Values(
+                        2 * 2,
+                        71 + index,
+                        0.04f);
+                    foreach (int device in devices)
+                    {
+                        parameters[index].T.SetCudaGradient(
+                            gradient,
+                            device);
+                    }
+                    parameters[index].T.MarkCudaGradientsSynchronized(
+                        devices,
+                        reductionStamp);
+                }
+
+                TrainingStepState committed = executor.Execute(operations);
+
+                Assert.Equal(
+                    TrainingStepPhase.MetricsCommitted,
+                    committed.Phase);
+                DeviceTransferSnapshot snapshot = Assert.NotNull(
+                    operations.GuardedSnapshot);
+                Assert.Equal(0, snapshot.HostToDeviceCopyCount);
+                Assert.Equal(0, snapshot.HostToDeviceBytes);
+                Assert.InRange(snapshot.DeviceToHostBytes, 0L, 64L);
+                Assert.InRange(
+                    snapshot.DeviceToHostCopyCount,
+                    0L,
+                    8L + 8L * deviceCount);
+            }
+            finally
+            {
+                optimizer.DisposeCudaResources();
+                foreach (Parameter parameter in parameters)
+                    parameter.T.InvalidateCudaBuffers();
+            }
+        });
+    }
+
+    [Fact]
+    public void AdaptiveMix8OneStepMatchesFloat32CpuControl()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        float[] initial = Values(8 * 16, 19, 0.18f);
+        float[] gradient = Values(8 * 16, 43, 0.035f);
+        NekoMuonOptions options = AdaptiveEveryStepOptions() with
+        {
+            WeightDecay = 0f,
+        };
+        float[] expectedMaster;
+        NekoMuonDiagnostics expectedDiagnostics;
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            Tensor.ExecutionDevice = TensorDevice.Cpu;
+            var referenceParameter = new Parameter(
+                initial.ToArray(),
+                [8, 16],
+                "adaptive.reference",
+                WeightDecayPolicy.Exclude);
+            var referenceOptimizer = new NekoMuon(
+                [referenceParameter],
+                options);
+            gradient.AsSpan().CopyTo(referenceParameter.T.MutableGrad);
+
+            referenceOptimizer.step();
+
+            expectedMaster = referenceParameter.T.Data.ToArray();
+            expectedDiagnostics = referenceOptimizer.GetDiagnostics();
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndices = previousIndices;
+        }
+
+        WithCuda([0], () =>
+        {
+            using IDisposable dispatch = CudaDispatchPolicy.Push(
+                CudaDispatchPolicy.Defaults with
+                {
+                    DisableTensorCoreNekoMuon = true,
+                    DisableBatchedNekoMuon = true,
+                });
+            Parameter parameter = CreateParameter(
+                initial.ToArray(),
+                [8, 16],
+                "adaptive.cuda",
+                Bfp8QuantizationDescriptor.Block(32));
+            var optimizer = new NekoMuon([parameter], options);
+            try
+            {
+                parameter.T.SetCudaGradient(gradient, 0);
+
+                optimizer.step();
+
+                float[] actualMaster = Read(
+                    parameter.T.EnsureCudaMasterFloat32Buffer(0));
+                NekoMuonDiagnostics actualDiagnostics =
+                    optimizer.GetDiagnostics();
+                AssertClose(expectedMaster, actualMaster, 5e-4f);
+                Assert.InRange(
+                    MathF.Abs(actualDiagnostics.MeanConfidence
+                        - expectedDiagnostics.MeanConfidence),
+                    0f,
+                    2e-5f);
+                Assert.InRange(
+                    MathF.Abs(actualDiagnostics.MeanNewtonSchulzDepth
+                        - expectedDiagnostics.MeanNewtonSchulzDepth),
+                    0f,
+                    1e-4f);
+                Assert.InRange(
+                    actualDiagnostics.MeanNewtonSchulzDepth,
+                    0.01f,
+                    options.MaxNewtonSchulzSteps - 0.01f);
+            }
+            finally
+            {
+                optimizer.DisposeCudaResources();
+                parameter.T.InvalidateCudaBuffers();
+            }
+        });
+    }
+
     [Fact]
     public void OrdinaryMuonBlock32KeepsFp32StateAndReplicasIdentical()
     {
@@ -927,6 +1096,13 @@ public sealed class CudaMix8NekoMuonTests
         NewtonSchulzInterval = 1,
         NewtonSchulzDepthMode = NekoMuonNewtonSchulzDepthMode.Fixed,
         NewtonSchulzDepth = 5f,
+    };
+
+    private static NekoMuonOptions AdaptiveEveryStepOptions() => Options() with
+    {
+        NewtonSchulzInterval = 1,
+        NewtonSchulzDepthMode = NekoMuonNewtonSchulzDepthMode.Adaptive,
+        NewtonSchulzDepth = 0f,
     };
 
     private static Parameter CreateParameter(

@@ -442,6 +442,56 @@ internal static class CudaOptimizerNative
             "NekoMuon interpolate");
     }
 
+    internal static void NekoAdaptiveAcceptBatched(
+        int device,
+        nint current,
+        nint candidate,
+        nint confidences,
+        int matrixLength,
+        int batch,
+        int step,
+        int maxSteps,
+        NekoMuonNewtonSchulzDepthMode depthMode,
+        float configuredDepth)
+    {
+        Select(device);
+        Check(CudaNativeGateway.OptimizerNekoMuonAdaptiveAcceptBatched(
+            device,
+            current,
+            candidate,
+            confidences,
+            matrixLength,
+            batch,
+            step,
+            maxSteps,
+            (int)depthMode,
+            configuredDepth), "NekoMuon device adaptive selection");
+    }
+
+    internal static void NekoConfidenceSummary(
+        int device,
+        nint confidences,
+        int count,
+        int maxSteps,
+        NekoMuonNewtonSchulzDepthMode depthMode,
+        float configuredDepth,
+        bool runNewtonSchulz,
+        bool forceFullDepth,
+        nint summary)
+    {
+        Select(device);
+        Check(CudaNativeGateway.OptimizerNekoMuonConfidenceSummary(
+            device,
+            confidences,
+            count,
+            maxSteps,
+            (int)depthMode,
+            configuredDepth,
+            runNewtonSchulz,
+            forceFullDepth,
+            summary), "NekoMuon device confidence summary");
+    }
+
     internal static void NekoTransposeBack(int device, nint source,
         nint destination, int length, int originalRows, int originalColumns)
     {

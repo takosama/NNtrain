@@ -98,6 +98,8 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_optimizer_neko_initialize_device_stats",
         "nntrain_optimizer_neko_initialize_bf16_device_stats",
         "nntrain_optimizer_neko_interpolate",
+        "nntrain_optimizer_neko_adaptive_accept_batched",
+        "nntrain_optimizer_neko_confidence_summary",
         "nntrain_optimizer_neko_transpose_back",
         "nntrain_optimizer_neko_apply",
         "nntrain_optimizer_neko_apply_mix8_diagnostic",
@@ -546,6 +548,7 @@ public sealed class CudaNativeAbiGatewayTests
         Assert.Equal(28, CudaAbiVersion.DirectBfp8AttentionOutputMinor);
         Assert.Equal(29, CudaAbiVersion.OrdinaryMuonNesterovMinor);
         Assert.Equal(30, CudaAbiVersion.Mix8DiagnosticsMinor);
+        Assert.Equal(31, CudaAbiVersion.DeviceAdaptiveNekoMuonMinor);
         Assert.False(CudaTensorNative.SupportsDirectBfp8FfnGradientAbi(
             new CudaAbiVersion(1, 25)));
         Assert.True(CudaTensorNative.SupportsDirectBfp8FfnGradientAbi(

@@ -25,6 +25,9 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
     private readonly Dictionary<int, CudaOptimizerKernels.NekoMuonStatsBatch>
         _cudaStatsBatches = [];
     private readonly Dictionary<int,
+        CudaOptimizerKernels.NekoMuonConfidenceBatch>
+        _cudaConfidenceBatches = [];
+    private readonly Dictionary<int,
         CudaOptimizerKernels.NekoMuonBFloat16StatsBatch>
         _cudaBFloat16StatsBatches = [];
     private readonly Dictionary<int,
@@ -136,6 +139,31 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
                 0f,
                 0f,
                 0f,
+                _state.Options.MaxNewtonSchulzSteps);
+        }
+
+        if (_cudaStateAuthorityDevice is int primaryDevice
+            && _cudaConfidenceBatches.TryGetValue(
+                primaryDevice,
+                out CudaOptimizerKernels.NekoMuonConfidenceBatch?
+                    confidenceBatch))
+        {
+            bool runDeviceNewtonSchulz =
+                _state.Step % _state.Options.NewtonSchulzInterval == 0;
+            (float deviceMinimum, float deviceMean, float deviceMaximum,
+                float deviceMeanDepth) =
+                confidenceBatch.Read(
+                    _state.Options.MaxNewtonSchulzSteps,
+                    _state.Options.NewtonSchulzDepthMode,
+                    _state.Options.NewtonSchulzDepth,
+                    runDeviceNewtonSchulz,
+                    ForceFullNewtonSchulz);
+            return new NekoMuonDiagnostics(
+                _state.Step,
+                deviceMinimum,
+                deviceMean,
+                deviceMaximum,
+                deviceMeanDepth,
                 _state.Options.MaxNewtonSchulzSteps);
         }
 
@@ -653,6 +681,10 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
                 || options.NewtonSchulzDepthMode
                     == NekoMuonNewtonSchulzDepthMode.Fixed
                 && options.NewtonSchulzDepth == 5f);
+        bool deviceOnlyAdaptive = mix8
+            && !ForceFullNewtonSchulz
+            && options.NewtonSchulzDepthMode
+                != NekoMuonNewtonSchulzDepthMode.Fixed;
         if (_cudaBfp8States.Any(state => state is not null))
         {
             int primaryDevice = devices[0];
@@ -849,22 +881,43 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
                 batch.GatherAndRead();
             });
         }
-        if (!deviceOnlyFixedFive && CudaOperationProfiler.IsEnabled)
+        if (!deviceOnlyFixedFive && !deviceOnlyAdaptive
+            && CudaOperationProfiler.IsEnabled)
         {
             CudaOperationProfiler.MeasureDevices(
                 "optimizer.nekomuon.stats_d2h",
                 devices,
                 ReadStatistics);
         }
-        else if (!deviceOnlyFixedFive)
+        else if (!deviceOnlyFixedFive && !deviceOnlyAdaptive)
         {
             ReadStatistics();
+        }
+
+        if (mix8)
+        {
+            for (int deviceSlot = 0;
+                deviceSlot < devices.Length;
+                deviceSlot++)
+            {
+                int deviceIndex = devices[deviceSlot];
+                if (_cudaConfidenceBatches.ContainsKey(deviceIndex))
+                    continue;
+                var states = new CudaOptimizerKernels
+                    .NekoMuonResidentState[_parameters.Count];
+                for (int index = 0; index < states.Length; index++)
+                    states[index] = GetCudaState(index);
+                _cudaConfidenceBatches.Add(
+                    deviceIndex,
+                    new CudaOptimizerKernels.NekoMuonConfidenceBatch(
+                        deviceIndex, states));
+            }
         }
 
         // Give every CUDA device its own host dispatch loop. This avoids the
         // parameter-major GPU0/GPU1 alternation and keeps both default streams
         // populated during Newton-Schulz and weight publication.
-        float[,]? confidences = deviceOnlyFixedFive
+        float[,]? confidences = deviceOnlyFixedFive || deviceOnlyAdaptive
             ? null
             : new float[devices.Length, _parameters.Count];
         void FinishUpdates()
@@ -920,6 +973,60 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
                             publishMix8: mix8,
                             nesterov: options.Nesterov,
                             mix8Diagnostics: deviceMix8Diagnostics);
+                    return;
+                }
+                if (deviceOnlyAdaptive)
+                {
+                    var adaptiveBatchItems = new CudaOptimizerKernels
+                        .NekoMuonBatchItem[_parameters.Count];
+                    for (int parameterIndex = 0;
+                        parameterIndex < _parameters.Count;
+                        parameterIndex++)
+                    {
+                        Parameter parameter = _parameters[parameterIndex];
+                        GetMatrixShape(
+                            parameter,
+                            out int originalRows,
+                            out int originalColumns);
+                        bool applyWeightDecay =
+                            parameter.WeightDecay == WeightDecayPolicy.Apply
+                            || (options.Decay1D && parameter.T.Rank == 1);
+                        adaptiveBatchItems[parameterIndex] =
+                            new CudaOptimizerKernels.NekoMuonBatchItem(
+                                parameter.T,
+                                GetCudaState(parameterIndex),
+                                originalRows,
+                                originalColumns,
+                                PreviousConfidence: 0f,
+                                ApplyWeightDecay: applyWeightDecay);
+                    }
+                    CudaOptimizerKernels
+                        .NekoMuonFinishAdaptiveGroupedDeviceResident(
+                            deviceIndex,
+                            adaptiveBatchItems,
+                            scratch,
+                            deviceFiniteStatus![deviceSlot],
+                            fastCorrection,
+                            options.Epsilon,
+                            options.MaxNewtonSchulzSteps,
+                            options.NewtonSchulzDepthMode,
+                            options.NewtonSchulzDepth,
+                            runNewtonSchulz,
+                            NewtonSchulzA,
+                            NewtonSchulzB,
+                            NewtonSchulzC,
+                            options.LearningRate,
+                            options.WeightDecay,
+                            options.Nesterov,
+                            deviceMix8Diagnostics);
+                    foreach (Parameter parameter in _parameters)
+                    {
+                        CudaOptimizerKernels.PublishMix8Master(
+                            parameter.T,
+                            deviceIndex,
+                            deviceFiniteStatus[deviceSlot],
+                            deviceMix8Diagnostics);
+                    }
                     return;
                 }
                 var batchItems = new CudaOptimizerKernels
@@ -1037,7 +1144,7 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
                 {
                     NekoMuonParameterState parameterState =
                         _state.ParameterStates[parameterIndex];
-                    if (!deviceOnlyFixedFive)
+                    if (!deviceOnlyFixedFive && !deviceOnlyAdaptive)
                     {
                         _state.ParameterStates[parameterIndex] =
                             parameterState with
@@ -1467,6 +1574,12 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
             TryDisposeCudaResource(batch, ref failures);
         }
         _cudaStatsBatches.Clear();
+        foreach (CudaOptimizerKernels.NekoMuonConfidenceBatch batch
+            in _cudaConfidenceBatches.Values)
+        {
+            TryDisposeCudaResource(batch, ref failures);
+        }
+        _cudaConfidenceBatches.Clear();
         foreach (CudaOptimizerKernels.NekoMuonBFloat16StatsBatch batch
             in _cudaBFloat16StatsBatches.Values)
         {

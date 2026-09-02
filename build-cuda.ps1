@@ -74,6 +74,8 @@ $requiredGatewayExports = @(
     'nntrain_cuda_mix8_diagnostics_reset',
     'nntrain_cuda_bfp8_quantize_f32_diagnostic',
     'nntrain_optimizer_neko_apply_mix8_diagnostic',
+    'nntrain_optimizer_neko_adaptive_accept_batched',
+    'nntrain_optimizer_neko_confidence_summary',
     'nntrain_optimizer_adamw_multi_tensor_mix8_diagnostic_v2',
     'nntrain_cuda_adamw_block_bfp8_state',
     'nntrain_cuda_nekomuon_block_bfp8_moments',

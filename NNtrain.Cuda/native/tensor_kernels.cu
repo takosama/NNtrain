@@ -3,6 +3,7 @@
 
 #include "mix8_diagnostics.cuh"
 #include <cub/block/block_radix_sort.cuh>
+#include <climits>
 #include <cfloat>
 #include <cmath>
 #include <cstdlib>
@@ -2048,6 +2049,77 @@ __global__ void neko_interpolate_kernel(float* current, const float* next,
         current[index] += fraction * (next[index] - current[index]);
 }
 
+__device__ __forceinline__ float neko_resolve_device_depth(
+    float confidence, int max_steps, int depth_mode,
+    float configured_depth) {
+    const float adaptive_depth = static_cast<float>(max_steps)
+        * fminf(1.f, fmaxf(0.f, confidence));
+    float depth = adaptive_depth;
+    if (depth_mode == 1)
+        depth = fmaxf(adaptive_depth, configured_depth);
+    else if (depth_mode == 2)
+        depth = configured_depth;
+    return fminf(static_cast<float>(max_steps), fmaxf(0.f, depth));
+}
+
+// Keeps adaptive Newton-Schulz control on the device. `current` is never
+// swapped: a complete step accepts `candidate`, a fractional step blends it,
+// and every later step leaves the already-selected result frozen. This is
+// algebraically identical to selecting X_floor(d) and interpolating toward
+// X_ceil(d), without another full-size workspace.
+__global__ void neko_adaptive_accept_batched_kernel(
+    float* current, const float* candidate,
+    const float* const* confidences, int matrix_length, int batch,
+    int step, int max_steps, int depth_mode, float configured_depth) {
+    const int linear = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total = matrix_length * batch;
+    if (linear >= total)
+        return;
+    const int matrix = linear / matrix_length;
+    const float depth = neko_resolve_device_depth(
+        confidences[matrix][0], max_steps, depth_mode, configured_depth);
+    const float completed = static_cast<float>(step + 1);
+    if (depth >= completed) {
+        current[linear] = candidate[linear];
+        return;
+    }
+    const float start = static_cast<float>(step);
+    if (depth > start) {
+        const float fraction = depth - start;
+        current[linear] = fmaf(
+            fraction, candidate[linear] - current[linear], current[linear]);
+    }
+}
+
+__global__ void neko_confidence_summary_kernel(
+    const float* const* confidences, int count, int max_steps,
+    int depth_mode, float configured_depth, int run_newton_schulz,
+    int force_full_depth, float* summary) {
+    if (blockIdx.x != 0 || threadIdx.x != 0)
+        return;
+    float minimum = FLT_MAX;
+    float maximum = -FLT_MAX;
+    float sum = 0.f;
+    float depth_sum = 0.f;
+    for (int index = 0; index < count; ++index) {
+        const float confidence = fminf(
+            1.f, fmaxf(0.f, confidences[index][0]));
+        minimum = fminf(minimum, confidence);
+        maximum = fmaxf(maximum, confidence);
+        sum += confidence;
+        if (run_newton_schulz) {
+            depth_sum += force_full_depth
+                ? static_cast<float>(max_steps)
+                : neko_resolve_device_depth(
+                    confidence, max_steps, depth_mode, configured_depth);
+        }
+    }
+    summary[0] = count == 0 ? 0.f : minimum;
+    summary[1] = sum;
+    summary[2] = count == 0 ? 0.f : maximum;
+    summary[3] = depth_sum;
+}
+
 __global__ void neko_transpose_back_kernel(const float* source,
     float* destination, int length, int original_rows, int original_columns) {
     int linear = blockIdx.x * blockDim.x + threadIdx.x;
@@ -3376,6 +3448,40 @@ NNTRAIN_EXPORT int nntrain_optimizer_neko_interpolate(float* current,
     const float* next, int length, float fraction) {
     NNTRAIN_LAUNCH_1D(neko_interpolate_kernel, length, current, next, length,
         fraction);
+}
+
+NNTRAIN_EXPORT int nntrain_optimizer_neko_adaptive_accept_batched(
+    float* current, const float* candidate,
+    const float* const* confidences, int matrix_length, int batch,
+    int step, int max_steps, int depth_mode, float configured_depth) {
+    if (!current || !candidate || !confidences || matrix_length <= 0
+        || batch <= 0 || matrix_length > INT_MAX / batch || step < 0
+        || step >= max_steps || max_steps <= 0 || depth_mode < 0
+        || depth_mode > 2 || !isfinite(configured_depth)
+        || configured_depth < 0.f
+        || configured_depth > static_cast<float>(max_steps)) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+    const int total = matrix_length * batch;
+    NNTRAIN_LAUNCH_1D(neko_adaptive_accept_batched_kernel, total,
+        current, candidate, confidences, matrix_length, batch, step,
+        max_steps, depth_mode, configured_depth);
+}
+
+NNTRAIN_EXPORT int nntrain_optimizer_neko_confidence_summary(
+    const float* const* confidences, int count, int max_steps,
+    int depth_mode, float configured_depth, int run_newton_schulz,
+    int force_full_depth, float* summary) {
+    if (!confidences || !summary || count <= 0 || max_steps <= 0
+        || depth_mode < 0 || depth_mode > 2
+        || !isfinite(configured_depth) || configured_depth < 0.f
+        || configured_depth > static_cast<float>(max_steps)) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+    neko_confidence_summary_kernel<<<1, 1, 0, g_stream>>>(
+        confidences, count, max_steps, depth_mode, configured_depth,
+        run_newton_schulz != 0, force_full_depth != 0, summary);
+    return launch_status();
 }
 
 NNTRAIN_EXPORT int nntrain_optimizer_neko_transpose_back(
