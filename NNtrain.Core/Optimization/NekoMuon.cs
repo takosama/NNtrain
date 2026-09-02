@@ -607,7 +607,16 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                 "The mix8_32 NekoMuon contract requires every parameter " +
                 "to use block-scaled BFP8 storage.");
         }
-        if (mix8 && _cudaDispatchPolicy.EnableBlockBfp8OptimizerState)
+        // Ordinary Muon recursively reuses m_t and feeds its Nesterov
+        // direction to NS5 on every step. Requantizing those values to BFP8
+        // can erase small momentum components and change the orthogonalized
+        // update enough to stall convergence. Keep its recurrent state in
+        // FP32 even when the optional low-memory NekoMuon state is enabled;
+        // mix8_32 parameters and activations remain block-BFP8 and the
+        // parameter update still accumulates in the resident FP32 master.
+        if (mix8
+            && _cudaDispatchPolicy.EnableBlockBfp8OptimizerState
+            && !options.Nesterov)
         {
             StepCudaBfp8(
                 options,

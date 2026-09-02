@@ -8,7 +8,8 @@
 - sequence 1024, width 512, 16 heads, hidden 1536, 32 layers
 - vocabulary 11,500, `mix8_32`, BFP8 block size 32
 - Muon for matrix parameters: momentum 0.95, Nesterov, fixed Newton–Schulz depth 5
-- AdamW for auxiliary parameters; configured learning rates 0.01 / 0.003
+- AdamW for auxiliary parameters; the performance A/B used learning rates
+  0.01 / 0.003, then the convergence A/B below adopted 0.001 / 0.0003
 
 Reproduction command:
 
@@ -46,12 +47,37 @@ provide peer-to-peer transport for the two devices.
   and five Newton–Schulz iterations on every optimizer update. Auxiliary
   parameters continue to use AdamW.
 - CUDA has dedicated Nesterov moment/statistic kernels for float32, bfloat16,
-  mix16_32, bfp8, and mix8_32. The block-32 mix8 path keeps optimizer state in
-  BFP8 and adds no persistent state allocation relative to NekoMuon.
+  mix16_32, bfp8, and mix8_32. Ordinary `mix8_32` Muon keeps its FP32 master,
+  gradient, momentum, and Nesterov direction resident; BFP8 is the published
+  parameter/activation representation. The optional block-BFP8 optimizer-state
+  experiment remains available only to NekoMuon.
 - One-GPU, two-GPU, gradient accumulation, and checkpoint resume paths use the
   same policy. Resume reapplies the configured Muon policy after decoding old
   compatible NekoMuon state.
 - Existing NekoMuon behavior and checkpoint compatibility remain unchanged.
+
+## Convergence correction
+
+The production checkpoint at step 1,427 was replayed from identical weights,
+optimizer state, and real FineWeb token batches. The convergence profiler was
+corrected to reapply ordinary Muon semantics after loading the checkpoint.
+
+| Learning rates (Muon / auxiliary AdamW) | Probe result | Hidden update RMS | Clip frequency |
+|---|---:|---:|---:|
+| 0.01 / 0.003, 10 steps | 4.245664 -> 4.315358 (+0.069694) | 9.1737% of weight RMS | 10/10 |
+| 0.01 / 0.0003, 10 steps | 4.243629 -> 4.274877 (+0.031248) | 9.0211% of weight RMS | 10/10 |
+| 0.001 / 0.003, 10 steps | 4.245664 -> 4.242590 (-0.003074) | 0.9156% of weight RMS | 4/10 |
+| 0.001 / 0.0003, 10 steps | 4.245664 -> 4.219631 (-0.026033) | 0.9034% of weight RMS | 4/10 |
+| 0.001 / 0.0003, 20-step confirmation | 4.475197 -> 4.437518 (-0.037679) | 1.6588% of weight RMS | 6/20 |
+| 0.002 / 0.0003, 20-step comparison | 4.475327 -> 4.444418 (-0.030910) | 3.2549% of weight RMS | 5/20 |
+
+The isolated arms show that Muon 0.01 is the primary instability and clips
+every measured gradient; auxiliary AdamW 0.003 also removes most of the gain
+left by the corrected Muon rate. Both were ten times too large for this
+checkpoint. The adopted configuration is Muon 0.001 and auxiliary AdamW
+0.0003. Ordinary Muon now also ignores the low-memory BFP8 optimizer-state
+diagnostic switch, preventing a stale PowerShell environment setting from
+quantizing its recurrent state.
 
 ## Amdahl profile and adopted changes
 
@@ -78,10 +104,10 @@ Diagnostic rollback switches are
 ## Verification
 
 - Release solution build: 0 warnings, 0 errors
-- Core tests: 1,142 passed
+- Core tests: 1,143 passed
 - Integration tests: 329 passed
 - Benchmark tests: 26 passed
-- Total: 1,497 passed
+- Total: 1,498 passed
 - Native ABI 29 build: SM80, SM86, SM89, SM90, plus compute-90 PTX
 - Production two-GPU mix8_32 accumulation run: finite loss, 16/16 shards, no
   OOM, illegal access, graph fallback, or timed allocation

@@ -8,7 +8,7 @@ using Xunit;
 public sealed class CudaMix8NekoMuonTests
 {
     [Fact]
-    public void OrdinaryMuonBlock32KeepsTwoGpuReplicasIdentical()
+    public void OrdinaryMuonBlock32KeepsFp32StateAndReplicasIdentical()
     {
         if (Tensor.CudaDeviceCount < 2)
             return;
@@ -38,11 +38,85 @@ public sealed class CudaMix8NekoMuonTests
                 AssertClose(
                     Read(parameter.T.EnsureCudaMasterFloat32Buffer(0)),
                     Read(parameter.T.EnsureCudaMasterFloat32Buffer(1)),
-                    1e-5f);
-                var state0 = optimizer.GetCudaBfp8Moments(0, 0);
-                var state1 = optimizer.GetCudaBfp8Moments(0, 1);
-                AssertEncoded(Read(state0.Fast), Read(state1.Fast));
-                AssertEncoded(Read(state0.Slow), Read(state1.Slow));
+                    5e-5f);
+                Assert.Throws<InvalidOperationException>(
+                    () => optimizer.GetCudaBfp8Moments(0, 0));
+                var state0 = optimizer.GetCudaMix8Moments(0, 0);
+                var state1 = optimizer.GetCudaMix8Moments(0, 1);
+                AssertClose(Read(state0.Fast), Read(state1.Fast), 1e-6f);
+                AssertClose(Read(state0.Slow), Read(state1.Slow), 1e-6f);
+            }
+            finally
+            {
+                optimizer.DisposeCudaResources();
+                parameter.T.InvalidateCudaBuffers();
+            }
+        });
+    }
+
+    [Fact]
+    public void OrdinaryMuonMix8AccumulatesSubQuantizationUpdatesInMaster()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        WithCuda([0], () =>
+        {
+            using IDisposable dispatch = CudaDispatchPolicy.Push(
+                CudaDispatchPolicy.Defaults with
+                {
+                    EnableBlockBfp8OptimizerState = true,
+                });
+            Bfp8QuantizationDescriptor descriptor =
+                Bfp8QuantizationDescriptor.Block(32);
+            float[] initial = Values(32 * 32, 71, 0.16f);
+            float[] gradient = Values(32 * 32, 113, 0.025f);
+            Parameter parameter = CreateParameter(
+                initial, [32, 32], "muon.sub_quantization", descriptor);
+            var optimizer = new NekoMuon(
+                [parameter],
+                FixedFiveOptions() with
+                {
+                    LearningRate = 1e-6f,
+                    WeightDecay = 0f,
+                });
+            optimizer.SetOrdinaryMuonPolicy();
+            try
+            {
+                optimizer.prepare();
+                float[] masterBefore = Read(
+                    parameter.T.EnsureCudaMasterFloat32Buffer(0));
+                float previousRms = 0f;
+                for (int step = 0; step < 8; step++)
+                {
+                    parameter.T.SetCudaGradient(gradient, 0);
+                    optimizer.step();
+                    optimizer.zero_grad();
+                    float[] master = Read(
+                        parameter.T.EnsureCudaMasterFloat32Buffer(0));
+                    float rms = MathF.Sqrt(master.Zip(
+                            masterBefore,
+                            (current, before) =>
+                                (current - before) * (current - before))
+                        .Average());
+                    Assert.True(
+                        rms > previousRms,
+                        $"FP32 master update did not accumulate at step " +
+                        $"{step + 1}: {previousRms:G9} -> {rms:G9}.");
+                    previousRms = rms;
+                }
+
+                Bfp8EncodedStorage published = Read(
+                    parameter.T.EnsureCudaBfp8Buffer(0));
+                Assert.True(
+                    previousRms < published.Scales.ToArray().Min() * 0.5f);
+                AssertEncoded(
+                    Bfp8QuantizationCodec.Default.Encode(
+                        Read(parameter.T.EnsureCudaMasterFloat32Buffer(0)),
+                        descriptor),
+                    published);
+                Assert.Throws<InvalidOperationException>(
+                    () => optimizer.GetCudaBfp8Moments(0, 0));
             }
             finally
             {
@@ -278,7 +352,7 @@ public sealed class CudaMix8NekoMuonTests
     }
 
     [Fact]
-    public void OptInBlockBfp8StateKeepsMuonMomentsResidentAndFinite()
+    public void NekoMuonOptInKeepsBlockBfp8MomentsResidentAndFinite()
     {
         if (!Tensor.IsCudaAvailable())
             return;

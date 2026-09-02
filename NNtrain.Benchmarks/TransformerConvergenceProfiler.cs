@@ -48,6 +48,10 @@ internal static class TransformerConvergenceProfiler
         JsonElement root = document.RootElement;
         JsonElement optimizerConfiguration = root.GetProperty("optimization")
             .GetProperty("optimizer");
+        bool ordinaryMuon = string.Equals(
+            optimizerConfiguration.GetProperty("type").GetString(),
+            "muon",
+            StringComparison.OrdinalIgnoreCase);
         TensorPrecisionMode precisionMode = PrecisionModeConfiguration.Read(root);
         TensorDType dtype = precisionMode.ToStorageDType();
         int bfp8BlockSize = root.TryGetProperty(
@@ -164,7 +168,10 @@ internal static class TransformerConvergenceProfiler
                 OptimizerStateStream.LoadStateBinary(nekoMuon, stream);
             using (var stream = File.OpenRead(adamArtifact))
                 OptimizerStateStream.LoadStateBinary(adamW, stream);
-            nekoMuon.ForceFullNewtonSchulz = forceFullNewtonSchulz;
+            if (ordinaryMuon)
+                nekoMuon.SetOrdinaryMuonPolicy();
+            else
+                nekoMuon.ForceFullNewtonSchulz = forceFullNewtonSchulz;
             var optimizer = new CompositeOptimizer(nekoMuon, adamW);
 
             Parameter hiddenProbe = model.HiddenWeightParameters[0];
@@ -252,7 +259,9 @@ internal static class TransformerConvergenceProfiler
             (double auxiliaryRms, double auxiliaryRelative) = UpdateRms(
                 auxiliaryBefore,
                 auxiliaryAfter);
-            int lossWindow = Math.Min(10, losses.Length);
+            int lossWindow = Math.Max(
+                1,
+                Math.Min(10, losses.Length / 2));
             double firstLossWindow = losses
                 .Take(lossWindow)
                 .Average();
@@ -266,8 +275,12 @@ internal static class TransformerConvergenceProfiler
                 : orderedElapsed[orderedElapsed.Length / 2];
 
             Console.WriteLine(
-                $"convergence A/B: schedule={schedule}, NS=" +
-                $"{(forceFullNewtonSchulz ? "full-5" : "adaptive")}, base LR=" +
+                $"convergence A/B: optimizer=" +
+                $"{(ordinaryMuon ? "muon" : "nekomuon")}, " +
+                $"schedule={schedule}, NS=" +
+                $"{(ordinaryMuon || forceFullNewtonSchulz
+                    ? "fixed-5"
+                    : "adaptive")}, base LR=" +
                 $"{matrixLearningRate:G}/{auxiliaryLearningRate:G}, " +
                 $"checkpoint step={globalStep:N0}, progress=" +
                 $"{initialProgress:P3}");
