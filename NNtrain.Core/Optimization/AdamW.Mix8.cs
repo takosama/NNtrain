@@ -43,7 +43,8 @@ public partial class AdamW
         bool transitioned = _parameterRuntime.Any(runtime =>
             runtime.CudaBfp8State is not null
             || runtime.CudaState is null
-            || runtime.CudaBFloat16State is not null);
+            || runtime.CudaBFloat16State is not null
+            || runtime.CudaMixedState is not null);
         if (transitioned)
         {
             foreach (CudaOptimizerKernels.AdamWMultiTensorPlan plan
@@ -52,9 +53,14 @@ public partial class AdamW
                 plan.Dispose();
             }
             _cudaMultiTensorPlans.Clear();
+            DisposeCudaBfp8Plans();
         }
 
         int primaryDevice = devices[0];
+        CudaMix8QuantizationDiagnostics diagnosticsOwner =
+            _cudaMix8Diagnostics ??= new CudaMix8QuantizationDiagnostics();
+        _cudaMix8DiagnosticsDevice = -1;
+        var diagnostics = diagnosticsOwner.Reset(primaryDevice);
         foreach (AdamWParameterRuntime runtime in _parameterRuntime)
         {
             if (runtime.CudaBfp8State is not null)
@@ -68,6 +74,12 @@ public partial class AdamW
                 runtime.CudaBFloat16State.SynchronizeHost(primaryDevice);
                 runtime.CudaBFloat16State.Dispose();
                 runtime.CudaBFloat16State = null;
+            }
+            if (runtime.CudaMixedState is not null)
+            {
+                runtime.CudaMixedState.SynchronizeHost(primaryDevice);
+                runtime.CudaMixedState.Dispose();
+                runtime.CudaMixedState = null;
             }
             if (runtime.FirstMomentBFloat16 is not null)
             {
@@ -104,10 +116,11 @@ public partial class AdamW
         for (int deviceSlot = 0; deviceSlot < devices.Length; deviceSlot++)
         {
             int deviceIndex = devices[deviceSlot];
+            bool enableMix8Diagnostics = deviceIndex == primaryDevice;
             if (!_cudaMultiTensorPlans.TryGetValue(
                     deviceIndex,
                     out CudaOptimizerKernels.AdamWMultiTensorPlan? plan)
-                    || !plan.Matches(items))
+                    || !plan.Matches(items, enableMix8Diagnostics))
             {
                 if (plan is not null)
                 {
@@ -116,7 +129,8 @@ public partial class AdamW
                 }
                 plan = new CudaOptimizerKernels.AdamWMultiTensorPlan(
                     deviceIndex,
-                    items);
+                    items,
+                    enableMix8Diagnostics);
                 _cudaMultiTensorPlans.Add(deviceIndex, plan);
                 _cudaMultiTensorPlanBuildCount++;
             }
@@ -128,13 +142,30 @@ public partial class AdamW
         Parallel.For(0, devices.Length, deviceSlot =>
         {
             int deviceIndex = devices[deviceSlot];
-            plans[deviceSlot].Execute(
-                options.Beta1,
-                options.Beta2,
-                options.LearningRate,
-                options.WeightDecay,
-                _stepUpdateScale,
-                _stepScaledEpsilon);
+            var deviceDiagnostics = deviceIndex == primaryDevice
+                ? diagnostics
+                : null;
+            if (deviceDiagnostics is null)
+            {
+                plans[deviceSlot].Execute(
+                    options.Beta1,
+                    options.Beta2,
+                    options.LearningRate,
+                    options.WeightDecay,
+                    _stepUpdateScale,
+                    _stepScaledEpsilon);
+            }
+            else
+            {
+                plans[deviceSlot].ExecuteMix8Diagnostic(
+                    options.Beta1,
+                    options.Beta2,
+                    options.LearningRate,
+                    options.WeightDecay,
+                    _stepUpdateScale,
+                    _stepScaledEpsilon,
+                    deviceDiagnostics);
+            }
             foreach (AdamWParameterRuntime runtime in _parameterRuntime)
             {
                 CudaOptimizerKernels.AccumulateAdamWMix8FiniteStatus(
@@ -145,7 +176,8 @@ public partial class AdamW
                 CudaOptimizerKernels.PublishMix8Master(
                     runtime.Parameter.T,
                     deviceIndex,
-                    statuses[deviceSlot]);
+                    statuses[deviceSlot],
+                    deviceDiagnostics);
             }
         });
 
@@ -174,6 +206,7 @@ public partial class AdamW
                         .MarkCudaBfp8DataReplicasSynchronized(devices);
                 }
             });
+        _cudaMix8DiagnosticsDevice = primaryDevice;
     }
 
     private static void ThrowIfMix8PublicationNonFinite(

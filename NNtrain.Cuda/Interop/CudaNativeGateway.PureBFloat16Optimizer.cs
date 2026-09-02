@@ -96,6 +96,29 @@ public static partial class CudaNativeGateway
             device);
     }
 
+    public static int MuonMomentsStatsBFloat16Compact(
+        int device, nint gradient, nint fast, nint direction, nint stats,
+        int length, float beta, nint stream)
+    {
+        EnsureMinimumAbiMinor(CudaAbiVersion.OrdinaryMuonNesterovMinor,
+            "reference Nesterov pure-BF16 CUDA Muon statistics");
+        return Complete(PureBFloat16OptimizerNativeMethods.MuonMomentsStats(
+                gradient, fast, direction, stats, length, beta, stream),
+            CudaNativeOperation.NekoMuonMomentsStatsCompact, device);
+    }
+
+    public static int MuonMomentsStatsBFloat16CompactFinite(
+        int device, nint gradient, nint fast, nint direction, nint stats,
+        int length, float beta, nint finiteStatus, nint stream)
+    {
+        EnsureMinimumAbiMinor(CudaAbiVersion.OrdinaryMuonNesterovMinor,
+            "finite-aware reference Nesterov pure-BF16 CUDA Muon statistics");
+        return Complete(PureBFloat16OptimizerNativeMethods.MuonMomentsStatsFinite(
+                gradient, fast, direction, stats, length, beta,
+                finiteStatus, stream),
+            CudaNativeOperation.NekoMuonMomentsStatsCompactFinite, device);
+    }
+
     private static void EnsurePureBFloat16OptimizerAbi()
         => EnsureMinimumAbiMinor(
             CudaAbiVersion.PureBFloat16OptimizerMinor,
@@ -103,6 +126,20 @@ public static partial class CudaNativeGateway
 
     private static class PureBFloat16OptimizerNativeMethods
     {
+        [DllImport(LibraryName,
+            EntryPoint = "nntrain_muon_moments_stats_bf16_compact",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int MuonMomentsStats(
+            nint gradient, nint fast, nint direction, nint stats,
+            int length, float beta, nint stream);
+
+        [DllImport(LibraryName,
+            EntryPoint = "nntrain_muon_moments_stats_bf16_compact_finite",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int MuonMomentsStatsFinite(
+            nint gradient, nint fast, nint direction, nint stats,
+            int length, float beta, nint finiteStatus, nint stream);
+
         [DllImport(LibraryName,
             EntryPoint = "nntrain_optimizer_adamw_pure_bf16",
             CallingConvention = CallingConvention.Cdecl)]

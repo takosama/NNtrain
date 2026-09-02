@@ -41,6 +41,16 @@ internal static class WikiTrainingPhaseProfiler
         float auxiliaryLearningRate = ReadSingle(
             optimizerConfiguration,
             "auxiliaryLearningRate");
+        float betaFast = optimizerConfiguration.TryGetProperty(
+            "nekoMuonBetaFast",
+            out JsonElement betaFastElement)
+                ? betaFastElement.GetSingle()
+                : 0.9f;
+        if (!float.IsFinite(betaFast) || betaFast < 0f || betaFast >= 1f)
+        {
+            throw new InvalidDataException(
+                "NekoMuon beta fast must be finite and in [0, 1).");
+        }
         int newtonSchulzInterval = ReadInt(
             optimizerConfiguration,
             "nekoMuonNewtonSchulzInterval");
@@ -77,6 +87,7 @@ internal static class WikiTrainingPhaseProfiler
             new NekoMuonOptions
             {
                 LearningRate = learningRate,
+                BetaFast = betaFast,
                 NewtonSchulzInterval = newtonSchulzInterval,
                 WeightDecay = weightDecay,
             });
@@ -110,7 +121,8 @@ internal static class WikiTrainingPhaseProfiler
             $"native-f16c {Tensor.IsFloat16NativeAccelerated}");
         Console.WriteLine(
             $"parameters = {model.Parameters().Sum(parameter => (long)parameter.T.Numel):N0}, " +
-            $"Neko matrices = {model.HiddenWeightParameters.Count}");
+            $"Neko matrices = {model.HiddenWeightParameters.Count}, " +
+            $"beta fast = {betaFast:G}");
 
         int warmupSteps = warmupStepsOverride
             ?? Math.Max(2, newtonSchulzInterval);

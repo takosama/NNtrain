@@ -254,8 +254,16 @@ internal static partial class Program
                 $"optimizer = {config.Optimizer.ToLowerInvariant()}");
             output.WriteLine(
                 $"learning rate = {config.LearningRate:F6}");
+            if (config.IsOptimizer(TrainingConfiguration.MuonOptimizer))
+            {
+                output.WriteLine(
+                    "muon = momentum 0.95, Nesterov, fixed NS5 " +
+                    "every step");
+            }
             if (config.IsOptimizer(
-                TrainingConfiguration.NekoMuonOptimizer))
+                    TrainingConfiguration.MuonOptimizer)
+                || config.IsOptimizer(
+                    TrainingConfiguration.NekoMuonOptimizer))
             {
                 output.WriteLine(
                     "auxiliary optimizer = adamw");
@@ -346,6 +354,10 @@ internal static partial class Program
                         model,
                         optimizer,
                         output);
+                ApplyClassificationMuonPolicyAfterResume(
+                    config,
+                    optimizer,
+                    output);
                 bool hasPartialEpoch = checkpoint.CurrentEpoch
                     > checkpoint.CompletedEpoch;
                 if (!hasPartialEpoch
@@ -826,6 +838,27 @@ internal static partial class Program
             return OptimizerBundle.Wrap(optimizer, ["all"]);
         }
 
+        if (configuration.IsOptimizer(TrainingConfiguration.MuonOptimizer))
+        {
+            var muon = (NekoMuon)optim.Muon(
+                model.HiddenWeightParameters,
+                lr: configuration.LearningRate,
+                momentum: 0.95f,
+                weight_decay: configuration.WeightDecay);
+            IOptimizer auxiliaryAdamW = optim.AdamW(
+                model.AuxiliaryParameters,
+                lr: configuration.AuxiliaryLearningRate,
+                beta1: 0.9f,
+                beta2: 0.95f,
+                eps: 1e-8f,
+                weight_decay: configuration.WeightDecay);
+            return new OptimizerBundle(
+            [
+                new OptimizerGroup("hidden", muon),
+                new OptimizerGroup("auxiliary", auxiliaryAdamW),
+            ]);
+        }
+
         if (configuration.IsOptimizer(
             TrainingConfiguration.NekoMuonOptimizer))
         {
@@ -861,6 +894,36 @@ internal static partial class Program
             lr: configuration.LearningRate,
             weight_decay: configuration.WeightDecay);
         return OptimizerBundle.Wrap(adamW, ["all"]);
+    }
+
+    internal static void ApplyClassificationMuonPolicyAfterResume(
+        TrainingConfiguration configuration,
+        IOptimizer optimizer,
+        TextWriter output)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(optimizer);
+        ArgumentNullException.ThrowIfNull(output);
+        if (!configuration.IsOptimizer(TrainingConfiguration.MuonOptimizer))
+            return;
+
+        int applied = 0;
+        foreach (NekoMuon muon in OptimizerBundle
+            .GetCheckpointLeafOptimizers(optimizer)
+            .OfType<NekoMuon>())
+        {
+            muon.SetOrdinaryMuonPolicy();
+            applied++;
+        }
+        if (applied == 0)
+        {
+            throw new InvalidDataException(
+                "Muon was configured, but the restored optimizer has no " +
+                "compatible matrix-optimizer state.");
+        }
+        output.WriteLine(
+            "resume Muon policy = momentum 0.95, Nesterov, " +
+            "fixed NS5 every step (runtime override)");
     }
 
     private static void SaveModelCheckpoint(

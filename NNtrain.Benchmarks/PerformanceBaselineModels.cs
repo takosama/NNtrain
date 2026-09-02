@@ -390,6 +390,7 @@ internal sealed record BaselineModelConfiguration(
     string Precision,
     float LearningRate,
     float AuxiliaryLearningRate,
+    float NekoMuonBetaFast,
     float WeightDecay,
     string NewtonSchulzDepthMode,
     int NewtonSchulzDepth,

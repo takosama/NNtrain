@@ -1,8 +1,12 @@
 #include <cuda_runtime.h>
 #include <cuda_bf16.h>
+
+#include "mix8_diagnostics.cuh"
 #include <cub/block/block_radix_sort.cuh>
+#include <climits>
 #include <cfloat>
 #include <cmath>
+#include <cstdlib>
 
 #if defined(_WIN32)
 #define NNTRAIN_EXPORT extern "C" __declspec(dllexport)
@@ -18,7 +22,17 @@ extern "C" int nntrain_cuda_set_device(int device);
 
 namespace {
 constexpr int kThreads = 256;
+constexpr int kMix8DiagnosticMaximumBlocks = 4096;
 thread_local cudaStream_t g_stream = nullptr;
+
+// Process-scoped diagnostic gate for reproducible same-DLL A/B benchmarks.
+// Read once while the module initializes; production kernel launches do not
+// inspect the environment.
+const bool g_linear_bias_block_reduction_enabled = []() {
+    const char* value = std::getenv(
+        "NNTRAIN_DISABLE_LINEAR_BIAS_BLOCK_REDUCTION");
+    return value == nullptr || value[0] != '1' || value[1] != '\0';
+}();
 
 int blocks_for(int length) {
     return (length + kThreads - 1) / kThreads;
@@ -829,6 +843,19 @@ __global__ void linear_mask_bf16_gradient_kernel(
         : 0;
 }
 
+__global__ void linear_mask_bfp8_relu_bf16_gradient_in_place_kernel(
+    unsigned short* gradient,
+    const signed char* output_payload,
+    int length) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= length)
+        return;
+    // The forward ReLU payload is already quantized. Every BFP8 scale is
+    // positive, so payload > 0 is exactly the stored activation predicate.
+    if (output_payload[index] <= 0)
+        gradient[index] = 0;
+}
+
 template <typename T>
 __global__ void linear_bias_backward_kernel(const T* output_gradient,
     float* bias_gradient, int rows, int width) {
@@ -839,6 +866,45 @@ __global__ void linear_bias_backward_kernel(const T* output_gradient,
     for (int row = 0; row < rows; ++row)
         sum += load(output_gradient, row * width + column);
     bias_gradient[column] += sum;
+}
+
+// A linear bias gradient reduces every row into one output column. Assigning
+// one thread to a column leaves production FFN shapes (width 512) with only
+// two resident blocks while each thread serially walks 16K rows. Instead,
+// eight warps cooperatively reduce 32 adjacent columns. A block exclusively
+// owns its column tile, so the final accumulation remains deterministic and
+// requires no atomics or temporary global workspace.
+template <typename T>
+__global__ void linear_bias_backward_block_kernel(
+    const T* output_gradient,
+    float* bias_gradient,
+    int rows,
+    int width) {
+    constexpr int kColumnsPerBlock = 32;
+    constexpr int kWarpsPerBlock = kThreads / kColumnsPerBlock;
+    __shared__ float partial[kWarpsPerBlock][kColumnsPerBlock];
+
+    const int lane = threadIdx.x & (kColumnsPerBlock - 1);
+    const int warp = threadIdx.x / kColumnsPerBlock;
+    const int column = blockIdx.x * kColumnsPerBlock + lane;
+    float sum = 0.f;
+    if (column < width) {
+        for (int row = warp; row < rows; row += kWarpsPerBlock)
+            sum += load(output_gradient, row * width + column);
+    }
+    partial[warp][lane] = sum;
+    __syncthreads();
+
+    if (warp == 0 && column < width) {
+        float total = partial[0][lane];
+#pragma unroll
+        for (int source_warp = 1;
+             source_warp < kWarpsPerBlock;
+             ++source_warp) {
+            total += partial[source_warp][lane];
+        }
+        bias_gradient[column] += total;
+    }
 }
 
 __global__ void scale_kernel(float* values, int length, float scale) {
@@ -1137,7 +1203,8 @@ __global__ void adamw_bfp8_moments_kernel(const float* gradient,
 
 __global__ void adamw_bfp8_apply_kernel(float* data,
     const float* first_moment, const float* second_moment,
-    const float* second_scale, int length, float learning_rate,
+    const float* second_scale, int second_scale_block_size,
+    int length, float learning_rate,
     float weight_decay, float update_scale, float scaled_epsilon,
     int apply_weight_decay, int* finite_status) {
     const int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1149,7 +1216,8 @@ __global__ void adamw_bfp8_apply_kernel(float* data,
     // pretending that the missing second moment is exactly zero.  This is
     // scale-aware (and therefore invariant to loss/gradient rescaling), while
     // scaled_epsilon still provides AdamW's configured numerical epsilon.
-    const float quantum = second_scale[0];
+    const float quantum =
+        second_scale[index / second_scale_block_size];
     if (!isfinite(quantum) || !(quantum > 0.f)) {
         atomicExch(finite_status, 1);
         return;
@@ -1166,6 +1234,345 @@ __global__ void adamw_bfp8_apply_kernel(float* data,
         return;
     }
     data[index] = parameter;
+}
+
+// Tensor-wide BFP8 AdamW cannot publish either moment before seeing its
+// complete tensor maximum, and the parameter update must consume those
+// quantized moments.  Five multi-tensor stages preserve that persistence
+// boundary without materializing per-parameter FP32 decode buffers or
+// launching the generic codec pipeline once per leaf.
+constexpr int kAdamWBfp8ChunkElements = 4096;
+constexpr int kAdamWBfp8ReductionValues = 6;
+
+struct AdamWBfp8TensorDescriptor {
+    signed char* data_payload;
+    float* data_scale;
+    const signed char* gradient_payload;
+    const float* gradient_scale;
+    signed char* first_moment_payload;
+    float* first_moment_scale;
+    signed char* second_moment_payload;
+    float* second_moment_scale;
+    int length;
+    int apply_weight_decay;
+};
+static_assert(sizeof(AdamWBfp8TensorDescriptor) == 72,
+    "AdamW BFP8 descriptor ABI must match managed layout");
+
+__device__ __forceinline__ float adamw_bfp8_scale(float maximum) {
+    return maximum == 0.f ? 1.f : __fdiv_rn(maximum, 127.f);
+}
+
+__device__ __forceinline__ signed char adamw_bfp8_quantize(
+    float value,
+    float scale) {
+    int quantized = __float2int_rn(__fdiv_rn(value, scale));
+    quantized = max(-127, min(127, quantized));
+    return static_cast<signed char>(quantized);
+}
+
+__device__ __forceinline__ float adamw_bfp8_warp_max(float value) {
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        value = fmaxf(
+            value,
+            __shfl_down_sync(0xffffffffu, value, offset));
+    }
+    return value;
+}
+
+__device__ float adamw_bfp8_block_max(float value) {
+    __shared__ float warp_values[32];
+    const int lane = threadIdx.x & 31;
+    const int warp = threadIdx.x >> 5;
+    value = adamw_bfp8_warp_max(value);
+    if (lane == 0)
+        warp_values[warp] = value;
+    __syncthreads();
+    float result = threadIdx.x < (blockDim.x + 31) / 32
+        ? warp_values[lane]
+        : 0.f;
+    if (warp == 0)
+        result = adamw_bfp8_warp_max(result);
+    __syncthreads();
+    if (threadIdx.x == 0)
+        warp_values[0] = result;
+    __syncthreads();
+    return warp_values[0];
+}
+
+__global__ void adamw_bfp8_moment_reduce_kernel(
+    const AdamWBfp8TensorDescriptor* tensors,
+    int tensor_count,
+    float beta1,
+    float beta2,
+    float* reduction,
+    int* finite_status) {
+    const int tensor_index = static_cast<int>(blockIdx.y);
+    if (tensor_index >= tensor_count)
+        return;
+    const AdamWBfp8TensorDescriptor tensor = tensors[tensor_index];
+    const int start = static_cast<int>(blockIdx.x)
+        * kAdamWBfp8ChunkElements;
+    if (start >= tensor.length)
+        return;
+    const int end = min(tensor.length, start + kAdamWBfp8ChunkElements);
+    const float gradient_scale = *tensor.gradient_scale;
+    const float first_scale = *tensor.first_moment_scale;
+    const float second_scale = *tensor.second_moment_scale;
+    const float data_scale = *tensor.data_scale;
+    const bool valid_scales = isfinite(gradient_scale)
+        && gradient_scale > 0.f
+        && isfinite(first_scale)
+        && first_scale > 0.f
+        && isfinite(second_scale)
+        && second_scale > 0.f
+        && isfinite(data_scale)
+        && data_scale > 0.f;
+    if (!valid_scales) {
+        if (threadIdx.x == 0)
+            atomicExch(finite_status, 1);
+        return;
+    }
+
+    float first_maximum = 0.f;
+    float second_maximum = 0.f;
+    for (int index = start + threadIdx.x; index < end;
+         index += blockDim.x) {
+        const float gradient =
+            static_cast<float>(tensor.gradient_payload[index])
+            * gradient_scale;
+        const float previous_first =
+            static_cast<float>(tensor.first_moment_payload[index])
+            * first_scale;
+        const float previous_second =
+            static_cast<float>(tensor.second_moment_payload[index])
+            * second_scale;
+        const float first = fmaf(
+            beta1,
+            previous_first,
+            (1.f - beta1) * gradient);
+        const float second = fmaf(
+            beta2,
+            previous_second,
+            (1.f - beta2) * gradient * gradient);
+        if (!isfinite(gradient) || !isfinite(first)
+            || !isfinite(second) || second < 0.f) {
+            atomicExch(finite_status, 1);
+            continue;
+        }
+        first_maximum = fmaxf(first_maximum, fabsf(first));
+        second_maximum = fmaxf(second_maximum, fabsf(second));
+    }
+    first_maximum = adamw_bfp8_block_max(first_maximum);
+    second_maximum = adamw_bfp8_block_max(second_maximum);
+    if (threadIdx.x == 0) {
+        float* tensor_reduction = reduction
+            + tensor_index * kAdamWBfp8ReductionValues;
+        atomicMax(
+            reinterpret_cast<unsigned int*>(tensor_reduction),
+            __float_as_uint(first_maximum));
+        atomicMax(
+            reinterpret_cast<unsigned int*>(tensor_reduction + 1),
+            __float_as_uint(second_maximum));
+    }
+}
+
+__global__ void adamw_bfp8_finalize_moment_scales_kernel(
+    const AdamWBfp8TensorDescriptor* tensors,
+    int tensor_count,
+    float* reduction,
+    int* finite_status) {
+    const int tensor_index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tensor_index >= tensor_count)
+        return;
+    const AdamWBfp8TensorDescriptor tensor = tensors[tensor_index];
+    float* tensor_reduction = reduction
+        + tensor_index * kAdamWBfp8ReductionValues;
+    const float old_data_scale = *tensor.data_scale;
+    const float old_first_scale = *tensor.first_moment_scale;
+    const float old_second_scale = *tensor.second_moment_scale;
+    if (!isfinite(old_data_scale) || old_data_scale <= 0.f
+        || !isfinite(old_first_scale) || old_first_scale <= 0.f
+        || !isfinite(old_second_scale) || old_second_scale <= 0.f) {
+        atomicExch(finite_status, 1);
+    }
+    tensor_reduction[3] = old_data_scale;
+    tensor_reduction[4] = old_first_scale;
+    tensor_reduction[5] = old_second_scale;
+    *tensor.first_moment_scale = adamw_bfp8_scale(tensor_reduction[0]);
+    *tensor.second_moment_scale = adamw_bfp8_scale(tensor_reduction[1]);
+}
+
+__global__ void adamw_bfp8_publish_moments_reduce_data_kernel(
+    const AdamWBfp8TensorDescriptor* tensors,
+    int tensor_count,
+    float beta1,
+    float beta2,
+    float learning_rate,
+    float weight_decay,
+    float update_scale,
+    float scaled_epsilon,
+    float* reduction,
+    int* finite_status) {
+    const int tensor_index = static_cast<int>(blockIdx.y);
+    if (tensor_index >= tensor_count)
+        return;
+    const AdamWBfp8TensorDescriptor tensor = tensors[tensor_index];
+    const int start = static_cast<int>(blockIdx.x)
+        * kAdamWBfp8ChunkElements;
+    if (start >= tensor.length)
+        return;
+    const int end = min(tensor.length, start + kAdamWBfp8ChunkElements);
+    float* tensor_reduction = reduction
+        + tensor_index * kAdamWBfp8ReductionValues;
+    const float old_data_scale = tensor_reduction[3];
+    const float old_first_scale = tensor_reduction[4];
+    const float old_second_scale = tensor_reduction[5];
+    const float gradient_scale = *tensor.gradient_scale;
+    const float next_first_scale = *tensor.first_moment_scale;
+    const float next_second_scale = *tensor.second_moment_scale;
+    const bool valid_scales = isfinite(old_data_scale)
+        && old_data_scale > 0.f
+        && isfinite(old_first_scale)
+        && old_first_scale > 0.f
+        && isfinite(old_second_scale)
+        && old_second_scale > 0.f
+        && isfinite(gradient_scale)
+        && gradient_scale > 0.f
+        && isfinite(next_first_scale)
+        && next_first_scale > 0.f
+        && isfinite(next_second_scale)
+        && next_second_scale > 0.f;
+    if (!valid_scales) {
+        if (threadIdx.x == 0)
+            atomicExch(finite_status, 1);
+        return;
+    }
+
+    float data_maximum = 0.f;
+    for (int index = start + threadIdx.x; index < end;
+         index += blockDim.x) {
+        const float gradient =
+            static_cast<float>(tensor.gradient_payload[index])
+            * gradient_scale;
+        const float previous_first =
+            static_cast<float>(tensor.first_moment_payload[index])
+            * old_first_scale;
+        const float previous_second =
+            static_cast<float>(tensor.second_moment_payload[index])
+            * old_second_scale;
+        const float first = fmaf(
+            beta1,
+            previous_first,
+            (1.f - beta1) * gradient);
+        const float second = fmaf(
+            beta2,
+            previous_second,
+            (1.f - beta2) * gradient * gradient);
+        const signed char first_code = adamw_bfp8_quantize(
+            first, next_first_scale);
+        const signed char second_code = adamw_bfp8_quantize(
+            second, next_second_scale);
+        tensor.first_moment_payload[index] = first_code;
+        tensor.second_moment_payload[index] = second_code;
+        const float quantized_first =
+            static_cast<float>(first_code) * next_first_scale;
+        const float quantized_second =
+            static_cast<float>(second_code) * next_second_scale;
+        const float variance_floor = 0.5f * next_second_scale;
+        const float variance = fmaxf(quantized_second, variance_floor);
+        float parameter = static_cast<float>(tensor.data_payload[index])
+            * old_data_scale;
+        if (tensor.apply_weight_decay != 0)
+            parameter *= 1.f - learning_rate * weight_decay;
+        parameter -= update_scale * quantized_first
+            / (sqrtf(variance) + scaled_epsilon);
+        if (!isfinite(first) || !isfinite(second) || second < 0.f
+            || !isfinite(parameter)) {
+            atomicExch(finite_status, 1);
+            continue;
+        }
+        data_maximum = fmaxf(data_maximum, fabsf(parameter));
+    }
+    data_maximum = adamw_bfp8_block_max(data_maximum);
+    if (threadIdx.x == 0) {
+        atomicMax(
+            reinterpret_cast<unsigned int*>(tensor_reduction + 2),
+            __float_as_uint(data_maximum));
+    }
+}
+
+__global__ void adamw_bfp8_finalize_data_scales_kernel(
+    const AdamWBfp8TensorDescriptor* tensors,
+    int tensor_count,
+    const float* reduction,
+    const int* finite_status) {
+    const int tensor_index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tensor_index >= tensor_count)
+        return;
+    const AdamWBfp8TensorDescriptor tensor = tensors[tensor_index];
+    *tensor.data_scale = *finite_status == 0
+        ? adamw_bfp8_scale(
+            reduction[tensor_index * kAdamWBfp8ReductionValues + 2])
+        : 1.f;
+}
+
+__global__ void adamw_bfp8_publish_data_kernel(
+    const AdamWBfp8TensorDescriptor* tensors,
+    int tensor_count,
+    float learning_rate,
+    float weight_decay,
+    float update_scale,
+    float scaled_epsilon,
+    const float* reduction,
+    int* finite_status) {
+    if (*finite_status != 0)
+        return;
+    const int tensor_index = static_cast<int>(blockIdx.y);
+    if (tensor_index >= tensor_count)
+        return;
+    const AdamWBfp8TensorDescriptor tensor = tensors[tensor_index];
+    const int start = static_cast<int>(blockIdx.x)
+        * kAdamWBfp8ChunkElements;
+    if (start >= tensor.length)
+        return;
+    const int end = min(tensor.length, start + kAdamWBfp8ChunkElements);
+    const float* tensor_reduction = reduction
+        + tensor_index * kAdamWBfp8ReductionValues;
+    const float old_data_scale = tensor_reduction[3];
+    const float data_scale = *tensor.data_scale;
+    const float first_scale = *tensor.first_moment_scale;
+    const float second_scale = *tensor.second_moment_scale;
+    if (!isfinite(old_data_scale) || old_data_scale <= 0.f
+        || !isfinite(data_scale) || data_scale <= 0.f
+        || !isfinite(first_scale) || first_scale <= 0.f
+        || !isfinite(second_scale) || second_scale <= 0.f) {
+        if (threadIdx.x == 0)
+            atomicExch(finite_status, 1);
+        return;
+    }
+    const float variance_floor = 0.5f * second_scale;
+    for (int index = start + threadIdx.x; index < end;
+         index += blockDim.x) {
+        const float first =
+            static_cast<float>(tensor.first_moment_payload[index])
+            * first_scale;
+        const float second =
+            static_cast<float>(tensor.second_moment_payload[index])
+            * second_scale;
+        float parameter = static_cast<float>(tensor.data_payload[index])
+            * old_data_scale;
+        if (tensor.apply_weight_decay != 0)
+            parameter *= 1.f - learning_rate * weight_decay;
+        parameter -= update_scale * first
+            / (sqrtf(fmaxf(second, variance_floor)) + scaled_epsilon);
+        if (!isfinite(parameter)) {
+            atomicExch(finite_status, 1);
+            continue;
+        }
+        tensor.data_payload[index] = adamw_bfp8_quantize(
+            parameter, data_scale);
+    }
 }
 
 __global__ void adamw_bf16_state_kernel(float* data, const float* gradient,
@@ -1236,11 +1643,23 @@ struct AdamWChunkDescriptor {
     int length;
     int apply_weight_decay;
     int physical_bf16;
-    int bfloat16_state;
+    int moment_format_flags;
     int pure_bfloat16;
 };
 static_assert(sizeof(AdamWChunkDescriptor) == 64,
     "AdamW descriptor ABI must match managed layout");
+
+// V2 is a separate ABI so the established 64-byte descriptor and ordinary
+// AdamW export remain unchanged.  The old publication scale belongs to the
+// whole parameter; chunk.offset therefore indexes it directly.
+struct AdamWMix8DiagnosticChunkDescriptor {
+    AdamWChunkDescriptor chunk;
+    const float* current_scales;
+    int quantization_block_size;
+    int reserved;
+};
+static_assert(sizeof(AdamWMix8DiagnosticChunkDescriptor) == 80,
+    "mix8 AdamW diagnostic descriptor ABI must match managed layout");
 
 __global__ void adamw_multi_tensor_kernel(
     const AdamWChunkDescriptor* chunks,
@@ -1263,31 +1682,42 @@ __global__ void adamw_multi_tensor_kernel(
                 reinterpret_cast<const __nv_bfloat16*>(
                     chunk.gradient)[index])
             : chunk.gradient[index];
+        constexpr int kFirstMomentBf16 = 1 << 0;
+        constexpr int kSecondMomentBf16 = 1 << 1;
+        const bool first_is_bf16 =
+            (chunk.moment_format_flags & kFirstMomentBf16) != 0;
+        const bool second_is_bf16 =
+            (chunk.moment_format_flags & kSecondMomentBf16) != 0;
         float first;
         float second;
-        if (chunk.bfloat16_state) {
+        if (first_is_bf16) {
             auto* first_bf16 =
                 reinterpret_cast<unsigned short*>(chunk.first_moment);
-            auto* second_bf16 =
-                reinterpret_cast<unsigned short*>(chunk.second_moment);
             first = fmaf(beta1, bf16_load(first_bf16, index),
                 (1.f - beta1) * g);
-            second = fmaf(beta2, bf16_load(second_bf16, index),
-                (1.f - beta2) * g * g);
             bf16_store(first_bf16, index, first);
-            bf16_store(second_bf16, index, second);
-            if (chunk.pure_bfloat16) {
+            if (chunk.pure_bfloat16)
                 first = bf16_load(first_bf16, index);
-                second = bf16_load(second_bf16, index);
-            }
         }
         else {
             auto* first_float = reinterpret_cast<float*>(chunk.first_moment);
-            auto* second_float = reinterpret_cast<float*>(chunk.second_moment);
             first = fmaf(beta1, first_float[index], (1.f - beta1) * g);
+            first_float[index] = first;
+        }
+        if (second_is_bf16) {
+            auto* second_bf16 =
+                reinterpret_cast<unsigned short*>(chunk.second_moment);
+            second = fmaf(beta2, bf16_load(second_bf16, index),
+                (1.f - beta2) * g * g);
+            bf16_store(second_bf16, index, second);
+            if (chunk.pure_bfloat16)
+                second = bf16_load(second_bf16, index);
+        }
+        else {
+            auto* second_float =
+                reinterpret_cast<float*>(chunk.second_moment);
             second = fmaf(beta2, second_float[index],
                 (1.f - beta2) * g * g);
-            first_float[index] = first;
             second_float[index] = second;
         }
         float parameter = chunk.pure_bfloat16
@@ -1315,6 +1745,128 @@ __global__ void adamw_multi_tensor_kernel(
                     __bfloat162float(value);
             }
         }
+    }
+}
+
+__global__ void adamw_multi_tensor_mix8_diagnostic_kernel(
+    const AdamWMix8DiagnosticChunkDescriptor* diagnostic_chunks,
+    int chunk_count,
+    float beta1,
+    float beta2,
+    float learning_rate,
+    float weight_decay,
+    float update_scale,
+    float scaled_epsilon,
+    nntrain_mix8_diagnostic_accumulator* metrics) {
+    const int chunk_index = blockIdx.x;
+    if (chunk_index >= chunk_count)
+        return;
+    const AdamWMix8DiagnosticChunkDescriptor diagnostic =
+        diagnostic_chunks[chunk_index];
+    const AdamWChunkDescriptor chunk = diagnostic.chunk;
+    if (diagnostic.current_scales == nullptr
+        || diagnostic.quantization_block_size <= 0) {
+        return;
+    }
+
+    float local_update_ratio_squared_sum = 0.f;
+    for (int local = threadIdx.x; local < chunk.length;
+         local += blockDim.x) {
+        const int index = chunk.offset + local;
+        const float g = chunk.pure_bfloat16
+            ? __bfloat162float(
+                reinterpret_cast<const __nv_bfloat16*>(
+                    chunk.gradient)[index])
+            : chunk.gradient[index];
+        constexpr int kFirstMomentBf16 = 1 << 0;
+        constexpr int kSecondMomentBf16 = 1 << 1;
+        const bool first_is_bf16 =
+            (chunk.moment_format_flags & kFirstMomentBf16) != 0;
+        const bool second_is_bf16 =
+            (chunk.moment_format_flags & kSecondMomentBf16) != 0;
+        float first;
+        float second;
+        if (first_is_bf16) {
+            auto* first_bf16 =
+                reinterpret_cast<unsigned short*>(chunk.first_moment);
+            first = fmaf(beta1, bf16_load(first_bf16, index),
+                (1.f - beta1) * g);
+            bf16_store(first_bf16, index, first);
+            if (chunk.pure_bfloat16)
+                first = bf16_load(first_bf16, index);
+        }
+        else {
+            auto* first_float =
+                reinterpret_cast<float*>(chunk.first_moment);
+            first = fmaf(
+                beta1, first_float[index], (1.f - beta1) * g);
+            first_float[index] = first;
+        }
+        if (second_is_bf16) {
+            auto* second_bf16 =
+                reinterpret_cast<unsigned short*>(chunk.second_moment);
+            second = fmaf(beta2, bf16_load(second_bf16, index),
+                (1.f - beta2) * g * g);
+            bf16_store(second_bf16, index, second);
+            if (chunk.pure_bfloat16)
+                second = bf16_load(second_bf16, index);
+        }
+        else {
+            auto* second_float =
+                reinterpret_cast<float*>(chunk.second_moment);
+            second = fmaf(beta2, second_float[index],
+                (1.f - beta2) * g * g);
+            second_float[index] = second;
+        }
+
+        const float previous = chunk.pure_bfloat16
+            ? __bfloat162float(
+                reinterpret_cast<const __nv_bfloat16*>(chunk.data)[index])
+            : chunk.data[index];
+        float parameter = previous;
+        if (chunk.apply_weight_decay)
+            parameter *= 1.f - learning_rate * weight_decay;
+        parameter -= update_scale * first /
+            (sqrtf(second) + scaled_epsilon);
+        if (chunk.pure_bfloat16) {
+            reinterpret_cast<__nv_bfloat16*>(chunk.data)[index] =
+                __float2bfloat16_rn(parameter);
+            parameter = __bfloat162float(
+                reinterpret_cast<const __nv_bfloat16*>(chunk.data)[index]);
+        }
+        else {
+            chunk.data[index] = parameter;
+        }
+        if (chunk.compute != nullptr) {
+            const __nv_bfloat16 value = __float2bfloat16_rn(parameter);
+            if (chunk.physical_bf16) {
+                reinterpret_cast<__nv_bfloat16*>(chunk.compute)[index] =
+                    value;
+            }
+            else {
+                reinterpret_cast<float*>(chunk.compute)[index] =
+                    __bfloat162float(value);
+            }
+        }
+
+        const float scale = diagnostic.current_scales[
+            index / diagnostic.quantization_block_size];
+        const float normalized = __fdiv_rn(parameter - previous, scale);
+        local_update_ratio_squared_sum += normalized * normalized;
+    }
+
+    __shared__ float reduction[kThreads];
+    reduction[threadIdx.x] = local_update_ratio_squared_sum;
+    __syncthreads();
+    for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+        if (threadIdx.x < offset)
+            reduction[threadIdx.x] += reduction[threadIdx.x + offset];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        atomicAdd(
+            &metrics->update_step_ratio_squared_sum,
+            static_cast<double>(reduction[0]));
     }
 }
 
@@ -1497,6 +2049,77 @@ __global__ void neko_interpolate_kernel(float* current, const float* next,
         current[index] += fraction * (next[index] - current[index]);
 }
 
+__device__ __forceinline__ float neko_resolve_device_depth(
+    float confidence, int max_steps, int depth_mode,
+    float configured_depth) {
+    const float adaptive_depth = static_cast<float>(max_steps)
+        * fminf(1.f, fmaxf(0.f, confidence));
+    float depth = adaptive_depth;
+    if (depth_mode == 1)
+        depth = fmaxf(adaptive_depth, configured_depth);
+    else if (depth_mode == 2)
+        depth = configured_depth;
+    return fminf(static_cast<float>(max_steps), fmaxf(0.f, depth));
+}
+
+// Keeps adaptive Newton-Schulz control on the device. `current` is never
+// swapped: a complete step accepts `candidate`, a fractional step blends it,
+// and every later step leaves the already-selected result frozen. This is
+// algebraically identical to selecting X_floor(d) and interpolating toward
+// X_ceil(d), without another full-size workspace.
+__global__ void neko_adaptive_accept_batched_kernel(
+    float* current, const float* candidate,
+    const float* const* confidences, int matrix_length, int batch,
+    int step, int max_steps, int depth_mode, float configured_depth) {
+    const int linear = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total = matrix_length * batch;
+    if (linear >= total)
+        return;
+    const int matrix = linear / matrix_length;
+    const float depth = neko_resolve_device_depth(
+        confidences[matrix][0], max_steps, depth_mode, configured_depth);
+    const float completed = static_cast<float>(step + 1);
+    if (depth >= completed) {
+        current[linear] = candidate[linear];
+        return;
+    }
+    const float start = static_cast<float>(step);
+    if (depth > start) {
+        const float fraction = depth - start;
+        current[linear] = fmaf(
+            fraction, candidate[linear] - current[linear], current[linear]);
+    }
+}
+
+__global__ void neko_confidence_summary_kernel(
+    const float* const* confidences, int count, int max_steps,
+    int depth_mode, float configured_depth, int run_newton_schulz,
+    int force_full_depth, float* summary) {
+    if (blockIdx.x != 0 || threadIdx.x != 0)
+        return;
+    float minimum = FLT_MAX;
+    float maximum = -FLT_MAX;
+    float sum = 0.f;
+    float depth_sum = 0.f;
+    for (int index = 0; index < count; ++index) {
+        const float confidence = fminf(
+            1.f, fmaxf(0.f, confidences[index][0]));
+        minimum = fminf(minimum, confidence);
+        maximum = fmaxf(maximum, confidence);
+        sum += confidence;
+        if (run_newton_schulz) {
+            depth_sum += force_full_depth
+                ? static_cast<float>(max_steps)
+                : neko_resolve_device_depth(
+                    confidence, max_steps, depth_mode, configured_depth);
+        }
+    }
+    summary[0] = count == 0 ? 0.f : minimum;
+    summary[1] = sum;
+    summary[2] = count == 0 ? 0.f : maximum;
+    summary[3] = depth_sum;
+}
+
 __global__ void neko_transpose_back_kernel(const float* source,
     float* destination, int length, int original_rows, int original_columns) {
     int linear = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1517,6 +2140,51 @@ __global__ void neko_apply_kernel(float* data, const float* update,
     if (apply_weight_decay)
         parameter -= learning_rate * weight_decay * parameter;
     data[index] = parameter - learning_rate * final_scale * update[index];
+}
+
+__global__ void neko_apply_mix8_diagnostic_kernel(
+    float* data,
+    const float* update,
+    const float* current_scales,
+    int quantization_block_size,
+    int length,
+    float learning_rate,
+    float final_scale,
+    float weight_decay,
+    int apply_weight_decay,
+    nntrain_mix8_diagnostic_accumulator* metrics) {
+    float local_update_ratio_squared_sum = 0.f;
+    const int stride = blockDim.x * gridDim.x;
+    for (int index = blockIdx.x * blockDim.x + threadIdx.x;
+         index < length;
+         index += stride) {
+        const float previous = data[index];
+        float parameter = previous;
+        if (apply_weight_decay)
+            parameter -= learning_rate * weight_decay * parameter;
+        parameter =
+            parameter - learning_rate * final_scale * update[index];
+        data[index] = parameter;
+
+        const float scale =
+            current_scales[index / quantization_block_size];
+        const float normalized = __fdiv_rn(parameter - previous, scale);
+        local_update_ratio_squared_sum += normalized * normalized;
+    }
+
+    __shared__ float reduction[kThreads];
+    reduction[threadIdx.x] = local_update_ratio_squared_sum;
+    __syncthreads();
+    for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+        if (threadIdx.x < offset)
+            reduction[threadIdx.x] += reduction[threadIdx.x + offset];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        atomicAdd(
+            &metrics->update_step_ratio_squared_sum,
+            static_cast<double>(reduction[0]));
+    }
 }
 
 __global__ void neko_apply_bf16_kernel(__nv_bfloat16* data,
@@ -2336,17 +3004,49 @@ NNTRAIN_EXPORT int nntrain_tensor_linear_mask_bf16_gradient(
         length);
 }
 
+NNTRAIN_EXPORT int
+nntrain_tensor_linear_mask_bfp8_relu_bf16_gradient_in_place(
+    unsigned short* gradient,
+    const signed char* output_payload,
+    int length) {
+    NNTRAIN_LAUNCH_1D(
+        linear_mask_bfp8_relu_bf16_gradient_in_place_kernel,
+        length,
+        gradient,
+        output_payload,
+        length);
+}
+
 NNTRAIN_EXPORT int nntrain_tensor_linear_bias_backward_float(
     const float* output_gradient, float* bias_gradient, int rows, int width) {
-    NNTRAIN_LAUNCH_1D(linear_bias_backward_kernel<float>, width,
-        output_gradient, bias_gradient, rows, width);
+    // Preserve the lower-overhead serial-column kernel for tiny matrices.
+    // Production transformer shards have thousands of rows and use the
+    // occupancy-rich block reduction.
+    if (!g_linear_bias_block_reduction_enabled || rows < kThreads) {
+        NNTRAIN_LAUNCH_1D(linear_bias_backward_kernel<float>, width,
+            output_gradient, bias_gradient, rows, width);
+    }
+    constexpr int kColumnsPerBlock = 32;
+    linear_bias_backward_block_kernel<float>
+        <<<(width + kColumnsPerBlock - 1) / kColumnsPerBlock,
+            kThreads, 0, g_stream>>>(
+            output_gradient, bias_gradient, rows, width);
+    return launch_status();
 }
 
 NNTRAIN_EXPORT int nntrain_tensor_linear_bias_backward_bf16(
     const unsigned short* output_gradient, float* bias_gradient, int rows,
     int width) {
-    NNTRAIN_LAUNCH_1D(linear_bias_backward_kernel<unsigned short>, width,
-        output_gradient, bias_gradient, rows, width);
+    if (!g_linear_bias_block_reduction_enabled || rows < kThreads) {
+        NNTRAIN_LAUNCH_1D(linear_bias_backward_kernel<unsigned short>, width,
+            output_gradient, bias_gradient, rows, width);
+    }
+    constexpr int kColumnsPerBlock = 32;
+    linear_bias_backward_block_kernel<unsigned short>
+        <<<(width + kColumnsPerBlock - 1) / kColumnsPerBlock,
+            kThreads, 0, g_stream>>>(
+            output_gradient, bias_gradient, rows, width);
+    return launch_status();
 }
 
 NNTRAIN_EXPORT int nntrain_tensor_scale(float* values, int length,
@@ -2436,6 +3136,7 @@ NNTRAIN_EXPORT int nntrain_optimizer_adamw_bfp8_apply(
     const float* first_moment,
     const float* second_moment,
     const float* second_scale,
+    int second_scale_block_size,
     int length,
     float learning_rate,
     float weight_decay,
@@ -2444,12 +3145,98 @@ NNTRAIN_EXPORT int nntrain_optimizer_adamw_bfp8_apply(
     int apply_weight_decay,
     int* finite_status) {
     if (!data || !first_moment || !second_moment || !second_scale
-        || length <= 0 || !finite_status) {
+        || second_scale_block_size <= 0 || length <= 0 || !finite_status) {
         return static_cast<int>(cudaErrorInvalidValue);
     }
     NNTRAIN_LAUNCH_1D(adamw_bfp8_apply_kernel, length, data, first_moment,
-        second_moment, second_scale, length, learning_rate, weight_decay,
+        second_moment, second_scale, second_scale_block_size, length,
+        learning_rate, weight_decay,
         update_scale, scaled_epsilon, apply_weight_decay, finite_status);
+}
+
+NNTRAIN_EXPORT int nntrain_optimizer_adamw_multi_tensor_bfp8(
+    int device,
+    const AdamWBfp8TensorDescriptor* tensors,
+    int tensor_count,
+    float beta1,
+    float beta2,
+    float learning_rate,
+    float weight_decay,
+    float update_scale,
+    float scaled_epsilon,
+    float* reduction,
+    int maximum_chunks,
+    int* finite_status,
+    cudaStream_t stream) {
+    if (device < 0 || tensors == nullptr || tensor_count <= 0
+        || tensor_count > 65535 || reduction == nullptr
+        || maximum_chunks <= 0 || finite_status == nullptr) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+    cudaError_t status = static_cast<cudaError_t>(
+        nntrain_cuda_set_device(device));
+    if (status != cudaSuccess)
+        return static_cast<int>(status);
+    status = cudaMemsetAsync(
+        reduction,
+        0,
+        static_cast<size_t>(tensor_count)
+            * kAdamWBfp8ReductionValues * sizeof(float),
+        stream);
+    if (status != cudaSuccess)
+        return static_cast<int>(status);
+
+    const dim3 grid(
+        static_cast<unsigned int>(maximum_chunks),
+        static_cast<unsigned int>(tensor_count));
+    adamw_bfp8_moment_reduce_kernel<<<grid, kThreads, 0, stream>>>(
+        tensors,
+        tensor_count,
+        beta1,
+        beta2,
+        reduction,
+        finite_status);
+    status = cudaPeekAtLastError();
+    if (status != cudaSuccess)
+        return static_cast<int>(status);
+    const int tensor_blocks = (tensor_count + kThreads - 1) / kThreads;
+    adamw_bfp8_finalize_moment_scales_kernel<<<
+        tensor_blocks, kThreads, 0, stream>>>(
+            tensors, tensor_count, reduction, finite_status);
+    status = cudaPeekAtLastError();
+    if (status != cudaSuccess)
+        return static_cast<int>(status);
+    adamw_bfp8_publish_moments_reduce_data_kernel<<<
+        grid, kThreads, 0, stream>>>(
+            tensors,
+            tensor_count,
+            beta1,
+            beta2,
+            learning_rate,
+            weight_decay,
+            update_scale,
+            scaled_epsilon,
+            reduction,
+            finite_status);
+    status = cudaPeekAtLastError();
+    if (status != cudaSuccess)
+        return static_cast<int>(status);
+    adamw_bfp8_finalize_data_scales_kernel<<<
+        tensor_blocks, kThreads, 0, stream>>>(
+            tensors, tensor_count, reduction, finite_status);
+    status = cudaPeekAtLastError();
+    if (status != cudaSuccess)
+        return static_cast<int>(status);
+    adamw_bfp8_publish_data_kernel<<<grid, kThreads, 0, stream>>>(
+        tensors,
+        tensor_count,
+        learning_rate,
+        weight_decay,
+        update_scale,
+        scaled_epsilon,
+        reduction,
+        finite_status);
+    return static_cast<int>(cudaPeekAtLastError());
 }
 
 NNTRAIN_EXPORT int nntrain_optimizer_adamw_publish(float* data,
@@ -2518,6 +3305,34 @@ NNTRAIN_EXPORT int nntrain_optimizer_adamw_multi_tensor(
     adamw_multi_tensor_kernel<<<chunk_count, kThreads, 0, g_stream>>>(
         chunks, chunk_count, beta1, beta2, learning_rate, weight_decay,
         update_scale, scaled_epsilon);
+    return launch_status();
+}
+
+NNTRAIN_EXPORT int
+nntrain_optimizer_adamw_multi_tensor_mix8_diagnostic_v2(
+    const AdamWMix8DiagnosticChunkDescriptor* chunks,
+    int chunk_count,
+    float beta1,
+    float beta2,
+    float learning_rate,
+    float weight_decay,
+    float update_scale,
+    float scaled_epsilon,
+    void* metrics) {
+    if (!chunks || chunk_count <= 0 || !metrics)
+        return static_cast<int>(cudaErrorInvalidValue);
+    adamw_multi_tensor_mix8_diagnostic_kernel<<<
+        chunk_count, kThreads, 0, g_stream>>>(
+            chunks,
+            chunk_count,
+            beta1,
+            beta2,
+            learning_rate,
+            weight_decay,
+            update_scale,
+            scaled_epsilon,
+            reinterpret_cast<
+                nntrain_mix8_diagnostic_accumulator*>(metrics));
     return launch_status();
 }
 
@@ -2635,6 +3450,40 @@ NNTRAIN_EXPORT int nntrain_optimizer_neko_interpolate(float* current,
         fraction);
 }
 
+NNTRAIN_EXPORT int nntrain_optimizer_neko_adaptive_accept_batched(
+    float* current, const float* candidate,
+    const float* const* confidences, int matrix_length, int batch,
+    int step, int max_steps, int depth_mode, float configured_depth) {
+    if (!current || !candidate || !confidences || matrix_length <= 0
+        || batch <= 0 || matrix_length > INT_MAX / batch || step < 0
+        || step >= max_steps || max_steps <= 0 || depth_mode < 0
+        || depth_mode > 2 || !isfinite(configured_depth)
+        || configured_depth < 0.f
+        || configured_depth > static_cast<float>(max_steps)) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+    const int total = matrix_length * batch;
+    NNTRAIN_LAUNCH_1D(neko_adaptive_accept_batched_kernel, total,
+        current, candidate, confidences, matrix_length, batch, step,
+        max_steps, depth_mode, configured_depth);
+}
+
+NNTRAIN_EXPORT int nntrain_optimizer_neko_confidence_summary(
+    const float* const* confidences, int count, int max_steps,
+    int depth_mode, float configured_depth, int run_newton_schulz,
+    int force_full_depth, float* summary) {
+    if (!confidences || !summary || count <= 0 || max_steps <= 0
+        || depth_mode < 0 || depth_mode > 2
+        || !isfinite(configured_depth) || configured_depth < 0.f
+        || configured_depth > static_cast<float>(max_steps)) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+    neko_confidence_summary_kernel<<<1, 1, 0, g_stream>>>(
+        confidences, count, max_steps, depth_mode, configured_depth,
+        run_newton_schulz != 0, force_full_depth != 0, summary);
+    return launch_status();
+}
+
 NNTRAIN_EXPORT int nntrain_optimizer_neko_transpose_back(
     const float* source, float* destination, int length, int original_rows,
     int original_columns) {
@@ -2647,6 +3496,38 @@ NNTRAIN_EXPORT int nntrain_optimizer_neko_apply(float* data,
     float weight_decay, int apply_weight_decay) {
     NNTRAIN_LAUNCH_1D(neko_apply_kernel, length, data, update, length,
         learning_rate, final_scale, weight_decay, apply_weight_decay);
+}
+
+NNTRAIN_EXPORT int nntrain_optimizer_neko_apply_mix8_diagnostic(
+    float* data,
+    const float* update,
+    const float* current_scales,
+    int quantization_block_size,
+    int length,
+    float learning_rate,
+    float final_scale,
+    float weight_decay,
+    int apply_weight_decay,
+    void* metrics) {
+    if (!data || !update || !current_scales || !metrics
+        || quantization_block_size <= 0 || length <= 0) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+    const int grid = min(
+        blocks_for(length),
+        kMix8DiagnosticMaximumBlocks);
+    neko_apply_mix8_diagnostic_kernel<<<grid, kThreads, 0, g_stream>>>(
+        data,
+        update,
+        current_scales,
+        quantization_block_size,
+        length,
+        learning_rate,
+        final_scale,
+        weight_decay,
+        apply_weight_decay,
+        reinterpret_cast<nntrain_mix8_diagnostic_accumulator*>(metrics));
+    return launch_status();
 }
 
 NNTRAIN_EXPORT int nntrain_optimizer_neko_apply_bf16(unsigned short* data,

@@ -7,6 +7,7 @@ sealed record TrainingConfiguration
 {
     internal const string GainShareAdamWOptimizer = "gainshareadamw";
     internal const string LionOptimizer = "lion";
+    internal const string MuonOptimizer = "muon";
     internal const string NekoMuonOptimizer = "nekomuon";
     internal const string AdamWOptimizer = "adamw";
     internal const string LinearWarmupCosineAnnealingScheduler =
@@ -432,6 +433,7 @@ sealed record TrainingConfiguration
 
         if (!IsOptimizer(GainShareAdamWOptimizer)
             && !IsOptimizer(LionOptimizer)
+            && !IsOptimizer(MuonOptimizer)
             && !IsOptimizer(NekoMuonOptimizer)
             && !IsOptimizer(AdamWOptimizer))
         {
@@ -439,6 +441,7 @@ sealed record TrainingConfiguration
                 $"Unsupported optimizer '{Optimizer}'. Supported " +
                 $"optimizers are '{GainShareAdamWOptimizer}', " +
                 $"'{LionOptimizer}', " +
+                $"'{MuonOptimizer}', " +
                 $"'{NekoMuonOptimizer}', and " +
                 $"'{AdamWOptimizer}'.",
                 nameof(Optimizer));

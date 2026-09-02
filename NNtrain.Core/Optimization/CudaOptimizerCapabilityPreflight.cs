@@ -21,10 +21,15 @@ internal static class CudaOptimizerCapabilityPreflight
         CudaOptimizerKind optimizer,
         TensorPrecisionMode precisionMode)
     {
-        CudaKernelFeature required = optimizer == CudaOptimizerKind.NekoMuon
-            ? CudaKernelFeature.TensorCores
-                | CudaKernelFeature.BlockReducedMuon
-            : CudaKernelFeature.None;
+        CudaKernelFeature required = optimizer switch
+        {
+            CudaOptimizerKind.NekoMuon =>
+                CudaKernelFeature.TensorCores
+                    | CudaKernelFeature.BlockReducedMuon,
+            CudaOptimizerKind.Lion or CudaOptimizerKind.GainShareAdamW =>
+                CudaKernelFeature.FusedFirstOrderOptimizers,
+            _ => CudaKernelFeature.None,
+        };
 
         switch (precisionMode)
         {

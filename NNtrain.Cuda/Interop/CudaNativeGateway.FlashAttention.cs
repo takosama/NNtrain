@@ -101,6 +101,49 @@ public static partial class CudaNativeGateway
             causal, stream,
             FlashAttentionBackwardVariant.ParallelDkv);
 
+    public static int
+        FlashAttentionBackwardBFloat16TensorCoreParallelDkvBfp8Output(
+            int device,
+            nint projected,
+            nint outputPayload,
+            nint outputScales,
+            int outputBlockSize,
+            nint outputGradient,
+            nint softmaxLogSumExp,
+            nint rowDelta,
+            nint projectedGradient,
+            int batch,
+            int sequence,
+            int modelWidth,
+            int heads,
+            int causal,
+            nint stream)
+    {
+        EnsureMinimumAbiMinor(
+            CudaAbiVersion.DirectBfp8AttentionOutputMinor,
+            "direct BFP8 attention output backward");
+        return Complete(
+            FlashAttentionNativeMethods
+                .BackwardBFloat16TensorCoreParallelDkvBfp8Output(
+                    projected,
+                    outputPayload,
+                    outputScales,
+                    outputBlockSize,
+                    outputGradient,
+                    softmaxLogSumExp,
+                    rowDelta,
+                    projectedGradient,
+                    batch,
+                    sequence,
+                    modelWidth,
+                    heads,
+                    causal,
+                    stream),
+            CudaNativeOperation
+                .FlashAttentionBackwardBFloat16TensorCoreBfp8Output,
+            device);
+    }
+
     public static int FlashAttentionBackwardBFloat16TensorCoreBFloat16Gradient(
         int device, nint projected, nint output, nint outputGradient,
         nint softmaxLogSumExp, nint rowDelta, nint projectedGradient,
@@ -316,6 +359,27 @@ public static partial class CudaNativeGateway
             nint softmaxLogSumExp, nint rowDelta, nint projectedGradient,
             int batch, int sequence, int modelWidth, int heads, int causal,
             nint stream);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint = "nntrain_flash_attention_backward_bf16_tensor_core_parallel_dkv_bfp8_output",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int
+            BackwardBFloat16TensorCoreParallelDkvBfp8Output(
+                nint projected,
+                nint outputPayload,
+                nint outputScales,
+                int outputBlockSize,
+                nint outputGradient,
+                nint softmaxLogSumExp,
+                nint rowDelta,
+                nint projectedGradient,
+                int batch,
+                int sequence,
+                int modelWidth,
+                int heads,
+                int causal,
+                nint stream);
 
         [DllImport(
             LibraryName,

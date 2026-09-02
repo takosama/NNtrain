@@ -62,6 +62,7 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_tensor_linear_encode_bf16",
         "nntrain_tensor_linear_encode_bfp8_relu",
         "nntrain_tensor_linear_mask_bf16_gradient",
+        "nntrain_tensor_linear_mask_bfp8_relu_bf16_gradient_in_place",
         "nntrain_tensor_linear_bias_backward_float",
         "nntrain_tensor_linear_bias_backward_bf16",
         "nntrain_tensor_scale",
@@ -80,6 +81,7 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_optimizer_adamw",
         "nntrain_optimizer_adamw_bfp8_moments",
         "nntrain_optimizer_adamw_bfp8_apply",
+        "nntrain_optimizer_adamw_multi_tensor_bfp8",
         "nntrain_optimizer_adamw_bf16_state",
         "nntrain_optimizer_adamw_publish",
         "nntrain_optimizer_adamw_bf16_state_publish",
@@ -96,8 +98,12 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_optimizer_neko_initialize_device_stats",
         "nntrain_optimizer_neko_initialize_bf16_device_stats",
         "nntrain_optimizer_neko_interpolate",
+        "nntrain_optimizer_neko_adaptive_accept_batched",
+        "nntrain_optimizer_neko_confidence_summary",
         "nntrain_optimizer_neko_transpose_back",
         "nntrain_optimizer_neko_apply",
+        "nntrain_optimizer_neko_apply_mix8_diagnostic",
+        "nntrain_optimizer_adamw_multi_tensor_mix8_diagnostic_v2",
         "nntrain_optimizer_neko_apply_bf16",
         "nntrain_optimizer_neko_combine",
         "nntrain_optimizer_neko_combine_batched",
@@ -105,6 +111,19 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_optimizer_symmetric_gram_bf16_operands",
         "nntrain_optimizer_newton_schulz",
         "nntrain_optimizer_newton_schulz_bf16_operands",
+        "nntrain_lion_multi_tensor_f32",
+        "nntrain_lion_multi_tensor_bf16",
+        "nntrain_lion_multi_tensor_mix8",
+        "nntrain_lion_multi_tensor_bfp8",
+        "nntrain_gainshare_prepare_fp32",
+        "nntrain_gainshare_prepare_bf16",
+        "nntrain_gainshare_moments_fp32",
+        "nntrain_gainshare_direction_fp32",
+        "nntrain_gainshare_prepare_bfp8_multi_tensor",
+        "nntrain_gainshare_apply_bfp8_multi_tensor",
+        "nntrain_gainshare_compute_scales",
+        "nntrain_gainshare_apply_fp32",
+        "nntrain_gainshare_apply_bf16",
         "nntrain_gradient_comm_create",
         "nntrain_gradient_event_create",
         "nntrain_gradient_pack_bf16",
@@ -148,6 +167,8 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_residual_dropout_layer_norm_backward_bf16",
         "nntrain_residual_dropout_layer_norm_backward_bf16_branch_gradient",
         "nntrain_residual_dropout_layer_norm_backward_bf16_io_gradient",
+        "nntrain_residual_dropout_layer_norm_forward_bfp8_block128_512",
+        "nntrain_residual_dropout_layer_norm_backward_bfp8_block128_512",
         "nntrain_flash_attention_forward",
         "nntrain_flash_attention_backward",
         "nntrain_flash_attention_forward_bf16",
@@ -156,6 +177,7 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_flash_attention_forward_bf16_tensor_core_sync",
         "nntrain_flash_attention_backward_bf16_tensor_core",
         "nntrain_flash_attention_backward_bf16_tensor_core_parallel_dkv",
+        "nntrain_flash_attention_backward_bf16_tensor_core_parallel_dkv_bfp8_output",
         "nntrain_flash_attention_backward_bf16_tensor_core_bf16_gradient",
         "nntrain_flash_attention_backward_bf16_tensor_core_bf16_io_gradient",
         "nntrain_flash_attention_backward_bf16_tensor_core_bf16_io_gradient_sync",
@@ -168,6 +190,11 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_nekomuon_moments_stats_compact_finite",
         "nntrain_nekomuon_moments_stats_bf16_compact",
         "nntrain_nekomuon_moments_stats_bf16_compact_finite",
+        "nntrain_cuda_muon_block_bfp8_moments",
+        "nntrain_muon_moments_stats_compact",
+        "nntrain_muon_moments_stats_compact_finite",
+        "nntrain_muon_moments_stats_bf16_compact",
+        "nntrain_muon_moments_stats_bf16_compact_finite",
         "nntrain_tensor_accumulate_scalar",
         "nntrain_tensor_embedding_backward_reduced",
         "nntrain_tensor_embedding_positions_backward_reduced",
@@ -192,6 +219,8 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_cuda_graph_residual_dropout_layer_norm_forward_bf16",
         "nntrain_cuda_graph_residual_dropout_layer_norm_backward",
         "nntrain_cuda_graph_residual_dropout_layer_norm_backward_bf16",
+        "nntrain_cuda_graph_residual_dropout_layer_norm_forward_bfp8_block128_512",
+        "nntrain_cuda_graph_residual_dropout_layer_norm_backward_bfp8_block128_512",
         "nntrain_cuda_graph_residual_dropout_layer_norm_backward_bf16_branch_gradient",
         "nntrain_cuda_graph_residual_dropout_layer_norm_backward_bf16_io_gradient",
         "nntrain_tensor_embedding_backward_reduced_bf16_gradient",
@@ -245,6 +274,8 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_cuda_can_access_peer",
         "nntrain_cuda_error_string",
         "nntrain_cuda_bfp8_quantize_f32",
+        "nntrain_cuda_bfp8_quantize_f32_diagnostic",
+        "nntrain_cuda_mix8_diagnostics_reset",
         "nntrain_cuda_bfp8_dequantize_f32",
         "nntrain_cuda_bfp8_dequantize_bf16",
         "nntrain_cuda_bfp8_quantize_bf16",
@@ -466,6 +497,14 @@ public sealed class CudaNativeAbiGatewayTests
                 CudaNativeOperation
                     .FlashAttentionBackwardBFloat16TensorCoreParallelDkv));
         Assert.Equal(
+            CudaKernelFeature.FlashAttention |
+                CudaKernelFeature.BFloat16 |
+                CudaKernelFeature.TensorCores |
+                CudaKernelFeature.Bfp8Quantization,
+            CudaNativeGateway.RequiredFeatures(
+                CudaNativeOperation
+                    .FlashAttentionBackwardBFloat16TensorCoreBfp8Output));
+        Assert.Equal(
             CudaKernelFeature.ForgetMemory |
                 CudaKernelFeature.BFloat16 |
                 CudaKernelFeature.TensorCores,
@@ -496,6 +535,26 @@ public sealed class CudaNativeAbiGatewayTests
         Assert.Equal(19, CudaAbiVersion.ExternalGradientReadyEventMinor);
         Assert.Equal(20, CudaAbiVersion.BlockBfp8GradientTransportMinor);
         Assert.Equal(21, CudaAbiVersion.LayerNormOneScanMinor);
+        Assert.Equal(22, CudaAbiVersion.DirectBfp8LayerNormMinor);
+        Assert.Equal(23, CudaAbiVersion.BlockBfp8OptimizerStateMinor);
+        Assert.Equal(24, CudaAbiVersion.FusedFirstOrderOptimizerMinor);
+        Assert.Equal(
+            25,
+            CudaAbiVersion.DirectBfp8LayerNormBlock32x384Minor);
+        Assert.Equal(26, CudaAbiVersion.DirectBfp8FfnGradientMinor);
+        Assert.Equal(
+            27,
+            CudaAbiVersion.DirectBfp8LayerNormBlock32x512Minor);
+        Assert.Equal(28, CudaAbiVersion.DirectBfp8AttentionOutputMinor);
+        Assert.Equal(29, CudaAbiVersion.OrdinaryMuonNesterovMinor);
+        Assert.Equal(30, CudaAbiVersion.Mix8DiagnosticsMinor);
+        Assert.Equal(31, CudaAbiVersion.DeviceAdaptiveNekoMuonMinor);
+        Assert.False(CudaTensorNative.SupportsDirectBfp8FfnGradientAbi(
+            new CudaAbiVersion(1, 25)));
+        Assert.True(CudaTensorNative.SupportsDirectBfp8FfnGradientAbi(
+            new CudaAbiVersion(1, 26)));
+        Assert.False(CudaTensorNative.SupportsDirectBfp8FfnGradientAbi(
+            new CudaAbiVersion(2, 26)));
         Assert.Equal(
             CudaKernelFeature.None,
             CudaNativeGateway.RequiredFeatures(
@@ -598,6 +657,8 @@ public sealed class CudaNativeAbiGatewayTests
         Assert.True(capabilities.Supports(CudaKernelFeature.Bfp8Quantization));
         Assert.True(capabilities.Supports(CudaKernelFeature.Int8TensorCores));
         Assert.True(capabilities.Supports(CudaKernelFeature.CudaGraphs));
+        Assert.True(capabilities.Supports(
+            CudaKernelFeature.FusedFirstOrderOptimizers));
     }
 
     [Fact]
@@ -703,6 +764,17 @@ public sealed class CudaNativeAbiGatewayTests
             if (inputHost != 0)
                 _ = CudaNativeGateway.HostFree(inputHost);
         }
+    }
+
+    [Fact]
+    public void Mix8DiagnosticLayoutsMatchNativeAbi()
+    {
+        Assert.Equal(
+            32,
+            Marshal.SizeOf<CudaMix8DiagnosticAccumulator>());
+        Assert.Equal(
+            80,
+            Marshal.SizeOf<CudaAdamWMix8DiagnosticChunkDescriptor>());
     }
 
     [Fact]

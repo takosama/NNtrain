@@ -48,8 +48,29 @@ internal static class TransformerConvergenceProfiler
         JsonElement root = document.RootElement;
         JsonElement optimizerConfiguration = root.GetProperty("optimization")
             .GetProperty("optimizer");
+        bool ordinaryMuon = string.Equals(
+            optimizerConfiguration.GetProperty("type").GetString(),
+            "muon",
+            StringComparison.OrdinalIgnoreCase);
+        float? betaFastOverride = optimizerConfiguration.TryGetProperty(
+            "nekoMuonBetaFast",
+            out JsonElement betaFastElement)
+                ? betaFastElement.GetSingle()
+                : null;
+        if (betaFastOverride is float betaFast
+            && (!float.IsFinite(betaFast)
+                || betaFast < 0f
+                || betaFast >= 1f))
+        {
+            throw new InvalidDataException(
+                "NekoMuon beta fast must be finite and in [0, 1).");
+        }
         TensorPrecisionMode precisionMode = PrecisionModeConfiguration.Read(root);
         TensorDType dtype = precisionMode.ToStorageDType();
+        int bfp8BlockSize = root.TryGetProperty(
+            "bfp8_block_size", out JsonElement configuredBlockSize)
+            ? configuredBlockSize.GetInt32()
+            : Bfp8QuantizationDescriptor.DefaultBlockSize;
         int batch = root.GetProperty("batchSize").GetInt32();
         int sequence = root.GetProperty("contextLength").GetInt32();
         int seed = root.GetProperty("seed").GetInt32();
@@ -108,6 +129,8 @@ internal static class TransformerConvergenceProfiler
             CudaDataParallel.ConfigureAdaptiveSharding(
                 ReadAdaptiveSharding(root));
 
+            bool bfp8Mode = precisionMode is TensorPrecisionMode.Bfp8
+                or TensorPrecisionMode.Mix8_32;
             var model = new GptRinWikiJp(
                 tokenizer.VocabularySize,
                 sequence,
@@ -118,9 +141,12 @@ internal static class TransformerConvergenceProfiler
                 new Random(seed),
                 root.GetProperty("initializationScale").GetSingle(),
                 root.GetProperty("dropout").GetSingle(),
-                dtype,
+                bfp8Mode ? TensorDType.Float32 : dtype,
                 root.GetProperty("tieWordEmbeddings").GetBoolean());
-            model.SetPrecisionMode(precisionMode);
+            if (bfp8Mode)
+                model.to(precisionMode, bfp8BlockSize);
+            else
+                model.SetPrecisionMode(precisionMode);
             ModuleState? state = safetensors.torch.load_file(modelArtifact);
             model.load_state_dict(state);
             state = null;
@@ -130,6 +156,7 @@ internal static class TransformerConvergenceProfiler
                 new NekoMuonOptions
                 {
                     LearningRate = matrixLearningRate,
+                    BetaFast = betaFastOverride ?? 0.9f,
                     WeightDecay = optimizerConfiguration
                         .GetProperty("weightDecay").GetSingle(),
                     MaxNewtonSchulzSteps = 5,
@@ -155,7 +182,14 @@ internal static class TransformerConvergenceProfiler
                 OptimizerStateStream.LoadStateBinary(nekoMuon, stream);
             using (var stream = File.OpenRead(adamArtifact))
                 OptimizerStateStream.LoadStateBinary(adamW, stream);
-            nekoMuon.ForceFullNewtonSchulz = forceFullNewtonSchulz;
+            if (ordinaryMuon)
+                nekoMuon.SetOrdinaryMuonPolicy();
+            else
+            {
+                if (betaFastOverride.HasValue)
+                    nekoMuon.SetBetaFast(betaFastOverride.Value);
+                nekoMuon.ForceFullNewtonSchulz = forceFullNewtonSchulz;
+            }
             var optimizer = new CompositeOptimizer(nekoMuon, adamW);
 
             Parameter hiddenProbe = model.HiddenWeightParameters[0];
@@ -243,7 +277,9 @@ internal static class TransformerConvergenceProfiler
             (double auxiliaryRms, double auxiliaryRelative) = UpdateRms(
                 auxiliaryBefore,
                 auxiliaryAfter);
-            int lossWindow = Math.Min(10, losses.Length);
+            int lossWindow = Math.Max(
+                1,
+                Math.Min(10, losses.Length / 2));
             double firstLossWindow = losses
                 .Take(lossWindow)
                 .Average();
@@ -257,8 +293,12 @@ internal static class TransformerConvergenceProfiler
                 : orderedElapsed[orderedElapsed.Length / 2];
 
             Console.WriteLine(
-                $"convergence A/B: schedule={schedule}, NS=" +
-                $"{(forceFullNewtonSchulz ? "full-5" : "adaptive")}, base LR=" +
+                $"convergence A/B: optimizer=" +
+                $"{(ordinaryMuon ? "muon" : "nekomuon")}, " +
+                $"schedule={schedule}, NS=" +
+                $"{(ordinaryMuon || forceFullNewtonSchulz
+                    ? "fixed-5"
+                    : "adaptive")}, base LR=" +
                 $"{matrixLearningRate:G}/{auxiliaryLearningRate:G}, " +
                 $"checkpoint step={globalStep:N0}, progress=" +
                 $"{initialProgress:P3}");

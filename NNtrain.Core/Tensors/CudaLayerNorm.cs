@@ -163,6 +163,54 @@ internal static class CudaLayerNorm
         }
     }
 
+    internal static void FusedForwardBfp8Block128x512(
+        NativeCudaDevice accelerator,
+        CudaBfp8BufferView residual,
+        CudaBfp8BufferView branch,
+        CudaBfp8BufferView gamma,
+        CudaBfp8BufferView beta,
+        CudaBfp8BufferView output,
+        NativeCudaBuffer<float> means,
+        NativeCudaBuffer<float> inverses,
+        int rows,
+        int columns,
+        uint seed,
+        uint dropThreshold,
+        float dropoutScale,
+        float epsilon,
+        CudaGraphDropoutToken? graphToken = null)
+    {
+        accelerator.Bind();
+        int blockSize = output.Descriptor.GetEffectiveBlockSize(
+            output.Payload.Length);
+        if (graphToken is { } token)
+        {
+            token.RngState
+                .EnqueueResidualDropoutLayerNormForwardBfp8Block128x512(
+                    residual.Payload.NativePtr, residual.Scales.NativePtr,
+                    branch.Payload.NativePtr, branch.Scales.NativePtr,
+                    gamma.Payload.NativePtr, gamma.Scales.NativePtr,
+                    beta.Payload.NativePtr, beta.Scales.NativePtr,
+                    output.Payload.NativePtr, output.Scales.NativePtr,
+                    means.NativePtr, inverses.NativePtr,
+                    rows, columns, blockSize, dropThreshold,
+                    dropoutScale, epsilon, token.OperationSeed);
+            return;
+        }
+        ThrowIfFailed(
+            CudaNativeGateway
+                .ResidualDropoutLayerNormForwardBfp8Block128x512(
+                    accelerator.Index,
+                    residual.Payload.NativePtr, residual.Scales.NativePtr,
+                    branch.Payload.NativePtr, branch.Scales.NativePtr,
+                    gamma.Payload.NativePtr, gamma.Scales.NativePtr,
+                    beta.Payload.NativePtr, beta.Scales.NativePtr,
+                    output.Payload.NativePtr, output.Scales.NativePtr,
+                    means.NativePtr, inverses.NativePtr,
+                    rows, columns, blockSize, seed, dropThreshold,
+                    dropoutScale, epsilon, Stream(accelerator)));
+    }
+
     internal static bool TryFusedForwardGraph(
         NativeCudaDevice accelerator,
         NativeCudaBuffer<float> residual,
@@ -381,6 +429,64 @@ internal static class CudaLayerNorm
                     betaGradient.NativePtr, parameterScratch.Buffer.NativePtr,
                     rows, columns, sameParent ? 1 : 0,
                     seed, dropThreshold, dropoutScale, Stream(accelerator)));
+    }
+
+    internal static void FusedBackwardBfp8Block128x512(
+        NativeCudaDevice accelerator,
+        CudaBfp8BufferView residual,
+        CudaBfp8BufferView branch,
+        CudaBfp8BufferView gamma,
+        NativeCudaBuffer<float> means,
+        NativeCudaBuffer<float> inverses,
+        NativeCudaBuffer<float> outputGradient,
+        NativeCudaBuffer<float> residualGradient,
+        NativeCudaBuffer<float> branchGradient,
+        NativeCudaBuffer<float> gammaGradient,
+        NativeCudaBuffer<float> betaGradient,
+        int rows,
+        int columns,
+        bool sameParent,
+        uint seed,
+        uint dropThreshold,
+        float dropoutScale,
+        CudaGraphDropoutToken? graphToken = null)
+    {
+        accelerator.Bind();
+        using ParameterScratchLease parameterScratch = GetParameterScratch(
+            accelerator, rows, columns);
+        int blockSize = residual.Descriptor.GetEffectiveBlockSize(
+            residual.Payload.Length);
+        if (graphToken is { } token)
+        {
+            token.RngState
+                .EnqueueResidualDropoutLayerNormBackwardBfp8Block128x512(
+                    residual.Payload.NativePtr, residual.Scales.NativePtr,
+                    branch.Payload.NativePtr, branch.Scales.NativePtr,
+                    gamma.Payload.NativePtr, gamma.Scales.NativePtr,
+                    means.NativePtr, inverses.NativePtr,
+                    outputGradient.NativePtr,
+                    residualGradient.NativePtr, branchGradient.NativePtr,
+                    gammaGradient.NativePtr, betaGradient.NativePtr,
+                    parameterScratch.Buffer.NativePtr,
+                    rows, columns, blockSize, sameParent, dropThreshold,
+                    dropoutScale, token.OperationSeed);
+            return;
+        }
+        ThrowIfFailed(
+            CudaNativeGateway
+                .ResidualDropoutLayerNormBackwardBfp8Block128x512(
+                    accelerator.Index,
+                    residual.Payload.NativePtr, residual.Scales.NativePtr,
+                    branch.Payload.NativePtr, branch.Scales.NativePtr,
+                    gamma.Payload.NativePtr, gamma.Scales.NativePtr,
+                    means.NativePtr, inverses.NativePtr,
+                    outputGradient.NativePtr,
+                    residualGradient.NativePtr, branchGradient.NativePtr,
+                    gammaGradient.NativePtr, betaGradient.NativePtr,
+                    parameterScratch.Buffer.NativePtr,
+                    rows, columns, blockSize, sameParent ? 1 : 0,
+                    seed, dropThreshold, dropoutScale,
+                    Stream(accelerator)));
     }
 
     internal static void FusedBackwardGraph(

@@ -45,6 +45,7 @@ internal static class CudaOptimizerNative
         nint first,
         nint second,
         nint secondScale,
+        int secondScaleBlockSize,
         int length,
         float learningRate,
         float weightDecay,
@@ -60,6 +61,7 @@ internal static class CudaOptimizerNative
             first,
             second,
             secondScale,
+            secondScaleBlockSize,
             length,
             learningRate,
             weightDecay,
@@ -67,6 +69,141 @@ internal static class CudaOptimizerNative
             scaledEpsilon,
             applyWeightDecay,
             finiteStatus), "scale-aware pure BFP8 AdamW update");
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal readonly struct AdamWBfp8TensorDescriptor(
+        nint dataPayload,
+        nint dataScale,
+        nint gradientPayload,
+        nint gradientScale,
+        nint firstMomentPayload,
+        nint firstMomentScale,
+        nint secondMomentPayload,
+        nint secondMomentScale,
+        int length,
+        int applyWeightDecay)
+    {
+        internal readonly nint DataPayload = dataPayload;
+        internal readonly nint DataScale = dataScale;
+        internal readonly nint GradientPayload = gradientPayload;
+        internal readonly nint GradientScale = gradientScale;
+        internal readonly nint FirstMomentPayload = firstMomentPayload;
+        internal readonly nint FirstMomentScale = firstMomentScale;
+        internal readonly nint SecondMomentPayload = secondMomentPayload;
+        internal readonly nint SecondMomentScale = secondMomentScale;
+        internal readonly int Length = length;
+        internal readonly int ApplyWeightDecay = applyWeightDecay;
+    }
+
+    internal static void AdamWMultiTensorBfp8(
+        int device,
+        nint tensors,
+        int tensorCount,
+        float beta1,
+        float beta2,
+        float learningRate,
+        float weightDecay,
+        float updateScale,
+        float scaledEpsilon,
+        nint reduction,
+        int maximumChunks,
+        nint finiteStatus,
+        nint stream)
+    {
+        Select(device);
+        Check(CudaNativeGateway.OptimizerAdamWMultiTensorBfp8(
+            device,
+            tensors,
+            tensorCount,
+            beta1,
+            beta2,
+            learningRate,
+            weightDecay,
+            updateScale,
+            scaledEpsilon,
+            reduction,
+            maximumChunks,
+            finiteStatus,
+            stream), "multi-tensor pure BFP8 AdamW update");
+    }
+
+    internal static void AdamWBlockBfp8State(
+        int device,
+        nint data,
+        nint gradient,
+        CudaBfp8BufferView first,
+        CudaBfp8BufferView second,
+        int length,
+        float beta1,
+        float beta2,
+        float learningRate,
+        float weightDecay,
+        float updateScale,
+        float scaledEpsilon,
+        bool applyWeightDecay,
+        nint finiteStatus,
+        nint stream)
+    {
+        Select(device);
+        Check(CudaNativeGateway.AdamWBlockBfp8State(
+            device,
+            data,
+            gradient,
+            first.Payload.NativePtr,
+            first.Scales.NativePtr,
+            second.Payload.NativePtr,
+            second.Scales.NativePtr,
+            length,
+            beta1,
+            beta2,
+            learningRate,
+            weightDecay,
+            updateScale,
+            scaledEpsilon,
+            applyWeightDecay,
+            finiteStatus,
+            stream), "fused block-BFP8 AdamW state update");
+    }
+
+    internal static void NekoMuonBlockBfp8Moments(
+        int device,
+        nint gradient,
+        CudaBfp8BufferView fast,
+        CudaBfp8BufferView slow,
+        nint fastRoundtrip,
+        nint slowRoundtrip,
+        int length,
+        float betaFast,
+        float betaSlow,
+        nint finiteStatus,
+        nint stream,
+        bool nesterov = false)
+    {
+        Select(device);
+        int status = nesterov
+            ? CudaNativeGateway.MuonBlockBfp8Moments(
+                device, gradient, fast.Payload.NativePtr,
+                fast.Scales.NativePtr, slow.Payload.NativePtr,
+                slow.Scales.NativePtr, fastRoundtrip, slowRoundtrip,
+                length, betaFast, finiteStatus, stream)
+            : CudaNativeGateway.NekoMuonBlockBfp8Moments(
+            device,
+            gradient,
+            fast.Payload.NativePtr,
+            fast.Scales.NativePtr,
+            slow.Payload.NativePtr,
+            slow.Scales.NativePtr,
+            fastRoundtrip,
+            slowRoundtrip,
+            length,
+            betaFast,
+            betaSlow,
+            finiteStatus,
+            stream);
+        Check(status, nesterov
+            ? "fused block-BFP8 Muon momentum update"
+            : "fused block-BFP8 NekoMuon moment update");
     }
 
     internal static void AdamWAndPublish(int device, nint data, nint gradient,
@@ -137,9 +274,12 @@ internal static class CudaOptimizerNative
         int length,
         int applyWeightDecay,
         int physicalBFloat16,
-        int bfloat16State,
+        int momentFormatFlags,
         int pureBFloat16)
     {
+        internal const int FirstMomentBFloat16 = 1 << 0;
+        internal const int SecondMomentBFloat16 = 1 << 1;
+
         internal readonly nint Data = data;
         internal readonly nint Gradient = gradient;
         internal readonly nint FirstMoment = firstMoment;
@@ -149,7 +289,9 @@ internal static class CudaOptimizerNative
         internal readonly int Length = length;
         internal readonly int ApplyWeightDecay = applyWeightDecay;
         internal readonly int PhysicalBFloat16 = physicalBFloat16;
-        internal readonly int BFloat16State = bfloat16State;
+        // Two independent bits preserve the 64-byte native ABI while
+        // allowing either AdamW moment to use BF16 storage independently.
+        internal readonly int MomentFormatFlags = momentFormatFlags;
         internal readonly int PureBFloat16 = pureBFloat16;
     }
 
@@ -169,6 +311,33 @@ internal static class CudaOptimizerNative
             device, chunks, chunkCount, beta1, beta2, learningRate,
             weightDecay, updateScale, scaledEpsilon),
             "AdamW multi-tensor update");
+    }
+
+    internal static void AdamWMultiTensorMix8Diagnostic(
+        int device,
+        nint chunks,
+        int chunkCount,
+        float beta1,
+        float beta2,
+        float learningRate,
+        float weightDecay,
+        float updateScale,
+        float scaledEpsilon,
+        nint diagnostics)
+    {
+        Select(device);
+        Check(CudaNativeGateway.OptimizerAdamWMultiTensorMix8Diagnostic(
+            device,
+            chunks,
+            chunkCount,
+            beta1,
+            beta2,
+            learningRate,
+            weightDecay,
+            updateScale,
+            scaledEpsilon,
+            diagnostics),
+            "AdamW mix8 multi-tensor update diagnostics");
     }
 
     internal static void NekoMoments(int device, nint gradient, nint fast,
@@ -273,6 +442,56 @@ internal static class CudaOptimizerNative
             "NekoMuon interpolate");
     }
 
+    internal static void NekoAdaptiveAcceptBatched(
+        int device,
+        nint current,
+        nint candidate,
+        nint confidences,
+        int matrixLength,
+        int batch,
+        int step,
+        int maxSteps,
+        NekoMuonNewtonSchulzDepthMode depthMode,
+        float configuredDepth)
+    {
+        Select(device);
+        Check(CudaNativeGateway.OptimizerNekoMuonAdaptiveAcceptBatched(
+            device,
+            current,
+            candidate,
+            confidences,
+            matrixLength,
+            batch,
+            step,
+            maxSteps,
+            (int)depthMode,
+            configuredDepth), "NekoMuon device adaptive selection");
+    }
+
+    internal static void NekoConfidenceSummary(
+        int device,
+        nint confidences,
+        int count,
+        int maxSteps,
+        NekoMuonNewtonSchulzDepthMode depthMode,
+        float configuredDepth,
+        bool runNewtonSchulz,
+        bool forceFullDepth,
+        nint summary)
+    {
+        Select(device);
+        Check(CudaNativeGateway.OptimizerNekoMuonConfidenceSummary(
+            device,
+            confidences,
+            count,
+            maxSteps,
+            (int)depthMode,
+            configuredDepth,
+            runNewtonSchulz,
+            forceFullDepth,
+            summary), "NekoMuon device confidence summary");
+    }
+
     internal static void NekoTransposeBack(int device, nint source,
         nint destination, int length, int originalRows, int originalColumns)
     {
@@ -290,6 +509,35 @@ internal static class CudaOptimizerNative
         Check(CudaNativeGateway.OptimizerNekoMuonApply(
             device, data, update, length, learningRate, finalScale,
             weightDecay, applyWeightDecay), "NekoMuon update");
+    }
+
+    internal static void NekoApplyMix8Diagnostic(
+        int device,
+        nint data,
+        nint update,
+        nint currentScales,
+        int blockSize,
+        int length,
+        float learningRate,
+        float finalScale,
+        float weightDecay,
+        bool applyWeightDecay,
+        nint diagnostics)
+    {
+        Select(device);
+        Check(CudaNativeGateway.OptimizerNekoMuonApplyMix8Diagnostic(
+            device,
+            data,
+            update,
+            currentScales,
+            blockSize,
+            length,
+            learningRate,
+            finalScale,
+            weightDecay,
+            applyWeightDecay,
+            diagnostics),
+            "NekoMuon mix8 update diagnostics");
     }
 
     internal static void NekoApplyBFloat16(

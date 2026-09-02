@@ -24,7 +24,9 @@ internal static partial class WikiLanguageModelCommand
     private static CudaOptimizerKind GetCudaOptimizerKind(
         WikiTrainingConfiguration config)
     {
-        if (config.IsOptimizer(WikiTrainingConfiguration.NekoMuonOptimizer))
+        if (config.IsOptimizer(WikiTrainingConfiguration.MuonOptimizer)
+            || config.IsOptimizer(
+                WikiTrainingConfiguration.NekoMuonOptimizer))
             return CudaOptimizerKind.NekoMuon;
         if (config.IsOptimizer(WikiTrainingConfiguration.LionOptimizer))
             return CudaOptimizerKind.Lion;
@@ -50,11 +52,35 @@ internal static partial class WikiLanguageModelCommand
         bool useBFloat16Moments =
             model.PrecisionMode == TensorPrecisionMode.BFloat16;
 
+        if (config.IsOptimizer(WikiTrainingConfiguration.MuonOptimizer))
+        {
+            var muon = (NekoMuon)optim.Muon(
+                model.HiddenWeightParameters,
+                lr: config.LearningRate,
+                momentum: 0.95f,
+                weight_decay: config.WeightDecay);
+            IOptimizer auxiliaryAdamW = optim.AdamW(
+                model.AuxiliaryParameters,
+                lr: config.AuxiliaryLearningRate,
+                beta1: 0.9f,
+                beta2: 0.95f,
+                eps: 1e-8f,
+                weight_decay: config.WeightDecay,
+                bf16_first_moment: useBFloat16Moments,
+                bf16_second_moment: useBFloat16Moments);
+            return new OptimizerBundle(
+            [
+                new OptimizerGroup("hidden", muon),
+                new OptimizerGroup("auxiliary", auxiliaryAdamW),
+            ]);
+        }
+
         if (config.IsOptimizer(WikiTrainingConfiguration.NekoMuonOptimizer))
         {
             IOptimizer nekoMuon = optim.NekoMuon(
                 model.HiddenWeightParameters,
                 lr: config.LearningRate,
+                beta_fast: config.NekoMuonBetaFast,
                 newton_schulz_interval:
                     config.NekoMuonNewtonSchulzInterval,
                 weight_decay: config.WeightDecay,
@@ -119,12 +145,26 @@ internal static partial class WikiLanguageModelCommand
         WikiTrainingConfiguration config,
         TextWriter output)
     {
-        if (config.IsOptimizer(WikiTrainingConfiguration.NekoMuonOptimizer))
+        if (config.IsOptimizer(WikiTrainingConfiguration.MuonOptimizer))
+        {
+            output.WriteLine(
+                $"optimizer = Muon " +
+                $"({model.HiddenWeightParameters.Count} matrix parameters, " +
+                $"lr {config.LearningRate:G}, momentum 0.95, " +
+                "Nesterov, fixed NS5 every step) + AdamW " +
+                $"({model.AuxiliaryParameters.Count} auxiliary parameters, " +
+                $"lr {config.AuxiliaryLearningRate:G}, moments " +
+                $"{GetAdamWMomentStorage(model)})");
+        }
+        else if (config.IsOptimizer(
+            WikiTrainingConfiguration.NekoMuonOptimizer))
         {
             output.WriteLine(
                 $"optimizer = NekoMuon " +
                 $"({model.HiddenWeightParameters.Count} matrix parameters, " +
-                $"lr {config.LearningRate:G}, Newton-Schulz every " +
+                $"lr {config.LearningRate:G}, " +
+                $"beta fast {config.NekoMuonBetaFast:G}, " +
+                "Newton-Schulz every " +
                 $"{config.NekoMuonNewtonSchulzInterval} steps, " +
                 $"{FormatNekoMuonNewtonSchulzDepthPolicy(config)}) + " +
                 "AdamW " +
@@ -186,20 +226,89 @@ internal static partial class WikiLanguageModelCommand
             ? "bf16/bf16"
             : "f32/f32";
 
-    private static string FormatOptimizerDiagnostics(IOptimizer optimizer)
+    internal static string FormatOptimizerDiagnostics(
+        IOptimizer optimizer,
+        WikiTrainingConfiguration config)
     {
-        NekoMuon? nekoMuon = OptimizerBundle
-            .GetCheckpointLeafOptimizers(optimizer)
-            .OfType<NekoMuon>()
-            .FirstOrDefault();
-        if (nekoMuon is null)
+        IReadOnlyList<IOptimizer> leaves =
+            GetOptimizerDiagnosticLeaves(optimizer);
+        string optimizerDiagnostics;
+        if (config.IsOptimizer(WikiTrainingConfiguration.MuonOptimizer))
+        {
+            optimizerDiagnostics = ", muon NS depth = 5";
+        }
+        else
+        {
+            NekoMuon? nekoMuon = leaves
+                .OfType<NekoMuon>()
+                .FirstOrDefault();
+            if (nekoMuon is null)
+            {
+                optimizerDiagnostics = string.Empty;
+            }
+            else
+            {
+                NekoMuonDiagnostics diagnostics = nekoMuon.GetDiagnostics();
+                optimizerDiagnostics =
+                    $", neko confidence = {diagnostics.MeanConfidence:G4} " +
+                    $"[{diagnostics.MinimumConfidence:G4}-" +
+                    $"{diagnostics.MaximumConfidence:G4}], NS depth = " +
+                    $"{diagnostics.MeanNewtonSchulzDepth:G4}/" +
+                    $"{diagnostics.MaximumNewtonSchulzDepth}";
+            }
+        }
+
+        return optimizerDiagnostics +
+            FormatMix8QuantizationDiagnostics(leaves);
+    }
+
+    private static string FormatMix8QuantizationDiagnostics(
+        IReadOnlyList<IOptimizer> leaves)
+    {
+        var values = new List<Mix8QuantizationDiagnostics>();
+        foreach (IOptimizer leaf in leaves)
+        {
+            if (leaf is IMix8QuantizationDiagnosticsProvider provider
+                && provider.TryGetMix8QuantizationDiagnostics(
+                    out Mix8QuantizationDiagnostics value))
+            {
+                values.Add(value);
+            }
+        }
+
+        Mix8QuantizationDiagnostics diagnostics =
+            Mix8QuantizationDiagnostics.Combine(values);
+        if (!diagnostics.HasValues)
             return string.Empty;
 
-        NekoMuonDiagnostics diagnostics = nekoMuon.GetDiagnostics();
-        return $", neko confidence = {diagnostics.MeanConfidence:G4} " +
-            $"[{diagnostics.MinimumConfidence:G4}-" +
-            $"{diagnostics.MaximumConfidence:G4}], NS depth = " +
-            $"{diagnostics.MeanNewtonSchulzDepth:G4}/" +
-            $"{diagnostics.MaximumNewtonSchulzDepth}";
+        return $", quantized_weight_change_rate = " +
+            $"{diagnostics.QuantizedWeightChangeRate:G6}, " +
+            $"residual_rms / quant_step = " +
+            $"{diagnostics.ResidualRmsPerQuantStep:G6}, " +
+            $"update_rms / quant_step = " +
+            $"{diagnostics.UpdateRmsPerQuantStep:G6}";
+    }
+
+    private static IReadOnlyList<IOptimizer> GetOptimizerDiagnosticLeaves(
+        IOptimizer optimizer)
+    {
+        ArgumentNullException.ThrowIfNull(optimizer);
+        var leaves = new List<IOptimizer>();
+        AddLeaves(optimizer, leaves);
+        return leaves;
+
+        static void AddLeaves(
+            IOptimizer current,
+            List<IOptimizer> destination)
+        {
+            if (current is not IOptimizerContainer container)
+            {
+                destination.Add(current);
+                return;
+            }
+
+            foreach (IOptimizer child in container.Optimizers)
+                AddLeaves(child, destination);
+        }
     }
 }

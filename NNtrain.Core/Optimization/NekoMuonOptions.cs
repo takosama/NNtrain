@@ -15,6 +15,14 @@ public sealed record NekoMuonOptions
 
     public float BetaSlow { get; init; } = 0.99f;
 
+    /// <summary>
+    /// Uses the ordinary Muon Nesterov direction
+    /// beta * m_t + (1 - beta) * g_t as the Newton-Schulz input. The default
+    /// is false so existing NekoMuon checkpoints and callers retain their
+    /// original fast-moment semantics.
+    /// </summary>
+    public bool Nesterov { get; init; }
+
     public float Rho { get; init; } = 0.9f;
 
     public float Epsilon { get; init; } = 1e-7f;

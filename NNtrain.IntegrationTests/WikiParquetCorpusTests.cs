@@ -86,6 +86,37 @@ public sealed class WikiParquetCorpusTests
         }
     }
 
+    [Fact]
+    public async Task FineWebFactoryReadsParquetTextColumn()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            $"NNtrain.FineWebParquetCorpusTests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            await WriteShard(
+                Path.Combine(directory, "train-00000.parquet"),
+                ["fineweb-a", "fineweb-b"]);
+
+            long count = await FineWebParquetCorpus.CountRowsAsync(
+                directory,
+                TestContext.Current.CancellationToken);
+            var values = new List<string>();
+            await foreach (string value in datasets.fineweb(
+                directory,
+                cancellation_token: TestContext.Current.CancellationToken))
+                values.Add(value);
+
+            Assert.Equal(2, count);
+            Assert.Equal(["fineweb-a", "fineweb-b"], values);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static async Task WriteShard(string path, string[] values)
     {
         var field = new DataField<string>("text");

@@ -1,11 +1,13 @@
 namespace NNtrain;
 
-public sealed class GainShareAdamW : IOptimizer, ILearningRateAdjustable
+public sealed class GainShareAdamW : IOptimizer, ILearningRateAdjustable,
+    IDisposable
 {
     private readonly List<Parameter> _parameters = [];
     private readonly int[][] _groups;
     private readonly int[] _parameterGroupIndices;
     private GainShareAdamWState _state;
+    private CudaGainShareAdamW? _cuda;
 
     internal IReadOnlyList<Parameter> Parameters => _parameters;
 
@@ -103,9 +105,17 @@ public sealed class GainShareAdamW : IOptimizer, ILearningRateAdjustable
         };
     }
 
-    public GainShareAdamWState CaptureState() => CloneState(_state);
+    public GainShareAdamWState CaptureState()
+    {
+        _cuda?.SynchronizeHost(_state);
+        return CloneState(_state);
+    }
 
-    internal GainShareAdamWState CaptureStateForStreaming() => _state;
+    internal GainShareAdamWState CaptureStateForStreaming()
+    {
+        _cuda?.SynchronizeHost(_state);
+        return _state;
+    }
 
     public void RestoreState(GainShareAdamWState state)
         => RestoreState(state, takeOwnership: false);
@@ -116,6 +126,7 @@ public sealed class GainShareAdamW : IOptimizer, ILearningRateAdjustable
     {
         ArgumentNullException.ThrowIfNull(state);
         ValidateState(state);
+        DisposeCudaResources();
         _state = takeOwnership ? state : CloneState(state);
     }
 
@@ -124,6 +135,12 @@ public sealed class GainShareAdamW : IOptimizer, ILearningRateAdjustable
 
     internal void ZeroGrad()
     {
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            foreach (Parameter parameter in _parameters)
+                parameter.T.ClearGradient();
+            return;
+        }
         foreach (Parameter parameter in _parameters)
             parameter.ZeroGrad();
     }
@@ -138,8 +155,30 @@ public sealed class GainShareAdamW : IOptimizer, ILearningRateAdjustable
                 "GainShareAdamW cannot advance beyond Int32.MaxValue steps.");
         }
 
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            CudaGradientOptimizerGuard.ValidateAndConsume(
+                _parameters,
+                Tensor.CudaDeviceIndices);
+        }
+        else
+        {
+            MakeCpuStateAuthoritative();
+        }
+
         _state = _state with { Step = _state.Step + 1 };
         GainShareAdamWOptions options = _state.Options;
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        {
+            int[] devices = Tensor.CudaDeviceIndices.ToArray();
+            (_cuda ??= new CudaGainShareAdamW(
+                _parameters,
+                _parameterGroupIndices,
+                _groups.Length))
+                .Step(_state, devices);
+            return;
+        }
+
         float biasCorrection1 =
             1f - MathF.Pow(options.Beta1, _state.Step);
         float biasCorrection2 =
@@ -361,6 +400,40 @@ public sealed class GainShareAdamW : IOptimizer, ILearningRateAdjustable
     }
 
     public void step() => Step();
+
+    /// <summary>
+    /// Preallocates persistent CUDA moments, directions, group reductions,
+    /// status scalars, and low-precision decode scratch. It is idempotent and
+    /// intentionally performs no work for the CPU reference path.
+    /// </summary>
+    public void prepare()
+    {
+        if (Tensor.ExecutionDevice != TensorDevice.Cuda)
+            return;
+        int[] devices = Tensor.CudaDeviceIndices.ToArray();
+        (_cuda ??= new CudaGainShareAdamW(
+            _parameters,
+            _parameterGroupIndices,
+            _groups.Length))
+            .Prepare(_state, devices);
+    }
+
+    internal void DisposeCudaResources()
+    {
+        CudaGainShareAdamW? cuda = Interlocked.Exchange(ref _cuda, null);
+        cuda?.Dispose();
+    }
+
+    public void Dispose() => DisposeCudaResources();
+
+    private void MakeCpuStateAuthoritative()
+    {
+        CudaGainShareAdamW? cuda = _cuda;
+        if (cuda is null)
+            return;
+        cuda.SynchronizeHost(_state);
+        DisposeCudaResources();
+    }
 
     public OptimizerStateDictionary state_dict()
         => OptimizerStateDictionary.Create(

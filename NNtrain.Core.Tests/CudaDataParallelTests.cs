@@ -295,6 +295,153 @@ public sealed class CudaDataParallelTests
         }
     }
 
+    [Theory]
+    [InlineData(TensorPrecisionMode.BFloat16)]
+    [InlineData(TensorPrecisionMode.Mix8_32)]
+    public void TwoGpuAccumulatedGradientsMatchOneLargeBatch(
+        TensorPrecisionMode precisionMode)
+    {
+        if (Tensor.CudaDeviceCount < 2)
+            return;
+
+        TensorDevice previousDevice = Tensor.ExecutionDevice;
+        int[] previousIndices = Tensor.CudaDeviceIndices.ToArray();
+        try
+        {
+            const int sequence = 4;
+            const int microBatchSize = 2;
+            const int accumulationSteps = 12;
+            const int effectiveBatchSize =
+                microBatchSize * accumulationSteps;
+            int[] input = Enumerable.Range(
+                    0,
+                    effectiveBatchSize * sequence)
+                .Select(index => index % 30 + 1)
+                .ToArray();
+            int[] target = input.Select(value => value % 31 + 1).ToArray();
+
+            (float Loss, float[][] Gradients) Run(bool accumulated)
+            {
+                Tensor.ExecutionDevice = TensorDevice.Cuda;
+                Tensor.CudaDeviceIndices = [0, 1];
+                var model = new GptRinWikiJp(
+                    vocabularySize: 32,
+                    contextLength: sequence,
+                    dModel: 8,
+                    numHeads: 2,
+                    dHidden: 16,
+                    numLayers: 1,
+                    rng: new Random(1709),
+                    dropout: 0f,
+                    dtype: TensorDType.Float32);
+                model.to(precisionMode, bfp8_block_size: 32);
+                model.ZeroGrad();
+                float loss;
+                using (var engine = new CudaDataParallelEngine(
+                    model,
+                    [0, 1],
+                    new CudaAdaptiveShardingOptions { Enabled = false }))
+                {
+                    engine.PrepareForTraining(
+                        accumulated
+                            ? microBatchSize
+                            : effectiveBatchSize);
+                    if (accumulated)
+                    {
+                        CudaLanguageModelMicroBatch[] microBatches =
+                            Enumerable.Range(0, accumulationSteps)
+                                .Select(index =>
+                                {
+                                    int start = checked(
+                                        index
+                                        * microBatchSize
+                                        * sequence);
+                                    int end = checked(
+                                        start
+                                        + microBatchSize
+                                        * sequence);
+                                    return new CudaLanguageModelMicroBatch(
+                                        input[start..end],
+                                        target[start..end],
+                                        microBatchSize,
+                                        sequence);
+                                })
+                                .ToArray();
+                        using IDisposable transferGuard =
+                            DeviceTransferGuard.EnterTrainingStep(2);
+                        loss = engine.ForwardBackwardAccumulated(
+                            microBatches,
+                            Tensor.DefaultCrossEntropyIgnoreIndex,
+                            globalStep: 0);
+                        DeviceTransferSnapshot transfer = Assert.NotNull(
+                            DeviceTransferGuard.CurrentSnapshot);
+                        Assert.Equal(
+                            3,
+                            transfer.DeviceToHostCopyCount);
+                        Assert.Equal(
+                            2 * sizeof(float) + sizeof(double),
+                            transfer.DeviceToHostBytes);
+                    }
+                    else
+                    {
+                        loss = engine.ForwardBackward(
+                            input,
+                            target,
+                            batchSize: effectiveBatchSize,
+                            sequenceLength: sequence,
+                            Tensor.DefaultCrossEntropyIgnoreIndex,
+                            globalStep: 0);
+                    }
+                }
+                return (
+                    loss,
+                    model.Parameters()
+                        .Select(parameter => parameter.T.Grad.ToArray())
+                        .ToArray());
+            }
+
+            var large = Run(accumulated: false);
+            var accumulated = Run(accumulated: true);
+            Assert.InRange(
+                MathF.Abs(large.Loss - accumulated.Loss),
+                0f,
+                3e-3f);
+            Assert.Equal(large.Gradients.Length, accumulated.Gradients.Length);
+            for (int parameter = 0;
+                parameter < large.Gradients.Length;
+                parameter++)
+            {
+                Assert.Equal(
+                    large.Gradients[parameter].Length,
+                    accumulated.Gradients[parameter].Length);
+                for (int index = 0;
+                    index < large.Gradients[parameter].Length;
+                    index++)
+                {
+                    float difference = MathF.Abs(
+                        large.Gradients[parameter][index]
+                        - accumulated.Gradients[parameter][index]);
+                    float tolerance = precisionMode
+                            == TensorPrecisionMode.Mix8_32
+                        ? 8e-2f
+                        : 8e-3f;
+                    Assert.True(
+                        difference <= tolerance,
+                        $"Parameter {parameter}, index {index}: " +
+                        $"large={large.Gradients[parameter][index]:R}, " +
+                        $"accumulated=" +
+                        $"{accumulated.Gradients[parameter][index]:R}, " +
+                        $"difference={difference:R}.");
+                }
+            }
+        }
+        finally
+        {
+            Tensor.ExecutionDevice = previousDevice;
+            Tensor.CudaDeviceIndices = previousIndices;
+        }
+    }
+
     [Fact]
     public void ConsecutiveExplicitEnginesReleaseOwnedCudaAllocations()
     {

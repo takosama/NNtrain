@@ -34,6 +34,22 @@ sealed record WikiOptimizerConfiguration
 
     public float AuxiliaryLearningRate { get; init; } = 3e-4f;
 
+    private float _nekoMuonBetaFast = 0.9f;
+    private bool _nekoMuonBetaFastWasSet;
+
+    public float NekoMuonBetaFast
+    {
+        get => _nekoMuonBetaFast;
+        init
+        {
+            _nekoMuonBetaFast = value;
+            _nekoMuonBetaFastWasSet = true;
+        }
+    }
+
+    internal bool HasExplicitNekoMuonBetaFast =>
+        _nekoMuonBetaFastWasSet;
+
     public float WeightDecay { get; init; } = 0.01f;
 
     public int NekoMuonNewtonSchulzInterval { get; init; } = 5;

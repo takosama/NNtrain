@@ -78,6 +78,33 @@ public static class optim
                 Decay1D = decay_1d,
             });
 
+    /// <summary>
+    /// Creates ordinary Muon using a fixed five-step Newton-Schulz
+    /// orthogonalization on every update. Nesterov momentum is enabled by
+    /// default, matching the reference Muon update.
+    /// </summary>
+    public static IOptimizer Muon(
+        IEnumerable<Parameter> parameters,
+        float lr = 3e-4f,
+        float momentum = 0.95f,
+        bool nesterov = true,
+        float eps = 1e-7f,
+        float weight_decay = 1e-2f,
+        bool decay_1d = false)
+    {
+        var optimizer = new NNtrain.NekoMuon(
+            parameters,
+            new NekoMuonOptions
+            {
+                LearningRate = lr,
+                Epsilon = eps,
+                WeightDecay = weight_decay,
+                Decay1D = decay_1d,
+            });
+        optimizer.SetOrdinaryMuonPolicy(momentum, nesterov);
+        return optimizer;
+    }
+
     public static IOptimizer GainShareAdamW(
         IReadOnlyList<IReadOnlyList<Parameter>> parameter_groups,
         float lr = 3e-4f,

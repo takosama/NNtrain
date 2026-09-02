@@ -202,6 +202,12 @@ internal static class TensorFloat16OperationManifest
             Preserve(
                 "LinearLastDim(Tensor,Tensor,Boolean)",
                 "LinearLastDimTests.Float16ProjectionMatchesFormerFloat16Graph"),
+            Preserve(
+                "LinearLastDimExclusiveBfp8InputGradient(Tensor,Tensor)",
+                "CudaBfp8GemmTests.ExclusiveMix8FfnDirectGradientMatchesLegacyAndKeepsLeavesFloat32"),
+            Preserve(
+                "LinearLastDimReluExclusiveBfp8OutputGradient(Tensor,Tensor)",
+                "CudaBfp8GemmTests.ExclusiveMix8FfnDirectGradientMatchesLegacyAndKeepsLeavesFloat32"),
             new(
                 "LinearLastDimBFloat16ForLoss(Tensor,Tensor)",
                 TensorFloat16ResultPolicy.Bfp8ToBFloat16,

@@ -6,6 +6,10 @@ namespace NNtrain;
 sealed record WikiTrainingConfiguration
 {
     internal const string TaskName = "gpt_rin_wiki_jp";
+    internal const string WikipediaDataset = "wikipedia";
+    internal const string WikipediaDatasetAlias = "wiki";
+    internal const string FineWebDataset = "fineweb";
+    internal const string MuonOptimizer = "muon";
     internal const string NekoMuonOptimizer = "nekomuon";
     internal const string AdamWOptimizer = "adamw";
     internal const string GainShareAdamWOptimizer = "gainshareadamw";
@@ -42,7 +46,22 @@ sealed record WikiTrainingConfiguration
 
     public string Task { get; init; } = TaskName;
 
-    public string DataPath { get; init; } = "data/wiki";
+    public string Dataset { get; init; } = WikipediaDataset;
+
+    private string _dataPath = "data/wiki";
+    private bool _dataPathWasSet;
+
+    public string DataPath
+    {
+        get => _dataPath;
+        init
+        {
+            _dataPath = value;
+            _dataPathWasSet = true;
+        }
+    }
+
+    internal bool HasExplicitDataPath => _dataPathWasSet;
 
     public string TextColumn { get; init; } = "text";
 
@@ -83,6 +102,13 @@ sealed record WikiTrainingConfiguration
     public int Epochs { get; init; } = 5;
 
     public int BatchSize { get; init; } = 2;
+
+    /// <summary>
+    /// Number of microbatches whose gradients form one optimizer update.
+    /// BatchSize remains the CUDA microbatch size; the effective batch size is
+    /// BatchSize multiplied by this value.
+    /// </summary>
+    public int GradientAccumulationSteps { get; init; } = 1;
 
     public int ContextLength { get; init; } = 64;
 
@@ -170,6 +196,22 @@ sealed record WikiTrainingConfiguration
     public float LearningRate { get; init; } = 3e-4f;
 
     public float AuxiliaryLearningRate { get; init; } = 3e-4f;
+
+    private float _nekoMuonBetaFast = 0.9f;
+    private bool _nekoMuonBetaFastWasSet;
+
+    public float NekoMuonBetaFast
+    {
+        get => _nekoMuonBetaFast;
+        init
+        {
+            _nekoMuonBetaFast = value;
+            _nekoMuonBetaFastWasSet = true;
+        }
+    }
+
+    internal bool HasNekoMuonBetaFastOverride =>
+        _nekoMuonBetaFastWasSet;
 
     public int NekoMuonNewtonSchulzInterval { get; init; } = 5;
 
@@ -309,12 +351,20 @@ sealed record WikiTrainingConfiguration
 
         string directory = Path.GetDirectoryName(fullPath)
             ?? Environment.CurrentDirectory;
+        string dataPath = configuration.HasExplicitDataPath
+            ? configuration.DataPath
+            : configuration.IsFineWebDataset()
+                ? "data/fineweb"
+                : "data/wiki";
+        string defaultTokenizer = configuration.IsFineWebDataset()
+            ? "fineweb-bpe.json"
+            : "wiki-jp-bpe.json";
         return configuration with
         {
-            DataPath = Path.GetFullPath(configuration.DataPath, directory),
+            DataPath = Path.GetFullPath(dataPath, directory),
             TokenizerPath = string.IsNullOrWhiteSpace(
                 configuration.TokenizerPath)
-                ? Path.Combine(directory, "wiki-jp-bpe.json")
+                ? Path.Combine(directory, defaultTokenizer)
                 : Path.GetFullPath(configuration.TokenizerPath, directory),
             CheckpointPath = ResolveCheckpointPath(
                 configuration,
@@ -363,6 +413,7 @@ sealed record WikiTrainingConfiguration
             "optimizer",
             "learningRate",
             "auxiliaryLearningRate",
+            "nekoMuonBetaFast",
             "weightDecay",
             "nekoMuonNewtonSchulzInterval",
             "nekoMuonNewtonSchulzDepthMode",
@@ -391,7 +442,7 @@ sealed record WikiTrainingConfiguration
                 nameof(Optimization));
         }
 
-        return configuration with
+        configuration = configuration with
         {
             Optimizer = optimizer.Type,
             LearningRate = optimizer.LearningRate,
@@ -413,6 +464,12 @@ sealed record WikiTrainingConfiguration
             GainShareMaxScale = optimizer.GainShareMaxScale,
             WarmupPercent = scheduler.WarmupPercent,
         };
+        return optimizer.HasExplicitNekoMuonBetaFast
+            ? configuration with
+            {
+                NekoMuonBetaFast = optimizer.NekoMuonBetaFast,
+            }
+            : configuration;
     }
 
     private static string ResolveCheckpointPath(
@@ -499,10 +556,28 @@ sealed record WikiTrainingConfiguration
                 $"Wiki task must be '{TaskName}'.",
                 nameof(Task));
         }
+        if (!string.Equals(
+                Dataset,
+                WikipediaDataset,
+                StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(
+                Dataset,
+                WikipediaDatasetAlias,
+                StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(
+                Dataset,
+                FineWebDataset,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"Dataset must be '{WikipediaDataset}' or " +
+                $"'{FineWebDataset}'.",
+                nameof(Dataset));
+        }
         if (string.IsNullOrWhiteSpace(DataPath))
-            throw new ArgumentException("Wiki data path is required.", nameof(DataPath));
+            throw new ArgumentException("Training data path is required.", nameof(DataPath));
         if (string.IsNullOrWhiteSpace(TextColumn))
-            throw new ArgumentException("Wiki text column is required.", nameof(TextColumn));
+            throw new ArgumentException("Training text column is required.", nameof(TextColumn));
         if (VocabularySize < BpeTokenizer.BaseVocabularySize)
         {
             throw new ArgumentOutOfRangeException(
@@ -519,6 +594,16 @@ sealed record WikiTrainingConfiguration
         ValidateNonNegative(ShuffleBufferSize, nameof(ShuffleBufferSize));
         ValidatePositive(Epochs, nameof(Epochs));
         ValidatePositive(BatchSize, nameof(BatchSize));
+        ValidatePositive(
+            GradientAccumulationSteps,
+            nameof(GradientAccumulationSteps));
+        if ((long)BatchSize * GradientAccumulationSteps > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(GradientAccumulationSteps),
+                GradientAccumulationSteps,
+                "Effective batch size must not exceed Int32.MaxValue.");
+        }
         ValidatePositive(ContextLength, nameof(ContextLength));
         ValidatePositive(ModelWidth, nameof(ModelWidth));
         ValidatePositive(Heads, nameof(Heads));
@@ -663,28 +748,17 @@ sealed record WikiTrainingConfiguration
             throw new ArgumentOutOfRangeException(nameof(Dropout));
         if (!float.IsFinite(InitializationScale) || InitializationScale <= 0f)
             throw new ArgumentOutOfRangeException(nameof(InitializationScale));
-        if (!IsOptimizer(NekoMuonOptimizer)
+        if (!IsOptimizer(MuonOptimizer)
+            && !IsOptimizer(NekoMuonOptimizer)
             && !IsOptimizer(AdamWOptimizer)
             && !IsOptimizer(GainShareAdamWOptimizer)
             && !IsOptimizer(LionOptimizer))
         {
             throw new ArgumentException(
                 $"Unsupported optimizer '{Optimizer}'. Supported optimizers " +
-                $"are '{NekoMuonOptimizer}', '{AdamWOptimizer}', " +
+                $"are '{MuonOptimizer}', '{NekoMuonOptimizer}', " +
+                $"'{AdamWOptimizer}', " +
                 $"'{GainShareAdamWOptimizer}', and '{LionOptimizer}'.",
-                nameof(Optimizer));
-        }
-        TensorPrecisionMode selectedPrecision = GetPrecisionMode();
-        if ((selectedPrecision is TensorPrecisionMode.Bfp8
-                or TensorPrecisionMode.Mix8_32)
-            && (IsOptimizer(GainShareAdamWOptimizer)
-                || IsOptimizer(LionOptimizer)))
-        {
-            throw new ArgumentException(
-                $"Optimizer '{Optimizer}' does not have a resident CUDA " +
-                $"{TensorPrecisionModeNames.Format(selectedPrecision)} " +
-                "update path. Use 'adamw' or 'nekomuon' so BFP8 weights, " +
-                "gradients, and optimizer state are not materialized on the host.",
                 nameof(Optimizer));
         }
         ValidateGainShareSettings();
@@ -695,6 +769,15 @@ sealed record WikiTrainingConfiguration
         {
             throw new ArgumentOutOfRangeException(
                 nameof(AuxiliaryLearningRate));
+        }
+        if (!float.IsFinite(NekoMuonBetaFast)
+            || NekoMuonBetaFast < 0f
+            || NekoMuonBetaFast >= 1f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(NekoMuonBetaFast),
+                NekoMuonBetaFast,
+                "NekoMuon beta fast must be finite and in [0, 1).");
         }
         ValidatePositive(
             NekoMuonNewtonSchulzInterval,
@@ -797,6 +880,12 @@ sealed record WikiTrainingConfiguration
 
     private void ValidateNekoMuonNewtonSchulzDepthPolicy()
     {
+        if (IsOptimizer(MuonOptimizer))
+        {
+            ValidateOrdinaryMuonNewtonSchulzPolicy();
+            return;
+        }
+
         if (NekoMuonNewtonSchulzDepthMode is null)
         {
             if (NekoMuonNewtonSchulzDepth.HasValue)
@@ -863,6 +952,39 @@ sealed record WikiTrainingConfiguration
         }
     }
 
+    private void ValidateOrdinaryMuonNewtonSchulzPolicy()
+    {
+        // Ordinary Muon has one fixed algorithm contract. The legacy
+        // NekoMuon-named fields remain accepted when they spell that exact
+        // contract so existing strict JSON files can switch only `type`.
+        if (NekoMuonNewtonSchulzDepthMode is null)
+        {
+            if (NekoMuonNewtonSchulzDepth.HasValue)
+            {
+                throw new ArgumentException(
+                    "nekoMuonNewtonSchulzDepth requires " +
+                    "nekoMuonNewtonSchulzDepthMode.",
+                    nameof(NekoMuonNewtonSchulzDepth));
+            }
+            return;
+        }
+
+        if (!string.Equals(
+                NekoMuonNewtonSchulzDepthMode,
+                "fixed",
+                StringComparison.OrdinalIgnoreCase)
+            || NekoMuonNewtonSchulzDepth != 5f
+            || NekoMuonNewtonSchulzInterval != 1)
+        {
+            throw new ArgumentException(
+                "Muon uses Nesterov momentum 0.95 with exactly five " +
+                "Newton-Schulz iterations on every optimizer step. Omit " +
+                "the NekoMuon depth settings, or specify interval 1, " +
+                "fixed depth 5.",
+                nameof(NekoMuonNewtonSchulzDepthMode));
+        }
+    }
+
     private static void ValidateGainShareUnitInterval(
         float value,
         string parameterName,
@@ -883,8 +1005,18 @@ sealed record WikiTrainingConfiguration
             expectedOptimizer,
             StringComparison.OrdinalIgnoreCase);
 
+    internal bool IsFineWebDataset()
+        => string.Equals(
+            Dataset,
+            FineWebDataset,
+            StringComparison.OrdinalIgnoreCase);
+
+    internal string GetDatasetDisplayName()
+        => IsFineWebDataset() ? "FineWeb" : "Wikipedia";
+
     internal bool HasNekoMuonNewtonSchulzDepthPolicyOverride
-        => NekoMuonNewtonSchulzDepthMode is not null;
+        => IsOptimizer(NekoMuonOptimizer)
+            && NekoMuonNewtonSchulzDepthMode is not null;
 
     internal global::NNtrain.NekoMuonNewtonSchulzDepthMode
         GetNekoMuonNewtonSchulzDepthMode()

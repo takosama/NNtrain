@@ -175,8 +175,6 @@ internal static partial class TensorCudaKernels
         {
             decodedProjection = Tensor.RentCudaBFloat16Buffer(
                 deviceIndex, projected.Numel);
-            decodedOutput = Tensor.RentCudaBFloat16Buffer(
-                deviceIndex, output.Numel);
             nint stream = accelerator.DefaultStream;
             CudaBfp8BufferView projectedView =
                 projected.EnsureCudaBfp8Buffer(deviceIndex);
@@ -189,33 +187,58 @@ internal static partial class TensorCudaKernels
                 stream);
             CudaBfp8BufferView outputView =
                 output.EnsureCudaBfp8Buffer(deviceIndex);
-            CudaBfp8Native.DequantizeBFloat16(
-                deviceIndex,
-                outputView.Payload,
-                outputView.Scales,
-                decodedOutput,
-                outputView.Descriptor,
-                stream);
+            NativeCudaBuffer<float> outputGradient =
+                output.EnsureCudaGradientBuffer(deviceIndex);
+            NativeCudaBuffer<float> projectedGradient =
+                projected.EnsureCudaGradientBuffer(deviceIndex);
+
+            bool directBfp8Output = context.RowDelta is not null
+                && CudaFlashAttention.TryBackwardBFloat16Bfp8Output(
+                    accelerator,
+                    decodedProjection,
+                    outputView,
+                    outputGradient,
+                    context.SoftmaxLogSumExp,
+                    context.RowDelta,
+                    projectedGradient,
+                    batch,
+                    sequence,
+                    modelWidth,
+                    numHeads,
+                    causal,
+                    context.TensorCore);
 
             // BFP8 is the storage boundary. FlashAttention still accumulates
             // its backward result in FP32; pure-BFP8 leaf publication happens
             // after the complete autograd contribution is accumulated.
-            CudaFlashAttention.BackwardBFloat16(
-                accelerator,
-                decodedProjection,
-                decodedOutput,
-                output.EnsureCudaGradientBuffer(deviceIndex),
-                outputGradientBFloat16: null,
-                context.SoftmaxLogSumExp,
-                context.RowDelta,
-                projected.EnsureCudaGradientBuffer(deviceIndex),
-                projectedGradientBFloat16: null,
-                batch,
-                sequence,
-                modelWidth,
-                numHeads,
-                causal,
-                context.TensorCore);
+            if (!directBfp8Output)
+            {
+                decodedOutput = Tensor.RentCudaBFloat16Buffer(
+                    deviceIndex, output.Numel);
+                CudaBfp8Native.DequantizeBFloat16(
+                    deviceIndex,
+                    outputView.Payload,
+                    outputView.Scales,
+                    decodedOutput,
+                    outputView.Descriptor,
+                    stream);
+                CudaFlashAttention.BackwardBFloat16(
+                    accelerator,
+                    decodedProjection,
+                    decodedOutput,
+                    outputGradient,
+                    outputGradientBFloat16: null,
+                    context.SoftmaxLogSumExp,
+                    context.RowDelta,
+                    projectedGradient,
+                    projectedGradientBFloat16: null,
+                    batch,
+                    sequence,
+                    modelWidth,
+                    numHeads,
+                    causal,
+                    context.TensorCore);
+            }
             projected.MarkCudaGradientMutated(deviceIndex);
         }
         finally

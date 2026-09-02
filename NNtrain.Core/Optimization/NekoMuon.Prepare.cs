@@ -21,7 +21,10 @@ public sealed partial class NekoMuon
         }
 
         lock (_cudaPreparationSync)
+        {
             PrepareCudaResidency(devices);
+            _cudaStateAuthorityDevice = devices[0];
+        }
     }
 
     private void PrepareCudaResidency(int[] devices)
@@ -87,6 +90,10 @@ public sealed partial class NekoMuon
         TransitionFromCudaBfp8State(devices[0]);
         bool deviceOnlyFixedFive =
             UsesDeviceOnlyFixedFiveOnEveryStep(_state.Options);
+        bool deviceOnlyAdaptive = mix8
+            && !ForceFullNewtonSchulz
+            && _state.Options.NewtonSchulzDepthMode
+                != NekoMuonNewtonSchulzDepthMode.Fixed;
         (int maximumLength, int maximumGramLength) =
             GetCudaScratchCapacities();
         foreach (int deviceIndex in devices)
@@ -128,7 +135,7 @@ public sealed partial class NekoMuon
             }
         }
 
-        if (!deviceOnlyFixedFive)
+        if (!deviceOnlyFixedFive && !deviceOnlyAdaptive)
         {
             foreach (int deviceIndex in devices)
             {
@@ -139,6 +146,61 @@ public sealed partial class NekoMuon
                     new CudaOptimizerKernels.NekoMuonStatsBatch(
                         deviceIndex,
                         states));
+            }
+        }
+        if (mix8)
+        {
+            foreach (int deviceIndex in devices)
+            {
+                if (!_cudaConfidenceBatches.ContainsKey(deviceIndex))
+                {
+                    _cudaConfidenceBatches.Add(
+                        deviceIndex,
+                        new CudaOptimizerKernels.NekoMuonConfidenceBatch(
+                            deviceIndex,
+                            states));
+                }
+                if (!deviceOnlyAdaptive)
+                    continue;
+
+                CudaOptimizerKernels.NekoMuonDeviceScratch scratch =
+                    GetOrCreatePreparedCudaScratch(
+                        deviceIndex,
+                        maximumLength,
+                        maximumGramLength);
+                var pointerGroups = _parameters
+                    .Select((parameter, index) =>
+                    {
+                        GetMatrixShape(
+                            parameter,
+                            out int originalRows,
+                            out int originalColumns);
+                        return new
+                        {
+                            Rows = Math.Min(originalRows, originalColumns),
+                            Columns = Math.Max(
+                                originalRows, originalColumns),
+                            Confidence = states[index]
+                                .GetOrCreate(deviceIndex)
+                                .Confidence.NativePtr,
+                        };
+                    })
+                    .GroupBy(item => (item.Rows, item.Columns));
+                foreach (var group in pointerGroups)
+                {
+                    var pointers = group
+                        .Select(item => item.Confidence)
+                        .ToArray();
+                    for (int offset = 0; offset < pointers.Length;
+                        offset += scratch.BatchCapacity)
+                    {
+                        int count = Math.Min(
+                            scratch.BatchCapacity,
+                            pointers.Length - offset);
+                        _ = scratch.GetAdaptiveConfidencePointers(
+                            pointers.AsSpan(offset, count));
+                    }
+                }
             }
         }
     }
@@ -249,6 +311,12 @@ public sealed partial class NekoMuon
             batch.Dispose();
         }
         _cudaStatsBatches.Clear();
+        foreach (CudaOptimizerKernels.NekoMuonConfidenceBatch batch
+            in _cudaConfidenceBatches.Values)
+        {
+            batch.Dispose();
+        }
+        _cudaConfidenceBatches.Clear();
     }
 
     private (int MaximumLength, int MaximumGramLength)

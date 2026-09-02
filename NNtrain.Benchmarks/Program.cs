@@ -88,7 +88,21 @@ else if (args.Length > 0
 {
     int warmup = args.Length > 1 ? int.Parse(args[1]) : 3;
     int iterations = args.Length > 2 ? int.Parse(args[2]) : 10;
-    Bfp8CudaGemmProfiler.Run(warmup, iterations);
+    int m = args.Length > 3 ? int.Parse(args[3]) : 256;
+    int k = args.Length > 4 ? int.Parse(args[4]) : 512;
+    int n = args.Length > 5 ? int.Parse(args[5]) : 256;
+    Bfp8CudaGemmProfiler.Run(warmup, iterations, m, k, n);
+}
+else if (args.Length > 0
+    && string.Equals(args[0], "--benchmark-bfp8-codec", StringComparison.Ordinal))
+{
+    int warmup = args.Length > 1 ? int.Parse(args[1]) : 2;
+    int iterations = args.Length > 2 ? int.Parse(args[2]) : 10;
+    int length = args.Length > 3 ? int.Parse(args[3]) : 41_287_680;
+    int blockSize = args.Length > 4 ? int.Parse(args[4]) : 32;
+    string? outputPath = args.Length > 5 ? args[5] : null;
+    Bfp8CudaCodecProfiler.Run(
+        warmup, iterations, length, blockSize, outputPath);
 }
 else if (args.Length > 0
     && string.Equals(
@@ -108,6 +122,28 @@ else if (args.Length > 0
     int iterations = args.Length > 5 ? int.Parse(args[5]) : 10;
     NekoMuonFixedNs5Profiler.Run(
         parameterCount, rows, columns, warmup, iterations);
+}
+else if (args.Length > 0
+    && string.Equals(
+        args[0], "--benchmark-optimizer-precision", StringComparison.Ordinal))
+{
+    string optimizer = args.Length > 1 ? args[1] : "all";
+    string precision = args.Length > 2 ? args[2] : "all";
+    int deviceCount = args.Length > 3 ? int.Parse(args[3]) : 1;
+    int warmup = args.Length > 4 ? int.Parse(args[4]) : 3;
+    int iterations = args.Length > 5 ? int.Parse(args[5]) : 10;
+    int parameterCount = args.Length > 6 ? int.Parse(args[6]) : 16;
+    int rows = args.Length > 7 ? int.Parse(args[7]) : 512;
+    int columns = args.Length > 8 ? int.Parse(args[8]) : 512;
+    OptimizerPrecisionProfiler.Run(
+        optimizer,
+        precision,
+        deviceCount,
+        warmup,
+        iterations,
+        parameterCount,
+        rows,
+        columns);
 }
 else if (args.Length > 0
     && string.Equals(

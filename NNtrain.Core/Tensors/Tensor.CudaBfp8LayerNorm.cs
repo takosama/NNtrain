@@ -1,4 +1,5 @@
 using System.Runtime.ExceptionServices;
+using NNtrain.Cuda.Interop;
 
 namespace NNtrain;
 
@@ -102,6 +103,46 @@ internal static partial class TensorCudaKernels
         CudaBfp8OwnedBuffers? encodedOutput = null;
         try
         {
+            if (branch is not null
+                && CanUseDirectBfp8FusedLayerNorm(
+                    input, branch, gamma, beta,
+                    outputDescriptor, columns))
+            {
+                means = Tensor.RentCudaFloatBuffer(deviceIndex, rows);
+                inverses = Tensor.RentCudaFloatBuffer(deviceIndex, rows);
+                encodedOutput = CudaBfp8OwnedBuffers.Allocate(
+                    accelerator, input.Numel, outputDescriptor);
+                CudaLayerNorm.FusedForwardBfp8Block128x512(
+                    accelerator,
+                    input.EnsureCudaBfp8Buffer(deviceIndex),
+                    branch.EnsureCudaBfp8Buffer(deviceIndex),
+                    gamma.EnsureCudaBfp8Buffer(deviceIndex),
+                    beta.EnsureCudaBfp8Buffer(deviceIndex),
+                    new CudaBfp8BufferView(
+                        encodedOutput.Payload,
+                        encodedOutput.Scales,
+                        outputDescriptor),
+                    means,
+                    inverses,
+                    rows,
+                    columns,
+                    seed,
+                    dropThreshold,
+                    dropoutScale,
+                    epsilon,
+                    graphToken);
+                var directContext = new Bfp8LayerNormResidentContext(
+                    means,
+                    inverses,
+                    encodedOutput,
+                    accelerator,
+                    fused: true);
+                means = null;
+                inverses = null;
+                encodedOutput = null;
+                return directContext;
+            }
+
             decodedInput = Tensor.RentCudaBFloat16Buffer(
                 deviceIndex, input.Numel);
             if (branch is not null)
@@ -355,6 +396,41 @@ internal static partial class TensorCudaKernels
         NativeCudaBuffer<ushort>? decodedGamma = null;
         try
         {
+            if (CanUseDirectBfp8FusedLayerNorm(
+                    residual,
+                    branch,
+                    gamma,
+                    beta,
+                    output.Bfp8Quantization,
+                    columns))
+            {
+                CudaLayerNorm.FusedBackwardBfp8Block128x512(
+                    accelerator,
+                    residual.EnsureCudaBfp8Buffer(deviceIndex),
+                    branch.EnsureCudaBfp8Buffer(deviceIndex),
+                    gamma.EnsureCudaBfp8Buffer(deviceIndex),
+                    context.Means,
+                    context.Inverses,
+                    output.EnsureCudaGradientBuffer(deviceIndex),
+                    residualGradient,
+                    branchGradient,
+                    gamma.EnsureCudaGradientBuffer(deviceIndex),
+                    beta.EnsureCudaGradientBuffer(deviceIndex),
+                    rows,
+                    columns,
+                    sameParent,
+                    seed,
+                    dropThreshold,
+                    dropoutScale,
+                    graphToken);
+                residual.MarkCudaGradientMutated(deviceIndex);
+                if (!sameParent)
+                    branch.MarkCudaGradientMutated(deviceIndex);
+                gamma.MarkCudaGradientMutated(deviceIndex);
+                beta.MarkCudaGradientMutated(deviceIndex);
+                return;
+            }
+
             decodedResidual = Tensor.RentCudaBFloat16Buffer(
                 deviceIndex, residual.Numel);
             decodedBranch = Tensor.RentCudaBFloat16Buffer(
@@ -447,6 +523,61 @@ internal static partial class TensorCudaKernels
                 parameterName);
         }
     }
+
+    private static bool CanUseDirectBfp8FusedLayerNorm(
+        Tensor residual,
+        Tensor branch,
+        Tensor gamma,
+        Tensor beta,
+        Bfp8QuantizationDescriptor? outputDescriptor,
+        int columns)
+    {
+        int blockSize;
+        if (columns == 512
+            && !CudaDispatchPolicy.Current
+                .DisableDirectBfp8LayerNormBlock32x512
+            && IsBlockSize(outputDescriptor, residual.Numel, 32))
+        {
+            if (CudaNativeGateway.AbiVersion.Minor
+                < CudaAbiVersion.DirectBfp8LayerNormBlock32x512Minor)
+            {
+                return false;
+            }
+            blockSize = 32;
+        }
+        else if (columns == 512)
+        {
+            blockSize = 128;
+        }
+        else if (columns == 384
+            && CudaNativeGateway.AbiVersion.Minor
+                >= CudaAbiVersion.DirectBfp8LayerNormBlock32x384Minor)
+        {
+            blockSize = 32;
+        }
+        else
+        {
+            return false;
+        }
+
+        return IsBlockSize(
+                residual.Bfp8Quantization, residual.Numel, blockSize)
+            && IsBlockSize(
+                branch.Bfp8Quantization, branch.Numel, blockSize)
+            && IsBlockSize(
+                gamma.Bfp8Quantization, gamma.Numel, blockSize)
+            && IsBlockSize(
+                beta.Bfp8Quantization, beta.Numel, blockSize)
+            && IsBlockSize(outputDescriptor, residual.Numel, blockSize);
+    }
+
+    private static bool IsBlockSize(
+        Bfp8QuantizationDescriptor? descriptor,
+        int length,
+        int blockSize)
+        => descriptor is not null
+            && descriptor.Granularity == Bfp8ScaleGranularity.Block
+            && descriptor.GetEffectiveBlockSize(length) == blockSize;
 
     private static void DecodeLayerNormOperand(
         Tensor tensor,

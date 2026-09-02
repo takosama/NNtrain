@@ -410,6 +410,55 @@ public sealed class CudaGraphRngState : IDisposable
             DeviceIndex);
     }
 
+    public void EnqueueResidualDropoutLayerNormForwardBfp8Block128x512(
+        nint residualPayload,
+        nint residualScales,
+        nint branchPayload,
+        nint branchScales,
+        nint gammaPayload,
+        nint gammaScales,
+        nint betaPayload,
+        nint betaScales,
+        nint outputPayload,
+        nint outputScales,
+        nint means,
+        nint inverses,
+        int rows,
+        int columns,
+        int blockSize,
+        uint dropThreshold,
+        float dropoutScale,
+        float epsilon,
+        ulong operationSeed)
+    {
+        ValidateFusedLayerNormForward(
+            residualPayload, branchPayload, gammaPayload, betaPayload,
+            outputPayload, means, inverses, rows, columns,
+            dropoutScale, epsilon);
+        if (residualScales == nint.Zero || branchScales == nint.Zero
+            || gammaScales == nint.Zero || betaScales == nint.Zero
+            || outputScales == nint.Zero || blockSize <= 0)
+        {
+            throw new ArgumentException(
+                "Block-BFP8 LayerNorm scales must be device pointers.");
+        }
+        _lane.ActivateComputeStream();
+        CudaGraphStatus.Check(
+            CudaNativeGateway
+                .GraphResidualDropoutLayerNormForwardBfp8Block128x512(
+                    DeviceIndex,
+                    residualPayload, residualScales,
+                    branchPayload, branchScales,
+                    gammaPayload, gammaScales,
+                    betaPayload, betaScales,
+                    outputPayload, outputScales,
+                    means, inverses, rows, columns, blockSize,
+                    _counter.Pointer, operationSeed, dropThreshold,
+                    dropoutScale, epsilon, _lane.ComputeStreamHandle),
+            "CUDA Graph direct block-BFP8 residual/dropout/LayerNorm forward",
+            DeviceIndex);
+    }
+
     public void EnqueueResidualDropoutLayerNormBackwardFloat32(
         nint residual,
         nint branch,
@@ -531,6 +580,58 @@ public sealed class CudaGraphRngState : IDisposable
                 dropoutScale,
                 _lane.ComputeStreamHandle),
             "CUDA Graph fused BF16 residual/dropout/LayerNorm backward",
+            DeviceIndex);
+    }
+
+    public void EnqueueResidualDropoutLayerNormBackwardBfp8Block128x512(
+        nint residualPayload,
+        nint residualScales,
+        nint branchPayload,
+        nint branchScales,
+        nint gammaPayload,
+        nint gammaScales,
+        nint means,
+        nint inverses,
+        nint outputGradient,
+        nint residualGradient,
+        nint branchGradient,
+        nint gammaGradient,
+        nint betaGradient,
+        nint parameterScratch,
+        int rows,
+        int columns,
+        int blockSize,
+        bool sameParent,
+        uint dropThreshold,
+        float dropoutScale,
+        ulong operationSeed)
+    {
+        ValidateFusedLayerNormBackward(
+            residualPayload, branchPayload, gammaPayload, means, inverses,
+            outputGradient, residualGradient, branchGradient,
+            gammaGradient, betaGradient, parameterScratch,
+            rows, columns, dropoutScale);
+        if (residualScales == nint.Zero || branchScales == nint.Zero
+            || gammaScales == nint.Zero || blockSize <= 0)
+        {
+            throw new ArgumentException(
+                "Block-BFP8 LayerNorm scales must be device pointers.");
+        }
+        _lane.ActivateComputeStream();
+        CudaGraphStatus.Check(
+            CudaNativeGateway
+                .GraphResidualDropoutLayerNormBackwardBfp8Block128x512(
+                    DeviceIndex,
+                    residualPayload, residualScales,
+                    branchPayload, branchScales,
+                    gammaPayload, gammaScales,
+                    means, inverses, outputGradient,
+                    residualGradient, branchGradient,
+                    gammaGradient, betaGradient, parameterScratch,
+                    rows, columns, blockSize, sameParent ? 1 : 0,
+                    _counter.Pointer, operationSeed, dropThreshold,
+                    dropoutScale, _lane.ComputeStreamHandle),
+            "CUDA Graph direct block-BFP8 residual/dropout/LayerNorm backward",
             DeviceIndex);
     }
 

@@ -64,6 +64,14 @@ public sealed partial class NekoMuon
                     .StoreUnsafe(ref fastHat[index]);
                 (nextSlow * inverseSlowCorrection)
                     .StoreUnsafe(ref slowHat[index]);
+                if (options.Nesterov)
+                {
+                    Vector256<float> direction = betaFast * nextFast
+                        + oneMinusBetaFast * gradient;
+                    direction.StoreUnsafe(ref fastHat[index]);
+                    direction.StoreUnsafe(ref slow[index]);
+                    direction.StoreUnsafe(ref slowHat[index]);
+                }
             }
         }
 
@@ -78,6 +86,13 @@ public sealed partial class NekoMuon
                 + (1f - options.BetaSlow) * gradient;
             fastHat[index] = fast[index] / fastCorrection;
             slowHat[index] = slow[index] / slowCorrection;
+            if (options.Nesterov)
+            {
+                fastHat[index] = options.BetaFast * fast[index]
+                    + (1f - options.BetaFast) * gradient;
+                slow[index] = fastHat[index];
+                slowHat[index] = fastHat[index];
+            }
         }
     }
 

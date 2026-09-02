@@ -58,6 +58,7 @@ public sealed class NekoMuonOptionsTests
         Assert.Equal(3e-4f, options.LearningRate);
         Assert.Equal(0.9f, options.BetaFast);
         Assert.Equal(0.99f, options.BetaSlow);
+        Assert.False(options.Nesterov);
         Assert.Equal(0.9f, options.Rho);
         Assert.Equal(1e-7f, options.Epsilon);
         Assert.Equal(5, options.MaxNewtonSchulzSteps);

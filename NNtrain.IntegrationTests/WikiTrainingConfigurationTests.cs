@@ -3,6 +3,71 @@ using Xunit;
 
 public sealed class WikiTrainingConfigurationTests
 {
+    [Fact]
+    public void FineWebSelectsFineWebDefaultsFromVersionTwoDataSection()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.Write(
+            """
+            {
+              "schemaVersion": 2,
+              "task": { "type": "wiki-language-model" },
+              "data": { "dataset": "fineweb" }
+            }
+            """);
+
+        WikiTrainingConfiguration configuration =
+            WikiTrainingConfiguration.Load(path);
+
+        Assert.Equal("fineweb", configuration.Dataset);
+        Assert.True(configuration.IsFineWebDataset());
+        Assert.Equal(
+            Path.Combine(directory.Root, "data", "fineweb"),
+            configuration.DataPath);
+        Assert.Equal(
+            Path.Combine(directory.Root, "fineweb-bpe.json"),
+            configuration.TokenizerPath);
+    }
+
+    [Fact]
+    public void FineWebHonorsExplicitDataAndTokenizerPaths()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.Write(
+            """
+            {
+              "task": "gpt_rin_wiki_jp",
+              "dataset": "fineweb",
+              "dataPath": "corpus/custom",
+              "tokenizerPath": "tokenizers/custom.json"
+            }
+            """);
+
+        WikiTrainingConfiguration configuration =
+            WikiTrainingConfiguration.Load(path);
+
+        Assert.Equal(
+            Path.Combine(directory.Root, "corpus", "custom"),
+            configuration.DataPath);
+        Assert.Equal(
+            Path.Combine(directory.Root, "tokenizers", "custom.json"),
+            configuration.TokenizerPath);
+    }
+
+    [Fact]
+    public void RejectsUnsupportedDataset()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            Dataset = "commoncrawl",
+        };
+
+        ArgumentException exception = Assert.Throws<ArgumentException>(
+            configuration.Validate);
+
+        Assert.Equal("Dataset", exception.ParamName);
+    }
+
     [Theory]
     [InlineData("training.example.json")]
     [InlineData("training.transformer.json")]
@@ -38,6 +103,7 @@ public sealed class WikiTrainingConfigurationTests
               "training": {
                 "epochs": 2,
                 "batchSize": 1,
+                "gradientAccumulationSteps": 4,
                 "validationFraction": 0.0
               },
               "runtime": { "device": "cpu", "seed": 29 },
@@ -58,6 +124,7 @@ public sealed class WikiTrainingConfigurationTests
 
         Assert.True(WikiTrainingConfiguration.IsWikiConfiguration(path));
         Assert.Equal(2, configuration.Epochs);
+        Assert.Equal(4, configuration.GradientAccumulationSteps);
         Assert.Equal(29, configuration.Seed);
         Assert.Equal(8, configuration.ModelWidth);
         Assert.Equal(
@@ -105,6 +172,7 @@ public sealed class WikiTrainingConfigurationTests
               "optimizer": "nekomuon",
               "learningRate": 0.001,
               "auxiliaryLearningRate": 0.002,
+              "nekoMuonBetaFast": 0.94,
               "nekoMuonNewtonSchulzInterval": 7,
               "warmupPercent": 20,
               "weightDecay": 0.02,
@@ -160,6 +228,8 @@ public sealed class WikiTrainingConfigurationTests
         Assert.Equal("nekomuon", configuration.Optimizer);
         Assert.Equal(0.001f, configuration.LearningRate);
         Assert.Equal(0.002f, configuration.AuxiliaryLearningRate);
+        Assert.Equal(0.94f, configuration.NekoMuonBetaFast);
+        Assert.True(configuration.HasNekoMuonBetaFastOverride);
         Assert.Equal(7, configuration.NekoMuonNewtonSchulzInterval);
         Assert.Equal(20f, configuration.WarmupPercent);
         Assert.True(configuration.ShowLossGraph);
@@ -190,6 +260,7 @@ public sealed class WikiTrainingConfigurationTests
                   "type": "nekomuon",
                   "learningRate": 0.001,
                   "auxiliaryLearningRate": 0.002,
+                  "nekoMuonBetaFast": 0.95,
                   "weightDecay": 0.02,
                   "nekoMuonNewtonSchulzInterval": 7,
                   "nekoMuonNewtonSchulzDepthMode": "minimum",
@@ -218,6 +289,8 @@ public sealed class WikiTrainingConfigurationTests
         Assert.Equal("nekomuon", configuration.Optimizer);
         Assert.Equal(0.001f, configuration.LearningRate);
         Assert.Equal(0.002f, configuration.AuxiliaryLearningRate);
+        Assert.Equal(0.95f, configuration.NekoMuonBetaFast);
+        Assert.True(configuration.HasNekoMuonBetaFastOverride);
         Assert.Equal(0.02f, configuration.WeightDecay);
         Assert.Equal(7, configuration.NekoMuonNewtonSchulzInterval);
         Assert.True(
@@ -230,6 +303,92 @@ public sealed class WikiTrainingConfigurationTests
             TensorPrecisionMode.BFloat16,
             configuration.GetPrecisionMode());
         Assert.Equal(25f, configuration.WarmupPercent);
+    }
+
+    [Fact]
+    public void GroupedOmittedBetaFastDoesNotCreateResumeOverride()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.Write(
+            """
+            {
+              "task": "gpt_rin_wiki_jp",
+              "optimization": {
+                "optimizer": { "type": "nekomuon" },
+                "scheduler": { "type": "warmupCosineProgress" }
+              }
+            }
+            """);
+
+        WikiTrainingConfiguration configuration =
+            WikiTrainingConfiguration.Load(path);
+
+        Assert.Equal(0.9f, configuration.NekoMuonBetaFast);
+        Assert.False(configuration.HasNekoMuonBetaFastOverride);
+    }
+
+    [Fact]
+    public void VersionTwoGroupedBetaFastCreatesResumeOverride()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.Write(
+            """
+            {
+              "schemaVersion": 2,
+              "task": { "type": "wiki-language-model" },
+              "optimization": {
+                "optimizer": {
+                  "type": "nekomuon",
+                  "nekoMuonBetaFast": 0.95
+                },
+                "scheduler": { "type": "warmupCosineProgress" }
+              }
+            }
+            """);
+
+        WikiTrainingConfiguration configuration =
+            WikiTrainingConfiguration.Load(path);
+
+        Assert.Equal(0.95f, configuration.NekoMuonBetaFast);
+        Assert.True(configuration.HasNekoMuonBetaFastOverride);
+    }
+
+    [Fact]
+    public void LoadAcceptsGroupedOrdinaryMuonFixedNs5Settings()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.Write(
+            """
+            {
+              "task": "gpt_rin_wiki_jp",
+              "optimization": {
+                "optimizer": {
+                  "type": "muon",
+                  "learningRate": 0.001,
+                  "auxiliaryLearningRate": 0.0003,
+                  "weightDecay": 0.01,
+                  "nekoMuonNewtonSchulzInterval": 1,
+                  "nekoMuonNewtonSchulzDepthMode": "fixed",
+                  "nekoMuonNewtonSchulzDepth": 5
+                },
+                "scheduler": {
+                  "type": "warmupCosineProgress",
+                  "warmupPercent": 0
+                }
+              }
+            }
+            """);
+
+        WikiTrainingConfiguration configuration =
+            WikiTrainingConfiguration.Load(path);
+
+        Assert.Equal(
+            WikiTrainingConfiguration.MuonOptimizer,
+            configuration.Optimizer);
+        Assert.Equal(1, configuration.NekoMuonNewtonSchulzInterval);
+        Assert.Equal("fixed", configuration.NekoMuonNewtonSchulzDepthMode);
+        Assert.Equal(5f, configuration.NekoMuonNewtonSchulzDepth);
+        Assert.Equal(0f, configuration.WarmupPercent);
     }
 
     [Fact]
@@ -410,6 +569,61 @@ public sealed class WikiTrainingConfigurationTests
     }
 
     [Fact]
+    public void AcceptsOrdinaryMuonWithImplicitFixedPolicy()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            Optimizer = WikiTrainingConfiguration.MuonOptimizer,
+        };
+
+        configuration.Validate();
+
+        Assert.False(
+            configuration.HasNekoMuonNewtonSchulzDepthPolicyOverride);
+    }
+
+    [Fact]
+    public void AcceptsOrdinaryMuonWithLegacyFieldsSpellingFixedNs5()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            Optimizer = WikiTrainingConfiguration.MuonOptimizer,
+            NekoMuonNewtonSchulzInterval = 1,
+            NekoMuonNewtonSchulzDepthMode = "fixed",
+            NekoMuonNewtonSchulzDepth = 5f,
+        };
+
+        configuration.Validate();
+
+        Assert.False(
+            configuration.HasNekoMuonNewtonSchulzDepthPolicyOverride);
+    }
+
+    [Theory]
+    [InlineData(2, "fixed", 5f)]
+    [InlineData(1, "fixed", 4f)]
+    [InlineData(1, "adaptive", null)]
+    public void RejectsOrdinaryMuonPolicyVariants(
+        int interval,
+        string mode,
+        float? depth)
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            Optimizer = WikiTrainingConfiguration.MuonOptimizer,
+            NekoMuonNewtonSchulzInterval = interval,
+            NekoMuonNewtonSchulzDepthMode = mode,
+            NekoMuonNewtonSchulzDepth = depth,
+        };
+
+        ArgumentException exception = Assert.Throws<ArgumentException>(
+            configuration.Validate);
+
+        Assert.Equal("NekoMuonNewtonSchulzDepthMode", exception.ParamName);
+        Assert.Contains("fixed depth 5", exception.Message);
+    }
+
+    [Fact]
     public void ExplicitFloat32OverridesTheFloat16V2Default()
     {
         var configuration = new WikiTrainingConfiguration
@@ -497,7 +711,7 @@ public sealed class WikiTrainingConfigurationTests
     [InlineData("bfp8", "lion")]
     [InlineData("mix8_32", "gainshareadamw")]
     [InlineData("mix8_32", "lion")]
-    public void RejectsBfp8OptimizersWithoutResidentCudaUpdates(
+    public void AllowsBfp8OptimizersWithResidentCudaUpdates(
         string precisionMode,
         string optimizer)
     {
@@ -509,13 +723,11 @@ public sealed class WikiTrainingConfigurationTests
             Optimizer = optimizer,
         };
 
-        ArgumentException exception = Assert.Throws<ArgumentException>(
-            configuration.Validate);
+        configuration.Validate();
 
-        Assert.Equal("Optimizer", exception.ParamName);
-        Assert.Contains("adamw", exception.Message);
-        Assert.Contains("nekomuon", exception.Message);
-        Assert.Contains("not have a resident CUDA", exception.Message);
+        Assert.Equal(
+            TensorPrecisionModeNames.Parse(precisionMode),
+            configuration.GetPrecisionMode());
     }
 
     [Fact]
@@ -677,6 +889,21 @@ public sealed class WikiTrainingConfigurationTests
                 configuration.Validate);
 
         Assert.Equal("CudaGraphCacheBudgetMiB", exception.ParamName);
+    }
+
+    [Fact]
+    public void RejectsNonPositiveGradientAccumulation()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            GradientAccumulationSteps = 0,
+        };
+
+        ArgumentOutOfRangeException exception =
+            Assert.Throws<ArgumentOutOfRangeException>(
+                configuration.Validate);
+
+        Assert.Equal("GradientAccumulationSteps", exception.ParamName);
     }
 
     [Fact]

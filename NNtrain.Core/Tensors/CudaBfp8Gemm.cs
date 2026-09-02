@@ -8,6 +8,8 @@ internal readonly record struct CudaBfp8GemmTelemetrySnapshot(
     long Int8TensorCoreExecutions,
     long BFloat16FallbackExecutions,
     long DirectBFloat16LossHeadExecutions,
+    long DirectBFloat16FfnInputGradientExecutions,
+    long Bfp8ReluBFloat16MaskExecutions,
     long BFloat16DecodeCacheMisses,
     long Int8LayoutTransformCacheMisses,
     CudaBfp8GemmBackend? LastBackend)
@@ -21,6 +23,10 @@ internal readonly record struct CudaBfp8GemmTelemetrySnapshot(
                 right.BFloat16FallbackExecutions,
             left.DirectBFloat16LossHeadExecutions -
                 right.DirectBFloat16LossHeadExecutions,
+            left.DirectBFloat16FfnInputGradientExecutions -
+                right.DirectBFloat16FfnInputGradientExecutions,
+            left.Bfp8ReluBFloat16MaskExecutions -
+                right.Bfp8ReluBFloat16MaskExecutions,
             left.BFloat16DecodeCacheMisses -
                 right.BFloat16DecodeCacheMisses,
             left.Int8LayoutTransformCacheMisses -
@@ -33,6 +39,8 @@ internal static class CudaBfp8GemmTelemetry
     private static long _int8TensorCoreExecutions;
     private static long _bfloat16FallbackExecutions;
     private static long _directBFloat16LossHeadExecutions;
+    private static long _directBFloat16FfnInputGradientExecutions;
+    private static long _bfp8ReluBFloat16MaskExecutions;
     private static long _bfloat16DecodeCacheMisses;
     private static long _int8LayoutTransformCacheMisses;
     private static int _lastBackend = -1;
@@ -41,6 +49,8 @@ internal static class CudaBfp8GemmTelemetry
         Interlocked.Read(ref _int8TensorCoreExecutions),
         Interlocked.Read(ref _bfloat16FallbackExecutions),
         Interlocked.Read(ref _directBFloat16LossHeadExecutions),
+        Interlocked.Read(ref _directBFloat16FfnInputGradientExecutions),
+        Interlocked.Read(ref _bfp8ReluBFloat16MaskExecutions),
         Interlocked.Read(ref _bfloat16DecodeCacheMisses),
         Interlocked.Read(ref _int8LayoutTransformCacheMisses),
         Volatile.Read(ref _lastBackend) is int backend && backend >= 0
@@ -61,6 +71,13 @@ internal static class CudaBfp8GemmTelemetry
 
     internal static void RecordDirectBFloat16LossHead()
         => Interlocked.Increment(ref _directBFloat16LossHeadExecutions);
+
+    internal static void RecordDirectBFloat16FfnInputGradient()
+        => Interlocked.Increment(
+            ref _directBFloat16FfnInputGradientExecutions);
+
+    internal static void RecordBfp8ReluBFloat16Mask()
+        => Interlocked.Increment(ref _bfp8ReluBFloat16MaskExecutions);
 
     internal static void RecordInt8LayoutTransformCacheMiss()
         => Interlocked.Increment(ref _int8LayoutTransformCacheMisses);
@@ -546,7 +563,9 @@ internal static class CudaBfp8Gemm
         int rows,
         int inputWidth,
         int outputWidth,
-        bool applyRelu)
+        bool applyRelu,
+        bool preferDirectBfp8InputGradient = false,
+        bool allowExclusiveBfp8ReluGradientMask = false)
     {
         int deviceIndex = Tensor.CudaDeviceIndex;
         NativeCudaDevice accelerator =
@@ -557,20 +576,62 @@ internal static class CudaBfp8Gemm
         // allocation in-place for the encoded logits gradient instead of
         // renting an equally large second buffer.
         NativeCudaBuffer<ushort>? rentedGradient = null;
-        bool encodedGradientReady = output.TryGetCudaBFloat16GradientBuffer(
+        bool hasBFloat16Gradient = output.TryGetCudaBFloat16GradientBuffer(
             deviceIndex,
             out NativeCudaBuffer<ushort>? directGradient);
-        NativeCudaBuffer<ushort> encodedGradient = encodedGradientReady
-            ? directGradient!
-            : rentedGradient =
-                Tensor.RentCudaBFloat16Buffer(deviceIndex, length);
-        using CudaBfp8BFloat16Lease inputDecode =
-            input.AcquireCudaBfp8BFloat16Buffer(deviceIndex);
-        using CudaBfp8BFloat16Lease weightDecode =
-            weight.AcquireCudaBfp8BFloat16Buffer(deviceIndex);
+        bool directFfnFeatureEnabled =
+            !CudaDispatchPolicy.Current.DisableDirectBfp8FfnGradient
+            && CudaTensorNative.SupportsDirectBfp8FfnGradient;
+        bool maskBorrowedGradientInPlace = applyRelu
+            && hasBFloat16Gradient
+            && allowExclusiveBfp8ReluGradientMask
+            && directFfnFeatureEnabled;
+        // ReLU masking may only mutate the private FFN activation gradient.
+        // A general/branched graph gets a separate encoded buffer and retains
+        // the old FP32-authoritative path.
+        bool encodedGradientBorrowed = hasBFloat16Gradient
+            && (!applyRelu || maskBorrowedGradientInPlace);
+        bool directInputGradient = preferDirectBfp8InputGradient
+            && directFfnFeatureEnabled
+            && !input.HasGradientBuffer;
+        NativeCudaBuffer<ushort>? directInputGradientBuffer = null;
+        CudaBfp8BFloat16Lease? inputDecode = null;
+        CudaBfp8BFloat16Lease? weightDecode = null;
         try
         {
-            if (!encodedGradientReady)
+            NativeCudaBuffer<ushort> encodedGradient =
+                encodedGradientBorrowed
+                    ? directGradient!
+                    : rentedGradient = Tensor.RentCudaBFloat16Buffer(
+                        deviceIndex,
+                        length);
+            directInputGradientBuffer = directInputGradient
+                ? Tensor.RentCudaBFloat16Buffer(
+                    deviceIndex,
+                    checked(rows * inputWidth))
+                : null;
+            inputDecode = input.AcquireCudaBfp8BFloat16Buffer(deviceIndex);
+            weightDecode = weight.AcquireCudaBfp8BFloat16Buffer(deviceIndex);
+            if (directInputGradientBuffer is not null
+                && CudaDispatchPolicy.Current
+                    .ThrowAfterDirectBfp8FfnGradientAllocationsForTest)
+            {
+                throw new InvalidOperationException(
+                    "Injected failure after direct BFP8 FFN gradient " +
+                    "allocations.");
+            }
+            if (maskBorrowedGradientInPlace)
+            {
+                CudaBfp8BufferView outputView =
+                    output.EnsureCudaBfp8Buffer(deviceIndex);
+                CudaTensorNative.LinearMaskBfp8ReluBFloat16GradientInPlace(
+                    deviceIndex,
+                    encodedGradient.NativePtr,
+                    outputView.Payload.NativePtr,
+                    length);
+                CudaBfp8GemmTelemetry.RecordBfp8ReluBFloat16Mask();
+            }
+            else if (!encodedGradientBorrowed)
             {
                 nint outputGradient = output
                     .EnsureCudaGradientBuffer(deviceIndex).NativePtr;
@@ -596,15 +657,30 @@ internal static class CudaBfp8Gemm
                         relu: false);
                 }
             }
-            CudaBlas.LinearBackwardInputBFloat16(
-                accelerator,
-                deviceIndex,
-                encodedGradient,
-                weightDecode.Buffer,
-                input.EnsureCudaGradientBuffer(deviceIndex),
-                rows,
-                inputWidth,
-                outputWidth);
+            if (directInputGradientBuffer is not null)
+            {
+                CudaBlas.LinearBackwardInputBFloat16Direct(
+                    accelerator,
+                    deviceIndex,
+                    encodedGradient,
+                    weightDecode.Buffer,
+                    directInputGradientBuffer,
+                    rows,
+                    inputWidth,
+                    outputWidth);
+            }
+            else
+            {
+                CudaBlas.LinearBackwardInputBFloat16(
+                    accelerator,
+                    deviceIndex,
+                    encodedGradient,
+                    weightDecode.Buffer,
+                    input.EnsureCudaGradientBuffer(deviceIndex),
+                    rows,
+                    inputWidth,
+                    outputWidth);
+            }
             CudaBlas.LinearBackwardWeightBFloat16(
                 accelerator,
                 deviceIndex,
@@ -621,12 +697,32 @@ internal static class CudaBfp8Gemm
                 rows,
                 outputWidth,
                 bfloat16: true);
-            input.MarkCudaGradientMutated(deviceIndex);
+            if (directInputGradientBuffer is not null)
+            {
+                input.AdoptCudaBFloat16GradientBuffer(
+                    directInputGradientBuffer,
+                    deviceIndex);
+                directInputGradientBuffer = null;
+                CudaBfp8GemmTelemetry
+                    .RecordDirectBFloat16FfnInputGradient();
+            }
+            else
+            {
+                input.MarkCudaGradientMutated(deviceIndex);
+            }
             weight.MarkCudaGradientMutated(deviceIndex);
             bias.MarkCudaGradientMutated(deviceIndex);
         }
         finally
         {
+            weightDecode?.Dispose();
+            inputDecode?.Dispose();
+            if (directInputGradientBuffer is not null)
+            {
+                Tensor.ReturnCudaBFloat16Buffer(
+                    accelerator,
+                    directInputGradientBuffer);
+            }
             if (rentedGradient is not null)
             {
                 Tensor.ReturnCudaBFloat16Buffer(

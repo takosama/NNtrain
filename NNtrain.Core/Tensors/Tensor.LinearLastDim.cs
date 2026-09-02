@@ -103,7 +103,57 @@ partial class Tensor
         Tensor weight,
         Tensor bias,
         bool applyRelu)
+        => LinearLastDimCore(
+            weight,
+            bias,
+            applyRelu,
+            preferDirectBfp8InputGradient: false,
+            allowExclusiveBfp8ReluGradientMask: false);
+
+    /// <summary>
+    /// Internal FFN edge with a proven single consumer. Only the CUDA BFP8
+    /// backward path observes this hint; every other backend is identical to
+    /// <see cref="LinearLastDim(Tensor, Tensor, bool)"/>.
+    /// </summary>
+    internal Tensor LinearLastDimExclusiveBfp8InputGradient(
+        Tensor weight,
+        Tensor bias)
+        => LinearLastDimCore(
+            weight,
+            bias,
+            applyRelu: false,
+            preferDirectBfp8InputGradient: true,
+            allowExclusiveBfp8ReluGradientMask: false);
+
+    internal Tensor LinearLastDimReluExclusiveBfp8OutputGradient(
+        Tensor weight,
+        Tensor bias)
+        => LinearLastDimCore(
+            weight,
+            bias,
+            applyRelu: true,
+            preferDirectBfp8InputGradient: false,
+            allowExclusiveBfp8ReluGradientMask: true);
+
+    private Tensor LinearLastDimCore(
+        Tensor weight,
+        Tensor bias,
+        bool applyRelu,
+        bool preferDirectBfp8InputGradient,
+        bool allowExclusiveBfp8ReluGradientMask)
     {
+        if (preferDirectBfp8InputGradient
+            && (applyRelu || allowExclusiveBfp8ReluGradientMask))
+        {
+            throw new InvalidOperationException(
+                "Direct FFN input gradients are valid only for the exclusive " +
+                "non-ReLU Fc2 edge.");
+        }
+        if (allowExclusiveBfp8ReluGradientMask && !applyRelu)
+        {
+            throw new InvalidOperationException(
+                "An exclusive BFP8 ReLU gradient mask requires a ReLU edge.");
+        }
         ArgumentNullException.ThrowIfNull(weight);
         ArgumentNullException.ThrowIfNull(bias);
         if (Rank < 2)
@@ -225,7 +275,9 @@ partial class Tensor
                             rows,
                             inputWidth,
                             outputWidth,
-                            applyRelu);
+                            applyRelu,
+                            preferDirectBfp8InputGradient,
+                            allowExclusiveBfp8ReluGradientMask);
                         if (CudaOperationProfiler.IsEnabled)
                             CudaOperationProfiler.Measure(backwardOperation, Backward);
                         else

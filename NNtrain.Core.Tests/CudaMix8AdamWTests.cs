@@ -99,6 +99,50 @@ public sealed class CudaMix8AdamWTests
         });
     }
 
+    [Fact]
+    public void OptInBlockBfp8StateKeepsMomentsResidentAndFinite()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        WithCuda([0], () =>
+        {
+            using IDisposable dispatch = CudaDispatchPolicy.Push(
+                CudaDispatchPolicy.Defaults with
+                {
+                    EnableBlockBfp8OptimizerState = true,
+                });
+            Parameter parameter = CreateParameter(
+                Values(257, 13, 0.6f),
+                [257],
+                "weight",
+                Bfp8QuantizationDescriptor.Mix8_32);
+            var optimizer = new AdamW([parameter], Options());
+            try
+            {
+                parameter.T.SetCudaGradient(Values(257, 41, 0.08f), 0);
+                optimizer.step();
+
+                var moments = optimizer.GetCudaBfp8Moments(0, 0);
+                Assert.Equal(
+                    Bfp8QuantizationDescriptor.Mix8_32,
+                    moments.First.Descriptor);
+                Assert.Equal(3, moments.First.Scales.Length);
+                Assert.All(Read(moments.First).Scales.ToArray(),
+                    scale => Assert.True(float.IsFinite(scale) && scale > 0f));
+                Assert.All(Read(moments.Second).Scales.ToArray(),
+                    scale => Assert.True(float.IsFinite(scale) && scale > 0f));
+                Assert.All(Read(parameter.T.EnsureCudaMasterFloat32Buffer(0)),
+                    AssertFinite);
+            }
+            finally
+            {
+                optimizer.DisposeCudaResources();
+                parameter.T.InvalidateCudaBuffers();
+            }
+        });
+    }
+
     [Theory]
     [InlineData(1, 128)]
     [InlineData(257, 128)]
@@ -122,6 +166,10 @@ public sealed class CudaMix8AdamWTests
             var optimizer = new AdamW([parameter], options);
             try
             {
+                float[] masterBefore = Read(
+                    parameter.T.EnsureCudaMasterFloat32Buffer(0));
+                Bfp8EncodedStorage encodedBefore = Read(
+                    parameter.T.EnsureCudaBfp8Buffer(0));
                 parameter.T.SetCudaGradient(gradient, 0);
                 optimizer.step();
 
@@ -152,8 +200,47 @@ public sealed class CudaMix8AdamWTests
                     Bfp8QuantizationCodec.Default.Encode(
                         expectedData,
                         descriptor);
-                AssertEncoded(expectedEncoded,
-                    Read(parameter.T.EnsureCudaBfp8Buffer(0)));
+                Bfp8EncodedStorage encodedAfter = Read(
+                    parameter.T.EnsureCudaBfp8Buffer(0));
+                AssertEncoded(expectedEncoded, encodedAfter);
+
+                Assert.True(optimizer.TryGetMix8QuantizationDiagnostics(
+                    out Mix8QuantizationDiagnostics diagnostics));
+                Assert.Equal((ulong)length, diagnostics.ElementCount);
+                double expectedUpdateSum = 0d;
+                double expectedResidualSum = 0d;
+                ulong expectedChanged = 0;
+                int effectiveBlockSize = descriptor
+                    .GetEffectiveBlockSize(length);
+                for (int index = 0; index < length; index++)
+                {
+                    float oldStep = encodedBefore.Scales.Span[
+                        index / effectiveBlockSize];
+                    float newStep = encodedAfter.Scales.Span[
+                        index / effectiveBlockSize];
+                    double update =
+                        (expectedData[index] - masterBefore[index]) / oldStep;
+                    double residual = (expectedData[index]
+                        - encodedAfter.Payload.Span[index] * newStep)
+                        / newStep;
+                    expectedUpdateSum += update * update;
+                    expectedResidualSum += residual * residual;
+                    if (encodedBefore.Payload.Span[index]
+                        != encodedAfter.Payload.Span[index])
+                    {
+                        expectedChanged++;
+                    }
+                }
+                Assert.Equal(expectedChanged,
+                    diagnostics.ChangedWeightCount);
+                AssertRelativeClose(
+                    expectedUpdateSum,
+                    diagnostics.UpdateStepRatioSquaredSum,
+                    2e-4);
+                AssertRelativeClose(
+                    expectedResidualSum,
+                    diagnostics.ResidualStepRatioSquaredSum,
+                    2e-4);
             }
             finally
             {
@@ -197,6 +284,9 @@ public sealed class CudaMix8AdamWTests
                     NativeCudaRuntime.TransferTelemetry - before;
                 Assert.Equal(0, transfer.HostToDeviceBytes);
                 Assert.Equal(2 * sizeof(int), transfer.DeviceToHostBytes);
+                Assert.True(optimizer.TryGetMix8QuantizationDiagnostics(
+                    out Mix8QuantizationDiagnostics diagnostics));
+                Assert.Equal((ulong)257, diagnostics.ElementCount);
                 AssertEncoded(
                     Read(parameter.T.EnsureCudaBfp8Buffer(0)),
                     Read(parameter.T.EnsureCudaBfp8Buffer(1)));
@@ -207,6 +297,56 @@ public sealed class CudaMix8AdamWTests
                 var secondary = optimizer.GetCudaMix8Moments(0, 1);
                 Assert.Equal(Read(primary.First), Read(secondary.First));
                 Assert.Equal(Read(primary.Second), Read(secondary.Second));
+            }
+            finally
+            {
+                optimizer.DisposeCudaResources();
+                parameter.T.InvalidateCudaBuffers();
+            }
+        });
+    }
+
+    [Fact]
+    public void DiagnosticsDescribeOnlyTheLatestCommittedMix8Step()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        WithCuda([0], () =>
+        {
+            const int length = 257;
+            Parameter parameter = CreateParameter(
+                Values(length, 7, 0.7f),
+                [length],
+                "weight",
+                Bfp8QuantizationDescriptor.Block(96));
+            var optimizer = new AdamW([parameter], Options());
+            try
+            {
+                parameter.T.SetCudaGradient(
+                    Values(length, 23, 0.11f), 0);
+                optimizer.step();
+
+                Assert.True(optimizer.TryGetMix8QuantizationDiagnostics(
+                    out Mix8QuantizationDiagnostics first));
+                Assert.Equal((ulong)length, first.ElementCount);
+                Assert.InRange(first.QuantizedWeightChangeRate, 0d, 1d);
+                Assert.InRange(first.ResidualRmsPerQuantStep, 0d, 0.51d);
+                Assert.True(double.IsFinite(first.UpdateRmsPerQuantStep));
+                Assert.True(first.UpdateRmsPerQuantStep > 0d);
+
+                optimizer.zero_grad();
+                parameter.T.SetCudaGradient(
+                    Values(length, 41, 0.08f), 0);
+                optimizer.step();
+
+                Assert.True(optimizer.TryGetMix8QuantizationDiagnostics(
+                    out Mix8QuantizationDiagnostics second));
+                Assert.Equal((ulong)length, second.ElementCount);
+                Assert.InRange(second.QuantizedWeightChangeRate, 0d, 1d);
+                Assert.InRange(second.ResidualRmsPerQuantStep, 0d, 0.51d);
+                Assert.True(double.IsFinite(second.UpdateRmsPerQuantStep));
+                Assert.True(second.UpdateRmsPerQuantStep > 0d);
             }
             finally
             {
@@ -703,6 +843,21 @@ public sealed class CudaMix8AdamWTests
                 tolerance);
         }
     }
+
+    private static void AssertRelativeClose(
+        double expected,
+        double actual,
+        double relativeTolerance)
+    {
+        double scale = Math.Max(1d, Math.Abs(expected));
+        Assert.InRange(
+            Math.Abs(actual - expected),
+            0d,
+            relativeTolerance * scale);
+    }
+
+    private static void AssertFinite(float value)
+        => Assert.True(float.IsFinite(value));
 
     private static void WithCuda(int[] devices, Action action)
         => WithCudaPolicy(devices, PrecisionPolicy.Mix8_32, action);

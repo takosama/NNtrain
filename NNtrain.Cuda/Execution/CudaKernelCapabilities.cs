@@ -16,6 +16,11 @@ public enum CudaKernelFeature
     CudaGraphs = 1 << 7,
     Bfp8Quantization = 1 << 8,
     Int8TensorCores = 1 << 9,
+    /// <summary>
+    /// Resident fused CUDA kernels for elementwise first-order optimizers
+    /// such as Lion and the reduction/apply stages of GainShareAdamW.
+    /// </summary>
+    FusedFirstOrderOptimizers = 1 << 10,
 }
 
 /// <summary>Immutable capability snapshot for one CUDA lane.</summary>

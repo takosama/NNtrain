@@ -6,16 +6,18 @@ using Xunit;
 public sealed class CudaBfp8KernelTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void NativeQuantizeAndDequantizeMatchesCpuReference(bool block128)
+    [InlineData(0)]
+    [InlineData(32)]
+    [InlineData(96)]
+    [InlineData(128)]
+    public void NativeQuantizeAndDequantizeMatchesCpuReference(int blockSize)
     {
         if (!Tensor.IsCudaAvailable())
             return;
 
-        Bfp8QuantizationDescriptor descriptor = block128
-            ? Bfp8QuantizationDescriptor.Mix8_32
-            : Bfp8QuantizationDescriptor.TensorWide;
+        Bfp8QuantizationDescriptor descriptor = blockSize == 0
+            ? Bfp8QuantizationDescriptor.TensorWide
+            : Bfp8QuantizationDescriptor.Block(blockSize);
         float[] source = Enumerable.Range(0, 515)
             .Select(index =>
                 MathF.Sin(index * 0.071f) * (0.5f + (index % 137) * 0.03f))
@@ -55,6 +57,59 @@ public sealed class CudaBfp8KernelTests
         AssertClose(reference, actualDecoded);
     }
 
+    [Theory]
+    [InlineData(32)]
+    [InlineData(96)]
+    [InlineData(128)]
+    public void NativeBlockQuantizeRoundtripPublishesEncodedStateInOnePass(
+        int blockSize)
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        const int length = 515;
+        Bfp8QuantizationDescriptor descriptor =
+            Bfp8QuantizationDescriptor.Block(blockSize);
+        float[] source = Enumerable.Range(0, length)
+            .Select(index =>
+                MathF.Sin(index * 0.043f) *
+                (0.125f + (index % 139) * 0.017f))
+            .ToArray();
+        Bfp8EncodedStorage expected = Bfp8QuantizationCodec.Default.Encode(
+            source,
+            descriptor);
+        var expectedDecoded = new float[length];
+        Bfp8QuantizationCodec.Default.Decode(
+            expected.Payload.Span,
+            expected.Scales.Span,
+            descriptor,
+            expectedDecoded);
+
+        NativeCudaDevice device = ForgetMemoryV2Cuda.GetAccelerator(0);
+        using NativeCudaBuffer<float> state = device.Allocate1D(source);
+        using NativeCudaBuffer<sbyte> payload =
+            device.Allocate1D<sbyte>(length);
+        using NativeCudaBuffer<float> scales = device.Allocate1D<float>(
+            descriptor.GetScaleCount(length));
+        CudaBfp8Native.QuantizeFloat32Roundtrip(
+            0,
+            state,
+            payload,
+            scales,
+            descriptor);
+        device.Synchronize();
+
+        var actualState = new float[length];
+        var actualPayload = new sbyte[length];
+        var actualScales = new float[scales.Length];
+        state.CopyToCPU(actualState);
+        payload.CopyToCPU(actualPayload);
+        scales.CopyToCPU(actualScales);
+        Assert.Equal(expected.Payload.ToArray(), actualPayload);
+        Assert.Equal(expected.Scales.ToArray(), actualScales);
+        Assert.Equal(expectedDecoded, actualState);
+    }
+
     [Fact]
     public void NativeBFloat16FallbackStaysOnCuda()
     {
@@ -87,15 +142,19 @@ public sealed class CudaBfp8KernelTests
                 TensorStorageCodec.DecodeBFloat16(value))));
     }
 
-    [Fact]
-    public void NativeBFloat16Block128RoundTripMatchesCpuCodesAndBits()
+    [Theory]
+    [InlineData(32)]
+    [InlineData(96)]
+    [InlineData(128)]
+    public void NativeBFloat16BlockRoundTripMatchesCpuCodesAndBits(
+        int blockSize)
     {
         if (!Tensor.IsCudaAvailable())
             return;
 
         const int length = 515;
         Bfp8QuantizationDescriptor descriptor =
-            Bfp8QuantizationDescriptor.Mix8_32;
+            Bfp8QuantizationDescriptor.Block(blockSize);
         ushort[] sourceBits = Enumerable.Range(0, length)
             .Select(index => TensorStorageCodec.EncodeBFloat16(
                 MathF.Sin(index * 0.037f) *
@@ -351,6 +410,74 @@ public sealed class CudaBfp8KernelTests
                 () => tensor.SetCudaGradient([0f, value], 0));
             Assert.Contains("finite", exception.Message);
             tensor.InvalidateCudaBuffers();
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LinearBiasBackwardBlockReductionHandlesWideRowAndColumnTail(
+        bool bfloat16)
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        WithCuda(() =>
+        {
+            const int rows = 1024;
+            const int width = 45;
+            float[] source = Enumerable.Range(0, rows * width)
+                .Select(index =>
+                {
+                    int row = index / width;
+                    int column = index % width;
+                    return ((row + column) % 7 - 3) * 0.25f;
+                })
+                .ToArray();
+            float[] initial = Enumerable.Range(0, width)
+                .Select(column => (column % 5) * 0.5f)
+                .ToArray();
+            float[] expected = (float[])initial.Clone();
+            for (int row = 0; row < rows; row++)
+            {
+                for (int column = 0; column < width; column++)
+                    expected[column] += source[row * width + column];
+            }
+
+            NativeCudaDevice device = ForgetMemoryV2Cuda.GetAccelerator(0);
+            using NativeCudaBuffer<float> bias = device.Allocate1D(initial);
+            if (bfloat16)
+            {
+                ushort[] encoded = source
+                    .Select(TensorStorageCodec.EncodeBFloat16)
+                    .ToArray();
+                using NativeCudaBuffer<ushort> gradient =
+                    device.Allocate1D(encoded);
+                CudaTensorNative.LinearBiasBackward(
+                    0,
+                    gradient.NativePtr,
+                    bias.NativePtr,
+                    rows,
+                    width,
+                    bfloat16: true);
+            }
+            else
+            {
+                using NativeCudaBuffer<float> gradient =
+                    device.Allocate1D(source);
+                CudaTensorNative.LinearBiasBackward(
+                    0,
+                    gradient.NativePtr,
+                    bias.NativePtr,
+                    rows,
+                    width,
+                    bfloat16: false);
+            }
+            device.Synchronize();
+            var actual = new float[width];
+            bias.CopyToCPU(actual);
+
+            Assert.Equal(expected, actual);
         });
     }
 

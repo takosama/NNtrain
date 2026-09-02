@@ -418,7 +418,8 @@ public sealed class WikiLanguageModelCommandTests
                 "thread parallelism = Parallel.For",
                 output.ToString());
             Assert.Contains(
-                "effective training = epochs 5, batch 7, context 12",
+                "effective training = epochs 5, microbatch 7, " +
+                "accumulation 1, effective batch 7, context 12",
                 output.ToString());
             Assert.Contains(
                 "effective model = forgetmemoryv3, vocabulary 2048, " +
@@ -493,6 +494,39 @@ public sealed class WikiLanguageModelCommandTests
             config.AuxiliaryLearningRate * 0.5f,
             ((AdamW)composite.Optimizers[1]).LearningRate,
             precision: 8);
+    }
+
+    [Fact]
+    public void CreatesOrdinaryMuonWithFixedPolicyAndAuxiliaryAdamW()
+    {
+        var model = new GptRinWikiJp(
+            BpeTokenizer.BaseVocabularySize,
+            contextLength: 4,
+            dModel: 8,
+            numHeads: 2,
+            dHidden: 16,
+            numLayers: 1,
+            rng: new Random(23));
+        var config = new WikiTrainingConfiguration
+        {
+            Optimizer = WikiTrainingConfiguration.MuonOptimizer,
+            LearningRate = 0.001f,
+            AuxiliaryLearningRate = 0.0003f,
+        };
+
+        CompositeOptimizer composite = Assert.IsType<CompositeOptimizer>(
+            WikiLanguageModelCommand.CreateOptimizer(model, config));
+        NekoMuon muon = Assert.IsType<NekoMuon>(composite.Optimizers[0]);
+        Assert.IsType<AdamW>(composite.Optimizers[1]);
+
+        NekoMuonOptions policy = muon.CaptureState().Options;
+        Assert.Equal(0.95f, policy.BetaFast);
+        Assert.Equal(1, policy.NewtonSchulzInterval);
+        Assert.Equal(5, policy.MaxNewtonSchulzSteps);
+        Assert.Equal(
+            NekoMuonNewtonSchulzDepthMode.Fixed,
+            policy.NewtonSchulzDepthMode);
+        Assert.Equal(5f, policy.NewtonSchulzDepth);
     }
 
     [Theory]

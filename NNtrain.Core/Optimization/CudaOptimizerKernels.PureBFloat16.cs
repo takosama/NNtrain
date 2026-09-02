@@ -196,7 +196,8 @@ internal static partial class CudaOptimizerKernels
         float slowCorrection,
         float epsilon,
         float rho,
-        bool deviceControl)
+        bool deviceControl,
+        bool nesterov = false)
     {
         if (!parameter.TryGetCudaBFloat16GradientBuffer(
                 deviceIndex,
@@ -223,7 +224,8 @@ internal static partial class CudaOptimizerKernels
                 betaSlow,
                 fastCorrection,
                 slowCorrection,
-                finiteStatus))
+                finiteStatus,
+                nesterov))
         {
             throw new InvalidOperationException(
                 "The ABI 1.18 pure-BF16 NekoMuon statistics kernel is " +
@@ -270,7 +272,8 @@ internal static partial class CudaOptimizerKernels
         float weightDecay,
         bool applyWeightDecay,
         bool deviceOnlyFixedFive,
-        bool forceFullNewtonSchulz)
+        bool forceFullNewtonSchulz,
+        bool nesterov = false)
     {
         NekoMuonBFloat16ResidentState.NekoBuffers buffers =
             state.GetOrCreate(deviceIndex);
@@ -282,13 +285,13 @@ internal static partial class CudaOptimizerKernels
             depth = 5f;
             CudaOptimizerNative.NekoInitializeBFloat16FromDeviceStats(
                 deviceIndex,
-                buffers.Fast.NativePtr,
+                (nesterov ? buffers.Slow : buffers.Fast).NativePtr,
                 scratch.X.NativePtr,
                 parameter.Numel,
                 originalRows,
                 originalColumns,
                 originalRows > originalColumns,
-                1f / fastCorrection,
+                nesterov ? 1f : 1f / fastCorrection,
                 buffers.Stats.NativePtr,
                 epsilon,
                 finiteStatus.NativePtr);

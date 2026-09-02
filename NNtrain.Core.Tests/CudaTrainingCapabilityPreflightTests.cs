@@ -41,6 +41,18 @@ public sealed class CudaTrainingCapabilityPreflightTests
                     | CudaKernelFeature.BFloat16
                     | CudaKernelFeature.Bfp8Quantization
             },
+            {
+                (int)CudaOptimizerKind.Lion,
+                TensorPrecisionMode.Float32,
+                CudaKernelFeature.FusedFirstOrderOptimizers
+            },
+            {
+                (int)CudaOptimizerKind.GainShareAdamW,
+                TensorPrecisionMode.Bfp8,
+                CudaKernelFeature.FusedFirstOrderOptimizers
+                    | CudaKernelFeature.BFloat16
+                    | CudaKernelFeature.Bfp8Quantization
+            },
         };
 
     public static TheoryData<
@@ -238,6 +250,27 @@ public sealed class CudaTrainingCapabilityPreflightTests
         Assert.False(allocatorWorkStarted);
         Assert.Contains("optimizer NekoMuon", error.Message);
         Assert.Contains("BlockReducedMuon", error.Message);
+        Assert.Contains("CPU fallback is forbidden", error.Message);
+    }
+
+    [Fact]
+    public void MissingFirstOrderKernelFailsBeforeLionConstruction()
+    {
+        var capabilities = new CudaKernelCapabilities(
+            8,
+            6,
+            CudaKernelFeature.BFloat16
+                | CudaKernelFeature.Bfp8Quantization);
+
+        NotSupportedException error = Assert.Throws<NotSupportedException>(
+            () => CudaOptimizerCapabilityPreflight.EnsureBeforeAllocation(
+                CudaOptimizerKind.Lion,
+                TensorPrecisionMode.Mix8_32,
+                [0],
+                _ => capabilities));
+
+        Assert.Contains("optimizer Lion", error.Message);
+        Assert.Contains("FusedFirstOrderOptimizers", error.Message);
         Assert.Contains("CPU fallback is forbidden", error.Message);
     }
 }

@@ -317,16 +317,55 @@ public sealed class WikiDTypeCheckpointTests
 
             WikiTrainingConfiguration mismatchedConfig = resumeConfig with
             {
-                Bfp8BlockSize =
-                    Bfp8QuantizationDescriptor.DefaultBlockSize,
+                Bfp8BlockSize = 32,
             };
             Assert.True(mismatchedConfig.HasExplicitBfp8BlockSize);
-            InvalidDataException mismatch = Assert.Throws<InvalidDataException>(
-                () => WikiLanguageModelCommand.ResolvePrecisionForTraining(
-                    mismatchedConfig));
-            Assert.Contains("does not match checkpoint", mismatch.Message);
-            Assert.Contains("96", mismatch.Message);
-            Assert.Contains("128", mismatch.Message);
+            WikiLanguageModelCommand.WikiPrecisionSelection reblocked =
+                WikiLanguageModelCommand.ResolvePrecisionForTraining(
+                    mismatchedConfig);
+            Assert.Equal(
+                32,
+                reblocked.Bfp8BlockSize);
+            LanguageModel reblockedModel =
+                WikiLanguageModelCommand.CreateModel(
+                    mismatchedConfig,
+                    mismatchedConfig.VocabularySize,
+                    reblocked.Mode,
+                    reblocked.StorageDType,
+                    reblocked.Bfp8BlockSize);
+            IOptimizer reblockedOptimizer =
+                WikiLanguageModelCommand.CreateOptimizer(
+                    reblockedModel,
+                    mismatchedConfig);
+            WarmupCosineProgressLRScheduler reblockedScheduler =
+                lr_scheduler.WarmupCosineProgressLR(
+                    reblockedOptimizer,
+                    mismatchedConfig.WarmupPercent);
+            ModuleState? reblockedBestState = null;
+            float reblockedBestLoss = float.PositiveInfinity;
+            int reblockedBestEpoch = 0;
+            long reblockedGlobalStep = 0;
+            _ = WikiLanguageModelCommand.RestoreTrainingCheckpoint(
+                mismatchedConfig,
+                reblockedModel,
+                reblockedOptimizer,
+                reblockedScheduler,
+                ref reblockedBestState,
+                ref reblockedBestLoss,
+                ref reblockedBestEpoch,
+                ref reblockedGlobalStep,
+                output);
+            AssertStatesBitwiseEqual(
+                checkpointMaster,
+                reblockedModel.state_dict());
+            Assert.All(
+                reblockedModel.parameters(),
+                parameter => Assert.Equal(
+                    Bfp8QuantizationDescriptor.Block(32),
+                    parameter.T.Bfp8Quantization));
+            AssertOptimizerStatesEqual(
+                checkpointOptimizer,
+                reblockedOptimizer.state_dict());
 
             TrainOneStep(
                 uninterrupted,

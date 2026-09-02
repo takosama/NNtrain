@@ -59,6 +59,37 @@ public sealed class TrainingDataCursorTests
     }
 
     [Fact]
+    public void FixedWikiUpdateCursorAccumulatesAndKeepsTailShapeSeparate()
+    {
+        int[] tokens = Enumerable.Range(0, 11).ToArray();
+        int[] order = [0, 1, 2, 3, 4];
+        var microBatches =
+            new WikiLanguageModelCommand.FixedWikiTrainingDataCursor(
+                tokens,
+                order,
+                batchSize: 2,
+                sequenceLength: 2);
+        var updates =
+            new WikiLanguageModelCommand.FixedWikiTrainingUpdateCursor(
+                microBatches,
+                accumulationSteps: 2);
+        updates.StartEpoch(completedBatches: 0);
+
+        WikiLanguageModelCommand.WikiTrainingUpdate first =
+            updates.AcquireNext();
+        WikiLanguageModelCommand.WikiTrainingUpdate tail =
+            updates.AcquireNext();
+
+        Assert.Equal(2, first.Count);
+        Assert.All(
+            first.MicroBatches,
+            batch => Assert.Equal(2, batch.BatchSize));
+        Assert.Equal(1, tail.Count);
+        Assert.Equal(1, tail.Last.BatchSize);
+        Assert.Equal(3, updates.Position);
+    }
+
+    [Fact]
     public void StreamingWikiCursorKeepsRestoredBufferAndBatchPosition()
     {
         var buffer = new List<int> { 3, 5, 7, 11, 13 };

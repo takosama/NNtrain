@@ -1,8 +1,9 @@
 {
   "task": "gpt_rin_wiki_jp",
-  "dataPath": "data/wiki",
+  "dataset": "fineweb",
+  "dataPath": "data/fineweb",
   "textColumn": "text",
-  "tokenizerPath": "wiki-jp-bpe.json",
+  "tokenizerPath": "fineweb-bpe.json",
   "checkpoint": {
     "directory": "checkpoints",
     "fileName": "training.transformer.tied.model.json",

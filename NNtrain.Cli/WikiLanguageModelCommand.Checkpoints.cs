@@ -256,16 +256,14 @@ internal static partial class WikiLanguageModelCommand
         if (checkpointMode == TensorPrecisionMode.Mix8_32
             && checkpoint.Bfp8BlockSize is int checkpointBlockSize)
         {
-            if (config.HasExplicitBfp8BlockSize
-                && config.Bfp8BlockSize != checkpointBlockSize)
-            {
-                throw new InvalidDataException(
-                    $"Configured bfp8_block_size '{config.Bfp8BlockSize}' " +
-                    $"does not match checkpoint BFP8 block size " +
-                    $"'{checkpointBlockSize}'. Remove bfp8_block_size to " +
-                    "inherit the checkpoint value, or use a matching value.");
-            }
-            bfp8BlockSize = checkpointBlockSize;
+            // An omitted setting preserves the checkpoint's exact payload
+            // contract. An explicit setting is a requested precision
+            // migration: the FP32 master stored in the checkpoint is loaded
+            // into a model created with the requested descriptor and safely
+            // requantized once, before CUDA residency is prepared.
+            bfp8BlockSize = config.HasExplicitBfp8BlockSize
+                ? config.Bfp8BlockSize
+                : checkpointBlockSize;
         }
         return new WikiPrecisionSelection(
             checkpointMode,
@@ -367,6 +365,14 @@ internal static partial class WikiLanguageModelCommand
                 output);
         if (optimizerRestored)
         {
+            ApplyOrdinaryMuonPolicyAfterResume(
+                config,
+                optimizer,
+                output);
+            ApplyNekoMuonBetaFastOverride(
+                config,
+                optimizer,
+                output);
             ApplyNekoMuonNewtonSchulzDepthPolicyOverride(
                 config,
                 optimizer,
@@ -411,6 +417,77 @@ internal static partial class WikiLanguageModelCommand
             hasPartialEpoch ? checkpoint.CompletedDocumentsInEpoch : 0,
             hasPartialEpoch ? checkpoint.CurrentTokenBuffer ?? [] : [],
             checkpoint.AdaptiveCudaShardState);
+    }
+
+    internal static void ApplyOrdinaryMuonPolicyAfterResume(
+        WikiTrainingConfiguration config,
+        IOptimizer optimizer,
+        TextWriter output)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(optimizer);
+        ArgumentNullException.ThrowIfNull(output);
+        if (!config.IsOptimizer(WikiTrainingConfiguration.MuonOptimizer))
+            return;
+
+        int applied = 0;
+        foreach (NekoMuon muon in OptimizerBundle
+            .GetCheckpointLeafOptimizers(optimizer)
+            .OfType<NekoMuon>())
+        {
+            // State restoration also restores the historical NekoMuon
+            // options. Reasserting the ordinary-Muon contract here prevents
+            // an old checkpoint from silently changing momentum or NS
+            // cadence while preserving its accumulated fast moment and step.
+            muon.SetOrdinaryMuonPolicy();
+            applied++;
+        }
+
+        if (applied == 0)
+        {
+            throw new InvalidDataException(
+                "Muon was configured, but the restored optimizer has no " +
+                "compatible matrix-optimizer state.");
+        }
+
+        output.WriteLine(
+            "resume Muon policy = momentum 0.95, Nesterov, " +
+            "fixed NS5 every step (runtime override)");
+    }
+
+    internal static void ApplyNekoMuonBetaFastOverride(
+        WikiTrainingConfiguration config,
+        IOptimizer optimizer,
+        TextWriter output)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(optimizer);
+        ArgumentNullException.ThrowIfNull(output);
+        if (!config.IsOptimizer(WikiTrainingConfiguration.NekoMuonOptimizer)
+            || !config.HasNekoMuonBetaFastOverride)
+        {
+            return;
+        }
+
+        int applied = 0;
+        foreach (NekoMuon nekoMuon in OptimizerBundle
+            .GetCheckpointLeafOptimizers(optimizer)
+            .OfType<NekoMuon>())
+        {
+            nekoMuon.SetBetaFast(config.NekoMuonBetaFast);
+            applied++;
+        }
+
+        if (applied == 0)
+        {
+            throw new InvalidDataException(
+                "A NekoMuon beta-fast override was configured, but the " +
+                "restored optimizer has no NekoMuon state.");
+        }
+
+        output.WriteLine(
+            $"resume NekoMuon beta fast = {config.NekoMuonBetaFast:G} " +
+            "(runtime override)");
     }
 
     internal static void ApplyNekoMuonNewtonSchulzDepthPolicyOverride(

@@ -45,15 +45,54 @@ public static partial class CudaNativeGateway
 
     public static int OptimizerAdamWBfp8Apply(
         int device, nint data, nint first, nint second, nint secondScale,
-        int length, float learningRate, float weightDecay, float updateScale,
+        int secondScaleBlockSize, int length, float learningRate,
+        float weightDecay, float updateScale,
         float scaledEpsilon, bool applyWeightDecay, nint finiteStatus)
     {
         EnsureCompatibleAbi();
         return Complete(
             OptimizerNativeMethods.AdamWBfp8Apply(
-                data, first, second, secondScale, length, learningRate,
+                data, first, second, secondScale, secondScaleBlockSize,
+                length, learningRate,
                 weightDecay, updateScale, scaledEpsilon,
                 applyWeightDecay ? 1 : 0, finiteStatus),
+            CudaNativeOperation.OptimizerBfp8,
+            device);
+    }
+
+    public static int OptimizerAdamWMultiTensorBfp8(
+        int device,
+        nint tensors,
+        int tensorCount,
+        float beta1,
+        float beta2,
+        float learningRate,
+        float weightDecay,
+        float updateScale,
+        float scaledEpsilon,
+        nint reduction,
+        int maximumChunks,
+        nint finiteStatus,
+        nint stream)
+    {
+        EnsureMinimumAbiMinor(
+            CudaAbiVersion.FusedFirstOrderOptimizerMinor,
+            "multi-tensor BFP8 AdamW");
+        return Complete(
+            OptimizerNativeMethods.AdamWMultiTensorBfp8(
+                device,
+                tensors,
+                tensorCount,
+                beta1,
+                beta2,
+                learningRate,
+                weightDecay,
+                updateScale,
+                scaledEpsilon,
+                reduction,
+                maximumChunks,
+                finiteStatus,
+                stream),
             CudaNativeOperation.OptimizerBfp8,
             device);
     }
@@ -210,6 +249,38 @@ public static partial class CudaNativeGateway
             device);
     }
 
+    public static int OptimizerNekoMuonAdaptiveAcceptBatched(
+        int device, nint current, nint candidate, nint confidences,
+        int matrixLength, int batch, int step, int maxSteps,
+        int depthMode, float configuredDepth)
+    {
+        EnsureMinimumAbiMinor(
+            CudaAbiVersion.DeviceAdaptiveNekoMuonMinor,
+            "device-resident adaptive NekoMuon");
+        return Complete(
+            OptimizerNativeMethods.NekoAdaptiveAcceptBatched(
+                current, candidate, confidences, matrixLength, batch, step,
+                maxSteps, depthMode, configuredDepth),
+            CudaNativeOperation.OptimizerNekoMuon,
+            device);
+    }
+
+    public static int OptimizerNekoMuonConfidenceSummary(
+        int device, nint confidences, int count, int maxSteps,
+        int depthMode, float configuredDepth, bool runNewtonSchulz,
+        bool forceFullDepth, nint summary)
+    {
+        EnsureMinimumAbiMinor(
+            CudaAbiVersion.DeviceAdaptiveNekoMuonMinor,
+            "device-resident NekoMuon confidence summary");
+        return Complete(
+            OptimizerNativeMethods.NekoConfidenceSummary(
+                confidences, count, maxSteps, depthMode, configuredDepth,
+                runNewtonSchulz ? 1 : 0, forceFullDepth ? 1 : 0, summary),
+            CudaNativeOperation.OptimizerNekoMuon,
+            device);
+    }
+
     public static int OptimizerNekoMuonTransposeBack(
         int device, nint source, nint destination, int length,
         int originalRows, int originalColumns)
@@ -303,7 +374,9 @@ public static partial class CudaNativeGateway
         [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_adamw_bfp8_moments", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int AdamWBfp8Moments(nint gradient, nint first, nint second, int length, float beta1, float beta2, nint finiteStatus);
         [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_adamw_bfp8_apply", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int AdamWBfp8Apply(nint data, nint first, nint second, nint secondScale, int length, float learningRate, float weightDecay, float updateScale, float scaledEpsilon, int applyWeightDecay, nint finiteStatus);
+        internal static extern int AdamWBfp8Apply(nint data, nint first, nint second, nint secondScale, int secondScaleBlockSize, int length, float learningRate, float weightDecay, float updateScale, float scaledEpsilon, int applyWeightDecay, nint finiteStatus);
+        [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_adamw_multi_tensor_bfp8", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int AdamWMultiTensorBfp8(int device, nint tensors, int tensorCount, float beta1, float beta2, float learningRate, float weightDecay, float updateScale, float scaledEpsilon, nint reduction, int maximumChunks, nint finiteStatus, nint stream);
         [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_adamw_bf16_state", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int AdamWBFloat16State(nint data, nint gradient, nint first, nint second, int length, float beta1, float beta2, float learningRate, float weightDecay, float updateScale, float scaledEpsilon, int applyWeightDecay);
         [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_adamw_publish", CallingConvention = CallingConvention.Cdecl)]
@@ -330,6 +403,10 @@ public static partial class CudaNativeGateway
         internal static extern int NekoInitializeFromDeviceStats(nint source, nint destination, int length, int originalRows, int originalColumns, int transpose, float inverseFastCorrection, nint stats, float epsilon, nint finiteStatus);
         [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_neko_interpolate", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int NekoInterpolate(nint current, nint next, int length, float fraction);
+        [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_neko_adaptive_accept_batched", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int NekoAdaptiveAcceptBatched(nint current, nint candidate, nint confidences, int matrixLength, int batch, int step, int maxSteps, int depthMode, float configuredDepth);
+        [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_neko_confidence_summary", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int NekoConfidenceSummary(nint confidences, int count, int maxSteps, int depthMode, float configuredDepth, int runNewtonSchulz, int forceFullDepth, nint summary);
         [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_neko_transpose_back", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int NekoTransposeBack(nint source, nint destination, int length, int originalRows, int originalColumns);
         [DllImport(LibraryName, EntryPoint = "nntrain_optimizer_neko_apply", CallingConvention = CallingConvention.Cdecl)]

@@ -25,6 +25,16 @@ public readonly record struct CudaAbiVersion(int Major, int Minor)
     public const int ExternalGradientReadyEventMinor = 19;
     public const int BlockBfp8GradientTransportMinor = 20;
     public const int LayerNormOneScanMinor = 21;
+    public const int DirectBfp8LayerNormMinor = 22;
+    public const int BlockBfp8OptimizerStateMinor = 23;
+    public const int FusedFirstOrderOptimizerMinor = 24;
+    public const int DirectBfp8LayerNormBlock32x384Minor = 25;
+    public const int DirectBfp8FfnGradientMinor = 26;
+    public const int DirectBfp8LayerNormBlock32x512Minor = 27;
+    public const int DirectBfp8AttentionOutputMinor = 28;
+    public const int OrdinaryMuonNesterovMinor = 29;
+    public const int Mix8DiagnosticsMinor = 30;
+    public const int DeviceAdaptiveNekoMuonMinor = 31;
 
     public uint Packed =>
         ((uint)(ushort)Major << 16) | (ushort)Minor;
@@ -155,6 +165,7 @@ public enum CudaNativeOperation : uint
     OptimizerNekoMuonBFloat16 = 102,
     GradientCollective = 103,
     GradientCollectiveBFloat16 = 104,
+    FlashAttentionBackwardBFloat16TensorCoreBfp8Output = 105,
 }
 
 /// <summary>
@@ -202,7 +213,8 @@ public static partial class CudaNativeGateway
             CudaKernelFeature.AsynchronousGradientReduction |
             CudaKernelFeature.CudaGraphs |
             CudaKernelFeature.Bfp8Quantization |
-            CudaKernelFeature.Int8TensorCores);
+            CudaKernelFeature.Int8TensorCores |
+            CudaKernelFeature.FusedFirstOrderOptimizers);
 
     private static readonly Lazy<CudaAbiVersion> CompatibleAbi = new(
         LoadAndValidateAbi,
@@ -739,10 +751,16 @@ public static partial class CudaNativeGateway
         CudaNativeOperation
             .FlashAttentionBackwardBFloat16TensorCoreBFloat16IoGradient or
         CudaNativeOperation
-            .FlashAttentionBackwardBFloat16TensorCoreBFloat16IoGradientSync =>
+            .FlashAttentionBackwardBFloat16TensorCoreBFloat16IoGradientSync or
+        CudaNativeOperation
+            .FlashAttentionBackwardBFloat16TensorCoreBfp8Output =>
             CudaKernelFeature.FlashAttention |
             CudaKernelFeature.BFloat16 |
-            CudaKernelFeature.TensorCores,
+            CudaKernelFeature.TensorCores |
+            (operation == CudaNativeOperation
+                .FlashAttentionBackwardBFloat16TensorCoreBfp8Output
+                    ? CudaKernelFeature.Bfp8Quantization
+                    : CudaKernelFeature.None),
 
         CudaNativeOperation.ForgetMemoryForward or
         CudaNativeOperation.ForgetMemoryBackward =>
@@ -861,6 +879,128 @@ public static partial class CudaNativeGateway
                 stream),
             CudaNativeOperation.Bfp8DequantizeFloat32,
             device);
+    }
+
+    public static int Bfp8QuantizeFloat32Roundtrip(
+        int device,
+        nint source,
+        nint payload,
+        nint scales,
+        int length,
+        int blockSize,
+        nint stream)
+    {
+        EnsureMinimumAbiMinor(
+            CudaAbiVersion.BlockBfp8OptimizerStateMinor,
+            "block-BFP8 optimizer state roundtrip");
+        return Complete(
+            NativeMethods.Bfp8QuantizeFloat32Roundtrip(
+                device,
+                source,
+                payload,
+                scales,
+                length,
+                blockSize,
+                stream),
+            CudaNativeOperation.Bfp8Quantize,
+            device);
+    }
+
+    public static int AdamWBlockBfp8State(
+        int device,
+        nint data,
+        nint gradient,
+        nint firstPayload,
+        nint firstScales,
+        nint secondPayload,
+        nint secondScales,
+        int length,
+        float beta1,
+        float beta2,
+        float learningRate,
+        float weightDecay,
+        float updateScale,
+        float scaledEpsilon,
+        bool applyWeightDecay,
+        nint finiteStatus,
+        nint stream)
+    {
+        EnsureMinimumAbiMinor(
+            CudaAbiVersion.BlockBfp8OptimizerStateMinor,
+            "fused block-BFP8 AdamW state");
+        return Complete(
+            NativeMethods.AdamWBlockBfp8State(
+                device,
+                data,
+                gradient,
+                firstPayload,
+                firstScales,
+                secondPayload,
+                secondScales,
+                length,
+                beta1,
+                beta2,
+                learningRate,
+                weightDecay,
+                updateScale,
+                scaledEpsilon,
+                applyWeightDecay ? 1 : 0,
+                finiteStatus,
+                stream),
+            CudaNativeOperation.Bfp8Quantize,
+            device);
+    }
+
+    public static int NekoMuonBlockBfp8Moments(
+        int device,
+        nint gradient,
+        nint fastPayload,
+        nint fastScales,
+        nint slowPayload,
+        nint slowScales,
+        nint fastRoundtrip,
+        nint slowRoundtrip,
+        int length,
+        float betaFast,
+        float betaSlow,
+        nint finiteStatus,
+        nint stream)
+    {
+        EnsureMinimumAbiMinor(
+            CudaAbiVersion.BlockBfp8OptimizerStateMinor,
+            "fused block-BFP8 NekoMuon moments");
+        return Complete(
+            NativeMethods.NekoMuonBlockBfp8Moments(
+                device,
+                gradient,
+                fastPayload,
+                fastScales,
+                slowPayload,
+                slowScales,
+                fastRoundtrip,
+                slowRoundtrip,
+                length,
+                betaFast,
+                betaSlow,
+                finiteStatus,
+                stream),
+            CudaNativeOperation.Bfp8Quantize,
+            device);
+    }
+
+    public static int MuonBlockBfp8Moments(
+        int device, nint gradient, nint fastPayload, nint fastScales,
+        nint directionPayload, nint directionScales, nint fastRoundtrip,
+        nint directionRoundtrip, int length, float beta,
+        nint finiteStatus, nint stream)
+    {
+        EnsureMinimumAbiMinor(CudaAbiVersion.OrdinaryMuonNesterovMinor,
+            "fused block-BFP8 reference Nesterov Muon moments");
+        return Complete(NativeMethods.MuonBlockBfp8Moments(
+                device, gradient, fastPayload, fastScales,
+                directionPayload, directionScales, fastRoundtrip,
+                directionRoundtrip, length, beta, finiteStatus, stream),
+            CudaNativeOperation.Bfp8Quantize, device);
     }
 
     public static int Bfp8DequantizeBFloat16(
@@ -1454,6 +1594,67 @@ public static partial class CudaNativeGateway
             int length,
             int blockSize,
             nint stream);
+
+        [DllImport(LibraryName,
+            EntryPoint = "nntrain_cuda_bfp8_quantize_f32_roundtrip",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int Bfp8QuantizeFloat32Roundtrip(
+            int device,
+            nint source,
+            nint payload,
+            nint scales,
+            int length,
+            int blockSize,
+            nint stream);
+
+        [DllImport(LibraryName,
+            EntryPoint = "nntrain_cuda_adamw_block_bfp8_state",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int AdamWBlockBfp8State(
+            int device,
+            nint data,
+            nint gradient,
+            nint firstPayload,
+            nint firstScales,
+            nint secondPayload,
+            nint secondScales,
+            int length,
+            float beta1,
+            float beta2,
+            float learningRate,
+            float weightDecay,
+            float updateScale,
+            float scaledEpsilon,
+            int applyWeightDecay,
+            nint finiteStatus,
+            nint stream);
+
+        [DllImport(LibraryName,
+            EntryPoint = "nntrain_cuda_nekomuon_block_bfp8_moments",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int NekoMuonBlockBfp8Moments(
+            int device,
+            nint gradient,
+            nint fastPayload,
+            nint fastScales,
+            nint slowPayload,
+            nint slowScales,
+            nint fastRoundtrip,
+            nint slowRoundtrip,
+            int length,
+            float betaFast,
+            float betaSlow,
+            nint finiteStatus,
+            nint stream);
+
+        [DllImport(LibraryName,
+            EntryPoint = "nntrain_cuda_muon_block_bfp8_moments",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int MuonBlockBfp8Moments(
+            int device, nint gradient, nint fastPayload, nint fastScales,
+            nint directionPayload, nint directionScales,
+            nint fastRoundtrip, nint directionRoundtrip, int length,
+            float beta, nint finiteStatus, nint stream);
 
         [DllImport(LibraryName,
             EntryPoint = "nntrain_cuda_bfp8_dequantize_f32",
