@@ -8,6 +8,136 @@ using Xunit;
 public sealed class CudaMix8NekoMuonTests
 {
     [Fact]
+    public void OrdinaryMuonReportsExactMix8QuantizationDiagnostics()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        WithCuda([0], () =>
+        {
+            Bfp8QuantizationDescriptor descriptor =
+                Bfp8QuantizationDescriptor.Block(32);
+            Parameter parameter = CreateParameter(
+                Values(32 * 33, 17, 0.18f),
+                [32, 33],
+                "muon.diagnostics",
+                descriptor);
+            var optimizer = new NekoMuon(
+                [parameter],
+                FixedFiveOptions() with
+                {
+                    LearningRate = 0.001f,
+                    WeightDecay = 0.01f,
+                });
+            optimizer.SetOrdinaryMuonPolicy();
+            try
+            {
+                optimizer.prepare();
+                float[] masterBefore = Read(
+                    parameter.T.EnsureCudaMasterFloat32Buffer(0));
+                Bfp8EncodedStorage encodedBefore = Read(
+                    parameter.T.EnsureCudaBfp8Buffer(0));
+                parameter.T.SetCudaGradient(
+                    Values(parameter.T.Numel, 41, 0.035f), 0);
+
+                optimizer.step();
+
+                Assert.True(optimizer.TryGetMix8QuantizationDiagnostics(
+                    out Mix8QuantizationDiagnostics diagnostics));
+                float[] masterAfter = Read(
+                    parameter.T.EnsureCudaMasterFloat32Buffer(0));
+                Bfp8EncodedStorage encodedAfter = Read(
+                    parameter.T.EnsureCudaBfp8Buffer(0));
+                double expectedUpdateSum = 0d;
+                double expectedResidualSum = 0d;
+                ulong expectedChanged = 0;
+                int blockSize = descriptor.GetEffectiveBlockSize(
+                    parameter.T.Numel);
+                for (int index = 0; index < parameter.T.Numel; index++)
+                {
+                    float oldStep = encodedBefore.Scales.Span[
+                        index / blockSize];
+                    float newStep = encodedAfter.Scales.Span[
+                        index / blockSize];
+                    double update =
+                        (masterAfter[index] - masterBefore[index]) / oldStep;
+                    double residual = (masterAfter[index]
+                        - encodedAfter.Payload.Span[index] * newStep)
+                        / newStep;
+                    expectedUpdateSum += update * update;
+                    expectedResidualSum += residual * residual;
+                    if (encodedBefore.Payload.Span[index]
+                        != encodedAfter.Payload.Span[index])
+                    {
+                        expectedChanged++;
+                    }
+                }
+
+                Assert.Equal((ulong)parameter.T.Numel,
+                    diagnostics.ElementCount);
+                Assert.Equal(expectedChanged,
+                    diagnostics.ChangedWeightCount);
+                AssertRelativeClose(
+                    expectedUpdateSum,
+                    diagnostics.UpdateStepRatioSquaredSum,
+                    2e-4);
+                AssertRelativeClose(
+                    expectedResidualSum,
+                    diagnostics.ResidualStepRatioSquaredSum,
+                    2e-4);
+                Assert.InRange(
+                    diagnostics.ResidualRmsPerQuantStep,
+                    0d,
+                    0.5001d);
+            }
+            finally
+            {
+                optimizer.DisposeCudaResources();
+                parameter.T.InvalidateCudaBuffers();
+            }
+        });
+    }
+
+    [Fact]
+    public void OrdinaryMuonMix8DiagnosticsCountPrimaryReplicaOnce()
+    {
+        if (Tensor.CudaDeviceCount < 2)
+            return;
+
+        WithCuda([0, 1], () =>
+        {
+            Parameter parameter = CreateParameter(
+                Values(32 * 32, 23, 0.15f),
+                [32, 32],
+                "muon.replica.diagnostics",
+                Bfp8QuantizationDescriptor.Block(32),
+                [0, 1]);
+            var optimizer = new NekoMuon([parameter], FixedFiveOptions());
+            optimizer.SetOrdinaryMuonPolicy();
+            try
+            {
+                optimizer.prepare();
+                SetSynchronizedGradient(
+                    parameter,
+                    Values(parameter.T.Numel, 51, 0.03f),
+                    [0, 1]);
+
+                optimizer.step();
+
+                Assert.True(optimizer.TryGetMix8QuantizationDiagnostics(
+                    out Mix8QuantizationDiagnostics diagnostics));
+                Assert.Equal((ulong)parameter.T.Numel,
+                    diagnostics.ElementCount);
+            }
+            finally
+            {
+                optimizer.DisposeCudaResources();
+                parameter.T.InvalidateCudaBuffers();
+            }
+        });
+    }
+
+    [Fact]
     public void OrdinaryMuonBlock32KeepsFp32StateAndReplicasIdentical()
     {
         if (Tensor.CudaDeviceCount < 2)
@@ -878,6 +1008,18 @@ public sealed class CudaMix8NekoMuonTests
                 0f,
                 tolerance);
         }
+    }
+
+    private static void AssertRelativeClose(
+        double expected,
+        double actual,
+        double relativeTolerance)
+    {
+        double scale = Math.Max(1d, Math.Abs(expected));
+        Assert.InRange(
+            Math.Abs(actual - expected),
+            0d,
+            relativeTolerance * scale);
     }
 
     private static void WithCuda(int[] devices, Action action)

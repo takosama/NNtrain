@@ -1,3 +1,4 @@
+using NNtrain.Cuda.Interop;
 
 namespace NNtrain;
 
@@ -1157,15 +1158,27 @@ internal static partial class CudaOptimizerKernels
         private readonly PlanItemSignature[] _signatures;
         private readonly NativeCudaBuffer<
             CudaOptimizerNative.AdamWChunkDescriptor> _chunks;
+        private readonly NativeCudaBuffer<
+            CudaAdamWMix8DiagnosticChunkDescriptor>? _mix8DiagnosticChunks;
 
         internal AdamWMultiTensorPlan(
             int deviceIndex,
-            IReadOnlyList<AdamWMultiTensorItem> items)
+            IReadOnlyList<AdamWMultiTensorItem> items,
+            bool enableMix8Diagnostics = false)
         {
             _deviceIndex = deviceIndex;
             _signatures = new PlanItemSignature[items.Count];
             var descriptors = new List<
                 CudaOptimizerNative.AdamWChunkDescriptor>();
+            bool allMix8 = enableMix8Diagnostics
+                && items.Count > 0
+                && items.All(static item =>
+                item.Parameter.DType == TensorDType.Bfp8
+                && item.Parameter.Bfp8Quantization?.Granularity
+                    == Bfp8ScaleGranularity.Block
+                && !item.PureBFloat16);
+            List<CudaAdamWMix8DiagnosticChunkDescriptor>?
+                mix8DiagnosticDescriptors = allMix8 ? [] : null;
             for (int itemIndex = 0; itemIndex < items.Count; itemIndex++)
             {
                 AdamWMultiTensorItem item = items[itemIndex];
@@ -1199,6 +1212,28 @@ internal static partial class CudaOptimizerKernels
                                     .SecondMomentBFloat16
                                 : 0),
                             signature.PureBFloat16 ? 1 : 0));
+                    mix8DiagnosticDescriptors?.Add(
+                        new CudaAdamWMix8DiagnosticChunkDescriptor(
+                            signature.DataPointer,
+                            signature.GradientPointer,
+                            signature.FirstPointer,
+                            signature.SecondPointer,
+                            signature.ComputePointer,
+                            offset,
+                            length,
+                            item.ApplyWeightDecay ? 1 : 0,
+                            signature.PhysicalBFloat16 ? 1 : 0,
+                            (signature.FirstMomentBFloat16
+                                ? CudaOptimizerNative.AdamWChunkDescriptor
+                                    .FirstMomentBFloat16
+                                : 0)
+                            | (signature.SecondMomentBFloat16
+                                ? CudaOptimizerNative.AdamWChunkDescriptor
+                                    .SecondMomentBFloat16
+                                : 0),
+                            signature.PureBFloat16 ? 1 : 0,
+                            signature.Mix8ScalePointer,
+                            signature.Mix8BlockSize));
                 }
             }
             if (descriptors.Count == 0)
@@ -1207,9 +1242,33 @@ internal static partial class CudaOptimizerKernels
                     "AdamW multi-tensor plan requires CUDA-resident items.",
                     nameof(items));
             }
-            _chunks = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex)
-                .Allocate1D(System.Runtime.InteropServices.CollectionsMarshal
-                    .AsSpan(descriptors));
+            NativeCudaDevice accelerator =
+                ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+            NativeCudaBuffer<CudaOptimizerNative.AdamWChunkDescriptor>?
+                chunks = null;
+            NativeCudaBuffer<CudaAdamWMix8DiagnosticChunkDescriptor>?
+                mix8DiagnosticChunks = null;
+            try
+            {
+                chunks = accelerator.Allocate1D(
+                    System.Runtime.InteropServices.CollectionsMarshal
+                        .AsSpan(descriptors));
+                if (mix8DiagnosticDescriptors is not null)
+                {
+                    mix8DiagnosticChunks = accelerator.Allocate1D(
+                        System.Runtime.InteropServices.CollectionsMarshal
+                            .AsSpan(mix8DiagnosticDescriptors));
+                }
+                _chunks = chunks;
+                _mix8DiagnosticChunks = mix8DiagnosticChunks;
+                chunks = null;
+                mix8DiagnosticChunks = null;
+            }
+            finally
+            {
+                chunks?.Dispose();
+                mix8DiagnosticChunks?.Dispose();
+            }
         }
 
         internal void Execute(
@@ -1230,16 +1289,58 @@ internal static partial class CudaOptimizerKernels
                 updateScale,
                 scaledEpsilon);
 
+        internal void ExecuteMix8Diagnostic(
+            float beta1,
+            float beta2,
+            float learningRate,
+            float weightDecay,
+            float updateScale,
+            float scaledEpsilon,
+            NativeCudaBuffer<CudaMix8DiagnosticAccumulator> diagnostics)
+        {
+            ArgumentNullException.ThrowIfNull(diagnostics);
+            if (diagnostics.Device.Index != _deviceIndex
+                || diagnostics.Length != 1)
+            {
+                throw new ArgumentException(
+                    "The mix8 diagnostic accumulator must be one element " +
+                    "on the plan device.",
+                    nameof(diagnostics));
+            }
+            NativeCudaBuffer<CudaAdamWMix8DiagnosticChunkDescriptor> chunks =
+                _mix8DiagnosticChunks ?? throw new InvalidOperationException(
+                    "AdamW mix8 diagnostics require a plan containing only " +
+                    "block-scaled BFP8 parameters.");
+            CudaOptimizerNative.AdamWMultiTensorMix8Diagnostic(
+                _deviceIndex,
+                chunks.NativePtr,
+                chunks.Length,
+                beta1,
+                beta2,
+                learningRate,
+                weightDecay,
+                updateScale,
+                scaledEpsilon,
+                diagnostics.NativePtr);
+        }
+
         /// <summary>
         /// A plan contains raw native addresses, so object identity is part
         /// of its validity. Pointer equality alone is insufficient because
         /// the allocator may reuse an address after a dtype conversion or an
         /// arena rebind.
         /// </summary>
-        internal bool Matches(IReadOnlyList<AdamWMultiTensorItem> items)
+        internal bool Matches(
+            IReadOnlyList<AdamWMultiTensorItem> items,
+            bool enableMix8Diagnostics = false)
         {
             if (items.Count != _signatures.Length)
                 return false;
+            if ((_mix8DiagnosticChunks is not null)
+                != enableMix8Diagnostics)
+            {
+                return false;
+            }
             try
             {
                 for (int index = 0; index < items.Count; index++)
@@ -1360,6 +1461,19 @@ internal static partial class CudaOptimizerKernels
                 item.PureBFloat16
                     ? (0, true, data)
                     : GetComputeDestinationWithOwner(parameter, deviceIndex);
+            object? mix8ScaleOwner = null;
+            nint mix8ScalePointer = 0;
+            int mix8BlockSize = 0;
+            if (parameter.DType == TensorDType.Bfp8
+                && parameter.Bfp8Quantization?.Granularity
+                    == Bfp8ScaleGranularity.Block)
+            {
+                CudaBfp8BufferView encoded =
+                    parameter.EnsureCudaBfp8Buffer(deviceIndex);
+                mix8ScaleOwner = encoded.Scales;
+                mix8ScalePointer = encoded.Scales.NativePtr;
+                mix8BlockSize = encoded.Descriptor.BlockSize;
+            }
             return new PlanItemSignature(
                 parameter,
                 parameter.DType,
@@ -1380,7 +1494,10 @@ internal static partial class CudaOptimizerKernels
                 firstPointer,
                 secondPointer,
                 computePointer,
-                physicalBFloat16);
+                physicalBFloat16,
+                mix8ScaleOwner,
+                mix8ScalePointer,
+                mix8BlockSize);
         }
 
         private readonly record struct PlanItemSignature(
@@ -1403,7 +1520,10 @@ internal static partial class CudaOptimizerKernels
             nint FirstPointer,
             nint SecondPointer,
             nint ComputePointer,
-            bool PhysicalBFloat16)
+            bool PhysicalBFloat16,
+            object? Mix8ScaleOwner,
+            nint Mix8ScalePointer,
+            int Mix8BlockSize)
         {
             internal bool Matches(PlanItemSignature other)
                 => ReferenceEquals(Parameter, other.Parameter)
@@ -1427,7 +1547,11 @@ internal static partial class CudaOptimizerKernels
                     && FirstPointer == other.FirstPointer
                     && SecondPointer == other.SecondPointer
                     && ComputePointer == other.ComputePointer
-                    && PhysicalBFloat16 == other.PhysicalBFloat16;
+                    && PhysicalBFloat16 == other.PhysicalBFloat16
+                    && ReferenceEquals(
+                        Mix8ScaleOwner, other.Mix8ScaleOwner)
+                    && Mix8ScalePointer == other.Mix8ScalePointer
+                    && Mix8BlockSize == other.Mix8BlockSize;
 
             private static bool ShapesEqual(
                 IReadOnlyList<int> left,
@@ -1444,7 +1568,31 @@ internal static partial class CudaOptimizerKernels
             }
         }
 
-        public void Dispose() => _chunks.Dispose();
+        public void Dispose()
+        {
+            List<Exception>? failures = null;
+            try
+            {
+                _chunks.Dispose();
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+            try
+            {
+                _mix8DiagnosticChunks?.Dispose();
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+            if (failures is not null)
+            {
+                throw new AggregateException(
+                    "AdamW multi-tensor plan cleanup failed.", failures);
+            }
+        }
     }
 
     /// <summary>
@@ -2355,7 +2503,9 @@ internal static partial class CudaOptimizerKernels
         float weightDecay,
         bool applyWeightDecay,
         bool forceFullNewtonSchulz = false,
-        NativeCudaBuffer<int>? finiteStatus = null)
+        NativeCudaBuffer<int>? finiteStatus = null,
+        NativeCudaBuffer<CudaMix8DiagnosticAccumulator>?
+            mix8Diagnostics = null)
     {
         NativeCudaDevice accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
@@ -2450,7 +2600,8 @@ internal static partial class CudaOptimizerKernels
         float finalScale = MathF.Sqrt(MathF.Max(
             1f,
             (float)originalRows / originalColumns));
-        CudaOptimizerNative.NekoApply(
+        ApplyNekoMuonUpdate(
+            parameter,
             deviceIndex,
             dataBuffer.NativePtr,
             update.NativePtr,
@@ -2458,7 +2609,8 @@ internal static partial class CudaOptimizerKernels
             learningRate,
             finalScale,
             weightDecay,
-            applyWeightDecay);
+            applyWeightDecay,
+            mix8Diagnostics);
         PublishMaster(parameter, accelerator, deviceIndex, dataBuffer);
         return confidence;
     }
@@ -2485,7 +2637,9 @@ internal static partial class CudaOptimizerKernels
         float weightDecay,
         bool applyWeightDecay,
         bool publishMix8,
-        bool nesterov = false)
+        bool nesterov = false,
+        NativeCudaBuffer<CudaMix8DiagnosticAccumulator>?
+            mix8Diagnostics = null)
     {
         NativeCudaDevice accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
@@ -2551,7 +2705,8 @@ internal static partial class CudaOptimizerKernels
         float finalScale = MathF.Sqrt(MathF.Max(
             1f,
             (float)originalRows / originalColumns));
-        CudaOptimizerNative.NekoApply(
+        ApplyNekoMuonUpdate(
+            parameter,
             deviceIndex,
             data.NativePtr,
             update.NativePtr,
@@ -2559,9 +2714,16 @@ internal static partial class CudaOptimizerKernels
             learningRate,
             finalScale,
             weightDecay,
-            applyWeightDecay);
+            applyWeightDecay,
+            mix8Diagnostics);
         if (publishMix8)
-            PublishMix8Master(parameter, deviceIndex, finiteStatus);
+        {
+            PublishMix8Master(
+                parameter,
+                deviceIndex,
+                finiteStatus,
+                mix8Diagnostics);
+        }
         else
             PublishMaster(parameter, accelerator, deviceIndex, data);
     }
@@ -2586,7 +2748,9 @@ internal static partial class CudaOptimizerKernels
         float learningRate,
         float weightDecay,
         bool publishMix8,
-        bool nesterov = false)
+        bool nesterov = false,
+        NativeCudaBuffer<CudaMix8DiagnosticAccumulator>?
+            mix8Diagnostics = null)
     {
         ArgumentNullException.ThrowIfNull(items);
         if (items.Count == 0)
@@ -2630,7 +2794,8 @@ internal static partial class CudaOptimizerKernels
                             weightDecay,
                             item.ApplyWeightDecay,
                             publishMix8,
-                            nesterov);
+                            nesterov,
+                            mix8Diagnostics);
                     }
                     continue;
                 }
@@ -2650,7 +2815,8 @@ internal static partial class CudaOptimizerKernels
                     weightDecay,
                     useBFloat16TensorCores,
                     publishMix8,
-                    nesterov);
+                    nesterov,
+                    mix8Diagnostics);
             }
         }
     }
@@ -2670,7 +2836,9 @@ internal static partial class CudaOptimizerKernels
         float weightDecay,
         bool useBFloat16TensorCores,
         bool publishMix8,
-        bool nesterov)
+        bool nesterov,
+        NativeCudaBuffer<CudaMix8DiagnosticAccumulator>?
+            mix8Diagnostics)
     {
         int count = items.Length;
         int rows = Math.Min(
@@ -2748,7 +2916,8 @@ internal static partial class CudaOptimizerKernels
             float finalScale = MathF.Sqrt(MathF.Max(
                 1f,
                 (float)item.OriginalRows / item.OriginalColumns));
-            CudaOptimizerNative.NekoApply(
+            ApplyNekoMuonUpdate(
+                item.Parameter,
                 deviceIndex,
                 data.NativePtr,
                 update,
@@ -2756,9 +2925,16 @@ internal static partial class CudaOptimizerKernels
                 learningRate,
                 finalScale,
                 weightDecay,
-                item.ApplyWeightDecay);
+                item.ApplyWeightDecay,
+                mix8Diagnostics);
             if (publishMix8)
-                PublishMix8Master(item.Parameter, deviceIndex, finiteStatus);
+            {
+                PublishMix8Master(
+                    item.Parameter,
+                    deviceIndex,
+                    finiteStatus,
+                    mix8Diagnostics);
+            }
             else
                 PublishMaster(item.Parameter, accelerator, deviceIndex, data);
         }
@@ -2789,7 +2965,9 @@ internal static partial class CudaOptimizerKernels
         bool deviceOnlyFixedFive,
         bool mixedBlockState = false,
         bool forceFullNewtonSchulz = false,
-        bool nesterov = false)
+        bool nesterov = false,
+        NativeCudaBuffer<CudaMix8DiagnosticAccumulator>?
+            mix8Diagnostics = null)
     {
         NativeCudaDevice accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
@@ -2935,7 +3113,8 @@ internal static partial class CudaOptimizerKernels
         float finalScale = MathF.Sqrt(MathF.Max(
             1f,
             (float)originalRows / originalColumns));
-        CudaOptimizerNative.NekoApply(
+        ApplyNekoMuonUpdate(
+            parameter,
             deviceIndex,
             dataForUpdate.NativePtr,
             update.NativePtr,
@@ -2943,10 +3122,15 @@ internal static partial class CudaOptimizerKernels
             learningRate,
             finalScale,
             weightDecay,
-            applyWeightDecay);
+            applyWeightDecay,
+            mix8Diagnostics);
         if (mixedBlockState)
         {
-            PublishMix8Master(parameter, deviceIndex, finiteStatus);
+            PublishMix8Master(
+                parameter,
+                deviceIndex,
+                finiteStatus,
+                mix8Diagnostics);
         }
         else
         {
@@ -2978,7 +3162,9 @@ internal static partial class CudaOptimizerKernels
         float learningRate,
         float weightDecay,
         bool forceFullNewtonSchulz = false,
-        NativeCudaBuffer<int>? finiteStatus = null)
+        NativeCudaBuffer<int>? finiteStatus = null,
+        NativeCudaBuffer<CudaMix8DiagnosticAccumulator>?
+            mix8Diagnostics = null)
     {
         var confidences = new float[items.Count];
         if (scratch.BatchCapacity <= 1 || items.Count <= 1)
@@ -3011,7 +3197,8 @@ internal static partial class CudaOptimizerKernels
                     weightDecay,
                     item.ApplyWeightDecay,
                     forceFullNewtonSchulz,
-                    finiteStatus);
+                    finiteStatus,
+                    mix8Diagnostics);
             }
             return confidences;
         }
@@ -3108,7 +3295,8 @@ internal static partial class CudaOptimizerKernels
                                 weightDecay,
                                 item.ApplyWeightDecay,
                                 forceFullNewtonSchulz,
-                                finiteStatus);
+                                finiteStatus,
+                                mix8Diagnostics);
                     }
                     continue;
                 }
@@ -3124,7 +3312,8 @@ internal static partial class CudaOptimizerKernels
                     coefficientC,
                     learningRate,
                     weightDecay,
-                    finiteStatus);
+                    finiteStatus,
+                    mix8Diagnostics);
             }
         }
         return confidences;
@@ -3159,7 +3348,9 @@ internal static partial class CudaOptimizerKernels
         float coefficientC,
         float learningRate,
         float weightDecay,
-        NativeCudaBuffer<int>? finiteStatus)
+        NativeCudaBuffer<int>? finiteStatus,
+        NativeCudaBuffer<CudaMix8DiagnosticAccumulator>?
+            mix8Diagnostics)
     {
         int count = items.Length;
         int rows = items[0].Rows;
@@ -3259,7 +3450,8 @@ internal static partial class CudaOptimizerKernels
             float finalScale = MathF.Sqrt(MathF.Max(
                 1f,
                 (float)item.OriginalRows / item.OriginalColumns));
-            CudaOptimizerNative.NekoApply(
+            ApplyNekoMuonUpdate(
+                item.Parameter,
                 deviceIndex,
                 data.NativePtr,
                 update,
@@ -3267,7 +3459,8 @@ internal static partial class CudaOptimizerKernels
                 learningRate,
                 finalScale,
                 weightDecay,
-                item.ApplyWeightDecay);
+                item.ApplyWeightDecay,
+                mix8Diagnostics);
             PublishMaster(item.Parameter, accelerator, deviceIndex, data);
         }
     }

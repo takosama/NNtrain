@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using NNtrain.Cuda.Interop;
 
 namespace NNtrain;
 
-public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
+public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
+    IMix8QuantizationDiagnosticsProvider
 {
     private const float NewtonSchulzA = 3.4445f;
     private const float NewtonSchulzB = -4.7750f;
@@ -32,6 +34,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
     private readonly Dictionary<int, CudaOptimizerFiniteStatusReadback>
         _cudaBfp8FiniteReadbacks = [];
     private readonly CudaDispatchPolicy _cudaDispatchPolicy;
+    private CudaMix8QuantizationDiagnostics? _cudaMix8Diagnostics;
+    private int _cudaMix8DiagnosticsDevice = -1;
     private NekoMuonState _state;
     private int? _cudaStateAuthorityDevice;
 
@@ -161,6 +165,20 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
             maximum,
             (float)(depthSum / states.Length),
             _state.Options.MaxNewtonSchulzSteps);
+    }
+
+    public bool TryGetMix8QuantizationDiagnostics(
+        out Mix8QuantizationDiagnostics diagnostics)
+    {
+        CudaMix8QuantizationDiagnostics? accumulator =
+            _cudaMix8Diagnostics;
+        int deviceIndex = _cudaMix8DiagnosticsDevice;
+        if (accumulator is null || deviceIndex < 0)
+        {
+            diagnostics = default;
+            return false;
+        }
+        return accumulator.TryRead(deviceIndex, out diagnostics);
     }
 
     internal NekoMuonState CaptureStateForStreaming()
@@ -345,6 +363,7 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                 "NekoMuon cannot advance beyond Int32.MaxValue steps.");
         }
 
+        _cudaMix8DiagnosticsDevice = -1;
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
         {
             CudaGradientOptimizerGuard.ValidateAndConsume(
@@ -712,6 +731,15 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                 deviceFiniteStatus[deviceSlot].MemSetToZero();
             }
         }
+        NativeCudaBuffer<CudaMix8DiagnosticAccumulator>?
+            mix8Diagnostics = null;
+        if (mix8)
+        {
+            _cudaMix8Diagnostics ??=
+                new CudaMix8QuantizationDiagnostics();
+            _cudaMix8DiagnosticsDevice = devices[0];
+            mix8Diagnostics = _cudaMix8Diagnostics.Reset(devices[0]);
+        }
 
         CudaOptimizerKernels.NekoMuonResidentState GetCudaState(
             int parameterIndex)
@@ -844,6 +872,11 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
             Parallel.For(0, devices.Length, deviceSlot =>
             {
                 int deviceIndex = devices[deviceSlot];
+                NativeCudaBuffer<CudaMix8DiagnosticAccumulator>?
+                    deviceMix8Diagnostics = deviceIndex
+                        == _cudaMix8DiagnosticsDevice
+                        ? mix8Diagnostics
+                        : null;
                 CudaOptimizerKernels.NekoMuonDeviceScratch scratch =
                     deviceScratch[deviceSlot];
                 if (deviceOnlyFixedFive)
@@ -885,7 +918,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                             options.LearningRate,
                             options.WeightDecay,
                             publishMix8: mix8,
-                            nesterov: options.Nesterov);
+                            nesterov: options.Nesterov,
+                            mix8Diagnostics: deviceMix8Diagnostics);
                     return;
                 }
                 var batchItems = new CudaOptimizerKernels
@@ -932,7 +966,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                         options.LearningRate,
                         options.WeightDecay,
                         ForceFullNewtonSchulz,
-                        mix8 ? deviceFiniteStatus![deviceSlot] : null);
+                        mix8 ? deviceFiniteStatus![deviceSlot] : null,
+                        deviceMix8Diagnostics);
                 for (int parameterIndex = 0;
                     parameterIndex < deviceConfidences.Length;
                     parameterIndex++)
@@ -947,7 +982,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                         CudaOptimizerKernels.PublishMix8Master(
                             parameter.T,
                             deviceIndex,
-                            deviceFiniteStatus![deviceSlot]);
+                            deviceFiniteStatus![deviceSlot],
+                            deviceMix8Diagnostics);
                     }
                 }
             });
@@ -1106,6 +1142,15 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
             statuses[deviceSlot] = GetOrCreateBfp8FiniteStatus(deviceIndex);
             statuses[deviceSlot].MemSetToZero();
         }
+        NativeCudaBuffer<CudaMix8DiagnosticAccumulator>?
+            mix8Diagnostics = null;
+        if (mixedBlockState)
+        {
+            _cudaMix8Diagnostics ??=
+                new CudaMix8QuantizationDiagnostics();
+            _cudaMix8DiagnosticsDevice = devices[0];
+            mix8Diagnostics = _cudaMix8Diagnostics.Reset(devices[0]);
+        }
 
         var states = new CudaOptimizerKernels
             .NekoMuonBfp8ResidentState[_parameters.Count];
@@ -1184,6 +1229,11 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         Parallel.For(0, devices.Length, deviceSlot =>
         {
             int deviceIndex = devices[deviceSlot];
+            NativeCudaBuffer<CudaMix8DiagnosticAccumulator>?
+                deviceMix8Diagnostics = deviceIndex
+                    == _cudaMix8DiagnosticsDevice
+                    ? mix8Diagnostics
+                    : null;
             if (useGroupedPureBfp8)
             {
                 var batchItems = new CudaOptimizerKernels
@@ -1264,7 +1314,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                         deviceOnlyFixedFive,
                         mixedBlockState,
                         ForceFullNewtonSchulz,
-                        options.Nesterov);
+                        options.Nesterov,
+                        deviceMix8Diagnostics);
             }
         });
 
@@ -1446,6 +1497,10 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
             TryDisposeCudaResource(status, ref failures);
         }
         _cudaBfp8FiniteStatus.Clear();
+        if (_cudaMix8Diagnostics is IDisposable mix8Diagnostics)
+            TryDisposeCudaResource(mix8Diagnostics, ref failures);
+        _cudaMix8Diagnostics = null;
+        _cudaMix8DiagnosticsDevice = -1;
         _cudaStateAuthorityDevice = null;
         if (failures is not null)
         {

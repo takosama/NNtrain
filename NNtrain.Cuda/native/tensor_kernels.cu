@@ -1,5 +1,7 @@
 #include <cuda_runtime.h>
 #include <cuda_bf16.h>
+
+#include "mix8_diagnostics.cuh"
 #include <cub/block/block_radix_sort.cuh>
 #include <cfloat>
 #include <cmath>
@@ -19,6 +21,7 @@ extern "C" int nntrain_cuda_set_device(int device);
 
 namespace {
 constexpr int kThreads = 256;
+constexpr int kMix8DiagnosticMaximumBlocks = 4096;
 thread_local cudaStream_t g_stream = nullptr;
 
 // Process-scoped diagnostic gate for reproducible same-DLL A/B benchmarks.
@@ -1645,6 +1648,18 @@ struct AdamWChunkDescriptor {
 static_assert(sizeof(AdamWChunkDescriptor) == 64,
     "AdamW descriptor ABI must match managed layout");
 
+// V2 is a separate ABI so the established 64-byte descriptor and ordinary
+// AdamW export remain unchanged.  The old publication scale belongs to the
+// whole parameter; chunk.offset therefore indexes it directly.
+struct AdamWMix8DiagnosticChunkDescriptor {
+    AdamWChunkDescriptor chunk;
+    const float* current_scales;
+    int quantization_block_size;
+    int reserved;
+};
+static_assert(sizeof(AdamWMix8DiagnosticChunkDescriptor) == 80,
+    "mix8 AdamW diagnostic descriptor ABI must match managed layout");
+
 __global__ void adamw_multi_tensor_kernel(
     const AdamWChunkDescriptor* chunks,
     int chunk_count,
@@ -1729,6 +1744,128 @@ __global__ void adamw_multi_tensor_kernel(
                     __bfloat162float(value);
             }
         }
+    }
+}
+
+__global__ void adamw_multi_tensor_mix8_diagnostic_kernel(
+    const AdamWMix8DiagnosticChunkDescriptor* diagnostic_chunks,
+    int chunk_count,
+    float beta1,
+    float beta2,
+    float learning_rate,
+    float weight_decay,
+    float update_scale,
+    float scaled_epsilon,
+    nntrain_mix8_diagnostic_accumulator* metrics) {
+    const int chunk_index = blockIdx.x;
+    if (chunk_index >= chunk_count)
+        return;
+    const AdamWMix8DiagnosticChunkDescriptor diagnostic =
+        diagnostic_chunks[chunk_index];
+    const AdamWChunkDescriptor chunk = diagnostic.chunk;
+    if (diagnostic.current_scales == nullptr
+        || diagnostic.quantization_block_size <= 0) {
+        return;
+    }
+
+    float local_update_ratio_squared_sum = 0.f;
+    for (int local = threadIdx.x; local < chunk.length;
+         local += blockDim.x) {
+        const int index = chunk.offset + local;
+        const float g = chunk.pure_bfloat16
+            ? __bfloat162float(
+                reinterpret_cast<const __nv_bfloat16*>(
+                    chunk.gradient)[index])
+            : chunk.gradient[index];
+        constexpr int kFirstMomentBf16 = 1 << 0;
+        constexpr int kSecondMomentBf16 = 1 << 1;
+        const bool first_is_bf16 =
+            (chunk.moment_format_flags & kFirstMomentBf16) != 0;
+        const bool second_is_bf16 =
+            (chunk.moment_format_flags & kSecondMomentBf16) != 0;
+        float first;
+        float second;
+        if (first_is_bf16) {
+            auto* first_bf16 =
+                reinterpret_cast<unsigned short*>(chunk.first_moment);
+            first = fmaf(beta1, bf16_load(first_bf16, index),
+                (1.f - beta1) * g);
+            bf16_store(first_bf16, index, first);
+            if (chunk.pure_bfloat16)
+                first = bf16_load(first_bf16, index);
+        }
+        else {
+            auto* first_float =
+                reinterpret_cast<float*>(chunk.first_moment);
+            first = fmaf(
+                beta1, first_float[index], (1.f - beta1) * g);
+            first_float[index] = first;
+        }
+        if (second_is_bf16) {
+            auto* second_bf16 =
+                reinterpret_cast<unsigned short*>(chunk.second_moment);
+            second = fmaf(beta2, bf16_load(second_bf16, index),
+                (1.f - beta2) * g * g);
+            bf16_store(second_bf16, index, second);
+            if (chunk.pure_bfloat16)
+                second = bf16_load(second_bf16, index);
+        }
+        else {
+            auto* second_float =
+                reinterpret_cast<float*>(chunk.second_moment);
+            second = fmaf(beta2, second_float[index],
+                (1.f - beta2) * g * g);
+            second_float[index] = second;
+        }
+
+        const float previous = chunk.pure_bfloat16
+            ? __bfloat162float(
+                reinterpret_cast<const __nv_bfloat16*>(chunk.data)[index])
+            : chunk.data[index];
+        float parameter = previous;
+        if (chunk.apply_weight_decay)
+            parameter *= 1.f - learning_rate * weight_decay;
+        parameter -= update_scale * first /
+            (sqrtf(second) + scaled_epsilon);
+        if (chunk.pure_bfloat16) {
+            reinterpret_cast<__nv_bfloat16*>(chunk.data)[index] =
+                __float2bfloat16_rn(parameter);
+            parameter = __bfloat162float(
+                reinterpret_cast<const __nv_bfloat16*>(chunk.data)[index]);
+        }
+        else {
+            chunk.data[index] = parameter;
+        }
+        if (chunk.compute != nullptr) {
+            const __nv_bfloat16 value = __float2bfloat16_rn(parameter);
+            if (chunk.physical_bf16) {
+                reinterpret_cast<__nv_bfloat16*>(chunk.compute)[index] =
+                    value;
+            }
+            else {
+                reinterpret_cast<float*>(chunk.compute)[index] =
+                    __bfloat162float(value);
+            }
+        }
+
+        const float scale = diagnostic.current_scales[
+            index / diagnostic.quantization_block_size];
+        const float normalized = __fdiv_rn(parameter - previous, scale);
+        local_update_ratio_squared_sum += normalized * normalized;
+    }
+
+    __shared__ float reduction[kThreads];
+    reduction[threadIdx.x] = local_update_ratio_squared_sum;
+    __syncthreads();
+    for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+        if (threadIdx.x < offset)
+            reduction[threadIdx.x] += reduction[threadIdx.x + offset];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        atomicAdd(
+            &metrics->update_step_ratio_squared_sum,
+            static_cast<double>(reduction[0]));
     }
 }
 
@@ -1931,6 +2068,51 @@ __global__ void neko_apply_kernel(float* data, const float* update,
     if (apply_weight_decay)
         parameter -= learning_rate * weight_decay * parameter;
     data[index] = parameter - learning_rate * final_scale * update[index];
+}
+
+__global__ void neko_apply_mix8_diagnostic_kernel(
+    float* data,
+    const float* update,
+    const float* current_scales,
+    int quantization_block_size,
+    int length,
+    float learning_rate,
+    float final_scale,
+    float weight_decay,
+    int apply_weight_decay,
+    nntrain_mix8_diagnostic_accumulator* metrics) {
+    float local_update_ratio_squared_sum = 0.f;
+    const int stride = blockDim.x * gridDim.x;
+    for (int index = blockIdx.x * blockDim.x + threadIdx.x;
+         index < length;
+         index += stride) {
+        const float previous = data[index];
+        float parameter = previous;
+        if (apply_weight_decay)
+            parameter -= learning_rate * weight_decay * parameter;
+        parameter =
+            parameter - learning_rate * final_scale * update[index];
+        data[index] = parameter;
+
+        const float scale =
+            current_scales[index / quantization_block_size];
+        const float normalized = __fdiv_rn(parameter - previous, scale);
+        local_update_ratio_squared_sum += normalized * normalized;
+    }
+
+    __shared__ float reduction[kThreads];
+    reduction[threadIdx.x] = local_update_ratio_squared_sum;
+    __syncthreads();
+    for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+        if (threadIdx.x < offset)
+            reduction[threadIdx.x] += reduction[threadIdx.x + offset];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        atomicAdd(
+            &metrics->update_step_ratio_squared_sum,
+            static_cast<double>(reduction[0]));
+    }
 }
 
 __global__ void neko_apply_bf16_kernel(__nv_bfloat16* data,
@@ -3054,6 +3236,34 @@ NNTRAIN_EXPORT int nntrain_optimizer_adamw_multi_tensor(
     return launch_status();
 }
 
+NNTRAIN_EXPORT int
+nntrain_optimizer_adamw_multi_tensor_mix8_diagnostic_v2(
+    const AdamWMix8DiagnosticChunkDescriptor* chunks,
+    int chunk_count,
+    float beta1,
+    float beta2,
+    float learning_rate,
+    float weight_decay,
+    float update_scale,
+    float scaled_epsilon,
+    void* metrics) {
+    if (!chunks || chunk_count <= 0 || !metrics)
+        return static_cast<int>(cudaErrorInvalidValue);
+    adamw_multi_tensor_mix8_diagnostic_kernel<<<
+        chunk_count, kThreads, 0, g_stream>>>(
+            chunks,
+            chunk_count,
+            beta1,
+            beta2,
+            learning_rate,
+            weight_decay,
+            update_scale,
+            scaled_epsilon,
+            reinterpret_cast<
+                nntrain_mix8_diagnostic_accumulator*>(metrics));
+    return launch_status();
+}
+
 NNTRAIN_EXPORT int nntrain_optimizer_accumulate_finite_status(
     const float* values, int length, int* finite_status) {
     if (!values || length <= 0 || !finite_status)
@@ -3180,6 +3390,38 @@ NNTRAIN_EXPORT int nntrain_optimizer_neko_apply(float* data,
     float weight_decay, int apply_weight_decay) {
     NNTRAIN_LAUNCH_1D(neko_apply_kernel, length, data, update, length,
         learning_rate, final_scale, weight_decay, apply_weight_decay);
+}
+
+NNTRAIN_EXPORT int nntrain_optimizer_neko_apply_mix8_diagnostic(
+    float* data,
+    const float* update,
+    const float* current_scales,
+    int quantization_block_size,
+    int length,
+    float learning_rate,
+    float final_scale,
+    float weight_decay,
+    int apply_weight_decay,
+    void* metrics) {
+    if (!data || !update || !current_scales || !metrics
+        || quantization_block_size <= 0 || length <= 0) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+    const int grid = min(
+        blocks_for(length),
+        kMix8DiagnosticMaximumBlocks);
+    neko_apply_mix8_diagnostic_kernel<<<grid, kThreads, 0, g_stream>>>(
+        data,
+        update,
+        current_scales,
+        quantization_block_size,
+        length,
+        learning_rate,
+        final_scale,
+        weight_decay,
+        apply_weight_decay,
+        reinterpret_cast<nntrain_mix8_diagnostic_accumulator*>(metrics));
+    return launch_status();
 }
 
 NNTRAIN_EXPORT int nntrain_optimizer_neko_apply_bf16(unsigned short* data,

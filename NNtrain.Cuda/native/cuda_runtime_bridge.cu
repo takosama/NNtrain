@@ -6,6 +6,8 @@
 #include <cstring>
 #include <mutex>
 
+#include "mix8_diagnostics.cuh"
+
 #if defined(_WIN32)
 #define NNTRAIN_EXPORT extern "C" __declspec(dllexport)
 #else
@@ -14,7 +16,7 @@
 
 namespace {
 constexpr std::uint32_t nntrain_abi_major = 1;
-constexpr std::uint32_t nntrain_abi_minor = 29;
+constexpr std::uint32_t nntrain_abi_minor = 30;
 constexpr std::uint32_t nntrain_abi_version_value =
     (nntrain_abi_major << 16) | nntrain_abi_minor;
 
@@ -487,6 +489,7 @@ __global__ void bfp8_dequantize_bf16_kernel(
 // 32-value blocks, where the generic one-CTA-per-scale implementation otherwise
 // leaves seven eighths of a 256-thread CTA idle.
 constexpr int kBfp8ScaleBlocksPerCta = 8;
+constexpr int kMix8DiagnosticMaximumCtas = 4096;
 
 __global__ void bfp8_dequantize_f32_block32_kernel(
     const signed char* payload,
@@ -546,6 +549,184 @@ __global__ void bfp8_quantize_f32_warp_blocks_kernel(
     for (int index = start + lane; index < end; index += warpSize) {
         payload[index] = static_cast<signed char>(
             bfp8_quantized_code(source[index], scale));
+    }
+}
+
+// Diagnostic publication is deliberately fused with quantization.  Reading
+// the previous payload before replacing it gives an exact code-change count;
+// comparing the FP32 authority with the newly published value gives the
+// retained master residual in units of the new block quantum.  A bounded,
+// grid-stride launch keeps aggregate atomic traffic independent of model size.
+template <int QuantizationBlockSize>
+__global__ void bfp8_quantize_f32_diagnostic_warp_blocks_kernel(
+    const float* source,
+    signed char* payload,
+    float* scales,
+    int length,
+    int scale_count,
+    nntrain_mix8_diagnostic_accumulator* metrics) {
+    const int warp = threadIdx.x / warpSize;
+    const int lane = threadIdx.x & (warpSize - 1);
+    float local_residual_ratio_squared_sum = 0.f;
+    unsigned long long local_changed_code_count = 0;
+    unsigned long long local_element_count = 0;
+
+    for (int scale_index =
+             blockIdx.x * kBfp8ScaleBlocksPerCta + warp;
+         scale_index < scale_count;
+         scale_index += gridDim.x * kBfp8ScaleBlocksPerCta) {
+        const int start = scale_index * QuantizationBlockSize;
+        const int end = min(length, start + QuantizationBlockSize);
+        float maximum = 0.f;
+        for (int index = start + lane; index < end; index += warpSize)
+            maximum = fmaxf(maximum, fabsf(source[index]));
+        for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
+            maximum = fmaxf(
+                maximum,
+                __shfl_down_sync(0xffffffffu, maximum, offset));
+        }
+        const float scale = bfp8_scale_from_maximum(
+            __shfl_sync(0xffffffffu, maximum, 0));
+        if (lane == 0)
+            scales[scale_index] = scale;
+
+        for (int index = start + lane; index < end; index += warpSize) {
+            const signed char previous_code = payload[index];
+            const int quantized = bfp8_quantized_code(source[index], scale);
+            payload[index] = static_cast<signed char>(quantized);
+            local_changed_code_count +=
+                previous_code != static_cast<signed char>(quantized);
+            ++local_element_count;
+            const float residual = source[index]
+                - static_cast<float>(quantized) * scale;
+            const float normalized = __fdiv_rn(residual, scale);
+            local_residual_ratio_squared_sum += normalized * normalized;
+        }
+    }
+
+    for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
+        local_residual_ratio_squared_sum += __shfl_down_sync(
+            0xffffffffu, local_residual_ratio_squared_sum, offset);
+        local_changed_code_count += __shfl_down_sync(
+            0xffffffffu, local_changed_code_count, offset);
+        local_element_count += __shfl_down_sync(
+            0xffffffffu, local_element_count, offset);
+    }
+
+    __shared__ float residual_by_warp[kBfp8ScaleBlocksPerCta];
+    __shared__ unsigned long long
+        changed_by_warp[kBfp8ScaleBlocksPerCta];
+    __shared__ unsigned long long
+        elements_by_warp[kBfp8ScaleBlocksPerCta];
+    if (lane == 0) {
+        residual_by_warp[warp] = local_residual_ratio_squared_sum;
+        changed_by_warp[warp] = local_changed_code_count;
+        elements_by_warp[warp] = local_element_count;
+    }
+    __syncthreads();
+
+    if (threadIdx.x == 0) {
+        float residual_sum = 0.f;
+        unsigned long long changed_sum = 0;
+        unsigned long long element_sum = 0;
+        for (int index = 0; index < kBfp8ScaleBlocksPerCta; ++index) {
+            residual_sum += residual_by_warp[index];
+            changed_sum += changed_by_warp[index];
+            element_sum += elements_by_warp[index];
+        }
+        atomicAdd(
+            &metrics->residual_step_ratio_squared_sum,
+            static_cast<double>(residual_sum));
+        atomicAdd(&metrics->changed_code_count, changed_sum);
+        atomicAdd(&metrics->element_count, element_sum);
+    }
+}
+
+__global__ void bfp8_quantize_f32_diagnostic_kernel(
+    const float* source,
+    signed char* payload,
+    float* scales,
+    int length,
+    int quantization_block_size,
+    int scale_count,
+    nntrain_mix8_diagnostic_accumulator* metrics) {
+    float local_residual_ratio_squared_sum = 0.f;
+    unsigned long long local_changed_code_count = 0;
+    unsigned long long local_element_count = 0;
+    __shared__ float maximum_reduction[256];
+
+    for (int scale_index = blockIdx.x;
+         scale_index < scale_count;
+         scale_index += gridDim.x) {
+        const long long start =
+            static_cast<long long>(scale_index) * quantization_block_size;
+        const long long end = min(
+            static_cast<long long>(length),
+            start + quantization_block_size);
+        float local_maximum = 0.f;
+        for (long long index = start + threadIdx.x;
+             index < end;
+             index += blockDim.x) {
+            local_maximum = fmaxf(local_maximum, fabsf(source[index]));
+        }
+        maximum_reduction[threadIdx.x] = local_maximum;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride) {
+                maximum_reduction[threadIdx.x] = fmaxf(
+                    maximum_reduction[threadIdx.x],
+                    maximum_reduction[threadIdx.x + stride]);
+            }
+            __syncthreads();
+        }
+        const float scale =
+            bfp8_scale_from_maximum(maximum_reduction[0]);
+        if (threadIdx.x == 0)
+            scales[scale_index] = scale;
+        __syncthreads();
+
+        for (long long index = start + threadIdx.x;
+             index < end;
+             index += blockDim.x) {
+            const signed char previous_code = payload[index];
+            const int quantized = bfp8_quantized_code(source[index], scale);
+            payload[index] = static_cast<signed char>(quantized);
+            local_changed_code_count +=
+                previous_code != static_cast<signed char>(quantized);
+            ++local_element_count;
+            const float residual = source[index]
+                - static_cast<float>(quantized) * scale;
+            const float normalized = __fdiv_rn(residual, scale);
+            local_residual_ratio_squared_sum += normalized * normalized;
+        }
+        __syncthreads();
+    }
+
+    __shared__ float residual_reduction[256];
+    __shared__ unsigned long long changed_reduction[256];
+    __shared__ unsigned long long element_reduction[256];
+    residual_reduction[threadIdx.x] =
+        local_residual_ratio_squared_sum;
+    changed_reduction[threadIdx.x] = local_changed_code_count;
+    element_reduction[threadIdx.x] = local_element_count;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            residual_reduction[threadIdx.x] +=
+                residual_reduction[threadIdx.x + stride];
+            changed_reduction[threadIdx.x] +=
+                changed_reduction[threadIdx.x + stride];
+            element_reduction[threadIdx.x] +=
+                element_reduction[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        atomicAdd(
+            &metrics->residual_step_ratio_squared_sum,
+            static_cast<double>(residual_reduction[0]));
+        atomicAdd(&metrics->changed_code_count, changed_reduction[0]);
+        atomicAdd(&metrics->element_count, element_reduction[0]);
     }
 }
 
@@ -1378,6 +1559,102 @@ NNTRAIN_EXPORT int nntrain_cuda_bfp8_quantize_f32(
                 scales,
                 length,
                 quantization_block_size);
+    }
+    return complete(
+        nntrain_operation_bfp8_quantize,
+        device,
+        static_cast<int>(cudaPeekAtLastError()));
+}
+
+NNTRAIN_EXPORT int nntrain_cuda_mix8_diagnostics_reset(
+    int device,
+    void* metrics,
+    void* stream) {
+    if (metrics == nullptr) {
+        return complete(
+            nntrain_operation_memset_async,
+            device,
+            static_cast<int>(cudaErrorInvalidValue));
+    }
+    int status = select_device(device);
+    if (status != cudaSuccess) {
+        return complete(
+            nntrain_operation_memset_async,
+            device,
+            status);
+    }
+    status = static_cast<int>(cudaMemsetAsync(
+        metrics,
+        0,
+        sizeof(nntrain_mix8_diagnostic_accumulator),
+        reinterpret_cast<cudaStream_t>(stream)));
+    return complete(nntrain_operation_memset_async, device, status);
+}
+
+NNTRAIN_EXPORT int nntrain_cuda_bfp8_quantize_f32_diagnostic(
+    int device,
+    const float* source,
+    signed char* payload,
+    float* scales,
+    int length,
+    int quantization_block_size,
+    void* metrics,
+    void* stream) {
+    if (source == nullptr || payload == nullptr || scales == nullptr
+        || metrics == nullptr || length <= 0
+        || quantization_block_size <= 0) {
+        return complete(
+            nntrain_operation_bfp8_quantize,
+            device,
+            static_cast<int>(cudaErrorInvalidValue));
+    }
+    int status = select_device(device);
+    if (status != cudaSuccess) {
+        return complete(
+            nntrain_operation_bfp8_quantize,
+            device,
+            status);
+    }
+    const long long blocks64 =
+        (static_cast<long long>(length) + quantization_block_size - 1)
+        / quantization_block_size;
+    if (blocks64 > 2147483647ll) {
+        return complete(
+            nntrain_operation_bfp8_quantize,
+            device,
+            static_cast<int>(cudaErrorInvalidConfiguration));
+    }
+
+    const int scale_count = static_cast<int>(blocks64);
+    cudaStream_t cuda_stream = reinterpret_cast<cudaStream_t>(stream);
+    auto* accumulator =
+        reinterpret_cast<nntrain_mix8_diagnostic_accumulator*>(metrics);
+    if (quantization_block_size == 32) {
+        constexpr int threads = kBfp8ScaleBlocksPerCta * 32;
+        const int required_ctas =
+            (scale_count + kBfp8ScaleBlocksPerCta - 1)
+            / kBfp8ScaleBlocksPerCta;
+        const int grid = min(required_ctas, kMix8DiagnosticMaximumCtas);
+        bfp8_quantize_f32_diagnostic_warp_blocks_kernel<32><<<
+            grid, threads, 0, cuda_stream>>>(
+                source,
+                payload,
+                scales,
+                length,
+                scale_count,
+                accumulator);
+    }
+    else {
+        const int grid = min(scale_count, kMix8DiagnosticMaximumCtas);
+        bfp8_quantize_f32_diagnostic_kernel<<<
+            grid, 256, 0, cuda_stream>>>(
+                source,
+                payload,
+                scales,
+                length,
+                quantization_block_size,
+                scale_count,
+                accumulator);
     }
     return complete(
         nntrain_operation_bfp8_quantize,

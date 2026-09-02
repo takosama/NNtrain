@@ -313,6 +313,33 @@ internal static class CudaOptimizerNative
             "AdamW multi-tensor update");
     }
 
+    internal static void AdamWMultiTensorMix8Diagnostic(
+        int device,
+        nint chunks,
+        int chunkCount,
+        float beta1,
+        float beta2,
+        float learningRate,
+        float weightDecay,
+        float updateScale,
+        float scaledEpsilon,
+        nint diagnostics)
+    {
+        Select(device);
+        Check(CudaNativeGateway.OptimizerAdamWMultiTensorMix8Diagnostic(
+            device,
+            chunks,
+            chunkCount,
+            beta1,
+            beta2,
+            learningRate,
+            weightDecay,
+            updateScale,
+            scaledEpsilon,
+            diagnostics),
+            "AdamW mix8 multi-tensor update diagnostics");
+    }
+
     internal static void NekoMoments(int device, nint gradient, nint fast,
         nint slow, nint fastHat, nint slowHat, int length, float betaFast,
         float betaSlow, float fastCorrection, float slowCorrection)
@@ -432,6 +459,35 @@ internal static class CudaOptimizerNative
         Check(CudaNativeGateway.OptimizerNekoMuonApply(
             device, data, update, length, learningRate, finalScale,
             weightDecay, applyWeightDecay), "NekoMuon update");
+    }
+
+    internal static void NekoApplyMix8Diagnostic(
+        int device,
+        nint data,
+        nint update,
+        nint currentScales,
+        int blockSize,
+        int length,
+        float learningRate,
+        float finalScale,
+        float weightDecay,
+        bool applyWeightDecay,
+        nint diagnostics)
+    {
+        Select(device);
+        Check(CudaNativeGateway.OptimizerNekoMuonApplyMix8Diagnostic(
+            device,
+            data,
+            update,
+            currentScales,
+            blockSize,
+            length,
+            learningRate,
+            finalScale,
+            weightDecay,
+            applyWeightDecay,
+            diagnostics),
+            "NekoMuon mix8 update diagnostics");
     }
 
     internal static void NekoApplyBFloat16(

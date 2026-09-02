@@ -1,6 +1,7 @@
 namespace NNtrain;
 
-public partial class AdamW : IOptimizer, ILearningRateAdjustable
+public partial class AdamW : IOptimizer, ILearningRateAdjustable,
+    IMix8QuantizationDiagnosticsProvider
 {
     private readonly List<Parameter> _parameters;
     private readonly long _totalElements;
@@ -18,6 +19,8 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
     private readonly Dictionary<int,
         CudaOptimizerKernels.AdamWBfp8DeviceScratch> _cudaBfp8Scratch = [];
     private readonly CudaDispatchPolicy _cudaDispatchPolicy;
+    private CudaMix8QuantizationDiagnostics? _cudaMix8Diagnostics;
+    private int _cudaMix8DiagnosticsDevice = -1;
     private AdamWOptions _options;
     private AdamWParameterState[] _parameterStates;
     private readonly Action<int> _updateWorkItemAction;
@@ -103,6 +106,20 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
             || _options.UseBFloat16SecondMoment
             ? state
             : CloneState(state);
+    }
+
+    public bool TryGetMix8QuantizationDiagnostics(
+        out Mix8QuantizationDiagnostics diagnostics)
+    {
+        CudaMix8QuantizationDiagnostics? accumulator =
+            _cudaMix8Diagnostics;
+        int deviceIndex = _cudaMix8DiagnosticsDevice;
+        if (accumulator is null || deviceIndex < 0)
+        {
+            diagnostics = default;
+            return false;
+        }
+        return accumulator.TryRead(deviceIndex, out diagnostics);
     }
 
     internal AdamWState CaptureStateForStreaming()
@@ -311,6 +328,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
                 "AdamW cannot advance beyond Int32.MaxValue steps.");
         }
 
+        _cudaMix8DiagnosticsDevice = -1;
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
         {
             CudaGradientOptimizerGuard.ValidateAndConsume(
@@ -911,6 +929,10 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable
         {
             (failures ??= []).Add(exception);
         }
+        if (_cudaMix8Diagnostics is IDisposable mix8Diagnostics)
+            TryDisposeCudaResource(mix8Diagnostics, ref failures);
+        _cudaMix8Diagnostics = null;
+        _cudaMix8DiagnosticsDevice = -1;
         _cudaStateAuthorityDevice = null;
         if (failures is not null)
         {

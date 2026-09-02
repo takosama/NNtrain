@@ -203,7 +203,10 @@ public partial class AdamW
             }
         }
 
-        PrepareCudaPlans(devices, CreatePreparedPlanItems());
+        PrepareCudaPlans(
+            devices,
+            CreatePreparedPlanItems(),
+            mix8DiagnosticsDevice: primaryDevice);
     }
 
     private void PrepareCudaBfp8Residency(int[] devices)
@@ -298,16 +301,19 @@ public partial class AdamW
 
     private void PrepareCudaPlans(
         IReadOnlyList<int> devices,
-        IReadOnlyList<CudaOptimizerKernels.AdamWMultiTensorItem> items)
+        IReadOnlyList<CudaOptimizerKernels.AdamWMultiTensorItem> items,
+        int? mix8DiagnosticsDevice = null)
     {
         if (items.Count == 0)
             return;
         foreach (int deviceIndex in devices)
         {
+            bool enableMix8Diagnostics =
+                deviceIndex == mix8DiagnosticsDevice;
             if (_cudaMultiTensorPlans.TryGetValue(
                     deviceIndex,
                     out CudaOptimizerKernels.AdamWMultiTensorPlan? plan)
-                && plan.Matches(items))
+                && plan.Matches(items, enableMix8Diagnostics))
             {
                 continue;
             }
@@ -318,7 +324,8 @@ public partial class AdamW
             }
             plan = new CudaOptimizerKernels.AdamWMultiTensorPlan(
                 deviceIndex,
-                items);
+                items,
+                enableMix8Diagnostics);
             _cudaMultiTensorPlans.Add(deviceIndex, plan);
             _cudaMultiTensorPlanBuildCount++;
         }

@@ -37,6 +37,40 @@ internal static class CudaBfp8Native
             "CUDA BFP8 quantize(float32)");
     }
 
+    internal static void QuantizeFloat32Diagnostic(
+        int deviceIndex,
+        NativeCudaBuffer<float> source,
+        NativeCudaBuffer<sbyte> payload,
+        NativeCudaBuffer<float> scales,
+        Bfp8QuantizationDescriptor descriptor,
+        NativeCudaBuffer<CudaMix8DiagnosticAccumulator> diagnostics,
+        nint stream = 0)
+    {
+        ValidateBuffers(
+            deviceIndex, source, payload, scales, descriptor);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        if (diagnostics.Device.Index != deviceIndex
+            || diagnostics.Length != 1)
+        {
+            throw new ArgumentException(
+                "mix8 diagnostics must be one resident aggregate on the " +
+                "requested CUDA device.",
+                nameof(diagnostics));
+        }
+        RequireCapability(deviceIndex, CudaKernelFeature.Bfp8Quantization);
+        NativeCudaRuntime.Check(
+            CudaNativeGateway.Bfp8QuantizeFloat32Diagnostic(
+                deviceIndex,
+                source.NativePtr,
+                payload.NativePtr,
+                scales.NativePtr,
+                source.Length,
+                descriptor.GetEffectiveBlockSize(source.Length),
+                diagnostics.NativePtr,
+                stream),
+            "CUDA BFP8 quantize(float32) with mix8 diagnostics");
+    }
+
     internal static void DequantizeFloat32(
         int deviceIndex,
         NativeCudaBuffer<sbyte> payload,

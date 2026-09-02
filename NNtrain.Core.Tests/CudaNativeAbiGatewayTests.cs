@@ -100,6 +100,8 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_optimizer_neko_interpolate",
         "nntrain_optimizer_neko_transpose_back",
         "nntrain_optimizer_neko_apply",
+        "nntrain_optimizer_neko_apply_mix8_diagnostic",
+        "nntrain_optimizer_adamw_multi_tensor_mix8_diagnostic_v2",
         "nntrain_optimizer_neko_apply_bf16",
         "nntrain_optimizer_neko_combine",
         "nntrain_optimizer_neko_combine_batched",
@@ -270,6 +272,8 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_cuda_can_access_peer",
         "nntrain_cuda_error_string",
         "nntrain_cuda_bfp8_quantize_f32",
+        "nntrain_cuda_bfp8_quantize_f32_diagnostic",
+        "nntrain_cuda_mix8_diagnostics_reset",
         "nntrain_cuda_bfp8_dequantize_f32",
         "nntrain_cuda_bfp8_dequantize_bf16",
         "nntrain_cuda_bfp8_quantize_bf16",
@@ -541,6 +545,7 @@ public sealed class CudaNativeAbiGatewayTests
             CudaAbiVersion.DirectBfp8LayerNormBlock32x512Minor);
         Assert.Equal(28, CudaAbiVersion.DirectBfp8AttentionOutputMinor);
         Assert.Equal(29, CudaAbiVersion.OrdinaryMuonNesterovMinor);
+        Assert.Equal(30, CudaAbiVersion.Mix8DiagnosticsMinor);
         Assert.False(CudaTensorNative.SupportsDirectBfp8FfnGradientAbi(
             new CudaAbiVersion(1, 25)));
         Assert.True(CudaTensorNative.SupportsDirectBfp8FfnGradientAbi(
@@ -756,6 +761,17 @@ public sealed class CudaNativeAbiGatewayTests
             if (inputHost != 0)
                 _ = CudaNativeGateway.HostFree(inputHost);
         }
+    }
+
+    [Fact]
+    public void Mix8DiagnosticLayoutsMatchNativeAbi()
+    {
+        Assert.Equal(
+            32,
+            Marshal.SizeOf<CudaMix8DiagnosticAccumulator>());
+        Assert.Equal(
+            80,
+            Marshal.SizeOf<CudaAdamWMix8DiagnosticChunkDescriptor>());
     }
 
     [Fact]
