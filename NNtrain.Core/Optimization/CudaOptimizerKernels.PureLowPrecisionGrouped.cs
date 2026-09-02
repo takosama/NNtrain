@@ -36,7 +36,8 @@ internal static partial class CudaOptimizerKernels
             float coefficientB,
             float coefficientC,
             float learningRate,
-            float weightDecay)
+            float weightDecay,
+            bool nesterov = false)
     {
         ArgumentNullException.ThrowIfNull(items);
         if (items.Count == 0)
@@ -88,7 +89,8 @@ internal static partial class CudaOptimizerKernels
                             weightDecay,
                             item.ApplyWeightDecay,
                             deviceOnlyFixedFive: true,
-                            forceFullNewtonSchulz: false);
+                            forceFullNewtonSchulz: false,
+                            nesterov: nesterov);
                     }
                     continue;
                 }
@@ -99,13 +101,14 @@ internal static partial class CudaOptimizerKernels
                     grouped.AsSpan(offset, count),
                     scratch,
                     finiteStatus,
-                    1f / fastCorrection,
+                    nesterov ? 1f : 1f / fastCorrection,
                     epsilon,
                     coefficientA,
                     coefficientB,
                     coefficientC,
                     learningRate,
-                    weightDecay);
+                    weightDecay,
+                    nesterov);
             }
         }
     }
@@ -122,7 +125,8 @@ internal static partial class CudaOptimizerKernels
         float coefficientB,
         float coefficientC,
         float learningRate,
-        float weightDecay)
+        float weightDecay,
+        bool nesterov)
     {
         int count = items.Length;
         int rows = Math.Min(
@@ -141,7 +145,7 @@ internal static partial class CudaOptimizerKernels
                 item.State.GetOrCreate(deviceIndex);
             CudaOptimizerNative.NekoInitializeBFloat16FromDeviceStats(
                 deviceIndex,
-                buffers.Fast.NativePtr,
+                (nesterov ? buffers.Slow : buffers.Fast).NativePtr,
                 AddFloatOffset(scratch.X.NativePtr, slot * length),
                 length,
                 item.OriginalRows,
@@ -218,7 +222,8 @@ internal static partial class CudaOptimizerKernels
         float coefficientB,
         float coefficientC,
         float learningRate,
-        float weightDecay)
+        float weightDecay,
+        bool nesterov = false)
     {
         ArgumentNullException.ThrowIfNull(items);
         if (items.Count == 0)
@@ -270,7 +275,8 @@ internal static partial class CudaOptimizerKernels
                             item.ApplyWeightDecay,
                             deviceOnlyFixedFive: true,
                             mixedBlockState: false,
-                            forceFullNewtonSchulz: false);
+                            forceFullNewtonSchulz: false,
+                            nesterov: nesterov);
                     }
                     continue;
                 }
@@ -281,13 +287,14 @@ internal static partial class CudaOptimizerKernels
                     grouped.AsSpan(offset, count),
                     scratch,
                     finiteStatus,
-                    1f / fastCorrection,
+                    nesterov ? 1f : 1f / fastCorrection,
                     epsilon,
                     coefficientA,
                     coefficientB,
                     coefficientC,
                     learningRate,
-                    weightDecay);
+                    weightDecay,
+                    nesterov);
             }
         }
     }
@@ -304,7 +311,8 @@ internal static partial class CudaOptimizerKernels
         float coefficientB,
         float coefficientC,
         float learningRate,
-        float weightDecay)
+        float weightDecay,
+        bool nesterov)
     {
         int count = items.Length;
         int rows = Math.Min(
@@ -327,7 +335,7 @@ internal static partial class CudaOptimizerKernels
                 slot * length);
             DequantizeBfp8ToPointer(
                 deviceIndex,
-                buffers.Fast,
+                nesterov ? buffers.Slow : buffers.Fast,
                 decodedFast,
                 length,
                 stream);

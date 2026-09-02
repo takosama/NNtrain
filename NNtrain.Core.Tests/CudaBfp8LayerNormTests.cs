@@ -76,6 +76,8 @@ public sealed class CudaBfp8LayerNormTests
     [InlineData(128, 0.25, true, 512)]
     [InlineData(32, 0.25, false, 384)]
     [InlineData(32, 0.20, true, 384)]
+    [InlineData(32, 0.25, false, 512)]
+    [InlineData(32, 0.20, true, 512)]
     public void ResidentResidualDropoutLayerNormPreservesDropoutAndParentSemantics(
         int blockSize,
         double probabilityValue,
@@ -221,15 +223,17 @@ public sealed class CudaBfp8LayerNormTests
         });
     }
 
-    [Fact]
-    public void Block32x384GraphResidualDropoutLayerNormIsFiniteAndResident()
+    [Theory]
+    [InlineData(384)]
+    [InlineData(512)]
+    public void Block32GraphResidualDropoutLayerNormIsFiniteAndResident(
+        int columns)
     {
         if (!Tensor.IsCudaAvailable())
             return;
 
         const int rows = 3;
-        const int columns = 384;
-        const int length = rows * columns;
+        int length = rows * columns;
         Bfp8QuantizationDescriptor descriptor =
             Bfp8QuantizationDescriptor.Block(32);
 

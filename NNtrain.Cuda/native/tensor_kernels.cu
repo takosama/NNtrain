@@ -3,6 +3,7 @@
 #include <cub/block/block_radix_sort.cuh>
 #include <cfloat>
 #include <cmath>
+#include <cstdlib>
 
 #if defined(_WIN32)
 #define NNTRAIN_EXPORT extern "C" __declspec(dllexport)
@@ -19,6 +20,15 @@ extern "C" int nntrain_cuda_set_device(int device);
 namespace {
 constexpr int kThreads = 256;
 thread_local cudaStream_t g_stream = nullptr;
+
+// Process-scoped diagnostic gate for reproducible same-DLL A/B benchmarks.
+// Read once while the module initializes; production kernel launches do not
+// inspect the environment.
+const bool g_linear_bias_block_reduction_enabled = []() {
+    const char* value = std::getenv(
+        "NNTRAIN_DISABLE_LINEAR_BIAS_BLOCK_REDUCTION");
+    return value == nullptr || value[0] != '1' || value[1] != '\0';
+}();
 
 int blocks_for(int length) {
     return (length + kThreads - 1) / kThreads;
@@ -852,6 +862,45 @@ __global__ void linear_bias_backward_kernel(const T* output_gradient,
     for (int row = 0; row < rows; ++row)
         sum += load(output_gradient, row * width + column);
     bias_gradient[column] += sum;
+}
+
+// A linear bias gradient reduces every row into one output column. Assigning
+// one thread to a column leaves production FFN shapes (width 512) with only
+// two resident blocks while each thread serially walks 16K rows. Instead,
+// eight warps cooperatively reduce 32 adjacent columns. A block exclusively
+// owns its column tile, so the final accumulation remains deterministic and
+// requires no atomics or temporary global workspace.
+template <typename T>
+__global__ void linear_bias_backward_block_kernel(
+    const T* output_gradient,
+    float* bias_gradient,
+    int rows,
+    int width) {
+    constexpr int kColumnsPerBlock = 32;
+    constexpr int kWarpsPerBlock = kThreads / kColumnsPerBlock;
+    __shared__ float partial[kWarpsPerBlock][kColumnsPerBlock];
+
+    const int lane = threadIdx.x & (kColumnsPerBlock - 1);
+    const int warp = threadIdx.x / kColumnsPerBlock;
+    const int column = blockIdx.x * kColumnsPerBlock + lane;
+    float sum = 0.f;
+    if (column < width) {
+        for (int row = warp; row < rows; row += kWarpsPerBlock)
+            sum += load(output_gradient, row * width + column);
+    }
+    partial[warp][lane] = sum;
+    __syncthreads();
+
+    if (warp == 0 && column < width) {
+        float total = partial[0][lane];
+#pragma unroll
+        for (int source_warp = 1;
+             source_warp < kWarpsPerBlock;
+             ++source_warp) {
+            total += partial[source_warp][lane];
+        }
+        bias_gradient[column] += total;
+    }
 }
 
 __global__ void scale_kernel(float* values, int length, float scale) {
@@ -2716,15 +2765,34 @@ nntrain_tensor_linear_mask_bfp8_relu_bf16_gradient_in_place(
 
 NNTRAIN_EXPORT int nntrain_tensor_linear_bias_backward_float(
     const float* output_gradient, float* bias_gradient, int rows, int width) {
-    NNTRAIN_LAUNCH_1D(linear_bias_backward_kernel<float>, width,
-        output_gradient, bias_gradient, rows, width);
+    // Preserve the lower-overhead serial-column kernel for tiny matrices.
+    // Production transformer shards have thousands of rows and use the
+    // occupancy-rich block reduction.
+    if (!g_linear_bias_block_reduction_enabled || rows < kThreads) {
+        NNTRAIN_LAUNCH_1D(linear_bias_backward_kernel<float>, width,
+            output_gradient, bias_gradient, rows, width);
+    }
+    constexpr int kColumnsPerBlock = 32;
+    linear_bias_backward_block_kernel<float>
+        <<<(width + kColumnsPerBlock - 1) / kColumnsPerBlock,
+            kThreads, 0, g_stream>>>(
+            output_gradient, bias_gradient, rows, width);
+    return launch_status();
 }
 
 NNTRAIN_EXPORT int nntrain_tensor_linear_bias_backward_bf16(
     const unsigned short* output_gradient, float* bias_gradient, int rows,
     int width) {
-    NNTRAIN_LAUNCH_1D(linear_bias_backward_kernel<unsigned short>, width,
-        output_gradient, bias_gradient, rows, width);
+    if (!g_linear_bias_block_reduction_enabled || rows < kThreads) {
+        NNTRAIN_LAUNCH_1D(linear_bias_backward_kernel<unsigned short>, width,
+            output_gradient, bias_gradient, rows, width);
+    }
+    constexpr int kColumnsPerBlock = 32;
+    linear_bias_backward_block_kernel<unsigned short>
+        <<<(width + kColumnsPerBlock - 1) / kColumnsPerBlock,
+            kThreads, 0, g_stream>>>(
+            output_gradient, bias_gradient, rows, width);
+    return launch_status();
 }
 
 NNTRAIN_EXPORT int nntrain_tensor_scale(float* values, int length,

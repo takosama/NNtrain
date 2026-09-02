@@ -831,6 +831,51 @@ __global__ void attention_row_delta_bf16(
     }
 }
 
+// The mix8_32 attention output is already authoritative in block-scaled BFP8
+// storage. Backward needs it only for row_delta = dot(dO, O); decoding the
+// complete activation to a temporary BF16 buffer just for this reduction
+// wastes one read, one write, and one later read of the full tensor. Decode
+// each element in the owning row reduction instead.
+__global__ void attention_row_delta_bfp8(
+    const signed char* __restrict__ output_payload,
+    const float* __restrict__ output_scales,
+    int output_block_size,
+    const float* __restrict__ output_gradient,
+    float* __restrict__ row_delta,
+    int sequence,
+    int model_width,
+    int heads) {
+    const int batch_head_query = blockIdx.x;
+    const int query = batch_head_query % sequence;
+    const int batch_head = batch_head_query / sequence;
+    const int head = batch_head % heads;
+    const int batch_index = batch_head / heads;
+    const int head_width = model_width / heads;
+    const int offset = (batch_index * sequence + query) * model_width
+        + head * head_width;
+    float partial = 0.f;
+    for (int column = threadIdx.x; column < head_width;
+         column += blockDim.x) {
+        const int index = offset + column;
+        // Preserve the former BFP8 -> BF16 -> FP32 operand exactly; avoiding
+        // the temporary buffer must not silently increase row-delta precision.
+        const float decoded = __bfloat162float(__float2bfloat16_rn(
+            static_cast<float>(output_payload[index])
+                * output_scales[index / output_block_size]));
+        partial = fmaf(output_gradient[index], decoded, partial);
+    }
+    if (blockDim.x == kWarpSize) {
+        partial = warp_sum(partial);
+        if (threadIdx.x == 0)
+            row_delta[batch_head_query] = partial;
+    }
+    else {
+        partial = block_sum(partial);
+        if (threadIdx.x == 0)
+            row_delta[batch_head_query] = partial;
+    }
+}
+
 __global__ void attention_incremental_bf16(
     const __nv_bfloat16* __restrict__ qkv,
     __nv_bfloat16* __restrict__ key_cache,
@@ -1586,9 +1631,11 @@ int launch_backward_tensor_core_bf16(
     int causal,
     bool parallel_dkv,
     bool async_load,
+    bool row_delta_precomputed,
     cudaStream_t stream) {
     const int head_width = heads > 0 ? model_width / heads : 0;
-    if (!qkv || !output || !output_gradient || !log_sum_exp || !row_delta
+    if (!qkv || (!output && !row_delta_precomputed)
+        || !output_gradient || !log_sum_exp || !row_delta
         || !qkv_gradient || batch <= 0 || sequence <= 0 || heads <= 0
         || model_width % heads || head_width <= 0
         || head_width > kAttentionTensorCoreMaxHead) {
@@ -1601,7 +1648,8 @@ int launch_backward_tensor_core_bf16(
         && (head_width & 1) == 0;
     constexpr bool bf16_output_gradient =
         std::is_same_v<output_gradient_t, __nv_bfloat16>;
-    if (!(bf16_output_gradient && head_width <= 32)) {
+    if (!row_delta_precomputed
+        && !(bf16_output_gradient && head_width <= 32)) {
         const int row_delta_threads = head_width <= kWarpSize
             ? kWarpSize
             : 128;
@@ -2049,10 +2097,10 @@ __device__ __forceinline__ float layer_norm_warp_max(float value) {
     return __shfl_sync(0xffffffffu, value, 0);
 }
 
-// Direct fused BFP8 LayerNorm specializes the two production layouts instead
-// of performing runtime integer division in the hot loop: legacy width 512 /
-// block 128 and compact width 384 / block 32. Both layouts align every row to
-// a scale boundary. Reading the payloads directly removes five whole-tensor
+// Direct fused BFP8 LayerNorm specializes the production layouts instead of
+// performing runtime integer division in the hot loop: width 512 with block
+// 128 or 32, and compact width 384 with block 32. Every layout aligns each row
+// to a scale boundary. Reading the payloads directly removes five whole-tensor
 // codec passes and all temporary BF16 operands while retaining FP32 row
 // statistics and reductions.
 template <int Columns, int ScaleBlockSize, bool GraphDropout = false>
@@ -2605,6 +2653,15 @@ int launch_residual_dropout_layer_norm_forward_bfp8_block128_512(
             seed, drop_threshold, dropout_scale, step_counter,
             operation_seed, stream);
     }
+    if (columns == 512 && block_size == 32) {
+        return launch_residual_dropout_layer_norm_forward_bfp8_direct_impl<
+            512, 32, GraphDropout>(
+            residual_payload, residual_scales, branch_payload, branch_scales,
+            gamma_payload, gamma_scales, beta_payload, beta_scales,
+            output_payload, output_scales, means, inverses, rows, epsilon,
+            seed, drop_threshold, dropout_scale, step_counter,
+            operation_seed, stream);
+    }
     if (columns == 384 && block_size == 32) {
         return launch_residual_dropout_layer_norm_forward_bfp8_direct_impl<
             384, 32, GraphDropout>(
@@ -2717,6 +2774,17 @@ int launch_residual_dropout_layer_norm_backward_bfp8_block128_512(
     if (columns == 512 && block_size == 128) {
         return launch_residual_dropout_layer_norm_backward_bfp8_direct_impl<
             512, 128, GraphDropout>(
+            residual_payload, residual_scales, branch_payload, branch_scales,
+            gamma_payload, gamma_scales, means, inverses, output_gradient,
+            residual_gradient, branch_gradient,
+            gamma_gradient, beta_gradient, parameter_partials,
+            rows, same_parent, seed,
+            drop_threshold, dropout_scale, step_counter, operation_seed,
+            stream);
+    }
+    if (columns == 512 && block_size == 32) {
+        return launch_residual_dropout_layer_norm_backward_bfp8_direct_impl<
+            512, 32, GraphDropout>(
             residual_payload, residual_scales, branch_payload, branch_scales,
             gamma_payload, gamma_scales, means, inverses, output_gradient,
             residual_gradient, branch_gradient,
@@ -3202,7 +3270,7 @@ NNTRAIN_EXPORT int nntrain_flash_attention_backward_bf16_tensor_core(
     return launch_backward_tensor_core_bf16(
         qkv, output, output_gradient, log_sum_exp, row_delta,
         qkv_gradient, batch, sequence, model_width, heads, causal,
-        false, true, stream);
+        false, true, false, stream);
 }
 
 NNTRAIN_EXPORT int
@@ -3214,7 +3282,45 @@ nntrain_flash_attention_backward_bf16_tensor_core_parallel_dkv(
     return launch_backward_tensor_core_bf16(
         qkv, output, output_gradient, log_sum_exp, row_delta,
         qkv_gradient, batch, sequence, model_width, heads, causal,
-        true, true, stream);
+        true, true, false, stream);
+}
+
+NNTRAIN_EXPORT int
+nntrain_flash_attention_backward_bf16_tensor_core_parallel_dkv_bfp8_output(
+    const __nv_bfloat16* qkv,
+    const signed char* output_payload,
+    const float* output_scales,
+    int output_block_size,
+    const float* output_gradient,
+    const float* log_sum_exp,
+    float* row_delta,
+    float* qkv_gradient,
+    int batch,
+    int sequence,
+    int model_width,
+    int heads,
+    int causal,
+    cudaStream_t stream) {
+    const int head_width = heads > 0 ? model_width / heads : 0;
+    if (!output_payload || !output_scales || output_block_size <= 0
+        || !output_gradient || !row_delta || batch <= 0 || sequence <= 0
+        || heads <= 0 || model_width % heads || head_width <= 0) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+    const int row_delta_threads = head_width <= kWarpSize
+        ? kWarpSize
+        : 128;
+    attention_row_delta_bfp8<<<
+        batch * heads * sequence, row_delta_threads, 0, stream>>>(
+            output_payload, output_scales, output_block_size,
+            output_gradient, row_delta, sequence, model_width, heads);
+    cudaError_t status = cudaPeekAtLastError();
+    if (status != cudaSuccess)
+        return static_cast<int>(status);
+    return launch_backward_tensor_core_bf16(
+        qkv, nullptr, output_gradient, log_sum_exp, row_delta,
+        qkv_gradient, batch, sequence, model_width, heads, causal,
+        true, true, true, stream);
 }
 
 NNTRAIN_EXPORT int
@@ -3227,7 +3333,7 @@ nntrain_flash_attention_backward_bf16_tensor_core_bf16_gradient(
     return launch_backward_tensor_core_bf16(
         qkv, output, output_gradient, log_sum_exp, row_delta,
         qkv_gradient, batch, sequence, model_width, heads, causal,
-        true, true, stream);
+        true, true, false, stream);
 }
 
 NNTRAIN_EXPORT int
@@ -3240,7 +3346,7 @@ nntrain_flash_attention_backward_bf16_tensor_core_bf16_io_gradient(
     return launch_backward_tensor_core_bf16(
         qkv, output, output_gradient, log_sum_exp, row_delta,
         qkv_gradient, batch, sequence, model_width, heads, causal,
-        true, true, stream);
+        true, true, false, stream);
 }
 
 NNTRAIN_EXPORT int
@@ -3253,7 +3359,7 @@ nntrain_flash_attention_backward_bf16_tensor_core_bf16_io_gradient_sync(
     return launch_backward_tensor_core_bf16(
         qkv, output, output_gradient, log_sum_exp, row_delta,
         qkv_gradient, batch, sequence, model_width, heads, causal,
-        true, false, stream);
+        true, false, false, stream);
 }
 
 NNTRAIN_EXPORT int nntrain_flash_attention_incremental_bf16(

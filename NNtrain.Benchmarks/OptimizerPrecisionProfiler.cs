@@ -11,7 +11,7 @@ namespace NNtrain.Benchmarks;
 internal static class OptimizerPrecisionProfiler
 {
     private static readonly string[] OptimizerNames =
-        ["adamw", "nekomuon", "lion", "gainshareadamw"];
+        ["adamw", "nekomuon", "muon", "lion", "gainshareadamw"];
 
     private static readonly TensorPrecisionMode[] PrecisionModes =
     [
@@ -308,6 +308,7 @@ internal static class OptimizerPrecisionProfiler
                         NekoMuonNewtonSchulzDepthMode.Fixed,
                     NewtonSchulzDepth = 5f,
                 }),
+            "muon" => CreateMuon(parameters),
             "lion" => new Lion(
                 parameters,
                 new LionOptions
@@ -333,6 +334,17 @@ internal static class OptimizerPrecisionProfiler
                 }),
             _ => throw new ArgumentOutOfRangeException(nameof(name)),
         };
+
+    private static IOptimizer CreateMuon(Parameter[] parameters)
+    {
+        var optimizer = new NekoMuon(parameters, new NekoMuonOptions
+        {
+            LearningRate = 3e-4f,
+            WeightDecay = 0.01f,
+        });
+        optimizer.SetOrdinaryMuonPolicy();
+        return optimizer;
+    }
 
     private static IEnumerable<IEnumerable<Parameter>> CreateGroups(
         Parameter[] parameters)

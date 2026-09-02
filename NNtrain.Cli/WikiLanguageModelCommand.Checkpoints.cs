@@ -365,6 +365,10 @@ internal static partial class WikiLanguageModelCommand
                 output);
         if (optimizerRestored)
         {
+            ApplyOrdinaryMuonPolicyAfterResume(
+                config,
+                optimizer,
+                output);
             ApplyNekoMuonNewtonSchulzDepthPolicyOverride(
                 config,
                 optimizer,
@@ -409,6 +413,42 @@ internal static partial class WikiLanguageModelCommand
             hasPartialEpoch ? checkpoint.CompletedDocumentsInEpoch : 0,
             hasPartialEpoch ? checkpoint.CurrentTokenBuffer ?? [] : [],
             checkpoint.AdaptiveCudaShardState);
+    }
+
+    internal static void ApplyOrdinaryMuonPolicyAfterResume(
+        WikiTrainingConfiguration config,
+        IOptimizer optimizer,
+        TextWriter output)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(optimizer);
+        ArgumentNullException.ThrowIfNull(output);
+        if (!config.IsOptimizer(WikiTrainingConfiguration.MuonOptimizer))
+            return;
+
+        int applied = 0;
+        foreach (NekoMuon muon in OptimizerBundle
+            .GetCheckpointLeafOptimizers(optimizer)
+            .OfType<NekoMuon>())
+        {
+            // State restoration also restores the historical NekoMuon
+            // options. Reasserting the ordinary-Muon contract here prevents
+            // an old checkpoint from silently changing momentum or NS
+            // cadence while preserving its accumulated fast moment and step.
+            muon.SetOrdinaryMuonPolicy();
+            applied++;
+        }
+
+        if (applied == 0)
+        {
+            throw new InvalidDataException(
+                "Muon was configured, but the restored optimizer has no " +
+                "compatible matrix-optimizer state.");
+        }
+
+        output.WriteLine(
+            "resume Muon policy = momentum 0.95, Nesterov, " +
+            "fixed NS5 every step (runtime override)");
     }
 
     internal static void ApplyNekoMuonNewtonSchulzDepthPolicyOverride(

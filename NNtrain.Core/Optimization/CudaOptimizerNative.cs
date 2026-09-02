@@ -177,10 +177,17 @@ internal static class CudaOptimizerNative
         float betaFast,
         float betaSlow,
         nint finiteStatus,
-        nint stream)
+        nint stream,
+        bool nesterov = false)
     {
         Select(device);
-        Check(CudaNativeGateway.NekoMuonBlockBfp8Moments(
+        int status = nesterov
+            ? CudaNativeGateway.MuonBlockBfp8Moments(
+                device, gradient, fast.Payload.NativePtr,
+                fast.Scales.NativePtr, slow.Payload.NativePtr,
+                slow.Scales.NativePtr, fastRoundtrip, slowRoundtrip,
+                length, betaFast, finiteStatus, stream)
+            : CudaNativeGateway.NekoMuonBlockBfp8Moments(
             device,
             gradient,
             fast.Payload.NativePtr,
@@ -193,7 +200,10 @@ internal static class CudaOptimizerNative
             betaFast,
             betaSlow,
             finiteStatus,
-            stream), "fused block-BFP8 NekoMuon moment update");
+            stream);
+        Check(status, nesterov
+            ? "fused block-BFP8 Muon momentum update"
+            : "fused block-BFP8 NekoMuon moment update");
     }
 
     internal static void AdamWAndPublish(int device, nint data, nint gradient,

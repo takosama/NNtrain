@@ -140,7 +140,8 @@ public sealed partial class NekoMuon
                     slowCorrection,
                     options.Epsilon,
                     options.Rho,
-                    deviceOnlyFixedFive);
+                    deviceOnlyFixedFive,
+                    options.Nesterov);
             }
         });
 
@@ -200,7 +201,8 @@ public sealed partial class NekoMuon
                         NewtonSchulzB,
                         NewtonSchulzC,
                         options.LearningRate,
-                        options.WeightDecay);
+                        options.WeightDecay,
+                        options.Nesterov);
                 return;
             }
             for (int parameterIndex = 0;

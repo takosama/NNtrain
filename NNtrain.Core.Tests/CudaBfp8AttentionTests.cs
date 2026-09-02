@@ -150,6 +150,50 @@ public sealed class CudaBfp8AttentionTests
     }
 
     [Fact]
+    public void DirectBlock32OutputBackwardMatchesDecodedBf16Fallback()
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        const int batch = 2;
+        const int sequence = 9;
+        const int heads = 2;
+        const int headWidth = 32;
+        const int modelWidth = heads * headWidth;
+        int[] shape = [batch, sequence, 3 * modelWidth];
+        float[] source = Values(
+            batch * sequence * 3 * modelWidth, 211, 0.07f);
+        float[] seed = Values(
+            batch * sequence * modelWidth, 223, 0.029f);
+
+        WithCuda(() =>
+        {
+            AttentionRun direct;
+            using (CudaDispatchPolicy.Push(CudaDispatchPolicy.Defaults))
+            {
+                direct = CudaRun(
+                    source, shape, heads, seed,
+                    Bfp8QuantizationDescriptor.Block(32));
+            }
+
+            AttentionRun fallback;
+            using (CudaDispatchPolicy.Push(
+                CudaDispatchPolicy.Defaults with
+                {
+                    DisableDirectBfp8AttentionOutput = true,
+                }))
+            {
+                fallback = CudaRun(
+                    source, shape, heads, seed,
+                    Bfp8QuantizationDescriptor.Block(32));
+            }
+
+            AssertClose(fallback.Output, direct.Output, 1e-6f);
+            AssertClose(fallback.Gradient, direct.Gradient, 1e-6f);
+        });
+    }
+
+    [Fact]
     public void RepeatedNoGradAttentionReleasesEveryTransientCudaAllocation()
     {
         if (!Tensor.IsCudaAvailable())
@@ -220,6 +264,24 @@ public sealed class CudaBfp8AttentionTests
         {
             Tensor.ExecutionDevice = previous;
         }
+    }
+
+    private static AttentionRun CudaRun(
+        float[] values,
+        int[] shape,
+        int heads,
+        float[] seed,
+        Bfp8QuantizationDescriptor descriptor)
+    {
+        Tensor input = Tensor.FromBfp8(values, shape, descriptor);
+        input.to(new TorchDevice(TensorDevice.Cuda, 0));
+        Tensor output = input.FusedMultiHeadAttention(heads, causal: true);
+        float[] outputValues = output.Data.ToArray();
+        output.BackwardAndRelease(seed);
+        float[] gradient = input.Grad.ToArray();
+        output.InvalidateCudaBuffers();
+        input.InvalidateCudaBuffers();
+        return new AttentionRun(outputValues, gradient);
     }
 
     private static float[] Values(int length, int offset, float scale)

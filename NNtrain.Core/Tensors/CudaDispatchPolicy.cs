@@ -35,6 +35,8 @@ internal sealed record CudaDispatchPolicy
     internal bool EnableLayerNormOneScan512 { get; init; }
     internal bool DisableDirectLinearBFloat16Gradient { get; init; }
     internal bool DisableDirectBfp8FfnGradient { get; init; }
+    internal bool DisableDirectBfp8LayerNormBlock32x512 { get; init; }
+    internal bool DisableDirectBfp8AttentionOutput { get; init; }
     internal bool ThrowAfterDirectBfp8FfnGradientAllocationsForTest
         { get; init; }
     internal bool DisableKvCache { get; init; }
@@ -167,6 +169,12 @@ internal sealed record CudaDispatchPolicy
             DisableDirectBfp8FfnGradient = ReadFlag(
                 readEnvironment,
                 "NNTRAIN_DISABLE_DIRECT_BFP8_FFN_GRADIENT"),
+            DisableDirectBfp8LayerNormBlock32x512 = ReadFlag(
+                readEnvironment,
+                "NNTRAIN_DISABLE_DIRECT_BFP8_LAYERNORM_BLOCK32X512"),
+            DisableDirectBfp8AttentionOutput = ReadFlag(
+                readEnvironment,
+                "NNTRAIN_DISABLE_DIRECT_BFP8_ATTENTION_OUTPUT"),
             DisableKvCache = ReadFlag(
                 readEnvironment,
                 "NNTRAIN_DISABLE_KV_CACHE"),

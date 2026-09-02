@@ -317,6 +317,64 @@ internal static class CudaFlashAttention
                 $"BF16 FlashAttention backward CUDA error {status}.");
     }
 
+    internal static bool TryBackwardBFloat16Bfp8Output(
+        NativeCudaDevice accelerator,
+        NativeCudaBuffer<ushort> projected,
+        CudaBfp8BufferView output,
+        NativeCudaBuffer<float> outputGradient,
+        NativeCudaBuffer<float> softmaxLogSumExp,
+        NativeCudaBuffer<float> rowDelta,
+        NativeCudaBuffer<float> projectedGradient,
+        int batch,
+        int sequence,
+        int modelWidth,
+        int heads,
+        bool causal,
+        bool tensorCore)
+    {
+        CudaDispatchPolicy dispatch = CudaDispatchPolicy.Current;
+        int outputBlockSize = output.Descriptor.GetEffectiveBlockSize(
+            output.Payload.Length);
+        if (!tensorCore
+            || dispatch.DisableDirectBfp8AttentionOutput
+            || dispatch.DisableParallelAttentionDkv
+            || dispatch.DisableAsyncAttentionBackward
+            || modelWidth / heads != 32
+            || output.Descriptor.Granularity != Bfp8ScaleGranularity.Block
+            || outputBlockSize != 32
+            || CudaNativeGateway.AbiVersion.Minor
+                < CudaAbiVersion.DirectBfp8AttentionOutputMinor)
+        {
+            return false;
+        }
+
+        accelerator.Bind();
+        int status = CudaNativeGateway
+            .FlashAttentionBackwardBFloat16TensorCoreParallelDkvBfp8Output(
+                accelerator.Index,
+                projected.NativePtr,
+                output.Payload.NativePtr,
+                output.Scales.NativePtr,
+                outputBlockSize,
+                outputGradient.NativePtr,
+                softmaxLogSumExp.NativePtr,
+                rowDelta.NativePtr,
+                projectedGradient.NativePtr,
+                batch,
+                sequence,
+                modelWidth,
+                heads,
+                causal ? 1 : 0,
+                accelerator.DefaultStream);
+        if (status != 0)
+        {
+            throw new InvalidOperationException(
+                $"Direct BFP8-output FlashAttention backward CUDA error " +
+                $"{status}.");
+        }
+        return true;
+    }
+
     internal static void IncrementalBFloat16(
         NativeCudaDevice accelerator,
         NativeCudaBuffer<ushort> projected,

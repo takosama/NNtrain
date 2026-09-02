@@ -527,7 +527,7 @@ internal static partial class WikiLanguageModelCommand
                             totalTrainingSteps == 0
                                 ? 0d
                                 : (double)globalStep / totalTrainingSteps) +
-                        FormatOptimizerDiagnostics(optimizer));
+                        FormatOptimizerDiagnostics(optimizer, config));
                 }
                 if (!epochEnd)
                 {
@@ -935,7 +935,7 @@ internal static partial class WikiLanguageModelCommand
                             ? $", gpu batches = " +
                                 string.Join('/', shardBatches)
                             : string.Empty) +
-                        FormatOptimizerDiagnostics(optimizer));
+                        FormatOptimizerDiagnostics(optimizer, config));
                 }
                 ProductionTrainingSessionFactory
                     .EnsureCanPublishCheckpoint(

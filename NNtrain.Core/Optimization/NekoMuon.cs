@@ -264,6 +264,46 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
         _state = _state with { Options = options };
     }
 
+    /// <summary>
+    /// Reconfigures this optimizer to the ordinary Muon policy while
+    /// preserving its current step, moments, confidence, and
+    /// learning-rate/decay settings.
+    /// </summary>
+    /// <param name="momentum">
+    /// Exponential momentum coefficient in the half-open interval [0, 1).
+    /// </param>
+    /// <param name="nesterov">
+    /// When true, orthogonalizes beta * m_t + (1 - beta) * g_t. When false,
+    /// orthogonalizes the momentum buffer directly.
+    /// </param>
+    public void SetOrdinaryMuonPolicy(
+        float momentum = 0.95f,
+        bool nesterov = true)
+    {
+        if (!float.IsFinite(momentum) || momentum < 0f || momentum >= 1f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(momentum),
+                momentum,
+                "Muon momentum must be finite and in [0, 1).");
+        }
+
+        NekoMuonOptions options = _state.Options with
+        {
+            BetaFast = momentum,
+            BetaSlow = momentum,
+            Nesterov = nesterov,
+            Rho = 0f,
+            MaxNewtonSchulzSteps = 5,
+            NewtonSchulzInterval = 1,
+            NewtonSchulzDepthMode =
+                NekoMuonNewtonSchulzDepthMode.Fixed,
+            NewtonSchulzDepth = 5f,
+        };
+        ValidateOptions(options, nameof(momentum));
+        _state = _state with { Options = options };
+    }
+
     public void RestoreState(NekoMuonState state)
         => RestoreState(state, takeOwnership: false);
 
@@ -702,7 +742,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                             fastCorrection,
                             slowCorrection,
                             options.Epsilon,
-                            options.Rho);
+                            options.Rho,
+                            options.Nesterov);
                     }
                     else if (deviceOnlyFixedFive)
                     {
@@ -717,7 +758,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                                 fastCorrection,
                                 slowCorrection,
                                 options.Epsilon,
-                                options.Rho);
+                                options.Rho,
+                                options.Nesterov);
                     }
                     else
                     {
@@ -728,7 +770,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                             options.BetaFast,
                             options.BetaSlow,
                             fastCorrection,
-                            slowCorrection);
+                            slowCorrection,
+                            options.Nesterov);
                     }
                 }
             }
@@ -832,7 +875,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                             NewtonSchulzC,
                             options.LearningRate,
                             options.WeightDecay,
-                            publishMix8: mix8);
+                            publishMix8: mix8,
+                            nesterov: options.Nesterov);
                     return;
                 }
                 var batchItems = new CudaOptimizerKernels
@@ -1095,7 +1139,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                     slowCorrection,
                     options.Epsilon,
                     options.Rho,
-                    mixedBlockState);
+                    mixedBlockState,
+                    options.Nesterov);
             }
         });
 
@@ -1166,7 +1211,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                         NewtonSchulzB,
                         NewtonSchulzC,
                         options.LearningRate,
-                        options.WeightDecay);
+                        options.WeightDecay,
+                        options.Nesterov);
                 return;
             }
             for (int parameterIndex = 0;
@@ -1208,7 +1254,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable
                         applyWeightDecay,
                         deviceOnlyFixedFive,
                         mixedBlockState,
-                        ForceFullNewtonSchulz);
+                        ForceFullNewtonSchulz,
+                        options.Nesterov);
             }
         });
 

@@ -533,7 +533,19 @@ internal static partial class TensorCudaKernels
         int columns)
     {
         int blockSize;
-        if (columns == 512)
+        if (columns == 512
+            && !CudaDispatchPolicy.Current
+                .DisableDirectBfp8LayerNormBlock32x512
+            && IsBlockSize(outputDescriptor, residual.Numel, 32))
+        {
+            if (CudaNativeGateway.AbiVersion.Minor
+                < CudaAbiVersion.DirectBfp8LayerNormBlock32x512Minor)
+            {
+                return false;
+            }
+            blockSize = 32;
+        }
+        else if (columns == 512)
         {
             blockSize = 128;
         }

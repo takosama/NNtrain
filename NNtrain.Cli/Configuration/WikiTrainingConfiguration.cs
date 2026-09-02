@@ -9,6 +9,7 @@ sealed record WikiTrainingConfiguration
     internal const string WikipediaDataset = "wikipedia";
     internal const string WikipediaDatasetAlias = "wiki";
     internal const string FineWebDataset = "fineweb";
+    internal const string MuonOptimizer = "muon";
     internal const string NekoMuonOptimizer = "nekomuon";
     internal const string AdamWOptimizer = "adamw";
     internal const string GainShareAdamWOptimizer = "gainshareadamw";
@@ -724,14 +725,16 @@ sealed record WikiTrainingConfiguration
             throw new ArgumentOutOfRangeException(nameof(Dropout));
         if (!float.IsFinite(InitializationScale) || InitializationScale <= 0f)
             throw new ArgumentOutOfRangeException(nameof(InitializationScale));
-        if (!IsOptimizer(NekoMuonOptimizer)
+        if (!IsOptimizer(MuonOptimizer)
+            && !IsOptimizer(NekoMuonOptimizer)
             && !IsOptimizer(AdamWOptimizer)
             && !IsOptimizer(GainShareAdamWOptimizer)
             && !IsOptimizer(LionOptimizer))
         {
             throw new ArgumentException(
                 $"Unsupported optimizer '{Optimizer}'. Supported optimizers " +
-                $"are '{NekoMuonOptimizer}', '{AdamWOptimizer}', " +
+                $"are '{MuonOptimizer}', '{NekoMuonOptimizer}', " +
+                $"'{AdamWOptimizer}', " +
                 $"'{GainShareAdamWOptimizer}', and '{LionOptimizer}'.",
                 nameof(Optimizer));
         }
@@ -845,6 +848,12 @@ sealed record WikiTrainingConfiguration
 
     private void ValidateNekoMuonNewtonSchulzDepthPolicy()
     {
+        if (IsOptimizer(MuonOptimizer))
+        {
+            ValidateOrdinaryMuonNewtonSchulzPolicy();
+            return;
+        }
+
         if (NekoMuonNewtonSchulzDepthMode is null)
         {
             if (NekoMuonNewtonSchulzDepth.HasValue)
@@ -911,6 +920,39 @@ sealed record WikiTrainingConfiguration
         }
     }
 
+    private void ValidateOrdinaryMuonNewtonSchulzPolicy()
+    {
+        // Ordinary Muon has one fixed algorithm contract. The legacy
+        // NekoMuon-named fields remain accepted when they spell that exact
+        // contract so existing strict JSON files can switch only `type`.
+        if (NekoMuonNewtonSchulzDepthMode is null)
+        {
+            if (NekoMuonNewtonSchulzDepth.HasValue)
+            {
+                throw new ArgumentException(
+                    "nekoMuonNewtonSchulzDepth requires " +
+                    "nekoMuonNewtonSchulzDepthMode.",
+                    nameof(NekoMuonNewtonSchulzDepth));
+            }
+            return;
+        }
+
+        if (!string.Equals(
+                NekoMuonNewtonSchulzDepthMode,
+                "fixed",
+                StringComparison.OrdinalIgnoreCase)
+            || NekoMuonNewtonSchulzDepth != 5f
+            || NekoMuonNewtonSchulzInterval != 1)
+        {
+            throw new ArgumentException(
+                "Muon uses Nesterov momentum 0.95 with exactly five " +
+                "Newton-Schulz iterations on every optimizer step. Omit " +
+                "the NekoMuon depth settings, or specify interval 1, " +
+                "fixed depth 5.",
+                nameof(NekoMuonNewtonSchulzDepthMode));
+        }
+    }
+
     private static void ValidateGainShareUnitInterval(
         float value,
         string parameterName,
@@ -941,7 +983,8 @@ sealed record WikiTrainingConfiguration
         => IsFineWebDataset() ? "FineWeb" : "Wikipedia";
 
     internal bool HasNekoMuonNewtonSchulzDepthPolicyOverride
-        => NekoMuonNewtonSchulzDepthMode is not null;
+        => IsOptimizer(NekoMuonOptimizer)
+            && NekoMuonNewtonSchulzDepthMode is not null;
 
     internal global::NNtrain.NekoMuonNewtonSchulzDepthMode
         GetNekoMuonNewtonSchulzDepthMode()

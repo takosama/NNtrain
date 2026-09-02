@@ -246,6 +246,46 @@ public sealed class TrainingConfigurationTests
     }
 
     [Fact]
+    public void LoadAcceptsGroupedOrdinaryMuonOptimizer()
+    {
+        using var directory = new TemporaryDirectory();
+        string configurationPath = directory.WriteConfiguration(
+            """
+            {
+              "trainingData": {
+                "imagePath": "train-images",
+                "labelPath": "train-labels"
+              },
+              "evaluationData": {
+                "imagePath": "eval-images",
+                "labelPath": "eval-labels"
+              },
+              "optimization": {
+                "optimizer": {
+                  "type": "muon",
+                  "learningRate": 0.001,
+                  "auxiliaryLearningRate": 0.0003,
+                  "weightDecay": 0.01
+                },
+                "scheduler": {
+                  "type": "linearWarmupCosineAnnealing",
+                  "warmupEpochs": 0
+                }
+              }
+            }
+            """);
+
+        TrainingConfiguration configuration =
+            TrainingConfiguration.Load(configurationPath);
+
+        Assert.Equal(
+            TrainingConfiguration.MuonOptimizer,
+            configuration.Optimizer);
+        Assert.Equal(0.001f, configuration.LearningRate);
+        Assert.Equal(0.0003f, configuration.AuxiliaryLearningRate);
+    }
+
+    [Fact]
     public void GroupedCheckpointUsesLegacyDefaultFileName()
     {
         using var directory = new TemporaryDirectory();
@@ -641,6 +681,17 @@ public sealed class TrainingConfigurationTests
         Assert.Contains("lion", exception.Message);
         Assert.Contains("nekomuon", exception.Message);
         Assert.Contains("adamw", exception.Message);
+    }
+
+    [Fact]
+    public void AcceptsOrdinaryMuonOptimizer()
+    {
+        TrainingConfiguration configuration = CreateValidConfiguration() with
+        {
+            Optimizer = TrainingConfiguration.MuonOptimizer,
+        };
+
+        configuration.Validate();
     }
 
     [Theory]

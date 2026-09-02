@@ -63,4 +63,58 @@ public sealed class TransformerCudaProfilerConfigurationTests
             controls.NewtonSchulzDepthMode);
         Assert.Equal(0f, controls.NewtonSchulzDepth);
     }
+
+    [Fact]
+    public void OrdinaryMuonUsesFixedFiveEveryStepDefaults()
+    {
+        using JsonDocument document = JsonDocument.Parse(
+            """
+            {
+              "gradientAccumulationSteps": 4,
+              "optimization": {
+                "optimizer": {
+                  "type": "muon"
+                }
+              }
+            }
+            """);
+        JsonElement root = document.RootElement;
+        JsonElement optimizer = root.GetProperty("optimization")
+            .GetProperty("optimizer");
+
+        TransformerProfileTrainingControls controls =
+            TransformerCudaProfiler.ReadTrainingControls(root, optimizer);
+
+        Assert.Equal(4, controls.GradientAccumulationSteps);
+        Assert.Equal(
+            NekoMuonNewtonSchulzDepthMode.Fixed,
+            controls.NewtonSchulzDepthMode);
+        Assert.Equal(5f, controls.NewtonSchulzDepth);
+    }
+
+    [Fact]
+    public void OrdinaryMuonRejectsAdaptiveDepth()
+    {
+        using JsonDocument document = JsonDocument.Parse(
+            """
+            {
+              "optimization": {
+                "optimizer": {
+                  "type": "muon",
+                  "nekoMuonNewtonSchulzDepthMode": "adaptive"
+                }
+              }
+            }
+            """);
+        JsonElement root = document.RootElement;
+        JsonElement optimizer = root.GetProperty("optimization")
+            .GetProperty("optimizer");
+
+        InvalidDataException exception = Assert.Throws<InvalidDataException>(
+            () => TransformerCudaProfiler.ReadTrainingControls(
+                root,
+                optimizer));
+
+        Assert.Contains("Muon requires fixed", exception.Message);
+    }
 }

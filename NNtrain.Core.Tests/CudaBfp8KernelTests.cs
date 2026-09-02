@@ -413,6 +413,74 @@ public sealed class CudaBfp8KernelTests
         });
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LinearBiasBackwardBlockReductionHandlesWideRowAndColumnTail(
+        bool bfloat16)
+    {
+        if (!Tensor.IsCudaAvailable())
+            return;
+
+        WithCuda(() =>
+        {
+            const int rows = 1024;
+            const int width = 45;
+            float[] source = Enumerable.Range(0, rows * width)
+                .Select(index =>
+                {
+                    int row = index / width;
+                    int column = index % width;
+                    return ((row + column) % 7 - 3) * 0.25f;
+                })
+                .ToArray();
+            float[] initial = Enumerable.Range(0, width)
+                .Select(column => (column % 5) * 0.5f)
+                .ToArray();
+            float[] expected = (float[])initial.Clone();
+            for (int row = 0; row < rows; row++)
+            {
+                for (int column = 0; column < width; column++)
+                    expected[column] += source[row * width + column];
+            }
+
+            NativeCudaDevice device = ForgetMemoryV2Cuda.GetAccelerator(0);
+            using NativeCudaBuffer<float> bias = device.Allocate1D(initial);
+            if (bfloat16)
+            {
+                ushort[] encoded = source
+                    .Select(TensorStorageCodec.EncodeBFloat16)
+                    .ToArray();
+                using NativeCudaBuffer<ushort> gradient =
+                    device.Allocate1D(encoded);
+                CudaTensorNative.LinearBiasBackward(
+                    0,
+                    gradient.NativePtr,
+                    bias.NativePtr,
+                    rows,
+                    width,
+                    bfloat16: true);
+            }
+            else
+            {
+                using NativeCudaBuffer<float> gradient =
+                    device.Allocate1D(source);
+                CudaTensorNative.LinearBiasBackward(
+                    0,
+                    gradient.NativePtr,
+                    bias.NativePtr,
+                    rows,
+                    width,
+                    bfloat16: false);
+            }
+            device.Synchronize();
+            var actual = new float[width];
+            bias.CopyToCPU(actual);
+
+            Assert.Equal(expected, actual);
+        });
+    }
+
     private static void AssertClose(
         Bfp8EncodedStorage reference,
         IReadOnlyList<float> actual)

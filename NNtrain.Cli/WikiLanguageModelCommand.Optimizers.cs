@@ -24,7 +24,9 @@ internal static partial class WikiLanguageModelCommand
     private static CudaOptimizerKind GetCudaOptimizerKind(
         WikiTrainingConfiguration config)
     {
-        if (config.IsOptimizer(WikiTrainingConfiguration.NekoMuonOptimizer))
+        if (config.IsOptimizer(WikiTrainingConfiguration.MuonOptimizer)
+            || config.IsOptimizer(
+                WikiTrainingConfiguration.NekoMuonOptimizer))
             return CudaOptimizerKind.NekoMuon;
         if (config.IsOptimizer(WikiTrainingConfiguration.LionOptimizer))
             return CudaOptimizerKind.Lion;
@@ -49,6 +51,29 @@ internal static partial class WikiLanguageModelCommand
         ArgumentNullException.ThrowIfNull(config);
         bool useBFloat16Moments =
             model.PrecisionMode == TensorPrecisionMode.BFloat16;
+
+        if (config.IsOptimizer(WikiTrainingConfiguration.MuonOptimizer))
+        {
+            var muon = (NekoMuon)optim.Muon(
+                model.HiddenWeightParameters,
+                lr: config.LearningRate,
+                momentum: 0.95f,
+                weight_decay: config.WeightDecay);
+            IOptimizer auxiliaryAdamW = optim.AdamW(
+                model.AuxiliaryParameters,
+                lr: config.AuxiliaryLearningRate,
+                beta1: 0.9f,
+                beta2: 0.95f,
+                eps: 1e-8f,
+                weight_decay: config.WeightDecay,
+                bf16_first_moment: useBFloat16Moments,
+                bf16_second_moment: useBFloat16Moments);
+            return new OptimizerBundle(
+            [
+                new OptimizerGroup("hidden", muon),
+                new OptimizerGroup("auxiliary", auxiliaryAdamW),
+            ]);
+        }
 
         if (config.IsOptimizer(WikiTrainingConfiguration.NekoMuonOptimizer))
         {
@@ -119,7 +144,19 @@ internal static partial class WikiLanguageModelCommand
         WikiTrainingConfiguration config,
         TextWriter output)
     {
-        if (config.IsOptimizer(WikiTrainingConfiguration.NekoMuonOptimizer))
+        if (config.IsOptimizer(WikiTrainingConfiguration.MuonOptimizer))
+        {
+            output.WriteLine(
+                $"optimizer = Muon " +
+                $"({model.HiddenWeightParameters.Count} matrix parameters, " +
+                $"lr {config.LearningRate:G}, momentum 0.95, " +
+                "Nesterov, fixed NS5 every step) + AdamW " +
+                $"({model.AuxiliaryParameters.Count} auxiliary parameters, " +
+                $"lr {config.AuxiliaryLearningRate:G}, moments " +
+                $"{GetAdamWMomentStorage(model)})");
+        }
+        else if (config.IsOptimizer(
+            WikiTrainingConfiguration.NekoMuonOptimizer))
         {
             output.WriteLine(
                 $"optimizer = NekoMuon " +
@@ -186,8 +223,13 @@ internal static partial class WikiLanguageModelCommand
             ? "bf16/bf16"
             : "f32/f32";
 
-    private static string FormatOptimizerDiagnostics(IOptimizer optimizer)
+    private static string FormatOptimizerDiagnostics(
+        IOptimizer optimizer,
+        WikiTrainingConfiguration config)
     {
+        if (config.IsOptimizer(WikiTrainingConfiguration.MuonOptimizer))
+            return ", muon NS depth = 5";
+
         NekoMuon? nekoMuon = OptimizerBundle
             .GetCheckpointLeafOptimizers(optimizer)
             .OfType<NekoMuon>()

@@ -300,6 +300,44 @@ public sealed class WikiTrainingConfigurationTests
     }
 
     [Fact]
+    public void LoadAcceptsGroupedOrdinaryMuonFixedNs5Settings()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.Write(
+            """
+            {
+              "task": "gpt_rin_wiki_jp",
+              "optimization": {
+                "optimizer": {
+                  "type": "muon",
+                  "learningRate": 0.001,
+                  "auxiliaryLearningRate": 0.0003,
+                  "weightDecay": 0.01,
+                  "nekoMuonNewtonSchulzInterval": 1,
+                  "nekoMuonNewtonSchulzDepthMode": "fixed",
+                  "nekoMuonNewtonSchulzDepth": 5
+                },
+                "scheduler": {
+                  "type": "warmupCosineProgress",
+                  "warmupPercent": 0
+                }
+              }
+            }
+            """);
+
+        WikiTrainingConfiguration configuration =
+            WikiTrainingConfiguration.Load(path);
+
+        Assert.Equal(
+            WikiTrainingConfiguration.MuonOptimizer,
+            configuration.Optimizer);
+        Assert.Equal(1, configuration.NekoMuonNewtonSchulzInterval);
+        Assert.Equal("fixed", configuration.NekoMuonNewtonSchulzDepthMode);
+        Assert.Equal(5f, configuration.NekoMuonNewtonSchulzDepth);
+        Assert.Equal(0f, configuration.WarmupPercent);
+    }
+
+    [Fact]
     public void GroupedCheckpointUsesConfigurationFileNameByDefault()
     {
         using var directory = new TemporaryDirectory();
@@ -474,6 +512,61 @@ public sealed class WikiTrainingConfigurationTests
             configuration.Validate);
 
         Assert.Equal("Optimizer", exception.ParamName);
+    }
+
+    [Fact]
+    public void AcceptsOrdinaryMuonWithImplicitFixedPolicy()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            Optimizer = WikiTrainingConfiguration.MuonOptimizer,
+        };
+
+        configuration.Validate();
+
+        Assert.False(
+            configuration.HasNekoMuonNewtonSchulzDepthPolicyOverride);
+    }
+
+    [Fact]
+    public void AcceptsOrdinaryMuonWithLegacyFieldsSpellingFixedNs5()
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            Optimizer = WikiTrainingConfiguration.MuonOptimizer,
+            NekoMuonNewtonSchulzInterval = 1,
+            NekoMuonNewtonSchulzDepthMode = "fixed",
+            NekoMuonNewtonSchulzDepth = 5f,
+        };
+
+        configuration.Validate();
+
+        Assert.False(
+            configuration.HasNekoMuonNewtonSchulzDepthPolicyOverride);
+    }
+
+    [Theory]
+    [InlineData(2, "fixed", 5f)]
+    [InlineData(1, "fixed", 4f)]
+    [InlineData(1, "adaptive", null)]
+    public void RejectsOrdinaryMuonPolicyVariants(
+        int interval,
+        string mode,
+        float? depth)
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            Optimizer = WikiTrainingConfiguration.MuonOptimizer,
+            NekoMuonNewtonSchulzInterval = interval,
+            NekoMuonNewtonSchulzDepthMode = mode,
+            NekoMuonNewtonSchulzDepth = depth,
+        };
+
+        ArgumentException exception = Assert.Throws<ArgumentException>(
+            configuration.Validate);
+
+        Assert.Equal("NekoMuonNewtonSchulzDepthMode", exception.ParamName);
+        Assert.Contains("fixed depth 5", exception.Message);
     }
 
     [Fact]

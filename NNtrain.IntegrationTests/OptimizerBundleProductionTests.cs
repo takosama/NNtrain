@@ -36,6 +36,77 @@ public sealed class OptimizerBundleProductionTests
     }
 
     [Fact]
+    public void ClassificationFactoryCreatesOrdinaryMuonPolicy()
+    {
+        var model = new TransformerClassifier(
+            seqLen: 2,
+            dModel: 4,
+            numHeads: 2,
+            dHidden: 8,
+            numLayers: 1,
+            numClasses: 3,
+            rng: new Random(31));
+        var configuration = new TrainingConfiguration
+        {
+            Optimizer = TrainingConfiguration.MuonOptimizer,
+        };
+
+        OptimizerBundle bundle = Program.CreateOptimizerBundle(
+            model,
+            configuration);
+
+        Assert.Equal(
+            ["hidden", "auxiliary"],
+            bundle.Groups.Select(group => group.Name));
+        NekoMuon muon = Assert.IsType<NekoMuon>(bundle.LeafOptimizers[0]);
+        NekoMuonOptions options = muon.CaptureState().Options;
+        Assert.Equal(0.95f, options.BetaFast);
+        Assert.Equal(1, options.NewtonSchulzInterval);
+        Assert.Equal(
+            NekoMuonNewtonSchulzDepthMode.Fixed,
+            options.NewtonSchulzDepthMode);
+        Assert.Equal(5f, options.NewtonSchulzDepth);
+        Assert.IsType<AdamW>(bundle.LeafOptimizers[1]);
+    }
+
+    [Fact]
+    public void ClassificationResumeReassertsOrdinaryMuonPolicy()
+    {
+        var model = new TransformerClassifier(
+            seqLen: 2,
+            dModel: 4,
+            numHeads: 2,
+            dHidden: 8,
+            numLayers: 1,
+            numClasses: 3,
+            rng: new Random(37));
+        var configuration = new TrainingConfiguration
+        {
+            Optimizer = TrainingConfiguration.MuonOptimizer,
+        };
+        OptimizerBundle bundle = Program.CreateOptimizerBundle(
+            model,
+            configuration);
+        NekoMuon muon = Assert.IsType<NekoMuon>(bundle.LeafOptimizers[0]);
+        muon.SetNewtonSchulzDepthPolicy(
+            NekoMuonNewtonSchulzDepthMode.Minimum,
+            1.5f);
+
+        Program.ApplyClassificationMuonPolicyAfterResume(
+            configuration,
+            bundle,
+            TextWriter.Null);
+
+        NekoMuonOptions options = muon.CaptureState().Options;
+        Assert.Equal(0.95f, options.BetaFast);
+        Assert.Equal(1, options.NewtonSchulzInterval);
+        Assert.Equal(
+            NekoMuonNewtonSchulzDepthMode.Fixed,
+            options.NewtonSchulzDepthMode);
+        Assert.Equal(5f, options.NewtonSchulzDepth);
+    }
+
+    [Fact]
     public void WikiFactoryUsesFrozenLeavesForSchedulerAndCheckpointOrder()
     {
         var model = new GptRinWikiJp(

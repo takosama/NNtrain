@@ -2053,7 +2053,8 @@ internal static partial class CudaOptimizerKernels
         float betaFast,
         float betaSlow,
         float fastCorrection,
-        float slowCorrection)
+        float slowCorrection,
+        bool nesterov = false)
     {
         NativeCudaDevice accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
@@ -2071,7 +2072,8 @@ internal static partial class CudaOptimizerKernels
             betaFast,
             betaSlow,
             fastCorrection,
-            slowCorrection))
+            slowCorrection,
+            nesterov))
         {
             throw new InvalidOperationException(
                 "The native CUDA NekoMuon statistics kernel is required.");
@@ -2092,7 +2094,8 @@ internal static partial class CudaOptimizerKernels
         float fastCorrection,
         float slowCorrection,
         float epsilon,
-        float rho)
+        float rho,
+        bool nesterov = false)
     {
         NekoMuonPrepareStatsResident(
             parameter,
@@ -2101,7 +2104,8 @@ internal static partial class CudaOptimizerKernels
             betaFast,
             betaSlow,
             fastCorrection,
-            slowCorrection);
+            slowCorrection,
+            nesterov);
         NekoMuonResidentState.NekoBuffers buffers =
             state.GetOrCreate(deviceIndex);
         CudaOptimizerNative.NekoUpdateDeviceControl(
@@ -2124,7 +2128,8 @@ internal static partial class CudaOptimizerKernels
         float fastCorrection,
         float slowCorrection,
         float epsilon,
-        float rho)
+        float rho,
+        bool nesterov = false)
     {
         NativeCudaDevice accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
@@ -2144,7 +2149,8 @@ internal static partial class CudaOptimizerKernels
             betaFast,
             betaSlow,
             fastCorrection,
-            slowCorrection))
+            slowCorrection,
+            nesterov))
         {
             throw new InvalidOperationException(
                 "The ABI 1.7 finite-aware CUDA NekoMuon statistics " +
@@ -2172,7 +2178,8 @@ internal static partial class CudaOptimizerKernels
         float slowCorrection,
         float epsilon,
         float rho,
-        bool mixedBlockState = false)
+        bool mixedBlockState = false,
+        bool nesterov = false)
     {
         NativeCudaDevice accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
@@ -2197,20 +2204,21 @@ internal static partial class CudaOptimizerKernels
                 betaFast,
                 betaSlow,
                 finiteStatus.NativePtr,
-                stream);
+                stream,
+                nesterov);
             buffers.Stats.MemSetToZero();
             if (!CudaNekoMuon.TryMomentsAndStatsCompactFinite(
                 accelerator,
                 gradientForUpdate,
-                workspace.Fast,
+                nesterov ? workspace.Slow : workspace.Fast,
                 workspace.Slow,
                 buffers.Stats,
                 finiteStatus,
                 parameter.Numel,
                 betaFast: 1f,
                 betaSlow: 1f,
-                fastCorrection,
-                slowCorrection))
+                fastCorrection: nesterov ? 1f : fastCorrection,
+                slowCorrection: nesterov ? 1f : slowCorrection))
             {
                 throw new InvalidOperationException(
                     "The finite-aware CUDA NekoMuon statistics kernel is " +
@@ -2263,7 +2271,8 @@ internal static partial class CudaOptimizerKernels
             betaFast,
             betaSlow,
             fastCorrection,
-            slowCorrection))
+            slowCorrection,
+            nesterov))
         {
             throw new InvalidOperationException(
                 "The native CUDA NekoMuon statistics kernel is required.");
@@ -2289,15 +2298,15 @@ internal static partial class CudaOptimizerKernels
         if (!CudaNekoMuon.TryMomentsAndStatsCompactFinite(
             accelerator,
             gradientForUpdate,
-            workspace.Fast,
+            nesterov ? workspace.Slow : workspace.Fast,
             workspace.Slow,
             buffers.Stats,
             finiteStatus,
             parameter.Numel,
             betaFast: 1f,
             betaSlow: 1f,
-            fastCorrection,
-            slowCorrection))
+            fastCorrection: nesterov ? 1f : fastCorrection,
+            slowCorrection: nesterov ? 1f : slowCorrection))
         {
             throw new InvalidOperationException(
                 "The finite-aware CUDA NekoMuon statistics kernel is " +
@@ -2475,7 +2484,8 @@ internal static partial class CudaOptimizerKernels
         float learningRate,
         float weightDecay,
         bool applyWeightDecay,
-        bool publishMix8)
+        bool publishMix8,
+        bool nesterov = false)
     {
         NativeCudaDevice accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
@@ -2489,13 +2499,13 @@ internal static partial class CudaOptimizerKernels
         NekoMuonFixedNs5Telemetry.RecordScalar(rows);
         CudaOptimizerNative.NekoInitializeFromDeviceStats(
             deviceIndex,
-            buffers.Fast.NativePtr,
+            (nesterov ? buffers.Slow : buffers.Fast).NativePtr,
             scratch.X.NativePtr,
             parameter.Numel,
             originalRows,
             originalColumns,
             transpose,
-            1f / fastCorrection,
+            nesterov ? 1f : 1f / fastCorrection,
             buffers.Stats.NativePtr,
             epsilon,
             finiteStatus.NativePtr);
@@ -2575,7 +2585,8 @@ internal static partial class CudaOptimizerKernels
         float coefficientC,
         float learningRate,
         float weightDecay,
-        bool publishMix8)
+        bool publishMix8,
+        bool nesterov = false)
     {
         ArgumentNullException.ThrowIfNull(items);
         if (items.Count == 0)
@@ -2618,7 +2629,8 @@ internal static partial class CudaOptimizerKernels
                             learningRate,
                             weightDecay,
                             item.ApplyWeightDecay,
-                            publishMix8);
+                            publishMix8,
+                            nesterov);
                     }
                     continue;
                 }
@@ -2629,7 +2641,7 @@ internal static partial class CudaOptimizerKernels
                     grouped.AsSpan(offset, count),
                     scratch,
                     finiteStatus,
-                    1f / fastCorrection,
+                    nesterov ? 1f : 1f / fastCorrection,
                     epsilon,
                     coefficientA,
                     coefficientB,
@@ -2637,7 +2649,8 @@ internal static partial class CudaOptimizerKernels
                     learningRate,
                     weightDecay,
                     useBFloat16TensorCores,
-                    publishMix8);
+                    publishMix8,
+                    nesterov);
             }
         }
     }
@@ -2656,7 +2669,8 @@ internal static partial class CudaOptimizerKernels
         float learningRate,
         float weightDecay,
         bool useBFloat16TensorCores,
-        bool publishMix8)
+        bool publishMix8,
+        bool nesterov)
     {
         int count = items.Length;
         int rows = Math.Min(
@@ -2675,7 +2689,7 @@ internal static partial class CudaOptimizerKernels
                 item.State.GetOrCreate(deviceIndex);
             CudaOptimizerNative.NekoInitializeFromDeviceStats(
                 deviceIndex,
-                buffers.Fast.NativePtr,
+                (nesterov ? buffers.Slow : buffers.Fast).NativePtr,
                 AddFloatOffset(scratch.X.NativePtr, slot * length),
                 length,
                 item.OriginalRows,
@@ -2774,7 +2788,8 @@ internal static partial class CudaOptimizerKernels
         bool applyWeightDecay,
         bool deviceOnlyFixedFive,
         bool mixedBlockState = false,
-        bool forceFullNewtonSchulz = false)
+        bool forceFullNewtonSchulz = false,
+        bool nesterov = false)
     {
         NativeCudaDevice accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
@@ -2803,10 +2818,10 @@ internal static partial class CudaOptimizerKernels
         }
         CudaBfp8Native.DequantizeFloat32(
             deviceIndex,
-            buffers.Fast.Payload,
-            buffers.Fast.Scales,
+            (nesterov ? buffers.Slow : buffers.Fast).Payload,
+            (nesterov ? buffers.Slow : buffers.Fast).Scales,
             workspace.Fast,
-            buffers.Fast.Descriptor,
+            (nesterov ? buffers.Slow : buffers.Fast).Descriptor,
             stream);
 
         float[] stats = buffers.StatsHost;
@@ -2827,7 +2842,7 @@ internal static partial class CudaOptimizerKernels
                 originalRows,
                 originalColumns,
                 transpose,
-                1f / fastCorrection,
+                nesterov ? 1f : 1f / fastCorrection,
                 buffers.Stats.NativePtr,
                 epsilon,
                 finiteStatus.NativePtr);
@@ -2844,7 +2859,7 @@ internal static partial class CudaOptimizerKernels
                 originalRows,
                 originalColumns,
                 transpose,
-                1f / fastCorrection,
+                nesterov ? 1f : 1f / fastCorrection,
                 inverseNorm);
         }
 

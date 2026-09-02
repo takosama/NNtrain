@@ -14,7 +14,7 @@
 
 namespace {
 constexpr std::uint32_t nntrain_abi_major = 1;
-constexpr std::uint32_t nntrain_abi_minor = 26;
+constexpr std::uint32_t nntrain_abi_minor = 29;
 constexpr std::uint32_t nntrain_abi_version_value =
     (nntrain_abi_major << 16) | nntrain_abi_minor;
 
@@ -338,6 +338,7 @@ __global__ void nekomuon_block_bfp8_moments_kernel(
     int length,
     float beta_fast,
     float beta_slow,
+    bool nesterov,
     int* finite_status) {
     constexpr int block_size = 128;
     __shared__ float fast_maximum[block_size];
@@ -356,10 +357,12 @@ __global__ void nekomuon_block_bfp8_moments_kernel(
             beta_fast,
             static_cast<float>(fast_payload[index]) * fast_scales[blockIdx.x],
             (1.f - beta_fast) * g);
-        slow = fmaf(
-            beta_slow,
-            static_cast<float>(slow_payload[index]) * slow_scales[blockIdx.x],
-            (1.f - beta_slow) * g);
+        slow = nesterov
+            ? fmaf(beta_fast, fast, (1.f - beta_fast) * g)
+            : fmaf(beta_slow,
+                static_cast<float>(slow_payload[index])
+                    * slow_scales[blockIdx.x],
+                (1.f - beta_slow) * g);
         if (!isfinite(g) || !isfinite(fast) || !isfinite(slow))
             atomicExch(&invalid, 1);
     }
@@ -1591,10 +1594,38 @@ NNTRAIN_EXPORT int nntrain_cuda_nekomuon_block_bfp8_moments(
             length,
             beta_fast,
             beta_slow,
+            false,
             finite_status);
     return complete(
         nntrain_operation_bfp8_quantize,
         device,
+        static_cast<int>(cudaPeekAtLastError()));
+}
+
+NNTRAIN_EXPORT int nntrain_cuda_muon_block_bfp8_moments(
+    int device, const float* gradient, signed char* fast_payload,
+    float* fast_scales, signed char* direction_payload,
+    float* direction_scales, float* fast_roundtrip,
+    float* direction_roundtrip, int length, float beta,
+    int* finite_status, void* stream) {
+    if (gradient == nullptr || fast_payload == nullptr || fast_scales == nullptr
+        || direction_payload == nullptr || direction_scales == nullptr
+        || fast_roundtrip == nullptr || direction_roundtrip == nullptr
+        || length <= 0 || finite_status == nullptr) {
+        return complete(nntrain_operation_bfp8_quantize, device,
+            static_cast<int>(cudaErrorInvalidValue));
+    }
+    int status = select_device(device);
+    if (status != cudaSuccess)
+        return complete(nntrain_operation_bfp8_quantize, device, status);
+    constexpr int threads = 128;
+    const int blocks = (length + threads - 1) / threads;
+    nekomuon_block_bfp8_moments_kernel<<<blocks, threads, 0,
+        reinterpret_cast<cudaStream_t>(stream)>>>(
+            gradient, fast_payload, fast_scales, direction_payload,
+            direction_scales, fast_roundtrip, direction_roundtrip,
+            length, beta, beta, true, finite_status);
+    return complete(nntrain_operation_bfp8_quantize, device,
         static_cast<int>(cudaPeekAtLastError()));
 }
 

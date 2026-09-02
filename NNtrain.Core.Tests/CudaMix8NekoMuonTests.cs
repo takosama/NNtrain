@@ -8,6 +8,51 @@ using Xunit;
 public sealed class CudaMix8NekoMuonTests
 {
     [Fact]
+    public void OrdinaryMuonBlock32KeepsTwoGpuReplicasIdentical()
+    {
+        if (Tensor.CudaDeviceCount < 2)
+            return;
+
+        WithCuda([0, 1], () =>
+        {
+            using IDisposable dispatch = CudaDispatchPolicy.Push(
+                CudaDispatchPolicy.Defaults with
+                {
+                    EnableBlockBfp8OptimizerState = true,
+                });
+            Parameter parameter = CreateParameter(
+                Values(128 * 128, 11, 0.12f), [128, 128], "muon.weight",
+                Bfp8QuantizationDescriptor.Block(32), [0, 1]);
+            var optimizer = new NekoMuon([parameter], FixedFiveOptions());
+            optimizer.SetOrdinaryMuonPolicy();
+            try
+            {
+                optimizer.prepare();
+                for (int step = 0; step < 3; step++)
+                {
+                    SetSynchronizedGradient(parameter,
+                        Values(parameter.T.Numel, 23 + step, 0.03f), [0, 1]);
+                    optimizer.step();
+                    optimizer.zero_grad();
+                }
+                AssertClose(
+                    Read(parameter.T.EnsureCudaMasterFloat32Buffer(0)),
+                    Read(parameter.T.EnsureCudaMasterFloat32Buffer(1)),
+                    1e-5f);
+                var state0 = optimizer.GetCudaBfp8Moments(0, 0);
+                var state1 = optimizer.GetCudaBfp8Moments(0, 1);
+                AssertEncoded(Read(state0.Fast), Read(state1.Fast));
+                AssertEncoded(Read(state0.Slow), Read(state1.Slow));
+            }
+            finally
+            {
+                optimizer.DisposeCudaResources();
+                parameter.T.InvalidateCudaBuffers();
+            }
+        });
+    }
+
+    [Fact]
     public void FixedFiveEqualShapesUseOneBatchedNs5DispatchAndMatchScalar()
     {
         if (!Tensor.IsCudaAvailable())

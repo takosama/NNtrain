@@ -173,6 +173,7 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_flash_attention_forward_bf16_tensor_core_sync",
         "nntrain_flash_attention_backward_bf16_tensor_core",
         "nntrain_flash_attention_backward_bf16_tensor_core_parallel_dkv",
+        "nntrain_flash_attention_backward_bf16_tensor_core_parallel_dkv_bfp8_output",
         "nntrain_flash_attention_backward_bf16_tensor_core_bf16_gradient",
         "nntrain_flash_attention_backward_bf16_tensor_core_bf16_io_gradient",
         "nntrain_flash_attention_backward_bf16_tensor_core_bf16_io_gradient_sync",
@@ -185,6 +186,11 @@ public sealed class CudaNativeAbiGatewayTests
         "nntrain_nekomuon_moments_stats_compact_finite",
         "nntrain_nekomuon_moments_stats_bf16_compact",
         "nntrain_nekomuon_moments_stats_bf16_compact_finite",
+        "nntrain_cuda_muon_block_bfp8_moments",
+        "nntrain_muon_moments_stats_compact",
+        "nntrain_muon_moments_stats_compact_finite",
+        "nntrain_muon_moments_stats_bf16_compact",
+        "nntrain_muon_moments_stats_bf16_compact_finite",
         "nntrain_tensor_accumulate_scalar",
         "nntrain_tensor_embedding_backward_reduced",
         "nntrain_tensor_embedding_positions_backward_reduced",
@@ -485,6 +491,14 @@ public sealed class CudaNativeAbiGatewayTests
                 CudaNativeOperation
                     .FlashAttentionBackwardBFloat16TensorCoreParallelDkv));
         Assert.Equal(
+            CudaKernelFeature.FlashAttention |
+                CudaKernelFeature.BFloat16 |
+                CudaKernelFeature.TensorCores |
+                CudaKernelFeature.Bfp8Quantization,
+            CudaNativeGateway.RequiredFeatures(
+                CudaNativeOperation
+                    .FlashAttentionBackwardBFloat16TensorCoreBfp8Output));
+        Assert.Equal(
             CudaKernelFeature.ForgetMemory |
                 CudaKernelFeature.BFloat16 |
                 CudaKernelFeature.TensorCores,
@@ -522,6 +536,11 @@ public sealed class CudaNativeAbiGatewayTests
             25,
             CudaAbiVersion.DirectBfp8LayerNormBlock32x384Minor);
         Assert.Equal(26, CudaAbiVersion.DirectBfp8FfnGradientMinor);
+        Assert.Equal(
+            27,
+            CudaAbiVersion.DirectBfp8LayerNormBlock32x512Minor);
+        Assert.Equal(28, CudaAbiVersion.DirectBfp8AttentionOutputMinor);
+        Assert.Equal(29, CudaAbiVersion.OrdinaryMuonNesterovMinor);
         Assert.False(CudaTensorNative.SupportsDirectBfp8FfnGradientAbi(
             new CudaAbiVersion(1, 25)));
         Assert.True(CudaTensorNative.SupportsDirectBfp8FfnGradientAbi(

@@ -16,7 +16,8 @@ internal static class CudaNekoMuon
         float betaFast,
         float betaSlow,
         float fastCorrection,
-        float slowCorrection)
+        float slowCorrection,
+        bool nesterov = false)
     {
         if (Volatile.Read(ref _availability) < 0)
             return false;
@@ -24,7 +25,11 @@ internal static class CudaNekoMuon
         {
             accelerator.Bind();
             nint stream = accelerator.DefaultStream;
-            int status = CudaNativeGateway.NekoMuonMomentsStatsCompact(
+            int status = nesterov
+                ? CudaNativeGateway.MuonMomentsStatsCompact(
+                    accelerator.Index, gradient.NativePtr, fast.NativePtr,
+                    slow.NativePtr, stats.NativePtr, length, betaFast, stream)
+                : CudaNativeGateway.NekoMuonMomentsStatsCompact(
                 accelerator.Index,
                 gradient.NativePtr,
                 fast.NativePtr,
@@ -65,7 +70,8 @@ internal static class CudaNekoMuon
         float betaFast,
         float betaSlow,
         float fastCorrection,
-        float slowCorrection)
+        float slowCorrection,
+        bool nesterov = false)
     {
         if (Volatile.Read(ref _availability) < 0)
             return false;
@@ -73,8 +79,12 @@ internal static class CudaNekoMuon
         {
             accelerator.Bind();
             nint stream = accelerator.DefaultStream;
-            int status = CudaNativeGateway
-                .NekoMuonMomentsStatsCompactFinite(
+            int status = nesterov
+                ? CudaNativeGateway.MuonMomentsStatsCompactFinite(
+                    accelerator.Index, gradient.NativePtr, fast.NativePtr,
+                    slow.NativePtr, stats.NativePtr, length, betaFast,
+                    finiteStatus.NativePtr, stream)
+                : CudaNativeGateway.NekoMuonMomentsStatsCompactFinite(
                     accelerator.Index,
                     gradient.NativePtr,
                     fast.NativePtr,
@@ -116,7 +126,8 @@ internal static class CudaNekoMuon
         float betaSlow,
         float fastCorrection,
         float slowCorrection,
-        NativeCudaBuffer<int>? finiteStatus = null)
+        NativeCudaBuffer<int>? finiteStatus = null,
+        bool nesterov = false)
     {
         if (Volatile.Read(ref _availability) < 0)
             return false;
@@ -124,7 +135,16 @@ internal static class CudaNekoMuon
         {
             accelerator.Bind();
             nint stream = accelerator.DefaultStream;
-            int status = finiteStatus is null
+            int status = nesterov
+                ? finiteStatus is null
+                    ? CudaNativeGateway.MuonMomentsStatsBFloat16Compact(
+                        accelerator.Index, gradient.NativePtr, fast.NativePtr,
+                        slow.NativePtr, stats.NativePtr, length, betaFast, stream)
+                    : CudaNativeGateway.MuonMomentsStatsBFloat16CompactFinite(
+                        accelerator.Index, gradient.NativePtr, fast.NativePtr,
+                        slow.NativePtr, stats.NativePtr, length, betaFast,
+                        finiteStatus.NativePtr, stream)
+                : finiteStatus is null
                 ? CudaNativeGateway.NekoMuonMomentsStatsBFloat16Compact(
                     accelerator.Index,
                     gradient.NativePtr,

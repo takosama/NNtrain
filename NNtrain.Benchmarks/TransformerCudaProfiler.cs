@@ -18,6 +18,15 @@ internal static class TransformerCudaProfiler
         JsonElement root = document.RootElement;
         JsonElement optimizer = root.GetProperty("optimization")
             .GetProperty("optimizer");
+        string optimizerType = optimizer.GetProperty("type").GetString()
+            ?? string.Empty;
+        bool ordinaryMuon = IsOrdinaryMuon(optimizerType);
+        if (!ordinaryMuon && !IsNekoMuon(optimizerType))
+        {
+            throw new InvalidDataException(
+                $"Expected Muon or NekoMuon optimizer, got " +
+                $"'{optimizerType}'.");
+        }
         TensorPrecisionMode precisionMode = precisionModeOverride is null
             ? PrecisionModeConfiguration.Read(root)
             : TensorPrecisionModeNames.Parse(precisionModeOverride);
@@ -45,13 +54,16 @@ internal static class TransformerCudaProfiler
             optimizer.GetProperty("learningRate").GetSingle(),
             optimizer.GetProperty("auxiliaryLearningRate").GetSingle(),
             optimizer.GetProperty("weightDecay").GetSingle(),
-            optimizer.GetProperty("nekoMuonNewtonSchulzInterval").GetInt32(),
+            ordinaryMuon
+                ? 1
+                : ReadNewtonSchulzInterval(optimizer),
             precisionMode == TensorPrecisionMode.BFloat16,
             precisionMode == TensorPrecisionMode.BFloat16,
             path,
             controls.Bfp8BlockSize,
             controls.NewtonSchulzDepthMode,
-            controls.NewtonSchulzDepth);
+            controls.NewtonSchulzDepth,
+            ordinaryMuon);
     }
 
     internal static void RunFromConfiguration(
@@ -86,10 +98,12 @@ internal static class TransformerCudaProfiler
             .GetProperty("optimizer");
         string optimizerType = optimizer.GetProperty("type").GetString()
             ?? string.Empty;
-        if (!string.Equals(optimizerType, "nekomuon", StringComparison.OrdinalIgnoreCase))
+        bool ordinaryMuon = IsOrdinaryMuon(optimizerType);
+        if (!ordinaryMuon && !IsNekoMuon(optimizerType))
         {
             throw new InvalidDataException(
-                $"Expected NekoMuon optimizer, got '{optimizerType}'.");
+                $"Expected Muon or NekoMuon optimizer, got " +
+                $"'{optimizerType}'.");
         }
         TransformerProfileTrainingControls controls =
             ReadTrainingControls(root, optimizer);
@@ -115,14 +129,17 @@ internal static class TransformerCudaProfiler
             auxiliaryLearningRateOverride
                 ?? optimizer.GetProperty("auxiliaryLearningRate").GetSingle(),
             optimizer.GetProperty("weightDecay").GetSingle(),
-            optimizer.GetProperty("nekoMuonNewtonSchulzInterval").GetInt32(),
+            ordinaryMuon
+                ? 1
+                : ReadNewtonSchulzInterval(optimizer),
             path,
             generationEverySteps: generationEverySteps,
             generatedTokens: generatedTokens,
             gradientAccumulationSteps: controls.GradientAccumulationSteps,
             bfp8BlockSize: controls.Bfp8BlockSize,
             newtonSchulzDepthMode: controls.NewtonSchulzDepthMode,
-            newtonSchulzDepth: controls.NewtonSchulzDepth);
+            newtonSchulzDepth: controls.NewtonSchulzDepth,
+            ordinaryMuon: ordinaryMuon);
     }
 
     internal static TransformerProfileTrainingControls ReadTrainingControls(
@@ -157,8 +174,15 @@ internal static class TransformerCudaProfiler
         if (bfp8BlockSize <= 0)
             throw new InvalidDataException("BFP8 block size must be positive.");
 
-        NekoMuonNewtonSchulzDepthMode depthMode =
-            NekoMuonNewtonSchulzDepthMode.Adaptive;
+        string optimizerType = optimizer.TryGetProperty(
+            "type",
+            out JsonElement optimizerTypeElement)
+                ? optimizerTypeElement.GetString() ?? string.Empty
+                : string.Empty;
+        bool ordinaryMuon = IsOrdinaryMuon(optimizerType);
+        NekoMuonNewtonSchulzDepthMode depthMode = ordinaryMuon
+            ? NekoMuonNewtonSchulzDepthMode.Fixed
+            : NekoMuonNewtonSchulzDepthMode.Adaptive;
         if (optimizer.TryGetProperty(
                 "nekoMuonNewtonSchulzDepthMode",
                 out JsonElement depthModeElement))
@@ -181,7 +205,17 @@ internal static class TransformerCudaProfiler
         bool hasDepth = optimizer.TryGetProperty(
             "nekoMuonNewtonSchulzDepth",
             out JsonElement depthElement);
-        float depth = hasDepth ? depthElement.GetSingle() : 0f;
+        float depth = hasDepth
+            ? depthElement.GetSingle()
+            : ordinaryMuon ? 5f : 0f;
+        if (ordinaryMuon
+            && (depthMode != NekoMuonNewtonSchulzDepthMode.Fixed
+                || depth != 5f))
+        {
+            throw new InvalidDataException(
+                "Muon requires fixed Newton-Schulz depth 5 on every " +
+                "optimizer step.");
+        }
         if (depthMode == NekoMuonNewtonSchulzDepthMode.Adaptive)
         {
             if (hasDepth)
@@ -193,7 +227,7 @@ internal static class TransformerCudaProfiler
         }
         else
         {
-            if (!hasDepth)
+            if (!hasDepth && !ordinaryMuon)
             {
                 throw new InvalidDataException(
                     $"NekoMuon Newton-Schulz depth mode '{depthMode}' " +
@@ -214,6 +248,25 @@ internal static class TransformerCudaProfiler
             depthMode,
             depth);
     }
+
+    private static bool IsOrdinaryMuon(string optimizerType)
+        => string.Equals(
+            optimizerType,
+            "muon",
+            StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsNekoMuon(string optimizerType)
+        => string.Equals(
+            optimizerType,
+            "nekomuon",
+            StringComparison.OrdinalIgnoreCase);
+
+    private static int ReadNewtonSchulzInterval(JsonElement optimizer)
+        => optimizer.TryGetProperty(
+            "nekoMuonNewtonSchulzInterval",
+            out JsonElement interval)
+                ? interval.GetInt32()
+                : 5;
 
     internal static void Run(
         int warmupSteps,
@@ -273,7 +326,8 @@ internal static class TransformerCudaProfiler
         int bfp8BlockSize = Bfp8QuantizationDescriptor.DefaultBlockSize,
         NekoMuonNewtonSchulzDepthMode newtonSchulzDepthMode =
             NekoMuonNewtonSchulzDepthMode.Adaptive,
-        float newtonSchulzDepth = 0f)
+        float newtonSchulzDepth = 0f,
+        bool ordinaryMuon = false)
     {
         if (gradientAccumulationSteps <= 0)
         {
@@ -308,17 +362,14 @@ internal static class TransformerCudaProfiler
         model.to(precisionMode, bfp8BlockSize);
         IOptimizer optimizer = useNekoMuon
             ? new CompositeOptimizer(
-                new NekoMuon(
+                CreateMatrixOptimizer(
                     model.HiddenWeightParameters,
-                    new NekoMuonOptions
-                    {
-                        LearningRate = learningRate,
-                        WeightDecay = weightDecay,
-                        MaxNewtonSchulzSteps = 5,
-                        NewtonSchulzInterval = newtonSchulzInterval,
-                        NewtonSchulzDepthMode = newtonSchulzDepthMode,
-                        NewtonSchulzDepth = newtonSchulzDepth,
-                    }),
+                    learningRate,
+                    weightDecay,
+                    newtonSchulzInterval,
+                    newtonSchulzDepthMode,
+                    newtonSchulzDepth,
+                    ordinaryMuon),
                 new AdamW(
                     model.AuxiliaryParameters,
                     new AdamWOptions
@@ -526,7 +577,9 @@ internal static class TransformerCudaProfiler
         Console.WriteLine(
             $"configuration = {configurationDescription}");
         Console.WriteLine(
-            $"learning rates = NekoMuon {learningRate:G}, " +
+            $"learning rates = " +
+            $"{(ordinaryMuon ? "Muon" : "NekoMuon")} " +
+            $"{learningRate:G}, " +
             $"AdamW {auxiliaryLearningRate:G}; gradient clipping " +
             $"{samples.Count(sample => sample.GradientNorm > 1f)}/" +
             $"{samples.Length} measured steps, mean pre-clip norm " +
@@ -546,7 +599,9 @@ internal static class TransformerCudaProfiler
             $"{checked((long)batch * gradientAccumulationSteps)}, " +
             $"sequence={sequence}, width={width}, heads={heads}, " +
             $"hidden={hidden}, layers={layers}, vocabulary={vocabulary}, optimizer=" +
-            $"{(useNekoMuon ? "NekoMuon+AdamW" : "AdamW")}");
+            $"{(useNekoMuon
+                ? ordinaryMuon ? "Muon+AdamW" : "NekoMuon+AdamW"
+                : "AdamW")}");
         Console.WriteLine(
             $"time trend: first {trendWindow} mean {firstWindowMean:F2} ms, " +
             $"last {trendWindow} mean {lastWindowMean:F2} ms, " +
@@ -680,6 +735,31 @@ internal static class TransformerCudaProfiler
         }
     }
 
+    private static NekoMuon CreateMatrixOptimizer(
+        IEnumerable<Parameter> parameters,
+        float learningRate,
+        float weightDecay,
+        int newtonSchulzInterval,
+        NekoMuonNewtonSchulzDepthMode newtonSchulzDepthMode,
+        float newtonSchulzDepth,
+        bool ordinaryMuon)
+    {
+        var optimizer = new NekoMuon(
+            parameters,
+            new NekoMuonOptions
+            {
+                LearningRate = learningRate,
+                WeightDecay = weightDecay,
+                MaxNewtonSchulzSteps = 5,
+                NewtonSchulzInterval = newtonSchulzInterval,
+                NewtonSchulzDepthMode = newtonSchulzDepthMode,
+                NewtonSchulzDepth = newtonSchulzDepth,
+            });
+        if (ordinaryMuon)
+            optimizer.SetOrdinaryMuonPolicy();
+        return optimizer;
+    }
+
     private static void RunDetailedCore(
         int warmupSteps,
         int measuredSteps,
@@ -706,7 +786,8 @@ internal static class TransformerCudaProfiler
         string configurationDescription,
         int bfp8BlockSize,
         NekoMuonNewtonSchulzDepthMode newtonSchulzDepthMode,
-        float newtonSchulzDepth)
+        float newtonSchulzDepth,
+        bool ordinaryMuon)
     {
         if (measuredSteps <= 0)
             throw new ArgumentOutOfRangeException(nameof(measuredSteps));
@@ -731,17 +812,14 @@ internal static class TransformerCudaProfiler
         trainingRandom.BeginRuntime();
         model.AttachTrainingRandom(trainingRandom);
         model.to(precisionMode, bfp8BlockSize);
-        var nekoMuon = new NekoMuon(
+        NekoMuon nekoMuon = CreateMatrixOptimizer(
             model.HiddenWeightParameters,
-            new NekoMuonOptions
-            {
-                LearningRate = learningRate,
-                WeightDecay = weightDecay,
-                MaxNewtonSchulzSteps = 5,
-                NewtonSchulzInterval = newtonSchulzInterval,
-                NewtonSchulzDepthMode = newtonSchulzDepthMode,
-                NewtonSchulzDepth = newtonSchulzDepth,
-            });
+            learningRate,
+            weightDecay,
+            newtonSchulzInterval,
+            newtonSchulzDepthMode,
+            newtonSchulzDepth,
+            ordinaryMuon);
         var adamW = new AdamW(
             model.AuxiliaryParameters,
             new AdamWOptions
@@ -779,7 +857,8 @@ internal static class TransformerCudaProfiler
             $"{TensorPrecisionModeNames.Format(precisionMode)}; " +
             $"GPUs=[{string.Join(',', devices)}]");
         Console.WriteLine(
-            $"optimizer=NekoMuon(interval={newtonSchulzInterval})+AdamW " +
+            $"optimizer={(ordinaryMuon ? "Muon" : "NekoMuon")}" +
+            $"(interval={newtonSchulzInterval})+AdamW " +
             $"(moments={(adamFirstMomentBFloat16 ? "bf16" : "fp32")}/" +
             $"{(adamSecondMomentBFloat16 ? "bf16" : "fp32")})" +
             (skipOptimizer ? " [optimizer step skipped]" : ""));
