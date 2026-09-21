@@ -135,6 +135,89 @@ public sealed class OptimizerStateStreamTests
         Assert.Equal(4, options.MaxNewtonSchulzSteps);
     }
 
+    [Fact]
+    public void LegacyNekoMuonV1BinaryRestoresDecayProducts()
+    {
+        Parameter sourceParameter = CreateParameter("neko", [1, 2]);
+        var source = new NekoMuon(
+            [sourceParameter],
+            new NekoMuonOptions
+            {
+                BetaFast = 0.8f,
+                BetaSlow = 0.9f,
+                NewtonSchulzInterval = 100,
+                WeightDecay = 0f,
+            });
+        for (int step = 0; step < 3; step++)
+        {
+            sourceParameter.T.MutableGrad[0] = 0.25f;
+            sourceParameter.T.MutableGrad[1] = -0.5f;
+            source.step();
+        }
+        using var current = new MemoryStream();
+        OptimizerStateStream.SaveStateBinary(source, current);
+        byte[] legacy = DowngradeNekoMuonBinaryToV1(current.ToArray());
+        var restored = new NekoMuon(
+            [CreateParameter("neko", [1, 2])]);
+
+        OptimizerStateStream.LoadStateBinary(
+            restored,
+            new MemoryStream(legacy));
+
+        NekoMuonState state = restored.CaptureState();
+        Assert.Equal(NekoMuonState.CurrentFormatVersion, state.FormatVersion);
+        Assert.Equal(Math.Pow((double)0.8f, 3d),
+            state.FastDecayProduct!.Value, 12);
+        Assert.Equal(Math.Pow((double)0.9f, 3d),
+            state.SlowDecayProduct!.Value, 12);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ChangedBetaHistorySurvivesStreamAndContinuedTraining(bool binary)
+    {
+        Parameter parameter = CreateParameter("neko", [1, 2]);
+        parameter.T.MutableGrad[0] = 0.25f;
+        parameter.T.MutableGrad[1] = -0.5f;
+        var source = new NekoMuon([parameter], new NekoMuonOptions
+        {
+            BetaFast = 0.9f,
+            BetaSlow = 0.99f,
+            NewtonSchulzInterval = 100,
+            WeightDecay = 0f,
+        });
+        for (int step = 0; step < 5; step++)
+            source.Step();
+        source.SetBetaFast(0.95f);
+        source.Step();
+
+        using var stream = new MemoryStream();
+        if (binary)
+            OptimizerStateStream.SaveStateBinary(source, stream);
+        else
+            OptimizerStateStream.SaveStateJson(source, stream);
+        stream.Position = 0;
+        Parameter restoredParameter = new(parameter.T.Data.ToArray(),
+            [1, 2], "neko", WeightDecayPolicy.Exclude);
+        parameter.T.MutableGrad.CopyTo(restoredParameter.T.MutableGrad);
+        var restored = new NekoMuon([restoredParameter]);
+        if (binary)
+            OptimizerStateStream.LoadStateBinary(restored, stream);
+        else
+            OptimizerStateStream.LoadStateJson(restored, stream);
+
+        Assert.Equal(source.state_dict().StateJsonText,
+            restored.state_dict().StateJsonText);
+        source.Step();
+        restored.Step();
+        Assert.Equal(source.state_dict().StateJsonText,
+            restored.state_dict().StateJsonText);
+        Assert.Equal(parameter.T.Data.ToArray(), restoredParameter.T.Data.ToArray());
+        Assert.Equal(Math.Pow((double)0.9f, 5) * Math.Pow((double)0.95f, 2),
+            restored.CaptureState().FastDecayProduct!.Value, 12);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -303,6 +386,33 @@ public sealed class OptimizerStateStreamTests
             legacy.AsSpan(metadataOffset, legacyMetadata.Length));
         payload.AsSpan(suffixOffset).CopyTo(
             legacy.AsSpan(metadataOffset + legacyMetadata.Length));
+        return legacy;
+    }
+
+    private static byte[] DowngradeNekoMuonBinaryToV1(byte[] payload)
+    {
+        const int MagicLength = 8;
+        int typeLength = BinaryPrimitives.ReadInt32LittleEndian(
+            payload.AsSpan(MagicLength + sizeof(int), sizeof(int)));
+        int stateVersionOffset = checked(
+            MagicLength + sizeof(int) + sizeof(int) + typeLength);
+        int metadataLengthOffset = checked(
+            stateVersionOffset + sizeof(int) + sizeof(int));
+        int metadataLength = BinaryPrimitives.ReadInt32LittleEndian(
+            payload.AsSpan(metadataLengthOffset, sizeof(int)));
+        int decayProductsOffset = checked(
+            metadataLengthOffset
+                + sizeof(int)
+                + metadataLength
+                + sizeof(int));
+        const int DecayProductsBytes = sizeof(double) * 2;
+        var legacy = new byte[payload.Length - DecayProductsBytes];
+        payload.AsSpan(0, decayProductsOffset).CopyTo(legacy);
+        payload.AsSpan(decayProductsOffset + DecayProductsBytes).CopyTo(
+            legacy.AsSpan(decayProductsOffset));
+        BinaryPrimitives.WriteInt32LittleEndian(
+            legacy.AsSpan(stateVersionOffset, sizeof(int)),
+            1);
         return legacy;
     }
 

@@ -23,7 +23,7 @@ partial class Tensor
                 "[rows, input], [output, input], and [output].");
         }
 
-        if (ExecutionDevice == TensorDevice.Cuda)
+        if (ExecutionDevice is TensorDevice.Cuda or TensorDevice.Arc)
             return LinearLastDim(other, rowBias, applyRelu: true);
 
         float[] output = new float[checked(rows * outputWidth)];
@@ -185,7 +185,7 @@ partial class Tensor
                 $"LayerNorm parameters must have shape [{columns}].");
         }
 
-        if (ExecutionDevice == TensorDevice.Cuda)
+        if (ExecutionDevice is TensorDevice.Cuda or TensorDevice.Arc)
         {
             return AddDropoutLayerNormLastDim(
                 residual,

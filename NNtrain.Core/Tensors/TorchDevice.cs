@@ -24,10 +24,16 @@ public readonly record struct TorchDevice
     public int Index { get; }
 
     public bool IsCuda => Type == TensorDevice.Cuda;
+    public bool IsArc => Type == TensorDevice.Arc;
 
     public static TorchDevice Parse(string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        if (string.Equals(value, "arc", StringComparison.OrdinalIgnoreCase))
+            return new TorchDevice(TensorDevice.Arc);
+        if (value.StartsWith("arc:", StringComparison.OrdinalIgnoreCase)
+            && int.TryParse(value[4..], out int arcIndex) && arcIndex >= 0)
+            return new TorchDevice(TensorDevice.Arc, arcIndex);
         if (string.Equals(value, "cpu", StringComparison.OrdinalIgnoreCase))
             return new TorchDevice(TensorDevice.Cpu);
         if (string.Equals(value, "cuda", StringComparison.OrdinalIgnoreCase))
@@ -40,9 +46,9 @@ public readonly record struct TorchDevice
             return new TorchDevice(TensorDevice.Cuda, index);
         }
         throw new FormatException(
-            $"Invalid device '{value}'. Use 'cpu', 'cuda', or 'cuda:<index>'.");
+            $"Invalid device '{value}'. Use 'cpu', 'cuda[:index]', or 'arc[:index]'.");
     }
 
     public override string ToString()
-        => IsCuda ? $"cuda:{Index}" : "cpu";
+        => IsCuda ? $"cuda:{Index}" : IsArc ? $"arc:{Index}" : "cpu";
 }

@@ -127,6 +127,52 @@ internal static partial class WikiLanguageModelCommand
         }
     }
 
+    internal static IEnumerable<string> SkipResumeDocuments(
+        IEnumerable<string> documents, long completedDocuments, TextWriter output,
+        TimeSpan? reportInterval = null)
+    {
+        ArgumentNullException.ThrowIfNull(documents);
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentOutOfRangeException.ThrowIfNegative(completedDocuments);
+        using var enumerator = documents.GetEnumerator();
+        if (completedDocuments > 0)
+        {
+            using var progress = new ResumeDocumentProgress(completedDocuments, output, reportInterval);
+            for (long skipped = 0; skipped < completedDocuments; skipped++)
+            {
+                if (!enumerator.MoveNext())
+                    throw new InvalidDataException($"Cannot restore data cursor: checkpoint requires " +
+                        $"{completedDocuments:N0} documents but the configured corpus emitted only {skipped:N0}. " +
+                        "Restore the original dataset and document limit; refusing to silently finish the epoch.");
+                progress.Advance();
+            }
+            progress.Complete();
+        }
+        while (enumerator.MoveNext())
+            yield return enumerator.Current;
+    }
+
+    // Read-only diagnostic used by the benchmark executable. Does not load a
+    // model, tokenize text, create a run marker, or write checkpoint/metrics.
+    internal static void VerifyResumeDocumentCursor(string configurationPath, TextWriter output)
+    {
+        WikiTrainingConfiguration config = WikiTrainingConfiguration.Load(configurationPath);
+        WikiModelCheckpoint checkpoint = LoadCheckpointMetadata(config.CheckpointPath);
+        int completedEpoch = checkpoint.CompletedEpoch == 0 ? checkpoint.Epoch : checkpoint.CompletedEpoch;
+        int epoch = checkpoint.CurrentEpoch > completedEpoch
+            ? checkpoint.CurrentEpoch : completedEpoch + 1;
+        int documentSeed = TrainingRunner.CombineSeed(config.Seed, epoch, ShuffleSeedSalt);
+        int corpusSeed = TrainingRunner.CombineSeed(config.Seed, epoch, CorpusShuffleSeedSalt);
+        long skip = checkpoint.CurrentEpoch > completedEpoch
+            ? checkpoint.CompletedDocumentsInEpoch : 0;
+        var documents = ShuffleDocuments(ReadDocuments(config.Dataset, config.DataPath,
+            config.TextColumn, config.MaxTrainingDocuments == 0 ? null : config.MaxTrainingDocuments,
+            corpusSeed), config.ShuffleBufferSize, new Random(documentSeed));
+        using var iterator = SkipResumeDocuments(documents, skip, output).GetEnumerator();
+        bool hasNext = iterator.MoveNext();
+        output.WriteLine($"resume cursor check = success, next document available = {hasNext}; no training performed");
+    }
+
     /// <summary>
     /// Appends one document to the streaming token buffer as
     /// <c>&lt;bos&gt; tokens &lt;eos&gt;</c>.

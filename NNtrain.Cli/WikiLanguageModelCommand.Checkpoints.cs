@@ -245,11 +245,7 @@ internal static partial class WikiLanguageModelCommand
         if (configuredMode is not null
             && configuredMode.Value != checkpointMode)
         {
-            throw new InvalidDataException(
-                $"Configured precisionMode '{FormatPrecisionMode(configuredMode.Value)}' " +
-                $"does not match checkpoint precision mode " +
-                $"'{FormatPrecisionMode(checkpointMode)}'. Remove precisionMode " +
-                "to inherit the checkpoint mode, or use a matching value.");
+            ValidateResumePrecisionMigration(checkpointMode, configuredMode.Value);
         }
 
         int bfp8BlockSize = config.Bfp8BlockSize;
@@ -266,9 +262,23 @@ internal static partial class WikiLanguageModelCommand
                 : checkpointBlockSize;
         }
         return new WikiPrecisionSelection(
-            checkpointMode,
-            GetCheckpointModelDType(checkpoint),
+            configuredMode ?? checkpointMode,
+            configuredMode is { } requested && requested != checkpointMode
+                ? requested.ToStorageDType() : GetCheckpointModelDType(checkpoint),
             bfp8BlockSize);
+    }
+
+    private static void ValidateResumePrecisionMigration(
+        TensorPrecisionMode source, TensorPrecisionMode destination)
+    {
+        static bool HasFloat32TrainingState(TensorPrecisionMode mode)
+            => mode is TensorPrecisionMode.Float32 or TensorPrecisionMode.Mix16_32
+                or TensorPrecisionMode.Mix8_32;
+        if (!HasFloat32TrainingState(source) || !HasFloat32TrainingState(destination))
+            throw new InvalidDataException(
+                "Resume precision migration currently supports float32, mix16_32 and mix8_32 " +
+                "with FP32 optimizer state. For a BF16 storage experiment use mix16_32; " +
+                "pure bfloat16/bfp8 optimizer-state migration is not supported.");
     }
 
     internal static WikiResumePosition RestoreTrainingCheckpoint(
@@ -316,10 +326,12 @@ internal static partial class WikiLanguageModelCommand
             GetCheckpointPrecisionMode(checkpoint);
         if (model is Module module && module.PrecisionMode != checkpointMode)
         {
-            throw new InvalidDataException(
-                $"Checkpoint precision mode '{FormatPrecisionMode(checkpointMode)}' " +
-                $"does not match the constructed model precision mode " +
-                $"'{FormatPrecisionMode(module.PrecisionMode)}'.");
+            if (config.GetExplicitPrecisionMode() != module.PrecisionMode)
+                throw new InvalidDataException("Constructed model precision does not match the explicit resume request.");
+            ValidateResumePrecisionMigration(checkpointMode, module.PrecisionMode);
+            output.WriteLine($"resume precision migration = {FormatPrecisionMode(checkpointMode)} -> " +
+                $"{FormatPrecisionMode(module.PrecisionMode)}; restoring saved weights and FP32 optimizer state; " +
+                "step, scheduler and data cursor are preserved (numerical trajectory will change)");
         }
 
         int completedEpoch = checkpoint.CompletedEpoch == 0

@@ -143,6 +143,7 @@ public abstract class Module
         {
             TensorDevice.Cpu => MoveToCpu(),
             TensorDevice.Cuda => MoveToConfiguredCudaDevices(),
+            TensorDevice.Arc => to(new TorchDevice(TensorDevice.Arc)),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(device), device, "Unknown tensor device."),
         };
@@ -154,6 +155,16 @@ public abstract class Module
     {
         if (device.Type == TensorDevice.Cpu)
             return MoveToCpu();
+
+        if (device.Type == TensorDevice.Arc)
+        {
+            Tensor.ValidateArcPrecision(PrecisionMode);
+            if (!Tensor.IsArcAvailable(device.Index))
+                throw new InvalidOperationException($"Intel Arc OpenCL device {device.Index} is not available.");
+            foreach (Parameter parameter in Parameters()) parameter.T.to(device);
+            TensorExecutionContext.Device = device;
+            return this;
+        }
 
         if (!Tensor.IsCudaAvailable(device.Index))
         {
@@ -215,6 +226,7 @@ public abstract class Module
         {
             "cpu" => MoveToCpu(),
             "cuda" => MoveToConfiguredCudaDevices(),
+            "arc" => to(new TorchDevice(TensorDevice.Arc)),
             "auto" => MoveToAutomaticallySelectedDevice(),
             "float32" => to(TensorPrecisionMode.Float32),
             "bfloat16" => to(TensorPrecisionMode.BFloat16),
@@ -222,10 +234,11 @@ public abstract class Module
             "bfp8" => to(TensorPrecisionMode.Bfp8),
             "mix8_32" => to(TensorPrecisionMode.Mix8_32),
             _ when normalized.StartsWith("cuda:", StringComparison.Ordinal)
+                || normalized.StartsWith("arc:", StringComparison.Ordinal)
                 => to(TorchDevice.Parse(normalized)),
             _ => throw new ArgumentException(
                 $"Unsupported module conversion target '{target}'. " +
-                "Supported targets are cpu, cuda, cuda:N, auto, float32, " +
+                "Supported targets are cpu, cuda, cuda:N, arc, arc:N, auto, float32, " +
                 "bfloat16, mix16_32 (fp16_32), bfp8, and mix8_32.",
                 nameof(target)),
         };

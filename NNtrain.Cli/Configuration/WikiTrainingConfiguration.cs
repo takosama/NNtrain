@@ -31,6 +31,7 @@ sealed record WikiTrainingConfiguration
     internal const string LegacyFloat16ModelDType = "float16";
     internal const string CpuDevice = "cpu";
     internal const string CudaDevice = "cuda";
+    internal const string ArcDevice = "arc";
     internal const string AutoHyenaConvolution = "auto";
     internal const string DirectHyenaConvolution = "direct";
     internal const string FftHyenaConvolution = "fft";
@@ -68,6 +69,9 @@ sealed record WikiTrainingConfiguration
     public string TokenizerPath { get; init; } = string.Empty;
 
     public string CheckpointPath { get; init; } = string.Empty;
+
+    public double CheckpointIntervalMinutes { get; init; } =
+        CheckpointSchedule.DefaultIntervalMinutes;
 
     public bool ResumeFromCheckpoint { get; init; }
 
@@ -173,6 +177,8 @@ sealed record WikiTrainingConfiguration
     /// shape is retained; older completed shapes are retired first.
     /// </summary>
     public int CudaGraphCacheBudgetMiB { get; init; } = 512;
+    /// <summary>Optional per-replica budget for avoiding DRN history recomputation.</summary>
+    public int? CudaDrnRetainedHistoryMiB { get; init; }
 
     public int ForgetMemoryKeyWidth { get; init; } = 16;
 
@@ -384,6 +390,7 @@ sealed record WikiTrainingConfiguration
                 root,
                 "checkpoint",
                 "checkpointPath",
+                "checkpointIntervalMinutes",
                 "resumeFromCheckpoint",
                 "autoResume");
             WikiCheckpointConfiguration checkpoint =
@@ -400,6 +407,7 @@ sealed record WikiTrainingConfiguration
             {
                 ResumeFromCheckpoint = checkpoint.Resume,
                 AutoResume = checkpoint.AutoResume,
+                CheckpointIntervalMinutes = checkpoint.IntervalMinutes,
             };
         }
 
@@ -550,6 +558,7 @@ sealed record WikiTrainingConfiguration
 
     internal void Validate()
     {
+        _ = CheckpointSchedule.ParseInterval(CheckpointIntervalMinutes);
         if (!string.Equals(Task, TaskName, StringComparison.OrdinalIgnoreCase))
         {
             throw new ArgumentException(
@@ -642,6 +651,8 @@ sealed record WikiTrainingConfiguration
         ValidatePositive(
             CudaGraphCacheBudgetMiB,
             nameof(CudaGraphCacheBudgetMiB));
+        if (CudaDrnRetainedHistoryMiB is < 0 or > 1024)
+            throw new ArgumentOutOfRangeException(nameof(CudaDrnRetainedHistoryMiB));
         ValidatePositive(
             ForgetMemoryKeyWidth,
             nameof(ForgetMemoryKeyWidth));
@@ -708,7 +719,16 @@ sealed record WikiTrainingConfiguration
                 "Transformer and ForgetMemory architectures.",
                 nameof(PrecisionMode));
         }
-        _ = GetExecutionDevice();
+        if (GetExecutionDevice() == TensorDevice.Arc)
+        {
+            if (!IsArchitecture(TransformerArchitecture))
+                throw new NotSupportedException("Arc currently supports only modelArchitecture 'transformer'. DRN and other architectures are not implemented.");
+            Tensor.ValidateArcPrecision(GetPrecisionMode());
+            if ((DeviceIndices ?? [DeviceIndex]).Length != 1)
+                throw new NotSupportedException("Arc currently supports a single GPU; set deviceIndices to [0].");
+            if (!IsOptimizer(MuonOptimizer) && !IsOptimizer(NekoMuonOptimizer) && !IsOptimizer(AdamWOptimizer))
+                throw new NotSupportedException("Arc currently supports Muon, NekoMuon and AdamW.");
+        }
         if (!float.IsFinite(ForgetMemoryRetentionMinimum)
             || !float.IsFinite(ForgetMemoryRetentionMaximum)
             || ForgetMemoryRetentionMinimum < 0f
@@ -1113,10 +1133,12 @@ sealed record WikiTrainingConfiguration
             return TensorDevice.Cpu;
         if (string.Equals(Device, CudaDevice, StringComparison.OrdinalIgnoreCase))
             return TensorDevice.Cuda;
+        if (string.Equals(Device, ArcDevice, StringComparison.OrdinalIgnoreCase))
+            return TensorDevice.Arc;
 
         throw new ArgumentException(
             $"Unsupported device '{Device}'. Supported values are " +
-            $"'{CpuDevice}' and '{CudaDevice}'.",
+            $"'{CpuDevice}', '{CudaDevice}' and '{ArcDevice}'.",
             nameof(Device));
     }
 

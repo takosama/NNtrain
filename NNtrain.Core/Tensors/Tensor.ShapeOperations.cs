@@ -17,6 +17,15 @@ partial class Tensor
         int sequence = Rank == 3 ? _shape[1] : _shape[0];
         int width = _shape[^1];
         int sourceOffset = checked((sequence - 1) * width);
+        if (ExecutionDevice == TensorDevice.Arc)
+        {
+            if (ArcResident) return ArcResidentSlice(sourceOffset, width, [1, width]);
+            // A contiguous metadata slice is copied on the host; no arithmetic or CUDA fallback.
+            Tensor arcResult = ArcResult(ArcValues().AsSpan(sourceOffset, width).ToArray(), [1, width], [this]);
+            arcResult.Node.BackwardAction = () => ArcLane.Run("range_back", width, 0,
+                NNtrain.Arc.ArcExecutionLane.In(arcResult._grad), NNtrain.Arc.ArcExecutionLane.InOut(_grad), sourceOffset, width);
+            return arcResult;
+        }
         if (ExecutionDevice == TensorDevice.Cuda)
         {
             if (DType == TensorDType.Bfp8)
@@ -80,6 +89,9 @@ partial class Tensor
                 nameof(newShape));
         }
 
+        if (ExecutionDevice == TensorDevice.Arc)
+            return ArcReshape(newShape);
+
         if (ExecutionDevice == TensorDevice.Cuda)
         {
             if (DType == TensorDType.Bfp8)
@@ -94,8 +106,13 @@ partial class Tensor
                         accelerator,
                         Numel,
                         source.Descriptor);
-                source.Payload.View.CopyTo(output.Payload.View);
-                source.Scales.View.CopyTo(output.Scales.View);
+                // Payload and block scales stay on the same compute stream.
+                // The synchronous CopyTo overload is illegal during graph
+                // capture and would invalidate the stream before replay.
+                source.Payload.View.CopyTo(
+                    accelerator.DefaultStream, output.Payload.View);
+                source.Scales.View.CopyTo(
+                    accelerator.DefaultStream, output.Scales.View);
                 Tensor bfp8Result = FromCudaBfp8Result(
                     output,
                     deviceIndex,
@@ -182,18 +199,18 @@ partial class Tensor
         {
             source.Payload.View
                 .SubView(sourceOffset, length)
-                .CopyTo(output.Payload.View);
-            source.Scales.View.CopyTo(output.Scales.View);
+                .CopyTo(accelerator.DefaultStream, output.Payload.View);
+            source.Scales.View.CopyTo(accelerator.DefaultStream, output.Scales.View);
         }
         else if (sourceOffset % descriptor.BlockSize == 0)
         {
             source.Payload.View
                 .SubView(sourceOffset, length)
-                .CopyTo(output.Payload.View);
+                .CopyTo(accelerator.DefaultStream, output.Payload.View);
             int scaleOffset = sourceOffset / descriptor.BlockSize;
             source.Scales.View
                 .SubView(scaleOffset, checked((int)output.Scales.Length))
-                .CopyTo(output.Scales.View);
+                .CopyTo(accelerator.DefaultStream, output.Scales.View);
         }
         else
         {
@@ -205,7 +222,7 @@ partial class Tensor
             {
                 sourceDecode.Buffer.View
                     .SubView(sourceOffset, length)
-                    .CopyTo(decodedRange.View);
+                    .CopyTo(accelerator.DefaultStream, decodedRange.View);
                 CudaBfp8Native.QuantizeBFloat16(
                     deviceIndex,
                     decodedRange,

@@ -124,6 +124,63 @@ public sealed class NekoMuonStateTests
         Assert.Equal(4, options.MaxNewtonSchulzSteps);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BetaFastChangeUsesAccumulatedDecayProductAcrossResume(
+        bool legacyVersionOne)
+    {
+        var options = new NekoMuonOptions
+        {
+            LearningRate = 1e-4f,
+            BetaFast = 0.9f,
+            BetaSlow = 0.99f,
+            Rho = 0f,
+            NewtonSchulzInterval = 100,
+            WeightDecay = 0f,
+        };
+        Parameter sourceParameter = CreateParameter([0f], [1, 1]);
+        var source = new NekoMuon([sourceParameter], options);
+        for (int step = 0; step < 5; step++)
+        {
+            sourceParameter.T.MutableGrad[0] = 1f;
+            source.Step();
+        }
+
+        NekoMuonState checkpoint = source.CaptureState();
+        if (legacyVersionOne)
+        {
+            checkpoint = checkpoint with
+            {
+                FormatVersion = 1,
+                FastDecayProduct = null,
+                SlowDecayProduct = null,
+            };
+        }
+        Parameter resumedParameter = CreateParameter(
+            sourceParameter.T.Data.ToArray(),
+            [1, 1]);
+        var resumed = new NekoMuon([resumedParameter]);
+        resumed.RestoreState(checkpoint);
+        resumed.SetBetaFast(0.95f);
+        resumedParameter.T.MutableGrad[0] = 1f;
+
+        resumed.Step();
+
+        NekoMuonState state = resumed.CaptureState();
+        double expectedFastProduct =
+            Math.Pow((double)0.9f, 5d) * (double)0.95f;
+        Assert.Equal(NekoMuonState.CurrentFormatVersion, state.FormatVersion);
+        Assert.Equal(expectedFastProduct, state.FastDecayProduct!.Value, 12);
+        Assert.Equal(Math.Pow((double)0.99f, 6d),
+            state.SlowDecayProduct!.Value, 12);
+        Assert.Equal(1f, state.ParameterStates[0].FastMoment[0]
+            / (1f - (float)state.FastDecayProduct.Value), 5);
+        Assert.Equal(1f, state.ParameterStates[0].SlowMoment[0]
+            / (1f - (float)state.SlowDecayProduct.Value), 5);
+        Assert.Equal(1f, state.ParameterStates[0].Confidence, 5);
+    }
+
     private static Parameter CreateParameter(float[] data, int[] shape)
     {
         return new Parameter(

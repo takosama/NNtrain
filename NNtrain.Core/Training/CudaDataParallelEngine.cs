@@ -335,7 +335,8 @@ public sealed class CudaDataParallelEngine : IDisposable
         {
             ThrowIfDisposed();
             PrepareParameterResidency();
-            int[] devices = GetDevices(batchSize);
+            int[] devices = GetDevices(NeedsReducerTailPadding(batchSize)
+                ? _cudaDeviceIndices.Length : batchSize);
             if (devices.Length <= 1)
                 return;
 
@@ -596,11 +597,13 @@ public sealed class CudaDataParallelEngine : IDisposable
             using IDisposable precisionScope =
                 TensorExecutionContext.PushPrecisionPolicy(
                     ResolvePrecisionPolicy(_model.PrecisionMode));
+            CudaLanguageModelMicroBatch batch = PadReducerTail(
+                new(input, target, batchSize, sequenceLength), ignoreIndex);
             return ForwardBackwardCore(
-                input,
-                target,
-                batchSize,
-                sequenceLength,
+                batch.Input,
+                batch.Target,
+                batch.BatchSize,
+                batch.SequenceLength,
                 ignoreIndex,
                 globalStep);
         }
@@ -645,7 +648,9 @@ public sealed class CudaDataParallelEngine : IDisposable
                 TensorExecutionContext.PushPrecisionPolicy(
                     ResolvePrecisionPolicy(_model.PrecisionMode));
             return ForwardBackwardAccumulatedCore(
-                microBatches,
+                microBatches.Any(batch => NeedsReducerTailPadding(batch.BatchSize))
+                    ? microBatches.Select(batch => PadReducerTail(batch, ignoreIndex)).ToArray()
+                    : microBatches,
                 ignoreIndex,
                 globalStep);
         }
@@ -1294,7 +1299,8 @@ public sealed class CudaDataParallelEngine : IDisposable
                 work,
                 replicaCount,
                 ExecutionSession.Current,
-                ResolvePrecisionPolicy(_model.PrecisionMode));
+                ResolvePrecisionPolicy(_model.PrecisionMode),
+                dispatchPolicy: _dispatchPolicy);
         }
         catch (AggregateException exception)
             when (exception.InnerExceptions.Count == 1)
@@ -1663,6 +1669,27 @@ public sealed class CudaDataParallelEngine : IDisposable
             throw new ArgumentException(
                 "Input and target must match the batch shape.");
         }
+    }
+
+    private bool NeedsReducerTailPadding(int batchSize)
+        => batchSize > 0 && batchSize < _cudaDeviceIndices.Length
+            && UseBFloat16GradientBuckets(_cudaDeviceIndices, _model.PrecisionMode);
+
+    private CudaLanguageModelMicroBatch PadReducerTail(
+        CudaLanguageModelMicroBatch batch, int ignoreIndex)
+    {
+        ValidateBatch(batch.Input, batch.Target, batch.BatchSize, batch.SequenceLength);
+        if (!NeedsReducerTailPadding(batch.BatchSize))
+            return batch;
+        // Keep the reducer/device set stable at an epoch tail. Extra rows
+        // carry no targets and contribute zero; no samples are duplicated.
+        int length = checked(_cudaDeviceIndices.Length * batch.SequenceLength);
+        var input = new int[length];
+        var target = new int[length];
+        Array.Fill(target, ignoreIndex);
+        batch.Input.CopyTo(input, 0);
+        batch.Target.CopyTo(target, 0);
+        return new(input, target, _cudaDeviceIndices.Length, batch.SequenceLength);
     }
 
     private int[] GetDevices(int batchSize)
@@ -2180,6 +2207,26 @@ public sealed class CudaDataParallelEngine : IDisposable
                 _bfloat16Plan?.BeginDeviceStep(_reductionStepId, device);
                 _accumulatedLossBuffers?[replicaIndex].MemSetToZero();
             }
+            if (shardValid == 0 && _bfloat16Plan is not null)
+            {
+                // BeginDeviceStep already cleared this worker's gradient
+                // storage. Publish its zero contribution without attempting
+                // cross entropy on an all-ignore shard.
+                foreach (Parameter parameter in _owner._parameters)
+                    _reductionPlan?.NotifyGradientReady(
+                        parameter.T, device, _reductionStepId);
+                WeightedLosses[replicaIndex] = 0d;
+                if (_accumulatedLossBuffers is not null && _completeAccumulatedLoss)
+                {
+                    NativeCudaScalarReadback readback = NativeCudaScalarReadback.Rent(device);
+                    readback.Begin(_accumulatedLossBuffers[replicaIndex].NativePtr,
+                        ForgetMemoryV2Cuda.GetAccelerator(device).DefaultStream);
+                    WeightedLosses[replicaIndex] = readback.CompleteAndReturn();
+                }
+                ShardElapsed[replicaIndex] = System.Diagnostics.Stopwatch.GetElapsedTime(
+                    ShardStarted[replicaIndex]).TotalMilliseconds;
+                return;
+            }
             using IDisposable? reductionScope = _reductionPlan is null
                 ? null
                 : CudaGradientReductionContext.Push(
@@ -2627,6 +2674,22 @@ public sealed class CudaDataParallelEngine : IDisposable
                     _reductionStepId,
                     device,
                     compiled.BFloat16BucketOrder);
+            }
+            else if (_publishGradientsAfterReplay
+                && Devices.Length == 1)
+            {
+                // Replay writes captured buffers without running managed
+                // backward publication. There is no reducer to publish the
+                // new local generation on a single GPU.
+                NumericFormat gradientFormat = ResolvePrecisionPolicy(
+                    _owner._model.PrecisionMode).Gradient;
+                foreach (Parameter parameter in _owner._parameters)
+                {
+                    if (gradientFormat == NumericFormat.BFloat16)
+                        parameter.T.MarkCudaBFloat16GradientMutated(device);
+                    else if (gradientFormat == NumericFormat.Float32)
+                        parameter.T.MarkCudaGradientMutated(device);
+                }
             }
             float lossValue = readback?.CompleteAndReturn() ?? 0f;
             if (_publishGradientsAfterReplay)

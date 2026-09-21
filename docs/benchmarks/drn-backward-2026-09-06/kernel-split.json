@@ -1,0 +1,68 @@
+[
+  {
+    "Batch": 8,
+    "Sequence": 2048,
+    "Key": 32,
+    "Value": 32,
+    "SplitScratchBytes": 134217728,
+    "MeanMilliseconds": 4.36075,
+    "Compared": true,
+    "MaxAbsoluteError": 2.3841858E-07,
+    "RelativeL2Error": 9.646799597970966E-08
+  },
+  {
+    "Batch": 16,
+    "Sequence": 512,
+    "Key": 16,
+    "Value": 16,
+    "SplitScratchBytes": 16777216,
+    "MeanMilliseconds": 1.08035,
+    "Compared": true,
+    "MaxAbsoluteError": 1.4901161E-07,
+    "RelativeL2Error": 6.924727482436161E-08
+  },
+  {
+    "Batch": 8,
+    "Sequence": 129,
+    "Key": 17,
+    "Value": 17,
+    "SplitScratchBytes": 2385984,
+    "MeanMilliseconds": 0.18741000000000002,
+    "Compared": true,
+    "MaxAbsoluteError": 1.4901161E-07,
+    "RelativeL2Error": 7.110471479478188E-08
+  },
+  {
+    "Batch": 8,
+    "Sequence": 65,
+    "Key": 1,
+    "Value": 19,
+    "SplitScratchBytes": 0,
+    "MeanMilliseconds": 0.08771999999999999,
+    "Compared": true,
+    "MaxAbsoluteError": 3.0517578E-05,
+    "RelativeL2Error": 1.527220764598944E-07
+  },
+  {
+    "Batch": 2,
+    "Sequence": 33,
+    "Key": 32,
+    "Value": 32,
+    "SplitScratchBytes": 0,
+    "MeanMilliseconds": 0.05084999999999999,
+    "Compared": true,
+    "MaxAbsoluteError": 8.940697E-08,
+    "RelativeL2Error": 2.8881103907767534E-08
+  },
+  {
+    "Batch": 2,
+    "Sequence": 33,
+    "Key": 48,
+    "Value": 32,
+    "SplitScratchBytes": 0,
+    "MeanMilliseconds": 0.9957649999999999,
+    "Compared": true,
+    "MaxAbsoluteError": 0,
+    "RelativeL2Error": 0
+  }
+]

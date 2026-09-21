@@ -2967,7 +2967,8 @@ __device__ __forceinline__ void forget_memory_tensor_core_matvec(
     const __nv_bfloat16* state_tile,
     const __nv_bfloat16* vector_matrix,
     float* product,
-    int key_tiles) {
+    int key_tiles,
+    int state_stride) {
     using namespace nvcuda;
     wmma::fragment<wmma::accumulator, 16, 16, 16, float> accumulator;
     wmma::fill_fragment(accumulator, 0.f);
@@ -2979,7 +2980,7 @@ __device__ __forceinline__ void forget_memory_tensor_core_matvec(
         wmma::load_matrix_sync(
             state_fragment,
             state_tile + key_tile * kForgetMemoryTile,
-            kForgetMemoryMaxWidth);
+            state_stride);
         wmma::load_matrix_sync(
             vector_fragment,
             vector_matrix + key_tile * kForgetMemoryTile * kForgetMemoryTile,
@@ -2990,6 +2991,142 @@ __device__ __forceinline__ void forget_memory_tensor_core_matvec(
     wmma::store_matrix_sync(
         product, accumulator, kForgetMemoryTile, wmma::mem_row_major);
 }
+
+// One warp owns 16 independent value rows. Keep the FP32 recurrence in
+// registers, and stage only the BF16 operands for WMMA. All lanes participate
+// in every shuffle/WMMA; no cross-warp barrier is needed. The matrix product
+// uses the same K tile order and Q/K columns as the original CTA kernel.
+template<int KeyWidth, int Chunk = 0, bool Parallel = false>
+__global__ void drn_forward_warp_tensor_core_bf16(
+    const __nv_bfloat16* __restrict__ projected,
+    __nv_bfloat16* __restrict__ output, float* __restrict__ states,
+    float* __restrict__ state, int sequence, int projection_width,
+    int value_width, float retention_floor, const float* guesses = nullptr, float* ends = nullptr,
+    int* mismatch = nullptr, const int* fallback = nullptr, bool output_enabled = true,
+    bool reuse_unchanged = false) {
+    if (fallback && *fallback == 0) return;
+    constexpr int rows = 16;
+    constexpr int elements = rows * KeyWidth;
+    constexpr int per_lane = elements / 32;
+    __shared__ __align__(32) __nv_bfloat16 state_tile[elements];
+    __shared__ __align__(32) __nv_bfloat16 vectors[KeyWidth * 16];
+    __shared__ __align__(32) float product[16 * 16];
+    const int lane = threadIdx.x;
+    const int batch = blockIdx.x;
+    const int row_base = blockIdx.y * rows;
+    const int matrix_size = KeyWidth * value_width;
+    const int state_base = batch * matrix_size + row_base * KeyWidth;
+    const int chunks = Chunk > 0 ? (sequence + Chunk - 1) / Chunk : 1;
+    const int chunk = Parallel ? blockIdx.z : 0;
+    float recurrent[per_lane];
+    #pragma unroll
+    for (int i = 0; i < per_lane; ++i) {
+        if constexpr (Parallel)
+            recurrent[i] = chunk == 0 ? 0.f
+                : guesses[(batch * chunks + chunk - 1) * matrix_size + row_base * KeyWidth + i * 32 + lane];
+        else recurrent[i] = fallback ? 0.f : state[state_base + i * 32 + lane];
+    }
+    if constexpr (Parallel) {
+        bool changed = !reuse_unchanged;
+        if (reuse_unchanged) {
+            #pragma unroll
+            for (int i = 0; i < per_lane; ++i)
+                changed |= __float_as_uint(recurrent[i]) != __float_as_uint(
+                    states[(batch * chunks + chunk) * matrix_size + row_base * KeyWidth + i * 32 + lane]);
+        }
+        if (!__any_sync(0xffffffffu, changed)) {
+            #pragma unroll
+            for (int i = 0; i < per_lane; ++i) {
+                const int index = (batch * chunks + chunk) * matrix_size + row_base * KeyWidth + i * 32 + lane;
+                ends[index] = guesses[index];
+                if (chunk == chunks - 1) state[state_base + i * 32 + lane] = guesses[index];
+            }
+            return;
+        }
+    }
+    const int begin = Parallel ? chunk * Chunk : 0;
+    const int end = Parallel ? min(begin + Chunk, sequence) : sequence;
+    for (int time = begin; time < end; ++time) {
+        if constexpr (Chunk > 0) {
+            if (output_enabled && time % Chunk == 0) {
+                #pragma unroll
+                for (int i = 0; i < per_lane; ++i)
+                    states[(batch * chunks + time / Chunk) * matrix_size
+                        + row_base * KeyWidth + i * 32 + lane] = recurrent[i];
+            }
+        }
+        const int p = (batch * sequence + time) * projection_width;
+        float k = lane < KeyWidth
+            ? tanhf(__bfloat162float(projected[p + KeyWidth + lane])) : 0.f;
+        float q = lane < KeyWidth
+            ? tanhf(__bfloat162float(projected[p + lane])) : 0.f;
+        float kn = k * k, qn = q * q;
+        #pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            kn += __shfl_xor_sync(0xffffffffu, kn, offset);
+            qn += __shfl_xor_sync(0xffffffffu, qn, offset);
+        }
+        k *= rsqrtf(kn + 1e-8f);
+        q *= rsqrtf(qn + 1e-8f);
+        float gate = 0.f, beta = 0.f, value = 0.f;
+        if (lane < rows) {
+            const int v = p + 2 * KeyWidth + row_base + lane;
+            gate = 1.f / (1.f + expf(-__bfloat162float(projected[v + value_width])));
+            gate = retention_floor + (1.f - retention_floor) * gate;
+            beta = 1.f / (1.f + expf(-__bfloat162float(projected[v + 2 * value_width])));
+            value = tanhf(__bfloat162float(projected[v]));
+        }
+        #pragma unroll
+        for (int i = 0; i < KeyWidth * 16 / 32; ++i) {
+            const int index = i * 32 + lane;
+            const float vk = __shfl_sync(0xffffffffu, k, index / 16);
+            const float vq = __shfl_sync(0xffffffffu, q, index / 16);
+            vectors[index] = __float2bfloat16_rn(index % 16 == 0 ? vk
+                : index % 16 == 1 ? vq : 0.f);
+        }
+        #pragma unroll
+        for (int i = 0; i < per_lane; ++i)
+            state_tile[i * 32 + lane] = __float2bfloat16_rn(recurrent[i]);
+        __syncwarp();
+        forget_memory_tensor_core_matvec(state_tile, vectors, product,
+            KeyWidth / 16, KeyWidth);
+        __syncwarp();
+        float delta = 0.f;
+        if (lane < rows) {
+            delta = beta * (value - product[lane * 16]);
+            if (output_enabled)
+                output[(batch * sequence + time) * value_width + row_base + lane]
+                    = __float2bfloat16_rn(product[lane * 16 + 1]);
+        }
+        #pragma unroll
+        for (int i = 0; i < per_lane; ++i) {
+            const int index = i * 32 + lane;
+            const float g = __shfl_sync(0xffffffffu, gate, index / KeyWidth);
+            const float d = __shfl_sync(0xffffffffu, delta, index / KeyWidth);
+            const float nk = __shfl_sync(0xffffffffu, k, index % KeyWidth);
+            recurrent[i] = g * recurrent[i] + d * nk;
+            if constexpr (Chunk == 0)
+                states[(batch * sequence + time) * matrix_size
+                    + row_base * KeyWidth + index] = recurrent[i];
+        }
+        __syncwarp();
+    }
+    bool changed_end = false;
+    #pragma unroll
+    for (int i = 0; i < per_lane; ++i) {
+        if constexpr (Parallel) {
+            const int index = (batch * chunks + chunk) * matrix_size + row_base * KeyWidth + i * 32 + lane;
+            ends[index] = recurrent[i];
+            if (mismatch) changed_end |= __float_as_uint(recurrent[i]) != __float_as_uint(guesses[index]);
+            if (chunk == chunks - 1 && output_enabled) state[state_base + i * 32 + lane] = recurrent[i];
+        }
+        else state[state_base + i * 32 + lane] = recurrent[i];
+    }
+    if constexpr (Parallel)
+        if (__any_sync(0xffffffffu, changed_end) && lane == 0) atomicExch(mismatch, 1);
+}
+
+#include "drn_chunk.cuh"
 
 // A CTA owns one recurrent memory.  Q/K are normalized once per token instead
 // of once per value row.  16-row state tiles are read by BF16 Tensor Cores;
@@ -3038,7 +3175,33 @@ __global__ void forget_memory_forward_tensor_core_bf16(
         const int gate_offset = value_offset + value_width;
         const int beta_offset = gate_offset + value_width;
 
-        if (threadIdx.x == 0) {
+        if (key_width <= kWarpSize) {
+            // Small recurrent keys used to evaluate every tanh and both
+            // norms serially on lane zero. One warp now loads/normalizes
+            // coalesced Q/K; inactive tail lanes contribute zero. State and
+            // normalization stay FP32 before the existing BF16 WMMA cast.
+            if (threadIdx.x < kWarpSize) {
+                const int lane = threadIdx.x;
+                float k = lane < key_width ? tanhf(__bfloat162float(
+                    projected[key_offset + lane])) : 0.f;
+                float q = lane < key_width ? tanhf(__bfloat162float(
+                    projected[projected_offset + lane])) : 0.f;
+                float kn = k * k;
+                float qn = q * q;
+                for (int offset = kWarpSize / 2; offset > 0; offset >>= 1) {
+                    kn += __shfl_xor_sync(0xffffffffu, kn, offset);
+                    qn += __shfl_xor_sync(0xffffffffu, qn, offset);
+                }
+                const float ks = rsqrtf(use_drn ? kn + 1e-8f
+                    : use_v3 ? kn + 1e-6f : (float)key_width);
+                const float qs = rsqrtf(use_drn ? qn + 1e-8f : (float)key_width);
+                if (lane < key_width) {
+                    normalized_key[lane] = k * ks;
+                    normalized_query[lane] = q * qs;
+                }
+            }
+        }
+        else if (threadIdx.x == 0) {
             float key_norm_squared = use_drn
                 ? 1e-8f
                 : use_v3 ? 1e-6f : (float)key_width;
@@ -3066,9 +3229,7 @@ __global__ void forget_memory_forward_tensor_core_bf16(
              value_index += blockDim.x) {
             const float gate = 1.f / (1.f + expf(-__bfloat162float(
                 projected[gate_offset + value_index])));
-            const float row_retention = use_drn
-                ? gate
-                : retention_floor + (1.f - retention_floor) * gate;
+            const float row_retention = retention_floor + (1.f - retention_floor) * gate;
             const float beta = 1.f / (1.f + expf(-__bfloat162float(
                 projected[beta_offset + value_index])));
             retention[value_index] = row_retention;
@@ -3084,49 +3245,41 @@ __global__ void forget_memory_forward_tensor_core_bf16(
              index += blockDim.x) {
             const int key = index / tile;
             const int column = index % tile;
+            // DRN reads and predicts from the same pre-update state. Put Q
+            // beside K so one WMMA produces both independent dot products,
+            // with exactly the same BF16 operands and FP32 accumulation.
             key_matrix[index] = __float2bfloat16_rn(
-                column == 0 ? normalized_key[key] : 0.f);
-            query_matrix[index] = __float2bfloat16_rn(
-                column == 0 ? normalized_query[key] : 0.f);
+                column == 0 ? normalized_key[key]
+                    : use_drn && column == 1 ? normalized_query[key] : 0.f);
+            if (!use_drn) {
+                query_matrix[index] = __float2bfloat16_rn(
+                    column == 0 ? normalized_query[key] : 0.f);
+            }
         }
         __syncthreads();
 
         for (int value_tile = 0; value_tile < value_tiles; ++value_tile) {
-            for (int index = threadIdx.x; index < tile * max_width;
+            for (int index = threadIdx.x; index < tile * key_width;
                  index += blockDim.x) {
-                const int row = index / max_width;
-                const int key = index % max_width;
-                const int value_index = value_tile * tile + row;
-                state_tile[index] = key < key_width
-                    ? __float2bfloat16_rn(
-                        state[state_batch + value_index * key_width + key])
-                    : __float2bfloat16_rn(0.f);
+                state_tile[index] = __float2bfloat16_rn(
+                    state[state_batch + value_tile * tile * key_width + index]);
             }
             __syncthreads();
             if (threadIdx.x < kWarpSize) {
                 forget_memory_tensor_core_matvec(
-                    state_tile, key_matrix, product, key_tiles);
+                    state_tile, key_matrix, product, key_tiles, key_width);
             }
             __syncthreads();
             if (threadIdx.x < tile) {
                 const int value_index = value_tile * tile + threadIdx.x;
                 predicted[value_index] = product[threadIdx.x * tile];
-            }
-            __syncthreads();
-            if (use_drn) {
-                if (threadIdx.x < kWarpSize) {
-                    forget_memory_tensor_core_matvec(
-                        state_tile, query_matrix, product, key_tiles);
-                }
-                __syncthreads();
-                if (threadIdx.x < tile) {
-                    const int value_index = value_tile * tile + threadIdx.x;
-                    recalled[value_index] = product[threadIdx.x * tile];
+                if (use_drn) {
+                    recalled[value_index] = product[threadIdx.x * tile + 1];
                     output[output_batch + time * value_width + value_index] =
                         __float2bfloat16_rn(recalled[value_index]);
                 }
-                __syncthreads();
             }
+            __syncthreads();
         }
 
         for (int index = threadIdx.x; index < matrix_size;
@@ -3148,20 +3301,16 @@ __global__ void forget_memory_forward_tensor_core_bf16(
 
         if (!use_drn) {
             for (int value_tile = 0; value_tile < value_tiles; ++value_tile) {
-                for (int index = threadIdx.x; index < tile * max_width;
+                for (int index = threadIdx.x; index < tile * key_width;
                      index += blockDim.x) {
-                    const int row = index / max_width;
-                    const int key = index % max_width;
-                    const int value_index = value_tile * tile + row;
-                    state_tile[index] = key < key_width
-                        ? __float2bfloat16_rn(state[
-                            state_batch + value_index * key_width + key])
-                        : __float2bfloat16_rn(0.f);
+                    state_tile[index] = __float2bfloat16_rn(state[
+                        state_batch + value_tile * tile * key_width + index]);
                 }
                 __syncthreads();
                 if (threadIdx.x < kWarpSize) {
                     forget_memory_tensor_core_matvec(
-                        state_tile, query_matrix, product, key_tiles);
+                        state_tile, query_matrix, product, key_tiles,
+                        key_width);
                 }
                 __syncthreads();
                 if (threadIdx.x < tile) {
@@ -3175,6 +3324,107 @@ __global__ void forget_memory_forward_tensor_core_bf16(
     }
 }
 
+}
+
+// Bounded parallel fixed-point refinement, with an exactness gate entirely
+// on CUDA. A fixed point of chunk-end states is the unique sequential result
+// (chunk 0 starts at zero). Nonconvergence always executes the original loop.
+NNTRAIN_EXPORT int nntrain_drn_chunk_parallel_forward_with_floor(const __nv_bfloat16* projected,
+    __nv_bfloat16* output, float* checkpoints, float* state, float* ping, float* pong,
+    int* mismatch, int batch, int sequence, int width, int key, int value, int passes,
+    float retention_floor, cudaStream_t stream) {
+    if (!projected || !output || !checkpoints || !state || !ping || !pong || !mismatch
+        || batch <= 0 || sequence <= 0 || (key != 16 && key != 32)
+        || value <= 0 || value > 128 || value % 16 || width != 2*key+3*value || passes <= 0 || passes > 32
+        || !(retention_floor >= 0.f && retention_floor < 1.f))
+        return (int)cudaErrorInvalidValue;
+    const int chunks = (sequence + kDrnChunk - 1)/kDrnChunk;
+    const size_t bytes = (size_t)batch * chunks * key * value * sizeof(float);
+    cudaError_t status = cudaMemsetAsync(ping, 0, bytes, stream);
+    if (status == cudaSuccess) status = cudaMemsetAsync(mismatch, 0, sizeof(int), stream);
+    if (status != cudaSuccess) return (int)status;
+    const dim3 parallel(batch, value/16, chunks), serial(batch,value/16);
+    for (int pass = 0; pass < passes; ++pass) {
+        const float* input = pass % 2 == 0 ? ping : pong;
+        float* result = pass % 2 == 0 ? pong : ping;
+        int* check = pass == passes - 1 ? mismatch : nullptr;
+        if (key == 16) drn_forward_warp_tensor_core_bf16<16,kDrnChunk,true><<<parallel,32,0,stream>>>(
+            projected,output,checkpoints,state,sequence,width,value,retention_floor,input,result,check,nullptr,true,pass>0);
+        else drn_forward_warp_tensor_core_bf16<32,kDrnChunk,true><<<parallel,32,0,stream>>>(
+            projected,output,checkpoints,state,sequence,width,value,retention_floor,input,result,check,nullptr,true,pass>0);
+        status = cudaPeekAtLastError();
+        if (status != cudaSuccess) return (int)status;
+    }
+    // The predicated fallback initializes its registers to zero, leaving the
+    // speculative final state intact when refinement reached an exact fixed point.
+    if (key == 16) drn_forward_warp_tensor_core_bf16<16,kDrnChunk><<<serial,32,0,stream>>>(
+        projected,output,checkpoints,state,sequence,width,value,retention_floor,nullptr,nullptr,nullptr,mismatch);
+    else drn_forward_warp_tensor_core_bf16<32,kDrnChunk><<<serial,32,0,stream>>>(
+        projected,output,checkpoints,state,sequence,width,value,retention_floor,nullptr,nullptr,nullptr,mismatch);
+    return (int)cudaPeekAtLastError();
+}
+
+NNTRAIN_EXPORT int nntrain_drn_chunk_parallel_forward(const __nv_bfloat16* projected,
+    __nv_bfloat16* output, float* checkpoints, float* state, float* ping, float* pong,
+    int* mismatch, int batch, int sequence, int width, int key, int value, int passes,
+    cudaStream_t stream) {
+    return nntrain_drn_chunk_parallel_forward_with_floor(projected, output,
+        checkpoints, state, ping, pong, mismatch, batch, sequence, width,
+        key, value, passes, 0.f, stream);
+}
+
+NNTRAIN_EXPORT int nntrain_drn_chunk_forward_with_floor(const __nv_bfloat16* projected,
+    __nv_bfloat16* output, float* checkpoints, float* state,
+    int batch, int sequence, int width, int key, int value,
+    float retention_floor, cudaStream_t stream) {
+    if (!projected || !output || !checkpoints || !state || batch <= 0 || sequence <= 0
+        || (key != 16 && key != 32) || value <= 0 || value > 128 || value % 16
+        || width != 2*key + 3*value
+        || !(retention_floor >= 0.f && retention_floor < 1.f)) return (int)cudaErrorInvalidValue;
+    const dim3 grid(batch, value / 16);
+    if (key == 16) drn_forward_warp_tensor_core_bf16<16, kDrnChunk><<<grid, 32, 0, stream>>>(
+        projected, output, checkpoints, state, sequence, width, value, retention_floor);
+    else drn_forward_warp_tensor_core_bf16<32, kDrnChunk><<<grid, 32, 0, stream>>>(
+        projected, output, checkpoints, state, sequence, width, value, retention_floor);
+    return (int)cudaPeekAtLastError();
+}
+
+NNTRAIN_EXPORT int nntrain_drn_chunk_forward(const __nv_bfloat16* projected,
+    __nv_bfloat16* output, float* checkpoints, float* state,
+    int batch, int sequence, int width, int key, int value, cudaStream_t stream) {
+    return nntrain_drn_chunk_forward_with_floor(projected, output, checkpoints,
+        state, batch, sequence, width, key, value, 0.f, stream);
+}
+
+NNTRAIN_EXPORT int nntrain_drn_chunk_backward_with_floor(const __nv_bfloat16* projected,
+    float* dp, const float* dy, const float* checkpoints, float* state_gradient,
+    float* adjoints, int batch, int sequence, int width, int key, int value,
+    float retention_floor, cudaStream_t stream) {
+    if (!projected || !dp || !dy || !checkpoints || !state_gradient || !adjoints
+        || batch <= 0 || sequence <= 0 || (key != 16 && key != 32)
+        || value <= 0 || value > 128 || value % 16 || width != 2*key + 3*value
+        || !(retention_floor >= 0.f && retention_floor < 1.f))
+        return (int)cudaErrorInvalidValue;
+    if (key == 16) drn_chunk_adjoint_boundaries<16><<<batch*value, 32, 0, stream>>>(
+        projected, dy, state_gradient, adjoints, sequence, width, value, retention_floor);
+    else drn_chunk_adjoint_boundaries<32><<<batch*value, 32, 0, stream>>>(
+        projected, dy, state_gradient, adjoints, sequence, width, value, retention_floor);
+    cudaError_t status = cudaPeekAtLastError();
+    if (status != cudaSuccess) return (int)status;
+    const dim3 grid(batch, value/16, (sequence + kDrnChunk - 1)/kDrnChunk);
+    if (key == 16) drn_chunk_replay_backward<16><<<grid, 512, 0, stream>>>(
+        projected, dp, dy, checkpoints, adjoints, sequence, width, value, retention_floor);
+    else drn_chunk_replay_backward<32><<<grid, 512, 0, stream>>>(
+        projected, dp, dy, checkpoints, adjoints, sequence, width, value, retention_floor);
+    return (int)cudaPeekAtLastError();
+}
+
+NNTRAIN_EXPORT int nntrain_drn_chunk_backward(const __nv_bfloat16* projected,
+    float* dp, const float* dy, const float* checkpoints, float* state_gradient,
+    float* adjoints, int batch, int sequence, int width, int key, int value,
+    cudaStream_t stream) {
+    return nntrain_drn_chunk_backward_with_floor(projected, dp, dy, checkpoints,
+        state_gradient, adjoints, batch, sequence, width, key, value, 0.f, stream);
 }
 
 NNTRAIN_EXPORT int nntrain_forget_memory_forward_bf16_tensor_core(
@@ -3198,6 +3448,16 @@ NNTRAIN_EXPORT int nntrain_forget_memory_forward_bf16_tensor_core(
         || value_width % kForgetMemoryTile
         || projection_width != 2 * key_width + 3 * value_width) {
         return (int)cudaErrorInvalidValue;
+    }
+    if (memory_variant == 2 && (key_width == 16 || key_width == 32)) {
+        const dim3 grid(batch, value_width / 16);
+        if (key_width == 16)
+            drn_forward_warp_tensor_core_bf16<16><<<grid, 32, 0, stream>>>(
+                projected, output, states, state, sequence, projection_width, value_width, retention_floor);
+        else
+            drn_forward_warp_tensor_core_bf16<32><<<grid, 32, 0, stream>>>(
+                projected, output, states, state, sequence, projection_width, value_width, retention_floor);
+        return (int)cudaPeekAtLastError();
     }
     forget_memory_forward_tensor_core_bf16<<<batch, 256, 0, stream>>>(
         projected, output, states, state,

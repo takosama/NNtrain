@@ -99,6 +99,7 @@ public sealed class TrainingConfigurationTests
               "resumeFromCheckpoint": true,
               "autoResume": true,
               "checkpointPath": "artifacts/resume.json",
+              "checkpointIntervalMinutes": 2.5,
               "seed": 42,
               "model": {
                 "heads": 2,
@@ -156,6 +157,7 @@ public sealed class TrainingConfigurationTests
         Assert.Equal(
             Path.Combine(directory.Root, "artifacts", "resume.json"),
             configuration.CheckpointPath);
+        Assert.Equal(2.5, configuration.CheckpointIntervalMinutes);
         Assert.Equal(42, configuration.Seed);
         Assert.Equal(2, configuration.Model.Heads);
         Assert.Equal(64, configuration.Model.HiddenSize);
@@ -205,6 +207,7 @@ public sealed class TrainingConfigurationTests
               "checkpoint": {
                 "directory": "artifacts/checkpoints",
                 "fileName": "classifier.state.json",
+                "intervalMinutes": 7.5,
                 "resume": true,
                 "autoResume": true
               }
@@ -228,6 +231,7 @@ public sealed class TrainingConfigurationTests
         Assert.Equal(3.2f, configuration.GainShareMaxScale);
         Assert.Equal(2, configuration.WarmupEpochs);
         Assert.Equal(0.05f, configuration.MinimumLearningRateRatio);
+        Assert.Equal(7.5, configuration.CheckpointIntervalMinutes);
         Assert.True(configuration.ResumeFromCheckpoint);
         Assert.True(configuration.AutoResume);
         Assert.Equal(

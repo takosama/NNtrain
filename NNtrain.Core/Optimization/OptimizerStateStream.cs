@@ -335,6 +335,15 @@ public static class OptimizerStateStream
             state.Step,
             state.Options,
             state.ParameterStates.Length);
+        if (state.FormatVersion >= 2)
+        {
+            writer.Write(state.FastDecayProduct
+                ?? throw new InvalidDataException(
+                    "NekoMuon fast decay product is missing."));
+            writer.Write(state.SlowDecayProduct
+                ?? throw new InvalidDataException(
+                    "NekoMuon slow decay product is missing."));
+        }
         foreach (NekoMuonParameterState parameter in state.ParameterStates)
         {
             WriteParameterMetadata(
@@ -354,6 +363,12 @@ public static class OptimizerStateStream
     {
         (int formatVersion, int step, NekoMuonOptions options, int count) =
             ReadStateHeader<NekoMuonOptions>(reader, stream);
+        double? fastDecayProduct = formatVersion >= 2
+            ? reader.ReadDouble()
+            : null;
+        double? slowDecayProduct = formatVersion >= 2
+            ? reader.ReadDouble()
+            : null;
         var states = new NekoMuonParameterState[count];
         for (int index = 0; index < states.Length; index++)
         {
@@ -367,7 +382,11 @@ public static class OptimizerStateStream
                 ReadFloatArray(reader, stream),
                 reader.ReadSingle());
         }
-        return new NekoMuonState(formatVersion, step, options, states);
+        return new NekoMuonState(formatVersion, step, options, states)
+        {
+            FastDecayProduct = fastDecayProduct,
+            SlowDecayProduct = slowDecayProduct,
+        };
     }
 
     private static void WriteLionState(

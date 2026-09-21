@@ -189,6 +189,61 @@ public sealed class WikiEpochBoundaryTests
         }
     }
 
+    [Fact]
+    public async Task TimedStreamingSavesDoNotChangeGradientAccumulationOrFinalWeights()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"NNtrain.TimedWiki-{Guid.NewGuid():N}");
+        string dataDirectory = Path.Combine(directory, "wiki");
+        Directory.CreateDirectory(dataDirectory);
+        try
+        {
+            await WriteShard(Path.Combine(dataDirectory, "train.parquet"),
+                Enumerable.Repeat("日本語の学習文書です。勾配累積を分割せずに保存できることを確認します。", 5).ToArray());
+            (ModuleState State, long Step, string Output) Run(string name, double minutes)
+            {
+                string path = Path.Combine(directory, name + ".json");
+                File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    task = "gpt_rin_wiki_jp", dataPath = "wiki", textColumn = "text",
+                    tokenizerPath = "tokenizer.json", checkpointPath = name + ".checkpoint.json",
+                    checkpointIntervalMinutes = minutes,
+                    vocabularySize = 300, tokenizerTrainingDocuments = 1, tokenizerTrainingBytes = 10000,
+                    maxTrainingDocuments = 0, maxTrainingTokens = 0, maxDocumentTokens = 20,
+                    shuffleBufferSize = 4, validationFraction = 0, epochs = 1,
+                    batchSize = 1, gradientAccumulationSteps = 3,
+                    contextLength = 4, modelWidth = 4, heads = 1, hiddenSize = 8, layers = 1,
+                    modelArchitecture = "transformer", device = "cpu", precisionMode = "float32",
+                    dropout = 0.0, optimizer = "adamw", learningRate = 0.001, auxiliaryLearningRate = 0.001,
+                    warmupPercent = 0, seed = 1234, logEveryBatches = 1, showLossGraph = false,
+                    graphUpdateSteps = 100, datasetSampleEverySteps = 0, datasetSamplePoolSize = 1,
+                    maxNewTokens = 1, temperature = 0.0, topK = 1,
+                }));
+                using var output = new StringWriter();
+                using var error = new StringWriter();
+                int code = WikiLanguageModelCommand.Run(path, null, output, error);
+                Assert.True(code == 0, error + Environment.NewLine + output);
+                string checkpoint = Path.Combine(directory, name + ".checkpoint.json");
+                using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(checkpoint));
+                return (WikiLanguageModelCommand.LoadBestTrainingModelState(checkpoint),
+                    document.RootElement.GetProperty("GlobalStep").GetInt64(), output.ToString());
+            }
+
+            var baseline = Run("baseline", 30);
+            var frequent = Run("frequent", 0.0000001); // Far below one CPU training step; no wall-clock sleep.
+            Assert.DoesNotContain("at epoch ", baseline.Output);
+            Assert.Contains("at epoch ", frequent.Output);
+            Assert.True(baseline.Step > 1);
+            Assert.Equal(baseline.Step, frequent.Step);
+            Assert.Equal(baseline.State.Parameters.Length, frequent.State.Parameters.Length);
+            for (int index = 0; index < baseline.State.Parameters.Length; index++)
+            {
+                Assert.Equal(baseline.State.Parameters[index].Name, frequent.State.Parameters[index].Name);
+                Assert.Equal(baseline.State.Parameters[index].Values, frequent.State.Parameters[index].Values);
+            }
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     private static async Task WriteShard(string path, string[] values)
     {
         var field = new DataField<string>("text");

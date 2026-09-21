@@ -10,6 +10,8 @@ partial class Tensor
     /// </summary>
     private static void ThrowIfCudaHostFallback(string operation)
     {
+        if (ExecutionDevice == TensorDevice.Arc)
+            throw new NotSupportedException($"Arc backend does not implement {operation} for this shape/dtype; CPU fallback is forbidden.");
         if (ExecutionDevice != TensorDevice.Cuda)
             return;
 

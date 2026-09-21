@@ -45,7 +45,8 @@ public sealed class ForgetMemoryV2Layer : Module
         float dropout,
         TensorDType dtype,
         bool useV3,
-        bool useDrn)
+        bool useDrn,
+        float? residualInitializationScale = null)
         : base(dtype)
     {
         if (modelWidth <= 0)
@@ -69,6 +70,13 @@ public sealed class ForgetMemoryV2Layer : Module
         }
         if (!float.IsFinite(dropout) || dropout < 0f || dropout >= 1f)
             throw new ArgumentOutOfRangeException(nameof(dropout));
+        float residualScale = residualInitializationScale
+            ?? initializationScale;
+        if (!float.IsFinite(residualScale) || residualScale <= 0f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(residualInitializationScale));
+        }
 
         ModelWidth = modelWidth;
         KeyWidth = keyWidth;
@@ -76,6 +84,7 @@ public sealed class ForgetMemoryV2Layer : Module
         RetentionFloor = retentionFloor;
         UseV3 = useV3;
         UseDrn = useDrn;
+        ResidualInitializationScale = residualScale;
         random ??= new Random(1);
 
         Ln1 = RegisterModule(new LayerNorm(modelWidth, dtype: dtype));
@@ -91,7 +100,7 @@ public sealed class ForgetMemoryV2Layer : Module
                 valueWidth,
                 modelWidth,
                 random,
-                initializationScale,
+                residualScale,
                 dtype));
         MemoryDropout = RegisterModule(new Dropout(dropout, random, dtype));
         Ln2 = RegisterModule(new LayerNorm(modelWidth, dtype: dtype));
@@ -101,7 +110,8 @@ public sealed class ForgetMemoryV2Layer : Module
                 hiddenWidth,
                 random,
                 initializationScale,
-                dtype));
+                dtype,
+                outputInitScale: residualScale));
         FfnDropout = RegisterModule(new Dropout(dropout, random, dtype));
     }
 
@@ -117,6 +127,13 @@ public sealed class ForgetMemoryV2Layer : Module
 
     public bool UseDrn { get; }
 
+    /// <summary>
+    /// Initialization scale used by the two projections which feed residual
+    /// additions. DRN GPT models scale these by depth; standalone layers and
+    /// the V2/V3 architectures retain their historical initialization.
+    /// </summary>
+    public float ResidualInitializationScale { get; }
+
     internal LayerNorm Ln1 { get; }
 
     public Dropout MemoryDropout { get; }
@@ -124,6 +141,20 @@ public sealed class ForgetMemoryV2Layer : Module
     internal LayerNorm Ln2 { get; }
 
     internal FeedForward Ffn { get; }
+
+    internal Linear MemoryOutputProjection => _outputProjection;
+    internal void FreezeLoraBaseLinear(bool frozen)
+    {
+        _memoryProjection.FrozenForLora = _outputProjection.FrozenForLora = frozen;
+        Ffn.Fc1.FrozenForLora = Ffn.Fc2.FrozenForLora = frozen;
+    }
+    internal void AttachLora(LoraAdapterSet adapters, int layer, int rank, float alpha,
+        IReadOnlySet<string> targets, Random random)
+    {
+        foreach (var (name, linear) in new[] { ("memoryProjection", _memoryProjection),
+            ("memoryOutput", _outputProjection), ("ffnInput", Ffn.Fc1), ("ffnOutput", Ffn.Fc2) })
+            if (targets.Contains(name)) adapters.Add($"layers.{layer}.{name}", linear.AttachLora(rank, alpha, random));
+    }
 
     public Dropout FfnDropout { get; }
 
@@ -219,10 +250,10 @@ public sealed class ForgetMemoryV2Layer : Module
                     ValueWidth,
                     RetentionFloor);
         Tensor memoryOutput = _outputProjection.ForwardBatch(recalled);
-        Tensor mixed = MemoryDropout.AddResidual(
+        Tensor mixed = MemoryDropout.AddResidualExclusiveLinearBranch(
             batchedInput,
             memoryOutput);
-        Tensor output = FfnDropout.AddResidual(
+        Tensor output = FfnDropout.AddResidualExclusiveLinearBranch(
             mixed,
             Ffn.Forward(Ln2.Forward(mixed)));
         return unbatched

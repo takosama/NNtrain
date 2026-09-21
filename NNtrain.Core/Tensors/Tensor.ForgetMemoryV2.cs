@@ -46,6 +46,10 @@ partial class Tensor
     /// Applies the delta, read-before-write, normalized-query/key memory
     /// recurrence while leaving V2 and V3 behavior unchanged.
     /// </summary>
+    /// <remarks>
+    /// Retention is floor + (1 - floor) sigmoid(gate). Writing remains
+    /// independently controlled by sigmoid(beta), and reads use M[t-1].
+    /// </remarks>
     public Tensor ForgetMemoryDRN(
         int keyWidth,
         int valueWidth,
@@ -610,10 +614,8 @@ partial class Tensor
                 int stateRowOffset = valueIndex * keyWidth;
                 float gateSigmoid = ForgetMemorySigmoid(
                     projected[gateOffset + valueIndex]);
-                float retention = useDrn
-                    ? gateSigmoid
-                    : retentionFloor
-                        + (1f - retentionFloor) * gateSigmoid;
+                float retention = retentionFloor
+                    + (1f - retentionFloor) * gateSigmoid;
                 float beta = ForgetMemorySigmoid(
                     projected[betaOffset + valueIndex]);
                 float value = MathF.Tanh(
@@ -792,10 +794,8 @@ partial class Tensor
                 int stateRowOffset = valueIndex * keyWidth;
                 float gateSigmoid = ForgetMemorySigmoid(
                     projected[gateOffset + valueIndex]);
-                float retention = useDrn
-                    ? gateSigmoid
-                    : retentionFloor
-                        + (1f - retentionFloor) * gateSigmoid;
+                float retention = retentionFloor
+                    + (1f - retentionFloor) * gateSigmoid;
                 float beta = ForgetMemorySigmoid(
                     projected[betaOffset + valueIndex]);
                 float write = useV3 || useDrn
@@ -831,7 +831,7 @@ partial class Tensor
                     errorGradient * (1f - value * value);
                 projectedGradient[gateOffset + valueIndex] +=
                     retentionGradient
-                    * (useDrn ? 1f : 1f - retentionFloor)
+                    * (1f - retentionFloor)
                     * gateSigmoid
                     * (1f - gateSigmoid);
                 projectedGradient[betaOffset + valueIndex] +=

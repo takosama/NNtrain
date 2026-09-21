@@ -87,6 +87,8 @@ internal static partial class WikiLanguageModelCommand
     {
         ArgumentNullException.ThrowIfNull(canonical);
         WikiTrainingConfiguration config = canonical.Configuration;
+        using IDisposable dispatchScope = CudaDispatchPolicy.Push(
+            CreateCudaDispatchPolicy(config));
         if (resumeFromCheckpoint)
             config = config with { ResumeFromCheckpoint = true };
         torch.manual_seed(config.Seed);
@@ -110,6 +112,13 @@ internal static partial class WikiLanguageModelCommand
                     $"({Tensor.ExecutionDeviceName}; " +
                     "ForgetMemory training kernels CUDA, BF16 storage)"
                 : string.Empty));
+        if (Tensor.ExecutionDevice == TensorDevice.Arc)
+        {
+            int index = (config.DeviceIndices ?? [config.DeviceIndex])[0];
+            NNtrain.Arc.ArcDeviceInfo device = NNtrain.Arc.ArcDevices.Enumerate().FirstOrDefault(d => d.Index == index)
+                ?? throw new InvalidOperationException($"Intel Arc OpenCL device {index} is unavailable. Install the Intel graphics driver.");
+            output.WriteLine($"Arc [{index}] = {device.Name}, OpenCL driver {device.DriverVersion}; resident packed weights/activations, FP32 gradients/master/optimizer; token/target uploads and scalar readbacks; CUDA is not used");
+        }
         if (Tensor.ExecutionDevice == TensorDevice.Cuda
             && Tensor.CudaDeviceIndices.Count > 1)
         {
@@ -125,6 +134,9 @@ internal static partial class WikiLanguageModelCommand
         }
         if (generatePrompt is not null)
             return GenerateOnly(config, generatePrompt, output);
+
+        if (Tensor.ExecutionDevice == TensorDevice.Cuda && config.IsForgetMemoryDrnArchitecture())
+            output.WriteLine($"CUDA DRN retained history budget = {CudaDispatchPolicy.Current.DrnRetainedHistoryBudgetBytes / 1048576} MiB/GPU (remaining layers are recomputed)");
 
         return Train(
             config,
@@ -147,7 +159,23 @@ internal static partial class WikiLanguageModelCommand
             and not StackOverflowException
             and not OperationCanceledException)
         {
-            error.WriteLine($"Error: {exception.Message}");
+            if (exception is AggregateException aggregate)
+            {
+                var failures = aggregate.Flatten().InnerExceptions
+                    .GroupBy(item => (item.GetType(), item.Message)).ToArray();
+                foreach (var group in failures.Take(8))
+                {
+                    error.WriteLine($"Error: {group.Key.Message}" +
+                        (group.Count() > 1 ? $" (repeated {group.Count()} times)" : ""));
+                }
+                if (failures.Length > 8)
+                    error.WriteLine($"Additional distinct errors: {failures.Length - 8}");
+                error.WriteLine(aggregate.Flatten().InnerExceptions[0].StackTrace);
+            }
+            else
+            {
+                error.WriteLine($"Error: {exception.Message}");
+            }
             return 2;
         }
     }
@@ -165,6 +193,11 @@ internal static partial class WikiLanguageModelCommand
             GraphCacheBudgetBytes = checked(
                 (long)config.CudaGraphCacheBudgetMiB * 1024L * 1024L),
         };
+
+    internal static CudaDispatchPolicy CreateCudaDispatchPolicy(WikiTrainingConfiguration config)
+        => config.CudaDrnRetainedHistoryMiB is int mib
+            ? CudaDispatchPolicy.Current with { DrnRetainedHistoryBudgetBytes = (long)mib * 1024 * 1024 }
+            : CudaDispatchPolicy.Current;
 
     internal static TrainingSession? CreateCudaDataParallelSession(
         WikiTrainingConfiguration config,
@@ -303,6 +336,8 @@ internal static partial class WikiLanguageModelCommand
                 precisionMode,
                 config.GetExecutionDevice(),
                 config.DeviceIndices ?? [config.DeviceIndex]);
+        try
+        {
         using IDisposable executionScope = executionSession.Enter();
         LanguageModel model = CreateModel(
             config,
@@ -428,6 +463,8 @@ internal static partial class WikiLanguageModelCommand
 
         using NoGcTrainingWindow noGcWindow =
             TrainingRunner.BeginNoGcTrainingWindow();
+        var checkpointSchedule = new CheckpointSchedule(config.CheckpointIntervalMinutes);
+        output.WriteLine($"checkpoint interval = {config.CheckpointIntervalMinutes:G} minutes (and epoch end)");
         foreach (TrainingEpoch epochRun in TrainingRunner.Epochs(
             resume.Epoch,
             config.Epochs,
@@ -468,9 +505,7 @@ internal static partial class WikiLanguageModelCommand
                     stepOperations.LearningRates;
                 int completedBatches = stepOperations.CompletedBatches;
                 bool epochEnd = completedBatches == batchTotal;
-                if (TrainingRunner.ShouldSaveCheckpoint(
-                    completedBatches,
-                    batchTotal))
+                if (!epochEnd && checkpointSchedule.IsDue)
                 {
                     ProductionTrainingSessionFactory
                         .EnsureCanPublishCheckpoint(
@@ -510,6 +545,7 @@ internal static partial class WikiLanguageModelCommand
                     ReleaseCheckpointCudaMemory(
                         dataParallelEngine,
                         output);
+                    checkpointSchedule.RecordSaved();
                 }
                 if (globalStep % config.LogEveryBatches == 0
                     || epochEnd)
@@ -543,7 +579,8 @@ internal static partial class WikiLanguageModelCommand
                         config,
                         sampleRandom,
                         output,
-                        error);
+                        error,
+                        dataParallelEngine);
                 }
             }
 
@@ -605,6 +642,7 @@ internal static partial class WikiLanguageModelCommand
             output.WriteLine(
                 $"model snapshot = {epochSnapshotPath}");
             ReleaseCheckpointCudaMemory(dataParallelEngine, output);
+            checkpointSchedule.RecordSaved();
             ProductionTrainingSessionFactory
                 .EnsureCanPublishCheckpoint(
                     trainingSession,
@@ -617,7 +655,8 @@ internal static partial class WikiLanguageModelCommand
                 config,
                 sampleRandom,
                 output,
-                error);
+                error,
+                dataParallelEngine);
         }
 
         if (bestEpoch == 0)
@@ -636,6 +675,16 @@ internal static partial class WikiLanguageModelCommand
             globalStep,
             output);
         return 0;
+        }
+        catch (Exception failure)
+        {
+            try { executionSession.Dispose(); }
+            catch (Exception cleanup)
+            {
+                throw new AggregateException("Training and cleanup failed.", failure, cleanup);
+            }
+            throw;
+        }
     }
 
     private static int GenerateOnly(
@@ -739,6 +788,8 @@ internal static partial class WikiLanguageModelCommand
                 precisionMode,
                 config.GetExecutionDevice(),
                 config.DeviceIndices ?? [config.DeviceIndex]);
+        try
+        {
         using IDisposable executionScope = executionSession.Enter();
         LanguageModel model = CreateModel(
             config,
@@ -831,6 +882,8 @@ internal static partial class WikiLanguageModelCommand
         }
         var stepExecutor = new TrainingStepExecutor(trainingSession);
         var runProgress = new TrainingProgress();
+        var checkpointSchedule = new CheckpointSchedule(config.CheckpointIntervalMinutes);
+        output.WriteLine($"checkpoint interval = {config.CheckpointIntervalMinutes:G} minutes (and epoch end)");
         // Keep the fixed-step graph window continuous across epoch
         // boundaries. Flushing it at every boundary compared a short tail
         // sample with a short head sample and exaggerated corpus-order shifts.
@@ -949,7 +1002,8 @@ internal static partial class WikiLanguageModelCommand
                     config,
                     generationRandom,
                     output,
-                    error);
+                    error,
+                    dataParallelEngine);
             }
 
             void TrainBatch(
@@ -977,7 +1031,6 @@ internal static partial class WikiLanguageModelCommand
             int? maximumDocuments = config.MaxTrainingDocuments == 0
                 ? null
                 : config.MaxTrainingDocuments;
-            long documentsToSkip = documentsProcessed;
             // Seeded per epoch so a resumed run replays the same order and the
             // skip count still lands on the document it left off at.
             int documentShuffleSeed = TrainingRunner.CombineSeed(
@@ -988,7 +1041,7 @@ internal static partial class WikiLanguageModelCommand
                 config.Seed,
                 epoch,
                 CorpusShuffleSeedSalt);
-            foreach (string document in ShuffleDocuments(
+            foreach (string document in SkipResumeDocuments(ShuffleDocuments(
                 ReadDocuments(
                     config.Dataset,
                     config.DataPath,
@@ -996,13 +1049,8 @@ internal static partial class WikiLanguageModelCommand
                     maximumDocuments,
                     corpusShuffleSeed),
                 config.ShuffleBufferSize,
-                new Random(documentShuffleSeed)))
+                new Random(documentShuffleSeed)), documentsProcessed, output))
             {
-                if (documentsToSkip > 0)
-                {
-                    documentsToSkip--;
-                    continue;
-                }
                 documentsProcessed++;
                 if (epoch == resume.Epoch
                     && TryGetDocumentSplit(document, out _))
@@ -1021,17 +1069,15 @@ internal static partial class WikiLanguageModelCommand
                     document,
                     config.MaxDocumentTokens);
 
-                int previousTenth = (int)((documentsProcessed - 1) * 10
-                    / documentsPerEpoch);
-                int currentTenth = (int)(documentsProcessed * 10
-                    / documentsPerEpoch);
-                bool shouldSaveDocumentCheckpoint =
-                    currentTenth > previousTenth && currentTenth < 10;
-                bool documentCheckpointSaved = false;
-
                 void SaveDocumentCheckpoint()
                 {
-                    CommitPendingUpdate();
+                    // Never shorten gradient accumulation for a timed save.
+                    // After TrainBatch returns with no pending microbatches,
+                    // every consumed token is committed or remains in buffer.
+                    if (pendingMicroBatches.Count != 0 || completedTargets == 0
+                        || !checkpointSchedule.IsDue
+                        || (documentsProcessed == documentsPerEpoch && buffer.Count <= 1))
+                        return;
                     ProductionTrainingSessionFactory
                         .EnsureCanPublishCheckpoint(
                             trainingSession,
@@ -1071,30 +1117,18 @@ internal static partial class WikiLanguageModelCommand
                     ReleaseCheckpointCudaMemory(
                         dataParallelEngine,
                         output);
-                    documentCheckpointSaved = true;
+                    checkpointSchedule.RecordSaved();
                 }
 
                 while ((buffer.Count - 1) / config.ContextLength
                     >= config.BatchSize)
                 {
-                    int completeSequences =
-                        (buffer.Count - 1) / config.ContextLength;
-                    bool isLastDocumentBatch =
-                        completeSequences < config.BatchSize * 2;
                     TrainBatch(
                         config.BatchSize,
                         config.ContextLength);
-                    if (shouldSaveDocumentCheckpoint
-                        && isLastDocumentBatch)
-                    {
-                        SaveDocumentCheckpoint();
-                    }
-                }
-                if (shouldSaveDocumentCheckpoint
-                    && !documentCheckpointSaved)
-                {
                     SaveDocumentCheckpoint();
                 }
+                SaveDocumentCheckpoint();
             }
 
             while (buffer.Count > 1)
@@ -1169,6 +1203,7 @@ internal static partial class WikiLanguageModelCommand
             output.WriteLine(
                 $"model snapshot = {epochSnapshotPath}");
             ReleaseCheckpointCudaMemory(dataParallelEngine, output);
+            checkpointSchedule.RecordSaved();
         }
 
         if (bestEpoch == 0)
@@ -1186,6 +1221,16 @@ internal static partial class WikiLanguageModelCommand
             globalStep,
             output);
         return 0;
+        }
+        catch (Exception failure)
+        {
+            try { executionSession.Dispose(); }
+            catch (Exception cleanup)
+            {
+                throw new AggregateException("Training and cleanup failed.", failure, cleanup);
+            }
+            throw;
+        }
     }
 
     private static TrainingCorpus LoadTrainingCorpus(
@@ -1310,7 +1355,12 @@ internal static partial class WikiLanguageModelCommand
             ? $", matrix delta memory key {config.ForgetMemoryKeyWidth}, " +
                 $"value {config.ForgetMemoryValueWidth}, retention " +
                 $"{config.ForgetMemoryRetentionMinimum:G}-" +
-                $"{config.ForgetMemoryRetentionMaximum:G}"
+                $"{config.ForgetMemoryRetentionMaximum:G}" +
+                (config.IsForgetMemoryDrnArchitecture()
+                    ? $", fresh-model residual output init " +
+                        $"{config.InitializationScale / MathF.Sqrt(2f * config.Layers):G4} " +
+                        "(depth-scaled)"
+                    : string.Empty)
             : config.IsArchitecture(WikiTrainingConfiguration.HyenaArchitecture)
                 ? $", Hyena filter width {config.HyenaFilterWidth}, " +
                     $"convolution {config.HyenaConvolutionAlgorithm}"

@@ -62,6 +62,8 @@ partial class Tensor
                     $"between 0 and {rows - 1}.");
             }
         }
+        if (ExecutionDevice == TensorDevice.Arc)
+            return ArcEmbedding(null, retainedIndices, resultShape, indices.Length);
         if (ExecutionDevice == TensorDevice.Cuda)
         {
             if (DType == TensorDType.Bfp8)
@@ -345,6 +347,8 @@ partial class Tensor
             }
         }
 
+        if (ExecutionDevice == TensorDevice.Arc)
+            return ArcEmbedding(positionTable, retainedIndices, [batchSize, sequenceLength, width], sequenceLength);
         if (ExecutionDevice == TensorDevice.Cuda)
         {
             bool tokenBfp8 = DType == TensorDType.Bfp8;

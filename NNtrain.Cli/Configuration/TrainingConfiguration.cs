@@ -36,6 +36,7 @@ sealed record TrainingConfiguration
         "resumeFromCheckpoint",
         "autoResume",
         "checkpointPath",
+        "checkpointIntervalMinutes",
     ];
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -111,6 +112,9 @@ sealed record TrainingConfiguration
     public bool AutoResume { get; init; }
 
     public string CheckpointPath { get; init; } = string.Empty;
+
+    public double CheckpointIntervalMinutes { get; init; } =
+        CheckpointSchedule.DefaultIntervalMinutes;
 
     public ClassificationCheckpointConfiguration? Checkpoint { get; init; }
 
@@ -308,6 +312,8 @@ sealed record TrainingConfiguration
             ResumeFromCheckpoint =
                 Checkpoint?.Resume ?? ResumeFromCheckpoint,
             AutoResume = Checkpoint?.AutoResume ?? AutoResume,
+            CheckpointIntervalMinutes = Checkpoint?.IntervalMinutes
+                ?? CheckpointIntervalMinutes,
             CheckpointPath = checkpointPath,
         };
     }
@@ -374,6 +380,7 @@ sealed record TrainingConfiguration
 
     internal void Validate()
     {
+        _ = CheckpointSchedule.ParseInterval(CheckpointIntervalMinutes);
         if (TrainingData is null)
         {
             throw new ArgumentException(
@@ -653,6 +660,9 @@ sealed record ClassificationCheckpointConfiguration
     public bool? Resume { get; init; }
 
     public bool? AutoResume { get; init; }
+
+    public double IntervalMinutes { get; init; } =
+        CheckpointSchedule.DefaultIntervalMinutes;
 }
 
 sealed record ClassificationOptimizationConfiguration

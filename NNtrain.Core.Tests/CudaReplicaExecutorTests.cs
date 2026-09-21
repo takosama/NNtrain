@@ -6,6 +6,30 @@ using Xunit;
 public sealed class CudaReplicaExecutorTests
 {
     [Fact]
+    public void ExplicitDispatchPolicyReachesBothWorkersAndRebindsOnlyOnChange()
+    {
+        using var executor = new CudaReplicaExecutor([3, 7], _ => { });
+        var work = new DispatchPolicyWork();
+        var selected = CudaDispatchPolicy.Defaults with { DrnRetainedHistoryBudgetBytes = 320L * 1024 * 1024 };
+        for (int i = 0; i < 3; i++)
+            executor.Execute(work, 2, null, PrecisionPolicy.Mix8_32, TestContext.Current.CancellationToken, dispatchPolicy: selected);
+        Assert.All(work.Policies, value => Assert.Same(selected, value));
+        Assert.Equal([1L, 1L], executor.Telemetry.WorkerContextBindingCounts);
+        var next = selected with { DrnRetainedHistoryBudgetBytes = 0 };
+        using (CudaDispatchPolicy.Push(next))
+            executor.Execute(work, 2, null, PrecisionPolicy.Mix8_32, TestContext.Current.CancellationToken);
+        Assert.All(work.Policies, value => Assert.Same(next, value));
+        Assert.Equal([2L, 2L], executor.Telemetry.WorkerContextBindingCounts);
+    }
+
+    private sealed class DispatchPolicyWork : ICudaReplicaWorkDescriptor
+    {
+        internal CudaDispatchPolicy?[] Policies { get; } = new CudaDispatchPolicy?[2];
+        public void Execute(int replicaIndex, CancellationToken cancellationToken)
+            => Policies[replicaIndex] = CudaDispatchPolicy.Current;
+    }
+
+    [Fact]
     public async Task DedicatedWorkersReuseThreadsAndRunConcurrently()
     {
         CancellationToken cancellationToken =

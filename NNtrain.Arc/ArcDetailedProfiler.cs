@@ -1,0 +1,37 @@
+namespace NNtrain.Arc;
+
+/// <summary>Bounded aggregated telemetry; no tensor readback and no event per sample retained.</summary>
+public sealed class ArcDetailedProfiler
+{
+    private readonly Dictionary<string, Counter> _counters = [];
+    public string Phase { get; set; } = "unscoped";
+    private sealed class Counter { internal long Count, Bytes; internal double Milliseconds; }
+    internal void Add(string kind, string detail, double milliseconds = 0, long bytes = 0)
+    {
+        string key = kind + "|" + detail;
+        // Diagnostic labels are shape-based, never buffer addresses or step IDs.
+        if (!_counters.TryGetValue(key, out var value))
+        {
+            if (_counters.Count >= 8192) key = kind + "|other";
+            if (!_counters.TryGetValue(key, out value)) _counters.Add(key, value = new());
+        }
+        value.Count++; value.Bytes += bytes; value.Milliseconds += milliseconds;
+    }
+    public IReadOnlyList<ArcProfileEntry> Snapshot() => _counters.Select(pair => {
+        int separator = pair.Key.IndexOf('|');
+        return new ArcProfileEntry(pair.Key[..separator], pair.Key[(separator + 1)..],
+            pair.Value.Count, pair.Value.Bytes, pair.Value.Milliseconds);
+    }).OrderByDescending(e => e.Milliseconds).ToArray();
+    internal void Reset() => _counters.Clear();
+    internal string KernelLabel(string name, object[] args)
+    {
+        string shape = name.StartsWith("gemm_", StringComparison.Ordinal) && args.Length >= 10
+            ? $" M={args[5]} N={args[6]} K={args[7]} TA={args[8]} TB={args[9]}"
+            : (name.StartsWith("attention_gemm", StringComparison.Ordinal) || name.StartsWith("attention_xmx", StringComparison.Ordinal)) && args.Length >= 6
+                ? $" M={args[3]} N={args[4]} K={args[5]}"
+                : "";
+        return Phase + "/" + name + shape;
+    }
+}
+
+public sealed record ArcProfileEntry(string Kind, string Detail, long Count, long Bytes, double Milliseconds);

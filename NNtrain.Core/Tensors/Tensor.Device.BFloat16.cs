@@ -502,7 +502,7 @@ public partial class Tensor
                 accelerator, static _ => new PoolState());
             lock (state.Sync)
             {
-                if (state.Buffers.TryGetValue(length, out var bucket)
+                while (state.Buffers.TryGetValue(length, out var bucket)
                     && bucket.Count > 0)
                 {
                     NativeCudaBuffer<ushort> buffer = bucket.Pop();
@@ -512,7 +512,9 @@ public partial class Tensor
                     CudaTransientBufferBudget.Release(
                         accelerator,
                         checked((long)length * sizeof(ushort)));
-                    return buffer;
+                    if (buffer.IsAlive && buffer.SessionGeneration == 0 && buffer.Arena is null)
+                        return buffer;
+                    buffer.Dispose();
                 }
             }
 
@@ -534,7 +536,7 @@ public partial class Tensor
             NativeCudaDevice accelerator,
             NativeCudaBuffer<ushort> buffer)
         {
-            if (buffer.IsLaneManagedReusable)
+            if (!buffer.IsAlive || buffer.SessionGeneration != 0 || buffer.Arena is not null)
             {
                 buffer.Dispose();
                 return;

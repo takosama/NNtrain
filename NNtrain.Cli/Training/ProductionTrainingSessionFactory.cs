@@ -76,7 +76,8 @@ internal static class ProductionTrainingSessionFactory
         TensorPrecisionMode precisionMode,
         TensorDevice executionDevice,
         IReadOnlyList<int> cudaDeviceIndices,
-        Func<int, IExecutionLane>? cudaLaneFactory = null)
+        Func<int, IExecutionLane>? cudaLaneFactory = null,
+        NNtrain.Arc.ArcExecutionOptions? arcOptions = null)
     {
         ArgumentNullException.ThrowIfNull(cudaDeviceIndices);
         if (cudaDeviceIndices.Count == 0)
@@ -87,17 +88,34 @@ internal static class ProductionTrainingSessionFactory
         }
 
         int[] configuredCudaDevices = cudaDeviceIndices.ToArray();
+        if (executionDevice == TensorDevice.Arc)
+        {
+            Tensor.ValidateArcPrecision(precisionMode);
+            if (configuredCudaDevices.Length != 1)
+                throw new NotSupportedException("Arc currently supports one GPU; set deviceIndices to [0].");
+        }
         var execution = new ExecutionSession(new ExecutionOptions
         {
-            Device = executionDevice == TensorDevice.Cuda
-                ? ExecutionDeviceKind.Cuda
-                : ExecutionDeviceKind.Cpu,
+            Device = executionDevice switch {
+                TensorDevice.Cpu => ExecutionDeviceKind.Cpu,
+                TensorDevice.Cuda => ExecutionDeviceKind.Cuda,
+                TensorDevice.Arc => ExecutionDeviceKind.Arc,
+                _ => throw new ArgumentOutOfRangeException(nameof(executionDevice)),
+            },
+            ArcDeviceIndex = configuredCudaDevices[0],
+            RequireDeviceResidency = executionDevice != TensorDevice.Arc,
             CudaDevices = new DeviceSet(configuredCudaDevices),
             Precision = PrecisionPolicy.Parse(
                 TensorPrecisionModeNames.Format(precisionMode)),
         });
         try
         {
+            if (execution.Options.Device == ExecutionDeviceKind.Arc)
+            {
+                var lane = new NNtrain.Arc.ArcExecutionLane(execution.Options.ArcDeviceIndex, arcOptions);
+                try { execution.AttachLane(lane); }
+                catch { lane.Dispose(); throw; }
+            }
             if (execution.Options.Device == ExecutionDeviceKind.Cuda)
             {
                 Func<int, IExecutionLane> createLane =

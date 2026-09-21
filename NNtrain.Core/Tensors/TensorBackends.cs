@@ -11,14 +11,23 @@ internal static class TensorBackends
 {
     private static readonly ITensorBackend Cpu = new CpuTensorBackend();
     private static readonly ITensorBackend Cuda = new CudaTensorBackend();
+    private static readonly ITensorBackend Arc = new ArcTensorBackend();
 
     internal static ITensorBackend Get(TensorDevice device)
         => device switch
         {
             TensorDevice.Cpu => Cpu,
             TensorDevice.Cuda => Cuda,
+            TensorDevice.Arc => Arc,
             _ => throw new ArgumentOutOfRangeException(nameof(device)),
         };
+
+    private sealed class ArcTensorBackend : ITensorBackend
+    {
+        public TensorDevice DeviceType => TensorDevice.Arc;
+        public string GetName(int deviceIndex) => NNtrain.Arc.ArcDevices.Enumerate().ElementAtOrDefault(deviceIndex)?.Name ?? $"Arc:{deviceIndex} (unavailable)";
+        public bool IsAvailable(int deviceIndex) => deviceIndex >= 0 && deviceIndex < NNtrain.Arc.ArcDevices.Enumerate().Count;
+    }
 
     private sealed class CpuTensorBackend : ITensorBackend
     {

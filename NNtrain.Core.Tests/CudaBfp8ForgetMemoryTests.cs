@@ -5,16 +5,66 @@ using Xunit;
 public sealed class CudaBfp8ForgetMemoryTests
 {
     [Theory]
-    [InlineData(false, 16, 16, 5)]
-    [InlineData(true, 17, 13, 7)]
+    [InlineData(16, 16, 257)]
+    [InlineData(32, 32, 2048)]
+    [InlineData(16, 48, 65)]
+    [InlineData(17, 13, 33)]
+    [InlineData(48, 32, 65)]
+    public void RecomputedDrnHistoryIsBitExact(int keyWidth, int valueWidth, int sequence)
+    {
+        Assert.SkipWhen(!Tensor.IsCudaAvailable(), "CUDA is unavailable.");
+        WithCuda(Bfp8QuantizationDescriptor.Mix8_32, () =>
+        {
+            const int batch = 2;
+            int width = 2 * keyWidth + 3 * valueWidth;
+            Tensor input = Tensor.FromBfp8(Values(batch * sequence * width, 417, 0.3f),
+                [batch, sequence, width], Bfp8QuantizationDescriptor.Mix8_32);
+            input.to(new TorchDevice(TensorDevice.Cuda, 0));
+            try
+            {
+                using IDisposable savedPolicy = CudaDispatchPolicy.Push(CudaDispatchPolicy.Defaults with
+                    { DisableDrnStateRecomputation = true });
+                using var saved = CudaBfp8ForgetMemory.ForwardResident(input,
+                    Bfp8QuantizationDescriptor.Mix8_32, batch, sequence, width,
+                    keyWidth, valueWidth, 0.37f, false, true);
+                using IDisposable recomputePolicy = CudaDispatchPolicy.Push(CudaDispatchPolicy.Defaults);
+                using var compact = CudaBfp8ForgetMemory.ForwardResident(input,
+                    Bfp8QuantizationDescriptor.Mix8_32, batch, sequence, width,
+                    keyWidth, valueWidth, 0.37f, false, true);
+                Assert.NotNull(saved.States);
+                Assert.Null(compact.States);
+                using var recomputed = CudaBfp8ForgetMemory.RecomputeStates(compact,
+                    batch, sequence, width, keyWidth, valueWidth, 0.37f, false, true);
+                float[] expected = new float[batch * sequence * keyWidth * valueWidth];
+                float[] actual = new float[expected.Length];
+                saved.States!.CopyToCPU(expected);
+                recomputed.CopyToCPU(actual);
+                Assert.Equal(expected, actual);
+            }
+            finally { input.InvalidateCudaBuffers(); }
+        });
+    }
+
+    [Theory]
+    [InlineData(false, 16, 16, 5, 0)]
+    [InlineData(true, 17, 13, 7, 0)]
+    [InlineData(true, 32, 48, 7, 0)]
+    [InlineData(true, 48, 32, 7, 1)]
+    [InlineData(true, 16, 16, 31, 2)]
+    [InlineData(true, 48, 32, 7, 2)]
+    [InlineData(true, 128, 128, 7, 2)]
+    [InlineData(true, 32, 128, 33, 2)]
+    [InlineData(true, 32, 32, 129, 2)]
+    [InlineData(true, 16, 16, 257, 2)]
+    [InlineData(false, 32, 32, 129, 2)]
     public void ResidentForwardBackwardMatchesBf16ReferenceWithoutTransfers(
         bool blockScaled,
         int keyWidth,
         int valueWidth,
-        int sequence)
+        int sequence,
+        int memoryVariant)
     {
-        if (!Tensor.IsCudaAvailable())
-            return;
+        Assert.SkipWhen(!Tensor.IsCudaAvailable(), "CUDA is unavailable.");
 
         const int batch = 2;
         int projectionWidth = checked(2 * keyWidth + 3 * valueWidth);
@@ -37,7 +87,8 @@ public sealed class CudaBfp8ForgetMemoryTests
             keyWidth,
             valueWidth,
             retentionFloor: 0.37f,
-            seed);
+            seed,
+            memoryVariant);
 
         WithCuda(descriptor, () =>
         {
@@ -52,10 +103,12 @@ public sealed class CudaBfp8ForgetMemoryTests
             CudaDispatchEnvironmentTelemetrySnapshot environmentBefore =
                 CudaDispatchEnvironmentTelemetry.Snapshot;
 
-            Tensor output = input.ForgetMemoryV2(
+            Tensor output = ForwardVariant(
+                input,
                 keyWidth,
                 valueWidth,
-                retentionFloor: 0.37f);
+                retentionFloor: 0.37f,
+                memoryVariant);
             ForgetMemoryV2Cuda.GetAccelerator(0).Synchronize();
 
             NativeCudaTransferTelemetry transfers =
@@ -333,14 +386,17 @@ public sealed class CudaBfp8ForgetMemoryTests
         int keyWidth,
         int valueWidth,
         float retentionFloor,
-        float[] seed)
+        float[] seed,
+        int memoryVariant)
         => WithCpu(() =>
         {
             Tensor input = Bf16FromBfp8(source, shape, descriptor);
-            Tensor output = input.ForgetMemoryV2(
+            Tensor output = ForwardVariant(
+                input,
                 keyWidth,
                 valueWidth,
-                retentionFloor);
+                retentionFloor,
+                memoryVariant);
             output.Backward(seed);
             return new ForgetMemoryRun(
                 Quantize(output.Data, descriptor),
@@ -350,6 +406,20 @@ public sealed class CudaBfp8ForgetMemoryTests
                         Bfp8QuantizationDescriptor.TensorWide)
                     : input.Grad.ToArray());
         });
+
+    private static Tensor ForwardVariant(
+        Tensor input,
+        int keyWidth,
+        int valueWidth,
+        float retentionFloor,
+        int memoryVariant)
+        => memoryVariant switch
+        {
+            0 => input.ForgetMemoryV2(keyWidth, valueWidth, retentionFloor),
+            1 => input.ForgetMemoryV3(keyWidth, valueWidth, retentionFloor),
+            2 => input.ForgetMemoryDRN(keyWidth, valueWidth, retentionFloor),
+            _ => throw new ArgumentOutOfRangeException(nameof(memoryVariant)),
+        };
 
     private static ContinueRun Bf16ContinuationReference(
         float[] firstValues,

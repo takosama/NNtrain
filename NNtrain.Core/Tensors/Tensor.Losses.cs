@@ -67,6 +67,9 @@ partial class Tensor
                 nameof(labels));
         }
 
+        if (ExecutionDevice == TensorDevice.Arc)
+            return ArcCrossEntropy(retainedLabels, rows, columns, ignoreIndex, validRows, labelSmoothing);
+
         if (ExecutionDevice == TensorDevice.Cuda)
         {
             if (DType == TensorDType.Bfp8)

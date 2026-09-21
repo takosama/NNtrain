@@ -169,6 +169,8 @@ internal static class TensorExecutionContext
 
             ExecutionOptions options = session.Options;
             int[] cudaDevices = options.CudaDevices.ToArray();
+            if (options.Device == ExecutionDeviceKind.Arc)
+                return ambient with { Device = new TorchDevice(TensorDevice.Arc, options.ArcDeviceIndex), PrecisionPolicy = options.Precision };
             if (options.Device == ExecutionDeviceKind.Cpu)
             {
                 return ambient with

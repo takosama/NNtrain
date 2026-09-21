@@ -1,0 +1,188 @@
+{
+  "SchemaVersion": 1,
+  "TimestampUtc": "2026-09-20T12:22:10.6153718+00:00",
+  "ConfigurationPath": "C:\\Users\\takos\\source\\repos\\NNtrain\\training.transformer.json",
+  "ConfigurationSha256": "952ECFEFCB4A20463B2F83A9231CABC5B0651C02F5F02BD1E464D2FC451AEAF9",
+  "BinarySha256": {
+    "NNtrain.Core": "BB87A42C30A9EDF17A3F50E3622048C11C08F8DE4597774F714309D60FBCE6A5",
+    "NNtrain.Arc": "8799EBE15CC4A2C3007F9C89A687B1603F2793A559081846D5A8C61E42501075",
+    "NNtrain.Benchmarks": "5774F84F235387D14A6817C8F0F059CECF3E6E1B30D9E172062030A68AA5EC9F"
+  },
+  "Seed": 1234,
+  "Shape": {
+    "BatchSize": 16,
+    "GradientAccumulationSteps": 4,
+    "ContextLength": 1024,
+    "ModelWidth": 512,
+    "Heads": 16,
+    "HiddenSize": 1536,
+    "Layers": 32,
+    "VocabularySize": 11500,
+    "Dropout": 0.1,
+    "TieWordEmbeddings": true
+  },
+  "Precision": {
+    "Mode": "mix8_32",
+    "Bfp8BlockSize": 32
+  },
+  "Optimizer": {
+    "Optimizer": "muon",
+    "LearningRate": 0.001,
+    "AuxiliaryLearningRate": 0.0003,
+    "WeightDecay": 0.01,
+    "NekoMuonNewtonSchulzInterval": 1,
+    "DepthMode": "Fixed",
+    "Depth": 5,
+    "NekoMuonBetaFast": 0.9
+  },
+  "WarmupSteps": 1,
+  "MeasuredSteps": 1,
+  "ArcOptions": {
+    "ResidentTensors": true,
+    "TiledMatrices": true,
+    "StreamingAttention": true,
+    "ResidentMuonIterations": true,
+    "ChunkedLossHead": true,
+    "PackedUploads": true,
+    "FusedNormalization": true,
+    "BufferPoolBytes": 268435456
+  },
+  "Notes": "Fixed synthetic full-length tokens. Fresh seeded model; no LR scheduling, evaluation, checkpoint or corpus I/O. Gradient clipping max_norm=1 matches WikiLanguageModelCommand.TrainingStep. Host process working set is not dedicated VRAM. Lane byte counters describe backend allocations/transfers, not driver-reported VRAM. Kernel timings are OpenCL event GPU durations. Allocation milliseconds include upload; transfer milliseconds include pending kernel waits, so these counters are not disjoint. Amdahl fractions use sums of measured synchronous phase wall durations.",
+  "Overrides": {
+    "--warmup": "1",
+    "--steps": "1"
+  },
+  "Results": [
+    {
+      "Device": "Arc",
+      "DeviceName": "Intel(R) Arc(TM) B580 Graphics",
+      "DriverVersion": "32.0.101.9030",
+      "ParameterCount": 90507500,
+      "StepP50Ms": 72578.4017,
+      "StepMeanMs": 72578.4017,
+      "TokensPerSecond": 902.9683551160372,
+      "Amdahl": [
+        {
+          "Phase": "backward",
+          "MeanMs": 56380.1142,
+          "Fraction": 0.7768166958683522,
+          "MaximumTotalSpeedup": 4.480621899074207,
+          "TotalSpeedupIfPhase2X": 1.6350779096186434
+        },
+        {
+          "Phase": "forward",
+          "MeanMs": 15497.856099999999,
+          "Fraction": 0.2135326176520087,
+          "MaximumTotalSpeedup": 1.2715085487900453,
+          "TotalSpeedupIfPhase2X": 1.1195278569101879
+        },
+        {
+          "Phase": "optimizer",
+          "MeanMs": 645.1653,
+          "Fraction": 0.008889218898299326,
+          "MaximumTotalSpeedup": 1.008968945820989,
+          "TotalSpeedupIfPhase2X": 1.0044644521955632
+        },
+        {
+          "Phase": "clip",
+          "MeanMs": 42.67,
+          "Fraction": 0.0005879159502075395,
+          "MaximumTotalSpeedup": 1.0005882617987019,
+          "TotalSpeedupIfPhase2X": 1.0002940444118036
+        },
+        {
+          "Phase": "zeroGrad",
+          "MeanMs": 12.2564,
+          "Fraction": 0.0001688711753485748,
+          "MaximumTotalSpeedup": 1.000168899697639,
+          "TotalSpeedupIfPhase2X": 1.0000844427176447
+        }
+      ],
+      "Samples": [
+        {
+          "Step": 2,
+          "Loss": 9.312821,
+          "GradientNorm": 0.1501992,
+          "FiniteGradient": true,
+          "TotalMs": 72578.4017,
+          "ZeroGradMs": 12.2564,
+          "ForwardMs": 15497.856099999999,
+          "BackwardMs": 56380.1142,
+          "ClipMs": 42.67,
+          "OptimizerMs": 645.1653,
+          "ManagedAllocatedBytes": 48846672,
+          "ManagedBytes": 1197797960,
+          "WorkingSetBytes": 1323589632,
+          "GcCollections": [
+            3,
+            0,
+            0
+          ],
+          "LaneDelta": {
+            "AllocatedBytes": 0,
+            "AllocationCount": 3485,
+            "KernelLaunchCount": 32731,
+            "H2DBytes": 524288,
+            "D2HBytes": 2588,
+            "PeakAllocatedBytes": 1086274352,
+            "KernelMilliseconds": 69205.70412600994,
+            "TransferMilliseconds": 26.32210000000032,
+            "AllocationMilliseconds": 351.4942999998,
+            "CachedBytes": 30817200,
+            "PoolHits": 8736,
+            "BufferReuseCount": null
+          },
+          "LaneSnapshot": {
+            "AllocatedBytes": 1549940944,
+            "AllocationCount": 9296,
+            "KernelLaunchCount": 65853,
+            "H2DBytes": 1188959516,
+            "D2HBytes": 5180,
+            "PeakAllocatedBytes": 5384240292,
+            "KernelMilliseconds": 138393.98664301587,
+            "TransferMilliseconds": 365.49130000000014,
+            "AllocationMilliseconds": 1507.6164999996927,
+            "CachedBytes": 256951252,
+            "PoolHits": 17482,
+            "BufferReuseCount": null
+          },
+          "KernelGpuMs": {
+            "decode_bfp8": 703.5577369999908,
+            "embedding": 0.7180190000000001,
+            "resident_zero": 55.72702099999982,
+            "resident_bfp8": 288.7675590000019,
+            "dropout": 142.89259600000042,
+            "gemm_tiled": 15384.90944899983,
+            "attention_streaming": 9125.067444999997,
+            "norm": 122.83697199999996,
+            "round_bf16_values": 16.15662900000048,
+            "cross_entropy_rows": 27.715887999998216,
+            "loss_total": 2.5429759999999773,
+            "resident_validate_loss": 0.004581000000000001,
+            "cross_entropy_gradient": 12.64775700000008,
+            "copy_range": 0.5963219999999784,
+            "linear_db_chunk": 3723.204236999955,
+            "norm_dx_set": 243.11176999999995,
+            "norm_dw": 1507.1955169999994,
+            "copy_scale": 42.30405700000007,
+            "dropout_back": 41.93666399999998,
+            "attention_streaming_dq": 20571.802970999965,
+            "attention_streaming_dkv": 17143.761817000006,
+            "embedding_back": 1.5103099999999998,
+            "reduce_sum": 6.427558999999785,
+            "resident_clip_total": 0.001666,
+            "resident_clip_apply": 2.1133290000000473,
+            "moments": 6.019844999999995,
+            "confidence_blocks": 3.4366140000000045,
+            "confidence_finish": 19.383504999999968,
+            "transpose_scale": 4.555644999999992,
+            "ns_coefficient": 2.183874999999952,
+            "axpby": 1.7772370000000017,
+            "adam": 0.837286000000002,
+            "resident_finite": 1.6356160000000315
+          }
+        }
+      ]
+    }
+  ]
+}

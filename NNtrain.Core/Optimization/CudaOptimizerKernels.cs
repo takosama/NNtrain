@@ -2144,16 +2144,18 @@ internal static partial class CudaOptimizerKernels
         internal NekoMuonConfidenceBatch(
             int deviceIndex,
             IReadOnlyList<NekoMuonResidentState> states)
+            : this(deviceIndex, states.Select(state =>
+                state.GetOrCreate(deviceIndex).Confidence.NativePtr).ToArray())
         {
-            ArgumentOutOfRangeException.ThrowIfZero(states.Count);
+        }
+
+        internal NekoMuonConfidenceBatch(int deviceIndex, nint[] pointers)
+        {
+            ArgumentOutOfRangeException.ThrowIfZero(pointers.Length);
             _deviceIndex = deviceIndex;
-            _count = states.Count;
+            _count = pointers.Length;
             NativeCudaDevice accelerator =
                 ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
-            nint[] pointers = states
-                .Select(state => state.GetOrCreate(deviceIndex)
-                    .Confidence.NativePtr)
-                .ToArray();
             (_confidencePointers, _summary) = AllocateCudaResources(own =>
             {
                 NativeCudaBuffer<nint> confidencePointers =

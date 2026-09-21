@@ -124,17 +124,18 @@ public partial class AdamW
 
         CudaOptimizerKernels.AdamWMultiTensorItem[] items =
             CreatePreparedPlanItems();
-        // A pure-BF16 plan captures the address of the authoritative BF16
-        // gradient. prepare() is also a public pre-gradient hook, and the
-        // data-parallel reducer may bind its stable arena only afterwards.
-        // Materialize weights/moments here, then build the descriptor plan on
-        // the first step once every real gradient address is available.
-        if (items.Any(item => item.PureBFloat16
-            && devices.Any(deviceIndex =>
-                !item.Parameter.TryGetCudaBFloat16GradientBuffer(
-                    deviceIndex, out _))))
+        // Single-GPU execution has no reducer arena. Materialize its BF16
+        // gradient targets now so the first guarded optimizer step can reuse
+        // the descriptor plan without uploading metadata during training.
+        foreach (var item in items.Where(item => item.PureBFloat16))
         {
-            return;
+            foreach (int deviceIndex in devices)
+            {
+                using var target = CudaPureBFloat16GradientTarget.Acquire(
+                    item.Parameter, deviceIndex);
+                target.EnsureZeroInitialized();
+                target.Commit();
+            }
         }
         PrepareCudaPlans(devices, items);
     }

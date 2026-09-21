@@ -44,6 +44,9 @@ partial class Tensor
                 $"LayerNorm parameters must have shape [{columns}].");
         }
 
+        if (ExecutionDevice == TensorDevice.Arc)
+            return ArcNorm(gamma, beta, eps, branch, probability, random);
+
         bool bfp8Cuda = ExecutionDevice == TensorDevice.Cuda
             && DType == TensorDType.Bfp8
             && branch.DType == TensorDType.Bfp8

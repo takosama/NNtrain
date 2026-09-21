@@ -19,21 +19,52 @@ internal static partial class WikiLanguageModelCommand
         WikiTrainingConfiguration config,
         Random random,
         TextWriter output,
-        TextWriter warning)
+        TextWriter warning,
+        CudaDataParallelEngine? dataParallelEngine = null)
     {
         RunDatasetContinuationAfterCommittedStep(
             committedGlobalStep,
             config.DatasetSampleEverySteps,
             documents.Count,
-            () => StreamDatasetContinuation(
-                committedGlobalStep,
-                model,
-                tokenizer,
-                documents,
-                config,
-                random,
-                output),
+            () => RunWithGenerationMemoryReleased(dataParallelEngine,
+                () => StreamDatasetContinuation(
+                    committedGlobalStep,
+                    model,
+                    tokenizer,
+                    documents,
+                    config,
+                    random,
+                    output)),
             warning);
+    }
+
+    internal static void RunWithGenerationMemoryReleased(
+        CudaDataParallelEngine? engine, Action generate)
+    {
+        ArgumentNullException.ThrowIfNull(generate);
+        // Called only after the optimizer/metrics commit and only when a
+        // sample is due. Weights, optimizer moments, gradients and shard EMA
+        // stay resident; the next training step captures fresh activations.
+        engine?.ReleaseCheckpointTransientMemory();
+        Exception? generationFailure = null;
+        try
+        {
+            generate();
+        }
+        catch (Exception exception)
+        {
+            generationFailure = exception;
+            throw;
+        }
+        finally
+        {
+            try { engine?.ReleaseCheckpointTransientMemory(); }
+            catch (Exception cleanupFailure) when (generationFailure is not null)
+            {
+                throw new AggregateException("Generation and CUDA cache cleanup failed.",
+                    generationFailure, cleanupFailure);
+            }
+        }
     }
 
     internal static void RunDatasetContinuationAfterCommittedStep(

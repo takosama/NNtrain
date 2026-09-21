@@ -3,10 +3,9 @@ using NNtrain.Cuda.Memory;
 namespace NNtrain;
 
 /// <summary>
-/// CUDA implementation of the stateful ForgetMemory recurrence. One worker
-/// owns a complete batch item, which keeps the time recurrence and all
-/// gradient accumulation deterministic while allowing batch items to execute
-/// concurrently on the GPU.
+/// Resident CUDA ForgetMemory dispatch. Eligible mixed-BF16 DRN sequences use
+/// exact checked chunk forward and fused replay/backward; other variants,
+/// pure-BF16 gradients and recurrent inference retain the original kernels.
 /// </summary>
 internal static class ForgetMemoryV2Cuda
 {
@@ -30,6 +29,13 @@ internal static class ForgetMemoryV2Cuda
         int deviceIndex = Tensor.CudaDeviceIndex;
         NativeCudaDevice accelerator = GetAccelerator(deviceIndex);
         int matrixSize = checked(keyWidth * valueWidth);
+        // The exact BF16 chunk kernels also serve mixed BF16 training. Pure
+        // BF16 gradients and externally supplied recurrent states retain their
+        // existing numerical/continuation contract.
+        bool chunked = useDrn && recurrentState is null
+            && projected.DType == TensorDType.BFloat16
+            && !TensorExecutionContext.UsesBFloat16GradientStorage
+            && CudaDrnChunk.CanUse(batch, sequence, keyWidth, valueWidth);
         NativeCudaBuffer<float>? outputFloat32 = null;
         NativeCudaBuffer<ushort>? outputBFloat16 = null;
         int outputLength = checked(batch * sequence * valueWidth);
@@ -48,7 +54,8 @@ internal static class ForgetMemoryV2Cuda
                 outputLength);
         }
         var statesBuffer = accelerator.Allocate1D<float>(
-            checked(batch * sequence * matrixSize),
+            chunked ? CudaDrnChunk.CheckpointLength(batch, sequence, keyWidth, valueWidth)
+                : checked(batch * sequence * matrixSize),
             CudaMemoryKind.Transient);
         NativeCudaBuffer<float>? ownedStateBuffer = null;
         NativeCudaBuffer<float> stateBuffer;
@@ -77,7 +84,11 @@ internal static class ForgetMemoryV2Cuda
         int memoryVariant = useDrn ? 2 : useV3 ? 1 : 0;
         try
         {
-            bool tensorCore = outputBFloat16 is not null
+            if (chunked)
+                CudaDrnChunk.Forward(accelerator,
+                    projected.EnsureCudaBFloat16Buffer(deviceIndex), outputBFloat16!,
+                    statesBuffer, stateBuffer, batch, sequence, projectionWidth, keyWidth, valueWidth, retentionFloor);
+            bool tensorCore = chunked || (outputBFloat16 is not null
                 && CudaForgetMemoryTensorCore.TryForward(
                     accelerator,
                     projected.EnsureCudaBFloat16Buffer(deviceIndex),
@@ -90,7 +101,7 @@ internal static class ForgetMemoryV2Cuda
                     keyWidth,
                     valueWidth,
                     retentionFloor,
-                    memoryVariant);
+                    memoryVariant));
             if (!tensorCore)
             {
                 CudaForgetMemoryNative.Forward(
@@ -127,7 +138,8 @@ internal static class ForgetMemoryV2Cuda
                 ? new ResidentForwardResult(
                     deviceIndex,
                     outputBFloat16,
-                    statesBuffer)
+                    statesBuffer,
+                    chunked)
                 : new ResidentForwardResult(
                     deviceIndex,
                     outputFloat32!,
@@ -258,6 +270,22 @@ internal static class ForgetMemoryV2Cuda
             forward.DeviceIndex);
         var outputGradientBuffer = output.EnsureCudaGradientBuffer(
             forward.DeviceIndex);
+        if (forward.Chunked)
+        {
+            using var terminalGradient = accelerator.Allocate1D<float>(
+                checked(batch * matrixSize), CudaMemoryKind.Transient);
+            using var adjoints = accelerator.Allocate1D<float>(
+                CudaDrnChunk.AdjointLength(batch, sequence, keyWidth, valueWidth), CudaMemoryKind.Transient);
+            terminalGradient.MemSetToZero();
+            CudaDrnChunk.Backward(accelerator,
+                projected.EnsureCudaBFloat16Buffer(forward.DeviceIndex),
+                projectedGradientBuffer, outputGradientBuffer, forward.States,
+                terminalGradient, adjoints, batch, sequence, projectionWidth, keyWidth, valueWidth, retentionFloor);
+            if (!TensorExecutionContext.TryGetCudaStreamLane(forward.DeviceIndex, out _))
+                accelerator.Synchronize();
+            projected.MarkCudaGradientMutated(forward.DeviceIndex);
+            return;
+        }
         using var stateGradientBuffer = accelerator.Allocate1D<float>(
             checked(batch * matrixSize),
             CudaMemoryKind.Transient);
@@ -319,17 +347,20 @@ internal static class ForgetMemoryV2Cuda
         internal ResidentForwardResult(
             int deviceIndex,
             NativeCudaBuffer<ushort> output,
-            NativeCudaBuffer<float> states)
+            NativeCudaBuffer<float> states,
+            bool chunked = false)
         {
             DeviceIndex = deviceIndex;
             OutputBFloat16 = output;
             States = states;
+            Chunked = chunked;
         }
 
         internal int DeviceIndex { get; }
         internal NativeCudaBuffer<float>? OutputFloat32 { get; }
         internal NativeCudaBuffer<ushort>? OutputBFloat16 { get; }
         internal NativeCudaBuffer<float> States { get; }
+        internal bool Chunked { get; }
 
         internal void Dispose()
         {

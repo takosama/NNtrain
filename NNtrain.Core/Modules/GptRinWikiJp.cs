@@ -155,7 +155,9 @@ public sealed class GptRinWikiJp : LanguageModel
         }
 
         Tensor hidden = ForwardHidden(tokenIds, batchSize, sequenceLength);
-        Tensor logits = Tensor.ExecutionDevice == TensorDevice.Cuda
+        if (Tensor.ExecutionDevice == TensorDevice.Arc && Tensor.ArcLane.Options.ChunkedLossHead)
+            return hidden.ArcLinearCrossEntropy(_languageModelHead.W.T, _languageModelHead.B.T, targetIds, ignoreIndex);
+        Tensor logits = (Tensor.ExecutionDevice is TensorDevice.Cuda or TensorDevice.Arc)
                 && hidden.DType == TensorDType.Bfp8
                 && _languageModelHead.W.T.DType == TensorDType.Bfp8
                 && _languageModelHead.B.T.DType == TensorDType.Bfp8
@@ -368,6 +370,7 @@ public sealed class GptRinWikiJp : LanguageModel
                 // correct full-window pass for only that remaining suffix.
                 for (; !stopped && generated < maxNewTokens; ++generated)
                 {
+                    using IDisposable? arcInference = Tensor.BeginArcInferenceFrame();
                     using CudaInferenceScope inferenceScope =
                         CudaInferenceScope.Begin();
                     int sequenceLength = Math.Min(ContextLength, result.Count);

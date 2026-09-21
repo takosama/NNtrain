@@ -5,4 +5,5 @@ public enum TensorDevice
 {
     Cpu = 0,
     Cuda = 1,
+    Arc = 2,
 }

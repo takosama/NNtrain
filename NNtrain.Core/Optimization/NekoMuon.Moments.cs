@@ -1,3 +1,5 @@
+using static NNtrain.Arc.ArcExecutionLane;
+
 namespace NNtrain;
 
 public sealed partial class NekoMuon
@@ -13,6 +15,14 @@ public sealed partial class NekoMuon
         float slowCorrection)
     {
         int length = fast.Length;
+        if (Tensor.ExecutionDevice == TensorDevice.Arc)
+        {
+            Tensor.ArcLane.Run("moments", length, 0,
+                In(gradientBuffer.Length == 0 ? new float[length] : gradientBuffer),
+                InOut(fast), InOut(slow), InOut(fastHat), InOut(slowHat), length,
+                options.BetaFast, options.BetaSlow, fastCorrection, slowCorrection, options.Nesterov ? 1 : 0);
+            return;
+        }
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
         {
             CudaOptimizerKernels.NekoMuonMoments(
@@ -101,6 +111,16 @@ public sealed partial class NekoMuon
         float[] slowHat,
         float epsilon)
     {
+        if (Tensor.ExecutionDevice == TensorDevice.Arc)
+        {
+            if (Tensor.ArcLane.Options.ResidentMuonIterations)
+                return ArcMuonMath.Confidence(fastHat, slowHat, epsilon);
+            var statistics = new float[4];
+            Tensor.ArcLane.Run("confidence", 1, 0, In(fastHat), In(slowHat), InOut(statistics), fastHat.Length);
+            double arcAlignment = Math.Max(0, statistics[0] / (Math.Sqrt(statistics[1]) * Math.Sqrt(statistics[2]) + epsilon));
+            double arcPersistence = statistics[2] / ((double)statistics[2] + statistics[3] + epsilon);
+            return (float)Math.Clamp(arcAlignment * arcPersistence, 0, 1);
+        }
         double dot = 0d;
         double fastNormSquared = 0d;
         double slowNormSquared = 0d;

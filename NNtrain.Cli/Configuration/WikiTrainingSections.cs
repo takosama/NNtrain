@@ -12,6 +12,9 @@ sealed record WikiCheckpointConfiguration
     public bool Resume { get; init; }
 
     public bool AutoResume { get; init; }
+
+    public double IntervalMinutes { get; init; } =
+        CheckpointSchedule.DefaultIntervalMinutes;
 }
 
 /// <summary>

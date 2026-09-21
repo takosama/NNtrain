@@ -1,4 +1,5 @@
 using System.Runtime.ExceptionServices;
+using NNtrain.Cuda.Interop;
 
 namespace NNtrain;
 
@@ -124,6 +125,35 @@ internal static partial class TensorCudaKernels
         Exception? operationFailure = null;
         try
         {
+            if (!CudaDispatchPolicy.Current.DisableDirectBfp8Elementwise
+                && CudaNativeGateway.AbiVersion.Minor >= CudaAbiVersion.DirectBfp8ElementwiseMinor
+                && outputDescriptor.Granularity == Bfp8ScaleGranularity.Block
+                && outputDescriptor.BlockSize is 32 or 128)
+            {
+                encodedOutput = CudaBfp8OwnedBuffers.Allocate(accelerator, left.Numel, outputDescriptor);
+                var l = left.EnsureCudaBfp8Buffer(deviceIndex);
+                CudaBfp8BufferView? r = right?.EnsureCudaBfp8Buffer(deviceIndex);
+                int lb = l.Descriptor.GetEffectiveBlockSize(left.Numel);
+                int rb = r?.Descriptor.GetEffectiveBlockSize(left.Numel) ?? lb;
+                if (graphToken is { } token)
+                {
+                    uint threshold = (uint)(graphProbability * (uint.MaxValue + 1d));
+                    token.RngState.EnqueueBfp8Elementwise(l.Payload.NativePtr, l.Scales.NativePtr,
+                        r?.Payload.NativePtr ?? 0, r?.Scales.NativePtr ?? 0,
+                        encodedOutput.Payload.NativePtr, encodedOutput.Scales.NativePtr,
+                        left.Numel, lb, rb, outputDescriptor.BlockSize, (int)operation,
+                        threshold, 1f / (1f - graphProbability), token.OperationSeed);
+                }
+                else
+                    NativeCudaRuntime.Check(CudaNativeGateway.Bfp8Elementwise(deviceIndex,
+                        l.Payload.NativePtr, l.Scales.NativePtr, r?.Payload.NativePtr ?? 0, r?.Scales.NativePtr ?? 0,
+                        encodedOutput.Payload.NativePtr, encodedOutput.Scales.NativePtr,
+                        left.Numel, lb, rb, outputDescriptor.BlockSize, (int)operation,
+                        seed, dropThreshold, scale, 0, 0, accelerator.DefaultStream), "CUDA direct BFP8 elementwise");
+                completedOutput = encodedOutput;
+                encodedOutput = null;
+                return completedOutput;
+            }
             decodedLeft = Tensor.RentCudaBFloat16Buffer(
                 deviceIndex, left.Numel);
             if (right is not null)
@@ -841,6 +871,7 @@ public partial class Tensor
                     result,
                     left,
                     right);
+            result._cudaBinaryBackwardIgnoresOutputValues = true;
         }
         return result;
     }

@@ -31,6 +31,8 @@ internal static partial class Program
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(error);
         ArgumentNullException.ThrowIfNull(loadConfiguration);
+        if (args.Length > 0 && string.Equals(args[0], "lora", StringComparison.OrdinalIgnoreCase))
+            return LoraCommand.Run(args, output, error);
 
         string configurationPath;
         string? generatePrompt = null;
@@ -121,6 +123,7 @@ internal static partial class Program
                 "Usage: NNtrain.Cli [--config <training-config.json>] " +
                 "[--resume | --auto-resume | --generate <prompt>] " +
                 "[--generate-config <generate.json>]");
+            error.WriteLine("       NNtrain.Cli lora --model <DRN-checkpoint.json> [--config traning-lora.json] [--generate <prompt>]");
             return 1;
         }
 
@@ -441,6 +444,8 @@ internal static partial class Program
                     batchCursor,
                     stepOperations);
 
+            var checkpointSchedule = new CheckpointSchedule(config.CheckpointIntervalMinutes);
+            output.WriteLine($"checkpoint interval = {config.CheckpointIntervalMinutes:G} minutes (and epoch end)");
             foreach (TrainingEpoch epochRun in TrainingRunner.Epochs(
                 firstEpoch,
                 config.Epochs,
@@ -536,9 +541,7 @@ internal static partial class Program
                             ? currentRates[1]
                             : null);
                     int completedUpdates = update + 1;
-                    if (TrainingRunner.ShouldSaveCheckpoint(
-                        completedUpdates,
-                        updateTotal))
+                    if (completedUpdates < updateTotal && checkpointSchedule.IsDue)
                     {
                         ProductionTrainingSessionFactory
                             .EnsureCanPublishCheckpoint(
@@ -573,6 +576,7 @@ internal static partial class Program
                             model);
                         output.WriteLine(
                             $"model snapshot = {snapshotPath}");
+                        checkpointSchedule.RecordSaved();
                     }
                 }
 
@@ -686,6 +690,11 @@ internal static partial class Program
                     publishCurrentAsBest);
                 output.WriteLine(
                     $"training checkpoint = {config.CheckpointPath}");
+
+                string epochSnapshotPath = CheckpointSnapshot.Save(
+                    config.CheckpointPath, model.GetType().Name, epoch, model);
+                output.WriteLine($"model snapshot = {epochSnapshotPath}");
+                checkpointSchedule.RecordSaved();
 
                 if (config.EarlyStoppingPatience > 0
                     && epochsWithoutImprovement

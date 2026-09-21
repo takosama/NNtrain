@@ -43,8 +43,68 @@ internal sealed class CudaBfp8BFloat16Lease : IDisposable
 
 public partial class Tensor
 {
+    private bool _cudaLinearBackwardIgnoresOutputValues;
+    private bool _cudaBinaryBackwardIgnoresOutputValues;
+    private bool _cudaForwardValuesRetired;
+    internal bool SupportsExclusiveCudaLinearOutputRetirement => _cudaLinearBackwardIgnoresOutputValues;
+    internal bool SupportsExclusiveCudaOutputRetirement =>
+        _cudaLinearBackwardIgnoresOutputValues || _cudaBinaryBackwardIgnoresOutputValues;
+
+    /// <summary>
+    /// Internal ownership transfer for a non-ReLU linear output consumed only
+    /// by residual addition. Its backward needs dY, X and W, never Y. Retain
+    /// the node/gradient but return the dead payload to the ordered lane now.
+    /// This is deliberately not used by public/general Add/Dropout calls.
+    /// </summary>
+    internal void RetireExclusiveCudaLinearOutputValues()
+        => RetireExclusiveCudaOutputValues(requireLinear: true);
+
+    // Private binary results also have value-independent backward. Their
+    // owners may retire them only after the last forward consumer; public
+    // binary operations continue to support arbitrary value reuse.
+    internal void RetireExclusiveCudaOutputValues()
+        => RetireExclusiveCudaOutputValues(requireLinear: false);
+
+    private void RetireExclusiveCudaOutputValues(bool requireLinear)
+    {
+        if (ExecutionDevice != TensorDevice.Cuda || DType != TensorDType.Bfp8
+            || Node.IsLeaf || !AutogradContext.IsRecordingEnabled
+            || CudaDispatchPolicy.Current.DisableExclusiveLinearOutputRetirement
+            || !TensorExecutionContext.TryGetCudaStreamLane(CudaDeviceIndex, out _))
+            return;
+        if (requireLinear ? !_cudaLinearBackwardIgnoresOutputValues : !SupportsExclusiveCudaOutputRetirement)
+            throw new InvalidOperationException(requireLinear
+                ? "Only a non-ReLU linear output may retire its exclusive values."
+                : "Only a proven value-independent backward may retire its exclusive output values.");
+        lock (_deviceSync)
+        {
+            if (_cudaForwardValuesRetired) return;
+            _cudaForwardValuesRetired = true;
+            // No host copy exists or is needed. Explicit value reads below
+            // fail instead of interpreting the lazy placeholder as zero.
+            _hostDataCurrent = true;
+            var buffers = _cudaBfp8Buffers.Values.ToArray();
+            _cudaBfp8Buffers.Clear();
+            List<Exception>? failures = null;
+            foreach (Bfp8DeviceBuffer buffer in buffers)
+            {
+                try { buffer.Dispose(); }
+                catch (Exception failure) { (failures ??= []).Add(failure); }
+            }
+            if (failures is not null)
+                throw new AggregateException("Exclusive output value cleanup failed.", failures);
+        }
+    }
+
+    private void ThrowIfForwardValuesRetired()
+    {
+        if (_cudaForwardValuesRetired)
+            throw new InvalidOperationException("This internal output was consumed; only its gradient remains available.");
+    }
+
     internal CudaBfp8BufferView EnsureCudaBfp8Buffer(int deviceIndex = -1)
     {
+        ThrowIfForwardValuesRetired();
         if (DType != TensorDType.Bfp8)
         {
             throw new InvalidOperationException(

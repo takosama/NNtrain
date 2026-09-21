@@ -17,6 +17,7 @@ internal sealed class LossGraph
 
     private readonly List<LossPoint> _losses = [];
     private readonly int _totalEpochs;
+    private readonly bool _steps;
 
     private static readonly Regex PersistedPointPattern = new(
         "<circle class=\"(?<series>train|eval)-point\"[^>]*>\\s*" +
@@ -25,7 +26,7 @@ internal sealed class LossGraph
         "</title>\\s*</circle>",
         RegexOptions.CultureInvariant);
 
-    internal LossGraph(string path, int totalEpochs)
+    internal LossGraph(string path, int totalEpochs, bool steps = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         if (totalEpochs <= 0)
@@ -38,6 +39,7 @@ internal sealed class LossGraph
 
         Path = System.IO.Path.GetFullPath(path);
         _totalEpochs = totalEpochs;
+        _steps = steps;
     }
 
     internal string Path { get; }
@@ -150,13 +152,15 @@ internal sealed class LossGraph
         }
     }
 
-    internal void Write()
+    internal void Write(bool atomically = false)
     {
         string? directory = System.IO.Path.GetDirectoryName(Path);
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
 
-        File.WriteAllText(Path, BuildHtml(), new UTF8Encoding(false));
+        string destination = atomically ? Path + "." + Guid.NewGuid().ToString("N") + ".tmp" : Path;
+        File.WriteAllText(destination, BuildHtml(), new UTF8Encoding(false));
+        if (atomically) File.Move(destination, Path, overwrite: true);
     }
 
     internal void TryOpen(TextWriter error)
@@ -208,13 +212,13 @@ internal sealed class LossGraph
         html.AppendLine("main{width:min(1100px,96vw)}");
         html.AppendLine("h1{font-size:22px;margin:0 0 8px}p{color:#9ca3af;margin:0 0 14px}svg{width:100%;height:auto;background:#0b1220;border:1px solid #263244;border-radius:12px}text{fill:#9ca3af;font-size:13px}.grid{stroke:#263244;stroke-width:1}.axis{stroke:#64748b;stroke-width:1.5}.train{stroke:#38bdf8;fill:none;stroke-width:3}.eval{stroke:#fb7185;fill:none;stroke-width:3}.train-point{fill:#38bdf8}.eval-point{fill:#fb7185}.legend{font-size:14px;fill:#e5e7eb}</style>");
         html.AppendLine("</head><body><main>");
-        html.AppendLine("<h1>Loss by epoch</h1>");
-        html.Append("<p>epoch ")
+        html.AppendLine(_steps ? "<h1>DPO loss by step</h1>" : "<h1>Loss by epoch</h1>");
+        html.Append(_steps ? "<p>step " : "<p>epoch ")
             .Append(activeEpoch)
             .Append(" / ")
             .Append(_totalEpochs)
             .Append(" · progress ")
-            .Append(activeEpochProgress.ToString("0.0%", CultureInfo.InvariantCulture))
+            .Append((_steps ? currentEpoch / _totalEpochs : activeEpochProgress).ToString("0.0%", CultureInfo.InvariantCulture))
             .Append(" · train points ")
             .Append(_losses.Count)
             .Append(" · eval points ")
@@ -272,7 +276,7 @@ internal sealed class LossGraph
         }
         html.Append("<text x=\"").Append(Left + plotWidth / 2)
             .Append("\" y=\"").Append(Height - 20)
-            .AppendLine("\" text-anchor=\"middle\">epoch</text>");
+            .AppendLine(_steps ? "\" text-anchor=\"middle\">global step</text>" : "\" text-anchor=\"middle\">epoch</text>");
         html.Append("<text x=\"22\" y=\"").Append(Top + plotHeight / 2)
             .AppendLine("\" text-anchor=\"middle\" transform=\"rotate(-90 22 300)\">loss</text>");
         html.AppendLine("</svg></main></body></html>");
@@ -394,7 +398,7 @@ internal sealed class LossGraph
                 .Append("\" cx=\"").Append(Number(x))
                 .Append("\" cy=\"").Append(Number(y))
                 .AppendLine("\" r=\"5\">");
-            html.Append("<title>epoch ").Append(EpochNumber(loss.Epoch))
+            html.Append(_steps ? "<title>step " : "<title>epoch ").Append(EpochNumber(loss.Epoch))
                 .Append(": ")
                 .Append(value.ToString("0.000000", CultureInfo.InvariantCulture))
                 .AppendLine("</title></circle>");

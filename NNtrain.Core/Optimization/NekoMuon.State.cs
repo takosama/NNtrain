@@ -21,17 +21,22 @@ public sealed partial class NekoMuon
             NekoMuonState.CurrentFormatVersion,
             0,
             options with { },
-            parameterStates);
+            parameterStates)
+        {
+            FastDecayProduct = 1d,
+            SlowDecayProduct = 1d,
+        };
     }
 
     private void ValidateState(NekoMuonState state)
     {
-        if (state.FormatVersion != NekoMuonState.CurrentFormatVersion)
+        if (state.FormatVersion is < 1
+            or > NekoMuonState.CurrentFormatVersion)
         {
             throw new ArgumentException(
                 $"Unsupported NekoMuon state format version " +
-                $"'{state.FormatVersion}'. Expected " +
-                $"'{NekoMuonState.CurrentFormatVersion}'.",
+                $"'{state.FormatVersion}'. Expected a version in " +
+                $"[1, {NekoMuonState.CurrentFormatVersion}].",
                 nameof(state));
         }
 
@@ -51,6 +56,18 @@ public sealed partial class NekoMuon
         }
 
         ValidateOptions(state.Options, nameof(state));
+
+        if (state.FormatVersion >= 2)
+        {
+            ValidateDecayProduct(
+                state.FastDecayProduct,
+                state.Step,
+                nameof(state.FastDecayProduct));
+            ValidateDecayProduct(
+                state.SlowDecayProduct,
+                state.Step,
+                nameof(state.SlowDecayProduct));
+        }
 
         if (state.ParameterStates is null
             || state.ParameterStates.Length != _parameters.Count)
@@ -197,6 +214,35 @@ public sealed partial class NekoMuon
         }
     }
 
+    private static void ValidateDecayProduct(
+        double? product,
+        int step,
+        string productName)
+    {
+        if (!product.HasValue
+            || !double.IsFinite(product.Value)
+            || product.Value < 0d
+            || product.Value > 1d
+            || step == 0 && product.Value != 1d
+            || step > 0 && product.Value >= 1d)
+        {
+            throw new ArgumentException(
+                $"NekoMuon {productName} is incompatible with step {step}.");
+        }
+    }
+
+    private static NekoMuonState UpgradeState(NekoMuonState state)
+    {
+        if (state.FormatVersion >= 2)
+            return state;
+        return state with
+        {
+            FormatVersion = NekoMuonState.CurrentFormatVersion,
+            FastDecayProduct = Math.Pow(state.Options.BetaFast, state.Step),
+            SlowDecayProduct = Math.Pow(state.Options.BetaSlow, state.Step),
+        };
+    }
+
     private static NekoMuonState CloneState(NekoMuonState state)
     {
         return new NekoMuonState(
@@ -212,6 +258,10 @@ public sealed partial class NekoMuon
                         parameterState.FastMoment.ToArray(),
                         parameterState.SlowMoment.ToArray(),
                         parameterState.Confidence))
-                .ToArray());
+                .ToArray())
+        {
+            FastDecayProduct = state.FastDecayProduct,
+            SlowDecayProduct = state.SlowDecayProduct,
+        };
     }
 }

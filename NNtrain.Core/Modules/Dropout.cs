@@ -58,4 +58,16 @@ public sealed class Dropout : Module
             _random,
             epsilon);
     }
+
+    // The model transfers a private non-ReLU linear branch here. General
+    // callers keep AddResidual's reusable-value semantics unchanged.
+    internal Tensor AddResidualExclusiveLinearBranch(Tensor residual, Tensor branch)
+    {
+        Tensor result = AddResidual(residual, branch);
+        // The private projection may be a non-ReLU Linear or a LoRA Add.
+        // Both keep their gradients/parents but no longer need these values.
+        if (branch.SupportsExclusiveCudaOutputRetirement)
+            branch.RetireExclusiveCudaOutputValues();
+        return result;
+    }
 }

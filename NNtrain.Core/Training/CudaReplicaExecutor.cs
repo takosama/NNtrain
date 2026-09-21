@@ -45,6 +45,7 @@ internal sealed class CudaReplicaExecutor : IDisposable
     private ICudaReplicaWorkDescriptor? _work;
     private ExecutionSession? _session;
     private PrecisionPolicy? _precision;
+    private CudaDispatchPolicy? _dispatchPolicy;
     private DeviceTransferGuard.SharedContext? _transferContext;
     private CancellationToken _cancellationToken;
     private int _activeWorkerCount;
@@ -153,7 +154,8 @@ internal sealed class CudaReplicaExecutor : IDisposable
         int replicaCount,
         ExecutionSession? session,
         PrecisionPolicy precision,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        CudaDispatchPolicy? dispatchPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(work);
         ArgumentNullException.ThrowIfNull(precision);
@@ -174,6 +176,7 @@ internal sealed class CudaReplicaExecutor : IDisposable
             _work = work;
             _session = session;
             _precision = precision;
+            _dispatchPolicy = (dispatchPolicy ?? CudaDispatchPolicy.Current).Validate();
             _transferContext = DeviceTransferGuard.CaptureCurrentContext();
             _cancellationToken = cancellationToken;
             Volatile.Write(ref _activeWorkerCount, replicaCount);
@@ -212,6 +215,7 @@ internal sealed class CudaReplicaExecutor : IDisposable
                 _work = null;
                 _session = null;
                 _precision = null;
+                _dispatchPolicy = null;
                 _transferContext = null;
                 _cancellationToken = default;
                 Volatile.Write(ref _activeWorkerCount, 0);
@@ -254,7 +258,8 @@ internal sealed class CudaReplicaExecutor : IDisposable
                 "A CUDA replica worker was signaled without a precision policy.");
         DeviceTransferGuard.SharedContext? transferContext =
             _transferContext;
-        worker.EnsureExecutionContext(_session, precision, _bindDevice);
+        worker.EnsureExecutionContext(_session, precision,
+            _dispatchPolicy ?? throw new InvalidOperationException("Missing CUDA dispatch policy."), _bindDevice);
         _cancellationToken.ThrowIfCancellationRequested();
         IDisposable? transferScope = transferContext is null
             ? null
@@ -339,9 +344,11 @@ internal sealed class CudaReplicaExecutor : IDisposable
         private readonly int _deviceIndex;
         private ExecutionSession? _boundSession;
         private PrecisionPolicy? _boundPrecision;
+        private CudaDispatchPolicy? _boundDispatchPolicy;
         private IDisposable? _sessionScope;
         private IDisposable? _precisionScope;
         private IDisposable? _deviceScope;
+        private IDisposable? _dispatchScope;
         private int _stopRequested;
 
         internal Worker(
@@ -393,22 +400,25 @@ internal sealed class CudaReplicaExecutor : IDisposable
         internal void EnsureExecutionContext(
             ExecutionSession? session,
             PrecisionPolicy precision,
+            CudaDispatchPolicy dispatchPolicy,
             Action<int> bindDevice)
         {
             bool sessionChanged = !ReferenceEquals(_boundSession, session);
             bool precisionChanged = !Equals(_boundPrecision, precision);
-            if (!sessionChanged && !precisionChanged)
+            if (!sessionChanged && !precisionChanged && Equals(_boundDispatchPolicy, dispatchPolicy))
                 return;
 
             DisposeContext();
             bindDevice(_deviceIndex);
             _boundSession = session;
             _boundPrecision = precision;
+            _boundDispatchPolicy = dispatchPolicy;
             try
             {
                 _sessionScope = session?.Enter();
                 _precisionScope =
                     TensorExecutionContext.PushPrecisionPolicy(precision);
+                _dispatchScope = CudaDispatchPolicy.Push(dispatchPolicy);
                 _deviceScope = TensorExecutionContext.Push(
                     new TorchDevice(TensorDevice.Cuda, _deviceIndex));
                 Interlocked.Increment(ref ContextBindingCount);
@@ -518,10 +528,12 @@ internal sealed class CudaReplicaExecutor : IDisposable
         {
             List<Exception>? failures = null;
             TryDispose(ref _deviceScope, ref failures);
+            TryDispose(ref _dispatchScope, ref failures);
             TryDispose(ref _precisionScope, ref failures);
             TryDispose(ref _sessionScope, ref failures);
             _boundSession = null;
             _boundPrecision = null;
+            _boundDispatchPolicy = null;
             if (failures is [Exception failure])
             {
                 System.Runtime.ExceptionServices.ExceptionDispatchInfo
