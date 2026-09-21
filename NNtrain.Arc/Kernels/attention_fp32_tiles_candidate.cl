@@ -186,3 +186,77 @@ ATT_N_D32(attention_fp32_pv_d32_aligned,2,1,0,1)
 ATT_N_D32(attention_fp32_dq_d32_special,1,3,1,0)
 ATT_N_D32(attention_fp32_dq_d32_aligned,1,3,1,1)
 #undef ATT_N_D32
+
+#if defined(ARC_XMX) && ARC_SG == 16 && defined(ARC_SLM_BLOCK_IO) && defined(ARC_OPTIMIZATION_PROBES)
+#pragma OPENCL EXTENSION cl_intel_subgroups : enable
+#pragma OPENCL EXTENSION cl_intel_subgroup_local_block_io : enable
+// D32, aligned T. Four query coefficients are broadcast as one SLM vector;
+// both channel halves use one subgroup block read. Same BM64/K32 FMA order.
+#define ATT_N_BLOCK(NAME,COMPONENT,OC,ADD) \
+__attribute__((intel_reqd_sub_group_size(16))) __attribute__((reqd_work_group_size(16,16,1))) \
+__kernel void NAME(__global const float* a,__global const float* b,__global float* c, \
+ int m,int n,int k,int ar,int ac,int ag,int ab,int ah,int ao,int br,int bc,int bg,int bb,int bh,int bo, \
+ int cr,int cc,int cg,int cb,int ch,int co,int heads,int first,int add,int causalMode){ \
+ int lx=get_local_id(0),ly=get_local_id(1),tid=ly*16+lx,g=get_group_id(2),h=first+g; \
+ int width=heads*32,rb=get_group_id(1)*64,ap=g*m*m; \
+ int bp=(h/heads)*m*3*width+(h%heads)*32+COMPONENT*width,cp=(h/heads)*m*OC*width+(h%heads)*32; \
+ int end=causalMode==2?rb+64:m; \
+ __local float at[16][128];__local uint bt[32][32];float2 sums[4]; \
+ _Pragma("unroll") \
+ for(int r=0;r<4;r++){int row=rb+ly+16*r;sums[r]=(float2)(0); \
+  if(ADD)sums[r]=(float2)(c[cp+row*OC*width+lx],c[cp+row*OC*width+lx+16]);} \
+ for(int base=0;base<end;base+=32){ \
+  int r0=tid/8,k0=(tid%8)*4; \
+  _Pragma("unroll") \
+  for(int part=0;part<2;part++){int row=r0+32*part;float4 av=vload4(0,a+ap+(rb+row)*m+base+k0); \
+   _Pragma("unroll") \
+   for(int z=0;z<4;z++)at[row%16][4*(k0+z)+row/16]=av[z];} \
+  vstore4(as_uint4(vload4(0,b+bp+(base+r0)*3*width+k0)),0,&bt[r0][k0]); \
+  barrier(CLK_LOCAL_MEM_FENCE); \
+  _Pragma("unroll") \
+  for(int inner=0;inner<32;inner++){ \
+   float2 bv=as_float2(intel_sub_group_block_read2(&bt[inner][0]));float4 av=vload4(0,&at[ly][inner*4]); \
+   _Pragma("unroll") \
+   for(int r=0;r<4;r++)sums[r]=fma((float2)(av[r]),bv,sums[r]);} \
+  barrier(CLK_LOCAL_MEM_FENCE); \
+ } \
+ _Pragma("unroll") \
+ for(int r=0;r<4;r++){int row=rb+ly+16*r; \
+  c[cp+row*OC*width+lx]=sums[r].s0;c[cp+row*OC*width+lx+16]=sums[r].s1;} \
+}
+ATT_N_BLOCK(attention_fp32_pv_d32_block_slm,2,1,0)
+ATT_N_BLOCK(attention_fp32_dq_d32_block_slm,1,3,1)
+#undef ATT_N_BLOCK
+
+__attribute__((intel_reqd_sub_group_size(16))) __attribute__((reqd_work_group_size(16,16,1)))
+__kernel void attention_fp32_dp_d32_block_slm(__global const float* a,__global const float* b,__global float* c,
+ int m,int n,int k,int ar,int ac,int ag,int ab,int ah,int ao,int br,int bc,int bg,int bb,int bh,int bo,
+ int cr,int cc,int cg,int cb,int ch,int co,int heads,int first,int add,int causalMode){
+ int lx=get_local_id(0),ly=get_local_id(1),tid=ly*16+lx,g=get_group_id(2),h=first+g;
+ int width=heads*32,rb=get_group_id(1)*64,nb=get_group_id(0)*64;
+ if(causalMode==1&&nb>=rb+64)return;
+ int ap=(h/heads)*m*width+(h%heads)*32,bp=(h/heads)*m*3*width+(h%heads)*32+2*width,cp=g*m*m;
+ __local float at[16][64];__local uint bt[16][64];float4 sums[4]={(float4)(0),(float4)(0),(float4)(0),(float4)(0)};
+ #pragma unroll
+ for(int base=0;base<32;base+=16){
+  int row=tid/4,inner=(tid%4)*4;
+  float4 av=vload4(0,a+ap+(rb+row)*width+base+inner),bv=vload4(0,b+bp+(nb+row)*3*width+base+inner);
+  #pragma unroll
+  for(int z=0;z<4;z++){at[row%16][4*(inner+z)+row/16]=av[z];bt[inner+z][row]=as_uint(bv[z]);}
+  barrier(CLK_LOCAL_MEM_FENCE);
+  #pragma unroll
+  for(int inner=0;inner<16;inner++){
+   float4 av=vload4(0,&at[ly][inner*4]),bv=as_float4(intel_sub_group_block_read4(&bt[inner][0]));
+   #pragma unroll
+   for(int r=0;r<4;r++)sums[r]=fma((float4)(av[r]),bv,sums[r]);
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
+ }
+ #pragma unroll
+ for(int r=0;r<4;r++){
+  #pragma unroll
+  for(int col=0;col<4;col++){int row=rb+ly+16*r,column=nb+lx+16*col;
+   if(causalMode!=1||column/32<=row/32)c[cp+row*m+column]=sums[r][col];}
+ }
+}
+#endif

@@ -21,8 +21,8 @@
   "maxDocumentTokens": 1024,
   "validationFraction": 0.0,
   "epochs": 1,
-  "batchSize": 64,
-  "gradientAccumulationSteps": 4,
+  "batchSize": 16,
+  "gradientAccumulationSteps": 16,
 
   "contextLength": 1024,
   "modelWidth": 512,

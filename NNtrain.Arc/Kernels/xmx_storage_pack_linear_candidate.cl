@@ -4,6 +4,7 @@
 // ABI is identical to xmx_storage_pack_a_*; transpose MUST be zero.
 #if defined(ARC_XMX) && ARC_SG == 16
 ushort xmx_bf16(float x);
+int xmx_storage_scale_index(int index,int block);
 ushort xmx_storage_read_f32(__global const uchar*,__global const float*,int,int);
 ushort xmx_storage_read_bf16(__global const uchar*,__global const float*,int,int);
 ushort xmx_storage_read_bfp8(__global const uchar*,__global const float*,int,int);
@@ -19,10 +20,10 @@ ushort4 xmx_storage_linear_read4_bf16(__global const uchar* source,__global cons
 }
 ushort4 xmx_storage_linear_read4_bfp8(__global const uchar* source,__global const float* scales,int index,int block){
  const float4 quantized=convert_float4(vload4(0,((__global const char*)source)+index));
- const int first=index/block;
+ const int first=xmx_storage_scale_index(index,block);
  float4 scale;
- if((index+3)/block==first)scale=(float4)(scales[first]);
- else scale=(float4)(scales[first],scales[(index+1)/block],scales[(index+2)/block],scales[(index+3)/block]);
+ if(xmx_storage_scale_index(index+3,block)==first)scale=(float4)(scales[first]);
+ else scale=(float4)(scales[first],scales[xmx_storage_scale_index(index+1,block)],scales[xmx_storage_scale_index(index+2,block)],scales[xmx_storage_scale_index(index+3,block)]);
  const float4 value=quantized*scale;
  return (ushort4)(xmx_bf16(value.s0),xmx_bf16(value.s1),xmx_bf16(value.s2),xmx_bf16(value.s3));
 }

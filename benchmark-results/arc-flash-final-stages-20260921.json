@@ -1,0 +1,619 @@
+{
+  "Timestamp": "2026-09-21T06:17:24.5823565+00:00",
+  "Conditions": "Attention forward\u002Bbackward including pack, raw-output replay, allocations and synchronization. Resident FP32 gradient seed. Causal, mix16_32, 3 warmup \u002B 5 samples. All heads. Stage0 existing, 1 online softmax\u002BFP32 products, 2 compensated XMX products, 3 asynchronous collective ping-pong, 4 materialized compensated XMX products.",
+  "Results": [
+    {
+      "Stage": 0,
+      "Batch": 64,
+      "Sequence": 1024,
+      "Heads": 16,
+      "HeadWidth": 32,
+      "P50Ms": 104.9197,
+      "ForwardP50Ms": 27.0285,
+      "BackwardP50Ms": 78.0323,
+      "GpuP50Ms": 94.47197799999691,
+      "Samples": [
+        104.8986,
+        105.4969,
+        104.9197,
+        104.8302,
+        105.7956
+      ],
+      "ForwardSamples": [
+        27.0285,
+        27.4019,
+        26.8874,
+        26.996,
+        27.1829
+      ],
+      "BackwardSamples": [
+        77.87010000000001,
+        78.095,
+        78.0323,
+        77.83420000000001,
+        78.61269999999999
+      ],
+      "GpuSamples": [
+        94.47197799999691,
+        94.47587599999395,
+        94.52129100000366,
+        94.45832099999643,
+        94.44060199999842
+      ],
+      "Allocations": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "Launches": [
+        2308,
+        2308,
+        2308,
+        2308,
+        2308
+      ],
+      "PeakBytes": 1419247616,
+      "H2DBytes": 0,
+      "D2HBytes": 0,
+      "Kernels": {
+        "decode_bf16": 22.696034,
+        "attention_qk_pack_combined_candidate": 53.45318700000141,
+        "attention_qk_direct_256x32_candidate": 49.10297599999827,
+        "attention_probabilities_register_1024": 101.2917410000007,
+        "attention_fp32_pv_d32_aligned": 75.03374100000003,
+        "resident_bf16": 5.549893,
+        "resident_zero": 1.576559,
+        "attention_fp32_dp_d32_aligned": 57.12403099999938,
+        "attention_derivatives": 64.27361300000109,
+        "attention_fp32_dq_d32_aligned": 94.67654699999987,
+        "attention_dkv_d32_k32_q32_causal": 230.26697600000227
+      },
+      "Resources": {},
+      "Device": "Intel(R) Arc(TM) B580 Graphics",
+      "DriverVersion": "32.0.101.9030"
+    },
+    {
+      "Stage": 1,
+      "Batch": 64,
+      "Sequence": 1024,
+      "Heads": 16,
+      "HeadWidth": 32,
+      "P50Ms": 985.3071,
+      "ForwardP50Ms": 99.4011,
+      "BackwardP50Ms": 885.9308,
+      "GpuP50Ms": 984.650306999999,
+      "Samples": [
+        986.1086,
+        985.4992,
+        985.2097,
+        985.1642,
+        985.3071
+      ],
+      "ForwardSamples": [
+        99.472,
+        99.4826,
+        99.4011,
+        99.3449,
+        99.3763
+      ],
+      "BackwardSamples": [
+        886.6366,
+        886.0165999999999,
+        885.8086,
+        885.8193000000001,
+        885.9308
+      ],
+      "GpuSamples": [
+        985.3895799999996,
+        984.8884310000003,
+        984.5779119999997,
+        984.4770779999999,
+        984.650306999999
+      ],
+      "Allocations": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "Launches": [
+        12,
+        12,
+        12,
+        12,
+        12
+      ],
+      "PeakBytes": 1824522240,
+      "H2DBytes": 0,
+      "D2HBytes": 0,
+      "Kernels": {
+        "decode_bf16": 22.630096,
+        "attention_flash_pack": 55.47603399999999,
+        "attention_flash_f_d32_x0_a0": 1498.229786,
+        "resident_bf16": 5.427808,
+        "resident_zero": 1.5725989999999996,
+        "attention_flash_delta": 10.462808,
+        "attention_flash_pack_dy": 17.823123,
+        "attention_flash_q_d32_x0_a0": 2555.696039,
+        "attention_flash_kv_d32_x0_a0": 3710.1062459999994
+      },
+      "Resources": {
+        "attention_flash_pack": {
+          "Name": "attention_flash_pack",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 0,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_flash_f_d32_x0_a0": {
+          "Name": "attention_flash_f_d32_x0_a0",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 10240,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_flash_delta": {
+          "Name": "attention_flash_delta",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 0,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_flash_pack_dy": {
+          "Name": "attention_flash_pack_dy",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 0,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_flash_q_d32_x0_a0": {
+          "Name": "attention_flash_q_d32_x0_a0",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 20480,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_flash_kv_d32_x0_a0": {
+          "Name": "attention_flash_kv_d32_x0_a0",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 20480,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        }
+      },
+      "Device": "Intel(R) Arc(TM) B580 Graphics",
+      "DriverVersion": "32.0.101.9030"
+    },
+    {
+      "Stage": 2,
+      "Batch": 64,
+      "Sequence": 1024,
+      "Heads": 16,
+      "HeadWidth": 32,
+      "P50Ms": 227.6272,
+      "ForwardP50Ms": 49.9745,
+      "BackwardP50Ms": 177.67919999999998,
+      "GpuP50Ms": 226.9793699999998,
+      "Samples": [
+        228.1112,
+        227.6272,
+        227.7386,
+        227.3558,
+        227.5598
+      ],
+      "ForwardSamples": [
+        49.9745,
+        49.948,
+        49.9733,
+        49.9835,
+        49.9789
+      ],
+      "BackwardSamples": [
+        178.1367,
+        177.67919999999998,
+        177.7653,
+        177.3723,
+        177.58089999999999
+      ],
+      "GpuSamples": [
+        227.48020400000007,
+        226.9793699999998,
+        227.1112440000004,
+        226.77801499999987,
+        226.95166300000005
+      ],
+      "Allocations": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "Launches": [
+        12,
+        12,
+        12,
+        12,
+        12
+      ],
+      "PeakBytes": 1824522240,
+      "H2DBytes": 0,
+      "D2HBytes": 0,
+      "Kernels": {
+        "decode_bf16": 22.699160000000003,
+        "attention_flash_pack": 91.50051299999998,
+        "attention_flash_f_d32_x1_a0": 671.4888469999999,
+        "resident_bf16": 5.426976,
+        "resident_zero": 1.569997,
+        "attention_flash_delta": 9.405831,
+        "attention_flash_pack_dy": 29.18708,
+        "attention_flash_q_d32_x1_a0": 365.46728799999994,
+        "attention_flash_kv_d32_x1_a0": 621.0651009999999
+      },
+      "Resources": {
+        "attention_flash_pack": {
+          "Name": "attention_flash_pack",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 0,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_flash_f_d32_x1_a0": {
+          "Name": "attention_flash_f_d32_x1_a0",
+          "MaximumWorkGroupSize": 512,
+          "LocalMemoryBytes": 6144,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_flash_delta": {
+          "Name": "attention_flash_delta",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 0,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_flash_pack_dy": {
+          "Name": "attention_flash_pack_dy",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 0,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_flash_q_d32_x1_a0": {
+          "Name": "attention_flash_q_d32_x1_a0",
+          "MaximumWorkGroupSize": 512,
+          "LocalMemoryBytes": 12288,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_flash_kv_d32_x1_a0": {
+          "Name": "attention_flash_kv_d32_x1_a0",
+          "MaximumWorkGroupSize": 512,
+          "LocalMemoryBytes": 12288,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        }
+      },
+      "Device": "Intel(R) Arc(TM) B580 Graphics",
+      "DriverVersion": "32.0.101.9030"
+    },
+    {
+      "Stage": 3,
+      "Batch": 64,
+      "Sequence": 1024,
+      "Heads": 16,
+      "HeadWidth": 32,
+      "P50Ms": 291.0883,
+      "ForwardP50Ms": 55.3278,
+      "BackwardP50Ms": 235.8057,
+      "GpuP50Ms": 290.5008270000001,
+      "Samples": [
+        291.0883,
+        291.0545,
+        291.5333,
+        291.1667,
+        291.0882
+      ],
+      "ForwardSamples": [
+        55.2826,
+        55.3278,
+        55.3229,
+        55.3541,
+        55.3345
+      ],
+      "BackwardSamples": [
+        235.8057,
+        235.72670000000002,
+        236.2104,
+        235.81259999999997,
+        235.75369999999998
+      ],
+      "GpuSamples": [
+        290.4384309999998,
+        290.4493719999996,
+        290.95749300000057,
+        290.54416299999934,
+        290.5008270000001
+      ],
+      "Allocations": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "Launches": [
+        12,
+        12,
+        12,
+        12,
+        12
+      ],
+      "PeakBytes": 1824522240,
+      "H2DBytes": 0,
+      "D2HBytes": 0,
+      "Kernels": {
+        "decode_bf16": 22.637807000000002,
+        "attention_flash_pack": 91.51624199999999,
+        "attention_flash_f_d32_x1_a1": 757.5944720000001,
+        "resident_bf16": 5.424892,
+        "resident_zero": 1.569685,
+        "attention_flash_delta": 9.369892,
+        "attention_flash_pack_dy": 29.187913,
+        "attention_flash_q_d32_x1_a1": 554.4390599999999,
+        "attention_flash_kv_d32_x1_a1": 852.926767
+      },
+      "Resources": {
+        "attention_flash_pack": {
+          "Name": "attention_flash_pack",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 0,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_flash_f_d32_x1_a1": {
+          "Name": "attention_flash_f_d32_x1_a1",
+          "MaximumWorkGroupSize": 512,
+          "LocalMemoryBytes": 10240,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_flash_delta": {
+          "Name": "attention_flash_delta",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 0,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_flash_pack_dy": {
+          "Name": "attention_flash_pack_dy",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 0,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_flash_q_d32_x1_a1": {
+          "Name": "attention_flash_q_d32_x1_a1",
+          "MaximumWorkGroupSize": 512,
+          "LocalMemoryBytes": 18432,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_flash_kv_d32_x1_a1": {
+          "Name": "attention_flash_kv_d32_x1_a1",
+          "MaximumWorkGroupSize": 512,
+          "LocalMemoryBytes": 18432,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        }
+      },
+      "Device": "Intel(R) Arc(TM) B580 Graphics",
+      "DriverVersion": "32.0.101.9030"
+    },
+    {
+      "Stage": 4,
+      "Batch": 64,
+      "Sequence": 1024,
+      "Heads": 16,
+      "HeadWidth": 32,
+      "P50Ms": 253.6982,
+      "ForwardP50Ms": 44.4779,
+      "BackwardP50Ms": 209.27280000000002,
+      "GpuP50Ms": 242.2919200000099,
+      "Samples": [
+        268.3192,
+        253.6982,
+        255.2256,
+        252.6069,
+        253.3026
+      ],
+      "ForwardSamples": [
+        58.9759,
+        44.4254,
+        44.4779,
+        44.3317,
+        44.769
+      ],
+      "BackwardSamples": [
+        209.34330000000003,
+        209.27280000000002,
+        210.74769999999998,
+        208.27519999999998,
+        208.5336
+      ],
+      "GpuSamples": [
+        242.4376849999993,
+        242.294120999999,
+        242.2919200000099,
+        242.1125350000084,
+        242.13715200000843
+      ],
+      "Allocations": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "Launches": [
+        2564,
+        2564,
+        2564,
+        2564,
+        2564
+      ],
+      "PeakBytes": 1419247616,
+      "H2DBytes": 0,
+      "D2HBytes": 0,
+      "Kernels": {
+        "decode_bf16": 22.759262999999997,
+        "attention_qk_pack_combined_candidate": 55.235913000001524,
+        "attention_qk_direct_256x32_candidate": 49.17391699999844,
+        "attention_probabilities_register_1024": 101.34534900000045,
+        "attention_xmx_products_n32_b0": 1018.3989029999975,
+        "resident_bf16": 5.563433999999999,
+        "resident_zero": 1.5777050000000001,
+        "attention_xmx_products_n64_b0": 97.93699499999981,
+        "attention_derivatives": 61.93454600000177,
+        "attention_xmx_products_n32_b1": 523.2227869999995
+      },
+      "Resources": {
+        "attention_xmx_products_n32_b0": {
+          "Name": "attention_xmx_products_n32_b0",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 10496,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_xmx_products_n64_b0": {
+          "Name": "attention_xmx_products_n64_b0",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 12544,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_xmx_products_n32_b1": {
+          "Name": "attention_xmx_products_n32_b1",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 12544,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        }
+      },
+      "Device": "Intel(R) Arc(TM) B580 Graphics",
+      "DriverVersion": "32.0.101.9030"
+    },
+    {
+      "Stage": 5,
+      "Batch": 64,
+      "Sequence": 1024,
+      "Heads": 16,
+      "HeadWidth": 32,
+      "P50Ms": 219.2356,
+      "ForwardP50Ms": 54.6567,
+      "BackwardP50Ms": 164.54840000000002,
+      "GpuP50Ms": 197.6737020000444,
+      "Samples": [
+        219.3139,
+        218.69,
+        219.2356,
+        220.9473,
+        219.2036
+      ],
+      "ForwardSamples": [
+        54.3511,
+        54.6567,
+        54.6872,
+        54.5512,
+        54.8561
+      ],
+      "BackwardSamples": [
+        164.9628,
+        164.0333,
+        164.54840000000002,
+        166.39610000000002,
+        164.3475
+      ],
+      "GpuSamples": [
+        197.64639100000647,
+        197.6437300000033,
+        197.6737020000444,
+        197.7242050000291,
+        197.70503200003714
+      ],
+      "Allocations": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "Launches": [
+        4868,
+        4868,
+        4868,
+        4868,
+        4868
+      ],
+      "PeakBytes": 1469579264,
+      "H2DBytes": 0,
+      "D2HBytes": 0,
+      "Kernels": {
+        "decode_bf16": 22.713326999999996,
+        "attention_qk_pack_combined_candidate": 50.13551100000105,
+        "attention_qk_direct_256x32_candidate": 50.71845299999855,
+        "attention_probabilities_register_1024": 102.9434990000009,
+        "attention_products_pack_a": 925.2638020000202,
+        "attention_products_pack_b": 47.61018399999999,
+        "attention_products_direct_n32_b0": 192.40432900000184,
+        "resident_bf16": 5.359476,
+        "resident_zero": 1.578121,
+        "attention_products_direct_n64_b0": 40.08654499999972,
+        "attention_derivatives": 69.93369399999885,
+        "attention_products_direct_n32_b1": 71.86279699999879
+      },
+      "Resources": {
+        "attention_products_pack_a": {
+          "Name": "attention_products_pack_a",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 0,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_products_pack_b": {
+          "Name": "attention_products_pack_b",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 0,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_products_direct_n32_b0": {
+          "Name": "attention_products_direct_n32_b0",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 0,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_products_direct_n64_b0": {
+          "Name": "attention_products_direct_n64_b0",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 0,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_products_direct_n32_b1": {
+          "Name": "attention_products_direct_n32_b1",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 0,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        }
+      },
+      "Device": "Intel(R) Arc(TM) B580 Graphics",
+      "DriverVersion": "32.0.101.9030"
+    }
+  ]
+}

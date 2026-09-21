@@ -13,9 +13,13 @@ public sealed class ArcDispatchTests
         using var lane=new ArcExecutionLane(options:new(){BufferPoolBytes=0,DeferredReleaseBytes=4096,DetailedProfiling=true,ReuseRetiredBuffers=false});
         lane.DetailedProfiler!.Phase="test";
         using var result=lane.Upload(new float[131]);
+        using var one=lane.Upload(Enumerable.Repeat(1f,131).ToArray());
         lane.ResetDetailedProfile();
         for(int i=0;i<30;i++){
-            using var tmp=lane.Upload(Enumerable.Repeat((float)i,131).ToArray());
+            // Build temporaries on the device: explicit blocking uploads would
+            // finish earlier commands before the retirement budget is reached.
+            using var tmp=lane.Allocate(131);
+            lane.Run("copy_scale",131,0,one,tmp,131,(float)i,0);
             lane.Run("copy_scale",131,0,tmp,result,131,1f,1);
             tmp.Dispose();
             Assert.InRange(lane.RetiredBytes,0,4096);
@@ -26,10 +30,10 @@ public sealed class ArcDispatchTests
         float[] values=new float[131];lane.Read(result,values);
         Assert.All(values,v=>Assert.Equal(435f,v));Assert.Equal(0,lane.RetiredBytes);
         var entries=lane.DetailedProfiler.Snapshot();
-        Assert.Equal(30,entries.Where(e=>e.Kind=="gpu-kernel").Sum(e=>e.Count));
+        Assert.Equal(60,entries.Where(e=>e.Kind=="gpu-kernel").Sum(e=>e.Count));
         Assert.Contains(entries,e=>e.Kind=="synchronize"&&e.Detail.EndsWith("pool-budget-release"));
         Assert.Equal(524,entries.Where(e=>e.Kind=="D2H").Sum(e=>e.Bytes));
-        Assert.Equal(30 * 524,entries.Where(e=>e.Kind=="H2D").Sum(e=>e.Bytes));
+        Assert.Equal(0,entries.Where(e=>e.Kind=="H2D").Sum(e=>e.Bytes));
         lane.ResetDetailedProfile();Assert.Empty(lane.DetailedProfiler.Snapshot());
     }
     [Fact]

@@ -17,11 +17,14 @@ public sealed class ArcXmxStorageOperandTests
     [InlineData(TensorDType.Bfp8, 0)]
     [InlineData(TensorDType.Bfp8, 32)]
     [InlineData(TensorDType.Bfp8, 128)]
-    public void SlicedStoragePanelsMatchDecodedRoundingWithTailsAndTransposes(TensorDType dtype, int block)
+    [InlineData(TensorDType.Bfp8, 0, true)]
+    [InlineData(TensorDType.Bfp8, 32, true)]
+    [InlineData(TensorDType.Bfp8, 128, true)]
+    public void SlicedStoragePanelsMatchDecodedRoundingWithTailsAndTransposes(TensorDType dtype, int block, bool powerOfTwo = false)
     {
         RequireXmx();
         const int outer = 137, k = 67, offset = 5, length = outer * k;
-        using var scope = Tensor.BeginArcExecution(precision: TensorPrecisionMode.Mix8_32, options: new() { DirectXmxMatrices = true });
+        using var scope = Tensor.BeginArcExecution(precision: TensorPrecisionMode.Mix8_32, options: new() { DirectXmxMatrices = true, PowerOfTwoPackScales = powerOfTwo });
         var tensor = Make(dtype, block, offset + length + 7, 3);
         float[] expected = tensor.Data.ToArray().Skip(offset).Take(length).Select(TensorStorageCodec.RoundToBFloat16).ToArray();
         var lane = Tensor.ArcLane;

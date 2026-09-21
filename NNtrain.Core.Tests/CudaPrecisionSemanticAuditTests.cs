@@ -161,6 +161,7 @@ public sealed class CudaPrecisionSemanticAuditTests
     [Fact]
     public void ResidentCudaPublicOpsPerformNoTrainingStepTransfers()
     {
+        Assert.SkipWhen(!Tensor.IsCudaAvailable(), "CUDA device is required for resident-operation transfer checks.");
         TensorDevice previous = Tensor.ExecutionDevice;
         try
         {

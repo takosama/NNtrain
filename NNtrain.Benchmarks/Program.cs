@@ -2,7 +2,30 @@ using BenchmarkDotNet.Running;
 using NNtrain;
 using NNtrain.Benchmarks;
 
-if (args.Length > 0 && args[0] == "--probe-arc-transformer")
+if (args.Length == 2 && args[0] == "--probe-arc-bfp8-epilogue")
+{
+    ArcBfp8EpilogueProbe.Run(args[1]);
+}
+else if (args.Length == 1 && args[0] == "--probe-arc-capabilities")
+{
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(NNtrain.Arc.ArcDevices.Enumerate(),
+        new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+}
+else if (args.Length == 2 && args[0] == "--probe-arc-pow2-pack")
+{
+    ArcPow2PackProbe.Run(args[1]);
+}
+else if (args.Length is >= 2 and <= 4 && args[0] == "--probe-arc-flash")
+{
+    ArcFlashAttentionProbe.Run(args[1], args.Length >= 3 ? int.Parse(args[2]) : null,
+        args.Length >= 4 ? int.Parse(args[3]) : null);
+}
+else if (args.Length == 3 && args[0] == "--probe-arc-qk-bulk")
+{
+    if (args[2] is not ("on" or "off")) throw new ArgumentException("Bulk Q/K mode must be on or off.");
+    ArcFlashAttentionProbe.Run(args[1], 64, 0, args[2] == "on");
+}
+else if (args.Length > 0 && args[0] == "--probe-arc-transformer")
 {
     ArcTransformerProbe.Run(args[1..]);
 }
@@ -18,13 +41,49 @@ else if (args.Length == 2 && args[0] == "--probe-arc-storage-pack-linear")
 {
     ArcXmxStoragePackLinearProbe.Run(args[1]);
 }
+else if (args.Length == 2 && args[0] == "--probe-arc-serial-gemm")
+{
+    ArcSerialGemmProbe.Run(args[1]);
+}
+else if (args.Length == 2 && args[0] == "--probe-arc-bfp8-coalesced")
+{
+    ArcBfp8CoalescedProbe.Run(args[1]);
+}
 else if (args.Length == 2 && args[0] == "--probe-arc-dkv-special")
 {
     ArcDkvSpecialProbe.Run(args[1]);
 }
+else if (args.Length == 2 && args[0] == "--probe-arc-dkv-split")
+{
+    ArcDkvSpecialProbe.Run(args[1], splitOnly: true);
+}
+else if (args.Length == 2 && args[0] == "--probe-arc-dkv-register-query")
+{
+    ArcDkvSpecialProbe.Run(args[1], registerQueryOnly: true);
+}
+else if (args.Length == 2 && args[0] == "--probe-arc-dkv-narrow")
+{
+    ArcDkvSpecialProbe.Run(args[1], narrowOnly: true);
+}
 else if (args.Length == 2 && args[0] == "--probe-arc-attention-row-subgroup")
 {
     ArcAttentionRowSubgroupProbe.Run(args[1]);
+}
+else if (args.Length == 2 && args[0] == "--probe-arc-attention-row-register")
+{
+    ArcAttentionRowRegisterProbe.Run(args[1]);
+}
+else if (args.Length == 2 && args[0] == "--probe-arc-norm-coalesced")
+{
+    ArcNormCoalescedProbe.Run(args[1]);
+}
+else if (args.Length == 2 && args[0] == "--probe-arc-qk-direct")
+{
+    ArcAttentionQkDirectProbe.Run(args[1]);
+}
+else if (args.Length == 2 && args[0] == "--probe-arc-dp-ds")
+{
+    ArcAttentionDpDsProbe.Run(args[1]);
 }
 else if (args.Length == 2 && args[0] == "--probe-arc-gemm")
 {
@@ -45,6 +104,10 @@ else if (args.Length == 2 && args[0] == "--probe-arc-xmx-pack-tune")
 else if (args.Length == 2 && args[0] == "--probe-arc-xmx-direct-tune")
 {
     ArcXmxDirectTuneProbe.Run(args[1]);
+}
+else if (args.Length == 2 && args[0] == "--probe-arc-xmx-expanded")
+{
+    ArcXmxDirectTuneProbe.Run(args[1], expanded: true);
 }
 else if (args.Length == 2 && args[0] == "--probe-arc-backward")
 {

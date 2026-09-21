@@ -18,6 +18,26 @@ public static class AutogradContext
         return new NoGradScope();
     }
 
+    // A backward caller may itself be in NoGrad. A checkpoint's local forward
+    // still needs a graph, and must restore that caller's recording state.
+    internal static IDisposable EnableRecording()
+    {
+        int previous = NoGradDepth.Value;
+        NoGradDepth.Value = 0;
+        return new RecordingScope(previous);
+    }
+
+    private sealed class RecordingScope(int previous) : IDisposable
+    {
+        private bool _disposed;
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            NoGradDepth.Value = previous;
+        }
+    }
+
     private sealed class NoGradScope : IDisposable
     {
         private bool _disposed;

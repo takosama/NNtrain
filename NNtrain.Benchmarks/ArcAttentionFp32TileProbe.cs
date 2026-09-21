@@ -97,17 +97,20 @@ internal static class ArcAttentionFp32TileProbe
         new("attention_fp32_n_32x32x64_w128", 32, 32, 8, false),
         new("attention_fp32_dp_d32_special", 64, 64, 16, true, "dp", true),
         new("attention_fp32_dp_d32_aligned", 64, 64, 16, true, "dp", true, true),
+        new("attention_fp32_dp_d32_block_slm", 64, 64, 16, true, "dp", true, true),
         new("attention_fp32_pv_d32_special", 64, 32, 16, false, "pv", true),
         new("attention_fp32_pv_d32_aligned", 64, 32, 16, false, "pv", true, true),
         new("attention_fp32_dq_d32_special", 64, 32, 16, false, "dq", true),
-        new("attention_fp32_dq_d32_aligned", 64, 32, 16, false, "dq", true, true)
+        new("attention_fp32_dq_d32_aligned", 64, 32, 16, false, "dq", true, true),
+        new("attention_fp32_pv_d32_block_slm", 64, 32, 16, false, "pv", true, true),
+        new("attention_fp32_dq_d32_block_slm", 64, 32, 16, false, "dq", true, true)
     ];
 
     internal static void Run(string path, bool specializationOnly = false)
     {
         path = Path.GetFullPath(path);
         if (File.Exists(path)) throw new IOException("Probe output must be a new file.");
-        using var lane = new ArcExecutionLane();
+        using var lane = new ArcExecutionLane(options: new() { ExperimentalOptimizationKernels = true });
         var results = new List<object>();
         var validated = new Dictionary<string, int>();
         foreach (string operation in specializationOnly ? new[] { "dp", "pv", "dq" } : new[] { "dp", "pv", "dq", "dk", "dv" })

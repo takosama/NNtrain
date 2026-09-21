@@ -645,6 +645,7 @@ public sealed class CudaNativeAbiGatewayTests
         Assert.True(
             CudaNativeGateway.AbiVersion.Minor >=
                 CudaAbiVersion.ExternalGradientReadyEventMinor);
+        Assert.SkipWhen(!Tensor.IsCudaAvailable(), "CUDA device is unavailable; ABI checks above do not require a GPU.");
         Assert.Equal(
             0,
             CudaNativeGateway.DeviceCount(out int deviceCount));
@@ -668,6 +669,7 @@ public sealed class CudaNativeAbiGatewayTests
     [Fact]
     public void StreamAwareMemoryOperationsExecuteInSubmissionOrder()
     {
+        Assert.SkipWhen(!Tensor.IsCudaAvailable(), "CUDA device is required for stream and pinned-memory execution.");
         const int elementCount = 4;
         const int byteCount = elementCount * sizeof(int);
         nuint bytes = byteCount;

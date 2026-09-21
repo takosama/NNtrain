@@ -3,6 +3,8 @@
 // Source offsets address both payload and its original block-scale index.
 #if defined(ARC_XMX) && ARC_SG == 16
 ushort xmx_bf16(float x);
+// Packing-only ABI; negative block encodes ~log2(power-of-two block).
+int xmx_storage_scale_index(int index,int block){return block<0?index>>(~block):index/block;}
 ushort xmx_storage_read_f32(__global const uchar* source,__global const float* scales,int index,int block){
  return xmx_bf16(((__global const float*)source)[index]);
 }
@@ -13,7 +15,7 @@ ushort xmx_storage_read_bf16(__global const uchar* source,__global const float* 
  return (ushort)(bits|(((uint)(bits&0x7fffu)>0x7f80u)?0x40u:0u));
 }
 ushort xmx_storage_read_bfp8(__global const uchar* source,__global const float* scales,int index,int block){
- float value=(float)((__global const char*)source)[index]*scales[index/block];
+ float value=(float)((__global const char*)source)[index]*scales[xmx_storage_scale_index(index,block)];
  return xmx_bf16(value);
 }
 #define XMX_STORAGE_PACK_A(NAME,READ) \

@@ -25,6 +25,7 @@ public sealed class TensorFloat16OperationManifestTests
         Assert.Equal(
             manifested.Length,
             manifested.Select(static entry => entry.MemberId).Distinct().Count());
+        AssertCompleteInventory(reflected, manifested);
         Assert.Equal(
             reflected,
             manifested.Select(static entry => entry.MemberId).ToArray());
@@ -53,10 +54,75 @@ public sealed class TensorFloat16OperationManifestTests
         Assert.Equal(
             manifested.Length,
             manifested.Select(static entry => entry.MemberId).Distinct().Count());
+        AssertCompleteInventory(reflected, manifested);
         Assert.Equal(
             reflected,
             manifested.Select(static entry => entry.MemberId).ToArray());
         AssertVerificationTargetsExist(manifested);
+    }
+
+    [Fact]
+    public void BackendOnlyOperationsHaveExplicitFloat16Restrictions()
+    {
+        string[] backendMembers =
+        [
+            "ArcCheckpoint(Func`2,IReadOnlyList`1)",
+            "ArcLinearCrossEntropy(Tensor,Tensor,Int32[],Int32)",
+            "LinearLastDimFrozen(Tensor,Tensor,Boolean)",
+        ];
+        foreach (string member in backendMembers)
+        {
+            TensorFloat16OperationManifestEntry entry = Assert.Single(
+                TensorFloat16OperationManifest.InternalTensorReturningMembers,
+                candidate => candidate.MemberId == member);
+            Assert.Equal(TensorFloat16ResultPolicy.BackendWithoutFloat16, entry.ResultPolicy);
+            Assert.False(string.IsNullOrWhiteSpace(entry.Float16Restriction));
+            Assert.Contains("Float16", entry.Float16Restriction);
+        }
+    }
+
+    [Fact]
+    public void ArcCheckpointCpuPassthroughPreservesDelegateContract()
+    {
+        using var execution = TensorExecutionContext.Push(new TorchDevice(TensorDevice.Cpu));
+        Tensor input = Half([-1f, .5f, -2f, 1f], 4);
+        Tensor output = input.ArcCheckpoint(static value => value.Relu(), []);
+        AssertFloat16StorageContract(output);
+        output.Sum().BackwardAndRelease();
+        Assert.Equal(new float[] { 0, 1, 0, 1 }, input.Grad);
+    }
+
+    [Fact]
+    public void FrozenLinearRejectsLegacyFloat16()
+    {
+        using var execution = TensorExecutionContext.Push(new TorchDevice(TensorDevice.Cpu));
+        Tensor input = Half([1f, 2f], 1, 2);
+        Tensor weight = Half([.25f, .5f], 1, 2);
+        Tensor bias = Half([0f], 1);
+        Assert.Throws<NotSupportedException>(() => input.LinearLastDimFrozen(weight, bias, applyRelu: false));
+    }
+
+    [Fact]
+    public void DpoLossReadsFloat16ScoresAndReturnsFloat32LossAndGradients()
+    {
+        using var execution = TensorExecutionContext.Push(new TorchDevice(TensorDevice.Cpu));
+        float[] scores = [.5f, 1f, 2f, 4f];
+        Tensor[] losses = scores.Select(value => Tensor.Scalar(value, dtype: TensorDType.Float16)).ToArray();
+        int[] counts = [3, 5, 2, 7];
+        Tensor result = Tensor.DpoLoss(losses, counts, scores, beta: .25f);
+
+        Assert.All(losses, AssertFloat16StorageContract);
+        Assert.Equal(TensorDType.Float32, result.DType);
+        Assert.Equal(TensorDType.Float32, result.ComputeDType);
+        Assert.Equal(TensorDType.Float32, result.AccumulationDType);
+        Assert.Equal(sizeof(float), result.StorageByteLength);
+        Assert.Equal((float)Math.Log(2), result.item());
+
+        result.BackwardAndRelease([2f]);
+        // Both margins are zero: sigmoid(-margin)=1/2. The batch has two
+        // pairs, with a nonunit backward seed and token-count weighting.
+        Assert.Equal(new float[] { .375f, -.625f, .25f, -.875f },
+            losses.Select(loss => Assert.Single(loss.Grad)).ToArray());
     }
 
     [Fact]
@@ -213,6 +279,18 @@ public sealed class TensorFloat16OperationManifestTests
         => $"{method.Name}({string.Join(",", method.GetParameters()
             .Select(static parameter => parameter.ParameterType.Name))})";
 
+    private static void AssertCompleteInventory(
+        string[] reflected,
+        IReadOnlyList<TensorFloat16OperationManifestEntry> manifested)
+    {
+        string[] ids = manifested.Select(static entry => entry.MemberId).ToArray();
+        Assert.True(reflected.SequenceEqual(ids),
+            "Tensor operation inventory mismatch.\nMissing manifest entries:\n"
+            + string.Join("\n", reflected.Except(ids))
+            + "\nUnexpected manifest entries:\n"
+            + string.Join("\n", ids.Except(reflected)));
+    }
+
     private static void AssertVerificationTargetsExist(
         IEnumerable<TensorFloat16OperationManifestEntry> entries)
     {
@@ -220,6 +298,11 @@ public sealed class TensorFloat16OperationManifestTests
             .Assembly;
         foreach (TensorFloat16OperationManifestEntry entry in entries)
         {
+            if (entry.ResultPolicy == TensorFloat16ResultPolicy.BackendWithoutFloat16)
+            {
+                Assert.False(string.IsNullOrWhiteSpace(entry.Float16Restriction),
+                    $"Backend-only operation '{entry.MemberId}' must explain its Float16 restriction.");
+            }
             int separator = entry.Verification.LastIndexOf('.');
             Assert.True(
                 separator > 0 && separator < entry.Verification.Length - 1,

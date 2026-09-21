@@ -18,6 +18,13 @@ internal static class ArcTransformerProbe
 {
     private const string NextFeatureNames = "inline,dq,dkv,pv,norm,scatter,direct,storage,sg,tiles,lru,retired";
 
+    internal static bool IsShapeOverrideWithinBudget(
+        (int Batch, int Accumulation, int Sequence, int Layers) baseline,
+        (int Batch, int Accumulation, int Sequence, int Layers) candidate)
+        => candidate.Batch > 0 && candidate.Accumulation > 0 && candidate.Sequence > 0 && candidate.Layers > 0
+            && candidate.Batch <= baseline.Batch && candidate.Sequence <= baseline.Sequence && candidate.Layers <= baseline.Layers
+            && (long)candidate.Batch * candidate.Accumulation <= (long)baseline.Batch * baseline.Accumulation;
+
     internal static void Run(string[] args)
     {
         if (args.Length < 2)
@@ -25,7 +32,13 @@ internal static class ArcTransformerProbe
                 + "--batch N --sequence N --layers N --accumulation N --warmup N --steps N --device arc|cpu "
                 + "--arc-mode pre-xmx|optimized (or historical reference modes) --xmx-mode auto|legacy|narrow|wide "
                 + "--attention-mode legacy|unrolled|panel|optimized --next-features none|" + NextFeatureNames + " "
-                + "--attention-workspace MiB --event-limit N --pool-mib MiB --deferred-mib MiB --profile --compare-cpu. "
+                + "--attention-workspace MiB --event-limit N --pool-mib MiB --deferred-mib MiB --profile --compare-cpu "
+                + "--streamed-xmx on|off --direct-qk on|off --cached-prob on|off --ordered-norm on|off --packed-norm on|off "
+                + "--auto-memory on|off --checkpoint-blocks on|off --checkpoint-layers N --checkpoint-ffn on|off. "
+                + "--cache-backward on|off --weight-workspace MiB --packed-relu on|off --coalesced-codec on|off. "
+                + "--flash on|off --flash-xmx on|off --flash-async on|off. "
+                + "--timeline --pipeline-events on|off --pow2-pack on|off --bulk-qk on|off --fused-bfp8-linear on|off --expanded-xmx on|off --dkv-rows 2|4|8|16 "
+                + "--block-io-attention on|off --panel-cache-mib 0..1024. "
                 + "--next-features replaces the enabled feature set; use none to disable all listed features. "
                 + "The direct feature takes precedence over --xmx-mode for supported shapes.");
         string configPath = Path.GetFullPath(args[0]);
@@ -33,12 +46,39 @@ internal static class ArcTransformerProbe
         if (File.Exists(resultPath) || string.Equals(configPath, resultPath, StringComparison.OrdinalIgnoreCase))
             throw new IOException("Probe output must be a new artifact; refusing to replace an existing file.");
         var flags = new Dictionary<string, string>(StringComparer.Ordinal);
-        bool compareCpu = false, detailed = false;
+        bool compareCpu = false, detailed = false, timelineEnabled = false;
         for (int i = 2; i < args.Length; i++)
         {
             if (args[i] == "--compare-cpu") { compareCpu = true; continue; }
             if (args[i] == "--profile") { detailed = true; continue; }
-            if (args[i] is not ("--batch" or "--sequence" or "--layers" or "--accumulation" or "--warmup" or "--steps" or "--device" or "--arc-mode" or "--xmx-mode" or "--attention-mode" or "--next-features" or "--attention-workspace" or "--event-limit" or "--pool-mib" or "--deferred-mib"))
+            if (args[i] == "--timeline") { detailed = true; timelineEnabled = true; continue; }
+            if (args[i] == "--dkv-rows")
+            {
+                if (++i >= args.Length || !flags.TryAdd("--dkv-rows", args[i])) throw new ArgumentException("Invalid --dkv-rows.");
+                continue;
+            }
+            if (args[i] == "--pipeline-events")
+            {
+                if (++i >= args.Length || !flags.TryAdd("--pipeline-events", args[i])) throw new ArgumentException("Invalid --pipeline-events.");
+                continue;
+            }
+            if (args[i] == "--pow2-pack")
+            {
+                if (++i >= args.Length || !flags.TryAdd("--pow2-pack", args[i])) throw new ArgumentException("Invalid --pow2-pack.");
+                continue;
+            }
+            if (args[i] is "--fused-bfp8-linear" or "--expanded-xmx" or "--block-io-attention" or "--panel-cache-mib")
+            {
+                string flag = args[i];
+                if (++i >= args.Length || !flags.TryAdd(flag, args[i])) throw new ArgumentException($"Invalid {flag}.");
+                continue;
+            }
+            if (args[i] == "--bulk-qk")
+            {
+                if (++i >= args.Length || !flags.TryAdd("--bulk-qk", args[i])) throw new ArgumentException("Invalid --bulk-qk.");
+                continue;
+            }
+            if (args[i] is not ("--batch" or "--sequence" or "--layers" or "--accumulation" or "--warmup" or "--steps" or "--device" or "--arc-mode" or "--xmx-mode" or "--attention-mode" or "--next-features" or "--attention-workspace" or "--event-limit" or "--pool-mib" or "--deferred-mib" or "--streamed-xmx" or "--direct-qk" or "--cached-prob" or "--auto-memory" or "--checkpoint-blocks" or "--checkpoint-layers" or "--checkpoint-ffn" or "--ordered-norm" or "--packed-norm" or "--weight-workspace" or "--cache-backward" or "--packed-relu" or "--coalesced-codec" or "--flash" or "--flash-xmx" or "--flash-async"))
                 throw new ArgumentException($"Unknown probe argument: {args[i]}");
             if (++i >= args.Length) throw new ArgumentException("Missing probe argument value.");
             if (!flags.TryAdd(args[i - 1], args[i])) throw new ArgumentException($"Repeated argument: {args[i - 1]}");
@@ -90,8 +130,15 @@ internal static class ArcTransformerProbe
         if (arcMode != "optimized")
             arcOptions = arcOptions with { InlineMatrixGradient = false, FusedAttentionDkv = false,
                 FusedAttentionDq = false, FusedAttentionPv = false, BlockResidualNorm = false, FusedNormGradient = false,
-                DirectXmxMatrices = false, PackedMatrixStorage = false, SubgroupAttentionReduction = false,
-                TunedFp32Attention = false, LruBufferPool = false, ReuseRetiredBuffers = false };
+                DirectXmxMatrices = false, PackedMatrixStorage = false, SubgroupAttentionReduction = false, CachedAttentionProbabilities = false,
+                TunedFp32Attention = false, LruBufferPool = false, ReuseRetiredBuffers = false,
+                StreamedXmxMatrices = false, DirectAttentionQk = false, OrderedTiledNorm = false, PackedNormInput = false,
+                CacheSizedAttentionBackward = false, StreamedWeightGradientWorkspaceMiB = 64,
+                PackedReluBackward = false, CoalescedBfp8Publication = false,
+                PipelineEventCollection = false, PowerOfTwoPackScales = false, BulkAttentionQkPanels = false,
+                FusedBfp8Linear = false, ExpandedXmxTiles = false,
+                BlockIoAttention = false, MatrixPanelCacheMiB = 0,
+                AutomaticTransformerMemoryPlan = false, BufferPoolBytes = arcMode == "reference" ? 0 : 512L * 1024 * 1024 };
         if (arcMode is not ("optimized" or "pre-xmx"))
             arcOptions = arcOptions with {
                 CompactAttentionTiles = arcMode is "compact" or "pooled",
@@ -138,6 +185,34 @@ internal static class ArcTransformerProbe
             QueuedKernelLimit = Number("--event-limit", arcOptions.QueuedKernelLimit, 16),
             BufferPoolBytes = Number("--pool-mib", checked((int)(arcOptions.BufferPoolBytes / 1048576)), 0) * 1048576L,
             DeferredReleaseBytes = Number("--deferred-mib", checked((int)(arcOptions.DeferredReleaseBytes / 1048576)), 0) * 1048576L };
+        bool Switch(string key, bool fallback) => flags.TryGetValue(key, out string? value)
+            ? value switch { "on" => true, "off" => false, _ => throw new ArgumentException(key + " expects on or off.") }
+            : fallback;
+        arcOptions = arcOptions with {
+            AttentionDkvRows = Number("--dkv-rows", arcOptions.AttentionDkvRows),
+            PipelineEventCollection = Switch("--pipeline-events", arcOptions.PipelineEventCollection),
+            PowerOfTwoPackScales = Switch("--pow2-pack", arcOptions.PowerOfTwoPackScales),
+            BulkAttentionQkPanels = Switch("--bulk-qk", arcOptions.BulkAttentionQkPanels),
+            FusedBfp8Linear = Switch("--fused-bfp8-linear", arcOptions.FusedBfp8Linear),
+            ExpandedXmxTiles = Switch("--expanded-xmx", arcOptions.ExpandedXmxTiles),
+            BlockIoAttention = Switch("--block-io-attention", arcOptions.BlockIoAttention),
+            MatrixPanelCacheMiB = Number("--panel-cache-mib", arcOptions.MatrixPanelCacheMiB, 0),
+            StreamedXmxMatrices = Switch("--streamed-xmx", arcOptions.StreamedXmxMatrices),
+            StreamedWeightGradientWorkspaceMiB = Number("--weight-workspace", arcOptions.StreamedWeightGradientWorkspaceMiB, 0),
+            CacheSizedAttentionBackward = Switch("--cache-backward", arcOptions.CacheSizedAttentionBackward),
+            PackedReluBackward = Switch("--packed-relu", arcOptions.PackedReluBackward),
+            CoalescedBfp8Publication = Switch("--coalesced-codec", arcOptions.CoalescedBfp8Publication),
+            FlashAttention = Switch("--flash", arcOptions.FlashAttention),
+            FlashAttentionXmxProducts = Switch("--flash-xmx", arcOptions.FlashAttentionXmxProducts),
+            FlashAttentionAsyncCopy = Switch("--flash-async", arcOptions.FlashAttentionAsyncCopy),
+            DirectAttentionQk = Switch("--direct-qk", arcOptions.DirectAttentionQk),
+            CachedAttentionProbabilities = Switch("--cached-prob", arcOptions.CachedAttentionProbabilities),
+            AutomaticTransformerMemoryPlan = Switch("--auto-memory", arcOptions.AutomaticTransformerMemoryPlan),
+            TransformerCheckpointing = Switch("--checkpoint-blocks", arcOptions.TransformerCheckpointing),
+            TransformerCheckpointLayers = Number("--checkpoint-layers", arcOptions.TransformerCheckpointLayers, 0),
+            TransformerFfnCheckpointing = Switch("--checkpoint-ffn", arcOptions.TransformerFfnCheckpointing),
+            OrderedTiledNorm = Switch("--ordered-norm", arcOptions.OrderedTiledNorm),
+            PackedNormInput = Switch("--packed-norm", arcOptions.PackedNormInput) };
         WikiTrainingConfiguration config = original with
         {
             BatchSize = Number("--batch", original.BatchSize),
@@ -147,9 +222,10 @@ internal static class ArcTransformerProbe
             Device = deviceText,
             DeviceIndices = [original.DeviceIndex],
         };
-        if (config.BatchSize > original.BatchSize || config.ContextLength > original.ContextLength
-            || config.Layers > original.Layers || config.GradientAccumulationSteps > original.GradientAccumulationSteps)
-            throw new ArgumentException("Shape overrides may only reduce the configured dimensions.");
+        if (!IsShapeOverrideWithinBudget(
+            (original.BatchSize, original.GradientAccumulationSteps, original.ContextLength, original.Layers),
+            (config.BatchSize, config.GradientAccumulationSteps, config.ContextLength, config.Layers)))
+            throw new ArgumentException("Shape overrides may only reduce dimensions or preserve/reduce effective batch by exchanging microbatch for accumulation.");
         var random = new Random(config.Seed ^ 0x5A17);
         var batches = Enumerable.Range(0, config.GradientAccumulationSteps).Select(_ =>
         {
@@ -172,7 +248,7 @@ internal static class ArcTransformerProbe
         {
             Tensor.SimdEnabled = config.UseSimd;
             Tensor.MaxDegreeOfParallelism = config.MaxDegreeOfParallelism;
-            results.Add(Measure(config, device, batches, warmup, steps, arcOptions));
+            results.Add(Measure(config, device, batches, warmup, steps, arcOptions, timelineEnabled ? resultPath : null));
             if (compareCpu && device != TensorDevice.Cpu)
                 results.Add(Measure(config with { Device = "cpu" }, TensorDevice.Cpu, batches, warmup, steps, arcOptions));
         }
@@ -197,7 +273,7 @@ internal static class ArcTransformerProbe
                 config.NekoMuonNewtonSchulzInterval, DepthMode = config.GetNekoMuonNewtonSchulzDepthMode().ToString(), Depth = config.GetNekoMuonNewtonSchulzDepth(), config.NekoMuonBetaFast },
             WarmupSteps = warmup, MeasuredSteps = steps,
             ArcOptions = arcOptions,
-            Notes = "Fixed synthetic full-length tokens. Fresh seeded model; no LR scheduling, evaluation, checkpoint or corpus I/O. Gradient clipping max_norm=1 matches WikiLanguageModelCommand.TrainingStep. Host process working set is not dedicated VRAM. Lane byte counters describe backend allocations/transfers, not driver-reported VRAM. Kernel timings are OpenCL event GPU durations. Allocation milliseconds include upload; transfer milliseconds include pending kernel waits, so these counters are not disjoint. Amdahl fractions use sums of measured synchronous phase wall durations.",
+            Notes = "Fixed synthetic full-length tokens. Fresh seeded model; no LR scheduling, evaluation, checkpoint or corpus I/O. Gradient clipping max_norm=1 matches WikiLanguageModelCommand.TrainingStep. Host process working set is not dedicated VRAM. Lane byte counters describe backend allocations/transfers, not driver-reported VRAM. Legacy allocation, transfer and kernel duration counters overlap: do not add them. Timeline.Partition.WallCategories is the disjoint wall-time partition; GPU-idle means no measured command executing on this lane, not system-wide GPU idleness. HostExclusive and queued-command idle are alternative views, not extra wall time. Phase fences, progress output and event collection are inside wall time; trace export and gradient validation are outside. Managed allocation/GC snapshots exclude trace export. Amdahl fractions use sums of measured synchronous phase wall durations.",
             Overrides = flags,
             Results = results,
         };
@@ -208,7 +284,7 @@ internal static class ArcTransformerProbe
     }
 
     private static RunResult Measure(WikiTrainingConfiguration config, TensorDevice device,
-        (int[] Input, int[] Target)[] batches, int warmup, int steps, ArcExecutionOptions arcOptions)
+        (int[] Input, int[] Target)[] batches, int warmup, int steps, ArcExecutionOptions arcOptions, string? timelinePath = null)
     {
         GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
         using ExecutionSession session = ProductionTrainingSessionFactory.CreateExecutionSession(
@@ -235,8 +311,11 @@ internal static class ArcTransformerProbe
                 var kernelsBefore = lane?.KernelTimings.ToDictionary(p => p.Key, p => p.Value) ?? [];
                 long allocatedBefore = GC.GetTotalAllocatedBytes(false);
                 int[] gcBefore = [GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2)];
+                ArcTimeline? timeline = !warming && timelinePath is not null ? lane?.BeginTimeline() : null;
                 var total = Stopwatch.StartNew();
-                double Time(string phase, Action action) { if(lane?.DetailedProfiler is {} profiler) profiler.Phase=phase; long start = Stopwatch.GetTimestamp(); action(); lane?.Synchronize(); return Stopwatch.GetElapsedTime(start).TotalMilliseconds; }
+                timeline?.MarkStart();
+                var rootScope = timeline?.Host("managed-step", "bookkeeping");
+                double Time(string phase, Action action) { if(lane?.DetailedProfiler is {} profiler) profiler.Phase=phase; using var span = timeline?.Host("managed-" + phase, phase); long start = Stopwatch.GetTimestamp(); action(); lane?.Synchronize(); return Stopwatch.GetElapsedTime(start).TotalMilliseconds; }
                 double zero = Time("zero-grad", optimizer.zero_grad);
                 double forward = 0, backward = 0;
                 float meanLoss = 0;
@@ -244,15 +323,33 @@ internal static class ArcTransformerProbe
                 {
                     Tensor? loss = null;
                     forward += Time("forward", () => loss = model.forward_loss(batch.Input, batch.Target, config.BatchSize, config.ContextLength));
-                    if (config.Layers >= 16) Console.WriteLine($"  step {step + 1}: forward completed, cumulative {forward:F0} ms");
-                    meanLoss += loss!.item() / batches.Length;
+                    using (timeline?.Host("console-progress"))
+                        if (config.Layers >= 16) Console.WriteLine($"  step {step + 1}: forward completed, cumulative {forward:F0} ms");
+                    using (timeline?.Host("loss-scalar")) meanLoss += loss!.item() / batches.Length;
                     backward += Time("backward", () => loss.BackwardAndRelease([1f / batches.Length]));
-                    if (config.Layers >= 16) Console.WriteLine($"  step {step + 1}: backward completed, cumulative {backward:F0} ms");
+                    using (timeline?.Host("console-progress"))
+                        if (config.Layers >= 16) Console.WriteLine($"  step {step + 1}: backward completed, cumulative {backward:F0} ms");
                 }
                 float norm = 0;
                 double clip = Time("clip", () => norm = nn.utils.clip_grad_norm_(parameters, 1f));
                 double update = Time("optimizer", optimizer.step);
+                rootScope?.Dispose();
+                timeline?.MarkEnd();
                 total.Stop();
+                long managedAllocated = GC.GetTotalAllocatedBytes(false) - allocatedBefore;
+                long managedBytes = GC.GetTotalMemory(false);
+                int[] gcCollections = [GC.CollectionCount(0) - gcBefore[0], GC.CollectionCount(1) - gcBefore[1], GC.CollectionCount(2) - gcBefore[2]];
+                ArcTimelineReport? timelineReport = null;
+                if (timeline is not null)
+                {
+                    lane!.EndTimeline();
+                    timelineReport = timeline.Export(timelinePath + $".step-{step + 1}.trace.json.gz");
+                    Console.WriteLine($"Timeline: wall={timelineReport.WallMs:F2} ms, coverage={timelineReport.Partition.CoverageFraction:P6}, events={timelineReport.DeviceEvents}, missing={timelineReport.MissingEvents}, opaque uploads={timelineReport.OpaqueAllocationCopies}, GPU overlaps={timelineReport.Partition.GpuOverlapMs:F4} ms, clock bracket={timelineReport.ClockBracketUncertaintyMs:F6} ms");
+                    if (timelineReport.MissingEvents != 0 || timelineReport.OpaqueAllocationCopies != 0
+                        || Math.Abs(timelineReport.Partition.CoverageFraction - 1) > 1e-9
+                        || timelineReport.Partition.GpuOverlapMs > .001)
+                        throw new InvalidOperationException("Timeline quality gate failed; inspect the exported trace before using its performance numbers.");
+                }
                 var after = CaptureLane(lane);
                 var profile = lane?.DetailedProfiler?.Snapshot();
                 bool finite = float.IsFinite(meanLoss) && float.IsFinite(norm);
@@ -263,10 +360,9 @@ internal static class ArcTransformerProbe
                 using var process = Process.GetCurrentProcess();
                 var sample = new StepSample(step + 1, meanLoss, norm, finite,
                     total.Elapsed.TotalMilliseconds, zero, forward, backward, clip, update,
-                    GC.GetTotalAllocatedBytes(false) - allocatedBefore, GC.GetTotalMemory(false), process.WorkingSet64,
-                    [GC.CollectionCount(0) - gcBefore[0], GC.CollectionCount(1) - gcBefore[1], GC.CollectionCount(2) - gcBefore[2]],
+                    managedAllocated, managedBytes, process.WorkingSet64, gcCollections,
                     SubtractLane(after, before), after,
-                    lane?.KernelTimings.ToDictionary(p => p.Key, p => p.Value - kernelsBefore.GetValueOrDefault(p.Key)) ?? [], profile);
+                    lane?.KernelTimings.ToDictionary(p => p.Key, p => p.Value - kernelsBefore.GetValueOrDefault(p.Key)) ?? [], profile, timelineReport);
                 if (!warming) samples.Add(sample);
                 Console.WriteLine($"{device} {(warming ? "warmup" : "measure")} {step + 1}/{warmup + steps}: step={sample.TotalMs:F2} ms, forward={forward:F2}, backward={backward:F2}, clip={clip:F2}, optimizer={update:F2}, loss={meanLoss:F6}, norm={norm:G6}, managed={sample.ManagedBytes / 1048576d:F1} MiB");
             }
@@ -288,9 +384,12 @@ internal static class ArcTransformerProbe
                     .GroupBy(p => p.Detail).OrderByDescending(g => g.Sum(p => p.Milliseconds)).Take(10))
                     Console.WriteLine($"  {group.Sum(p => p.Milliseconds) / samples.Count:F2} ms: {group.Key}");
             }
+            ArcTransformerMemoryPlan? memoryPlan = (model as GptRinWikiJp)?.LastArcMemoryPlan;
+            if (memoryPlan is { } plan)
+                Console.WriteLine($"Automatic memory plan: full-block prefix={plan.CheckpointPrefixLayers}, FFN={plan.CheckpointFfn}, estimated saved activations={plan.EstimatedActivationBytes / 1048576d:F0} MiB (without recompute {plan.UncheckpointedActivationBytes / 1048576d:F0} MiB).");
             return new RunResult(device.ToString(), lane?.Device.Name ?? "CPU", lane?.Device.DriverVersion,
                 parameterCount, median, samples.Average(s => s.TotalMs),
-                1000d * config.BatchSize * config.ContextLength * config.GradientAccumulationSteps / median, amdahl, samples);
+                1000d * config.BatchSize * config.ContextLength * config.GradientAccumulationSteps / median, amdahl, samples, memoryPlan);
         }
         finally
         {
@@ -304,8 +403,9 @@ internal static class ArcTransformerProbe
     private static Dictionary<string, double?> CaptureLane(ArcExecutionLane? lane)
     {
         string[] names = ["AllocatedBytes", "AllocationCount", "KernelLaunchCount", "H2DBytes", "D2HBytes",
-            "PeakAllocatedBytes", "KernelMilliseconds", "TransferMilliseconds", "AllocationMilliseconds",
-            "CachedBytes", "RetiredBytes", "PoolHits", "RetiredReuseCount", "BufferReuseCount"];
+            "PeakAllocatedBytes", "RetainedMatrixPanelBytes", "KernelMilliseconds", "TransferMilliseconds", "AllocationMilliseconds",
+            "CachedBytes", "RetiredBytes", "PoolHits", "RetiredReuseCount", "BufferReuseCount",
+            "RequestedBytes", "NativeAllocatedBytes", "NativeReleasedBytes", "NativeReleaseCount"];
         return names.ToDictionary(name => name, name => lane is not null
             && lane.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.Instance)?.GetValue(lane) is object value
             ? (double?)Convert.ToDouble(value, CultureInfo.InvariantCulture) : null);
@@ -324,9 +424,10 @@ internal static class ArcTransformerProbe
         double TotalMs, double ZeroGradMs, double ForwardMs, double BackwardMs, double ClipMs, double OptimizerMs,
         long ManagedAllocatedBytes, long ManagedBytes, long WorkingSetBytes, int[] GcCollections,
         Dictionary<string, double?> LaneDelta, Dictionary<string, double?> LaneSnapshot,
-        Dictionary<string, double> KernelGpuMs, IReadOnlyList<ArcProfileEntry>? Profile);
+        Dictionary<string, double> KernelGpuMs, IReadOnlyList<ArcProfileEntry>? Profile, ArcTimelineReport? Timeline);
     private sealed record PhaseShare(string Phase, double MeanMs, double Fraction, double MaximumTotalSpeedup,
         double TotalSpeedupIfPhase2X);
     private sealed record RunResult(string Device, string DeviceName, string? DriverVersion, long ParameterCount,
-        double StepP50Ms, double StepMeanMs, double TokensPerSecond, PhaseShare[] Amdahl, List<StepSample> Samples);
+        double StepP50Ms, double StepMeanMs, double TokensPerSecond, PhaseShare[] Amdahl, List<StepSample> Samples,
+        ArcTransformerMemoryPlan? MemoryPlan);
 }

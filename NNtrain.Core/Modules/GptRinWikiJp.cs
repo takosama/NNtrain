@@ -112,6 +112,8 @@ public sealed class GptRinWikiJp : LanguageModel
 
     public override int ModelWidth { get; }
 
+    internal ArcTransformerMemoryPlan? LastArcMemoryPlan { get; private set; }
+
     /// <summary>
     /// Transformer matrix weights updated by NekoMuon.
     /// </summary>
@@ -197,8 +199,42 @@ public sealed class GptRinWikiJp : LanguageModel
                 tokenIds,
                 batchSize,
                 sequenceLength));
-        foreach (TransformerBlock block in _blocks)
-            hidden = block.Forward(hidden);
+        int checkpointPrefix = 0;
+        bool checkpointFfn = false;
+        LastArcMemoryPlan = null;
+        if (IsTraining && AutogradContext.IsRecordingEnabled && Tensor.ArcResident)
+        {
+            var options = Tensor.ArcLane.Options;
+            checkpointPrefix = options.TransformerCheckpointing
+                ? Math.Min(_blocks.Length, options.TransformerCheckpointLayers) : 0;
+            checkpointFfn = options.TransformerFfnCheckpointing;
+            // Explicit A/B policy always wins, including an explicit empty
+            // prefix. Auto may change graph retention only, never batch/LR or
+            // storage/compute precision.
+            if (options.AutomaticTransformerMemoryPlan
+                && !options.TransformerCheckpointing && !options.TransformerFfnCheckpointing)
+            {
+                Parameter[] parameters = Parameters().ToArray();
+                ArcTransformerMemoryPlan plan = ArcTransformerMemoryPlan.Create(
+                    batchSize, sequenceLength, ModelWidth, _blocks[0].Attn.NumHeads,
+                    _blocks[0].Ffn.Fc1.W.T.Shape[0], _blocks.Length,
+                    _tokenEmbedding.T.DType, _tokenEmbedding.T.Bfp8Quantization?.BlockSize ?? 0,
+                    parameters.Sum(parameter => (long)parameter.T.Numel),
+                    parameters.Sum(parameter => (long)parameter.T.StorageByteLength),
+                    Tensor.ArcLane.Device.GlobalMemoryBytes);
+                LastArcMemoryPlan = plan;
+                checkpointPrefix = plan.CheckpointPrefixLayers;
+                checkpointFfn = plan.CheckpointFfn;
+            }
+        }
+        for (int layer = 0; layer < _blocks.Length; layer++)
+        {
+            TransformerBlock block = _blocks[layer];
+            hidden = layer < checkpointPrefix
+                ? hidden.ArcCheckpoint(block.CaptureArcCheckpointForward(checkpointFfn),
+                    block.Parameters().Select(parameter => parameter.T).ToArray())
+                : block.ForwardArcPlanned(hidden, checkpointFfn);
+        }
         hidden = _finalNorm.Forward(hidden);
 
         return hidden;
