@@ -35,6 +35,10 @@ public readonly record struct CudaAbiVersion(int Major, int Minor)
     public const int OrdinaryMuonNesterovMinor = 29;
     public const int Mix8DiagnosticsMinor = 30;
     public const int DeviceAdaptiveNekoMuonMinor = 31;
+    public const int DirectBfp8ElementwiseMinor = 32;
+    public const int DrnPreparedBackwardMinor = 33;
+    public const int DrnChunkBackwardMinor = 34;
+    public const int DrnRetentionFloorMinor = 35;
 
     public uint Packed =>
         ((uint)(ushort)Major << 16) | (ushort)Minor;
@@ -166,6 +170,7 @@ public enum CudaNativeOperation : uint
     GradientCollective = 103,
     GradientCollectiveBFloat16 = 104,
     FlashAttentionBackwardBFloat16TensorCoreBfp8Output = 105,
+    Bfp8Elementwise = 106,
 }
 
 /// <summary>

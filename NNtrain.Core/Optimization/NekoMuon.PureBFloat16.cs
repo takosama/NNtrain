@@ -12,8 +12,6 @@ public sealed partial class NekoMuon
     {
         TransitionFromCudaBfp8State(devices[0]);
         TransitionFromCudaFloatState(devices[0]);
-        bool deviceOnlyFixedFive =
-            UsesDeviceOnlyFixedFiveOnEveryStep(_state.Options);
         (int maximumLength, int maximumGramLength) =
             GetCudaScratchCapacities();
         var states = new CudaOptimizerKernels
@@ -22,8 +20,7 @@ public sealed partial class NekoMuon
         {
             _ = GetOrCreatePreparedCudaScratch(
                 deviceIndex, maximumLength, maximumGramLength);
-            if (deviceOnlyFixedFive)
-                _ = GetOrCreateBfp8FiniteStatus(deviceIndex);
+            _ = GetOrCreateBfp8FiniteStatus(deviceIndex);
         }
         for (int index = 0; index < _parameters.Count; index++)
         {
@@ -41,18 +38,25 @@ public sealed partial class NekoMuon
                 _ = _parameters[index].T
                     .EnsureCudaBFloat16Buffer(deviceIndex);
                 _ = state.GetOrCreate(deviceIndex);
+                if (_state.Options.NewtonSchulzDepthMode
+                    != NekoMuonNewtonSchulzDepthMode.Fixed && !ForceFullNewtonSchulz)
+                {
+                    _ = GetOrCreatePreparedCudaScratch(deviceIndex,
+                        maximumLength, maximumGramLength)
+                        .GetAdaptiveConfidencePointers(
+                            [state.GetOrCreate(deviceIndex).Confidence.NativePtr]);
+                }
             }
         }
-        if (deviceOnlyFixedFive)
-            return;
-        foreach (int deviceIndex in devices)
+        if (states.Length > 0)
         {
-            if (!_cudaBFloat16StatsBatches.ContainsKey(deviceIndex))
+            foreach (int deviceIndex in devices)
             {
-                _cudaBFloat16StatsBatches.Add(
-                    deviceIndex,
-                    new CudaOptimizerKernels.NekoMuonBFloat16StatsBatch(
-                        deviceIndex, states));
+                if (!_cudaConfidenceBatches.ContainsKey(deviceIndex))
+                    _cudaConfidenceBatches.Add(deviceIndex,
+                        new CudaOptimizerKernels.NekoMuonConfidenceBatch(deviceIndex,
+                            states.Select(state => state.GetOrCreate(deviceIndex)
+                                .Confidence.NativePtr).ToArray()));
             }
         }
     }
@@ -86,6 +90,9 @@ public sealed partial class NekoMuon
             batch.Dispose();
         }
         _cudaBFloat16StatsBatches.Clear();
+        foreach (var batch in _cudaConfidenceBatches.Values)
+            batch.Dispose();
+        _cudaConfidenceBatches.Clear();
     }
 
     private void StepCudaBFloat16(
@@ -140,28 +147,11 @@ public sealed partial class NekoMuon
                     slowCorrection,
                     options.Epsilon,
                     options.Rho,
-                    deviceOnlyFixedFive,
+                    deviceControl: true,
                     options.Nesterov);
             }
         });
 
-        if (!deviceOnlyFixedFive)
-        {
-            Parallel.For(0, devices.Length, deviceSlot =>
-            {
-                int deviceIndex = devices[deviceSlot];
-                CudaOptimizerKernels.NekoMuonBFloat16StatsBatch batch;
-                lock (_cudaBFloat16StatsBatches)
-                {
-                    batch = _cudaBFloat16StatsBatches[deviceIndex];
-                }
-                batch.GatherAndRead();
-            });
-        }
-
-        float[,]? confidences = deviceOnlyFixedFive
-            ? null
-            : new float[devices.Length, _parameters.Count];
         Parallel.For(0, devices.Length, deviceSlot =>
         {
             int deviceIndex = devices[deviceSlot];
@@ -217,7 +207,7 @@ public sealed partial class NekoMuon
                 bool applyWeightDecay =
                     parameter.WeightDecay == WeightDecayPolicy.Apply
                     || (options.Decay1D && parameter.T.Rank == 1);
-                confidences![deviceSlot, parameterIndex] =
+                _ =
                     CudaOptimizerKernels
                         .NekoMuonFinishBFloat16StepResident(
                             parameter.T,
@@ -242,14 +232,11 @@ public sealed partial class NekoMuon
                             options.WeightDecay,
                             applyWeightDecay,
                             deviceOnlyFixedFive,
-                            ForceFullNewtonSchulz);
+                            ForceFullNewtonSchulz,
+                            options.Nesterov);
             }
         });
 
-        int primarySlot = Array.IndexOf(devices, Tensor.CudaDeviceIndex);
-        if (primarySlot < 0)
-            primarySlot = 0;
-        int finalPrimarySlot = primarySlot;
         CudaOptimizerStepBatch.CompleteAfterSynchronization(
             devices,
             "pure BFloat16 NekoMuon update",
@@ -260,17 +247,6 @@ public sealed partial class NekoMuon
                     parameterIndex < _parameters.Count;
                     parameterIndex++)
                 {
-                    if (!deviceOnlyFixedFive)
-                    {
-                        NekoMuonParameterState parameterState =
-                            _state.ParameterStates[parameterIndex];
-                        _state.ParameterStates[parameterIndex] =
-                            parameterState with
-                            {
-                                Confidence = confidences![
-                                    finalPrimarySlot, parameterIndex],
-                            };
-                    }
                     _parameters[parameterIndex].T
                         .MarkCudaDataReplicasSynchronized(devices);
                 }

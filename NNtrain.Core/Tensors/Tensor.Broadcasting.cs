@@ -31,6 +31,17 @@ partial class Tensor
         ArgumentNullException.ThrowIfNull(derivative);
 
         BinaryBroadcastPlan plan = BinaryBroadcastPlan.Create(left, right);
+        if (ExecutionDevice == TensorDevice.Arc)
+        {
+            if (operation != BinaryOperation.Add || !left._shape.AsSpan().SequenceEqual(right._shape))
+                throw new NotSupportedException("Arc currently supports equal-shape tensor addition only.");
+            if (ArcResident) return left.ArcResidentAdd(right);
+            float[] values = new float[left.Numel];
+            ArcLane.Run("add", values.Length, 0, NNtrain.Arc.ArcExecutionLane.In(left.ArcValues()), NNtrain.Arc.ArcExecutionLane.In(right.ArcValues()), NNtrain.Arc.ArcExecutionLane.InOut(values), values.Length);
+            Tensor arcResult = ArcResult(values, left._shape, [left, right]);
+            arcResult.Node.BackwardAction = () => { ArcAccumulate(arcResult._grad, left._grad); ArcAccumulate(arcResult._grad, right._grad); };
+            return arcResult;
+        }
         if (ExecutionDevice == TensorDevice.Cuda
             && left.DType is TensorDType.Float32
                 or TensorDType.BFloat16

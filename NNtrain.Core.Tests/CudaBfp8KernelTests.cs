@@ -419,13 +419,26 @@ public sealed class CudaBfp8KernelTests
     public void LinearBiasBackwardBlockReductionHandlesWideRowAndColumnTail(
         bool bfloat16)
     {
-        if (!Tensor.IsCudaAvailable())
-            return;
+        CheckLinearBiasReduction(bfloat16, 1024, 45);
+    }
+
+    [Theory]
+    [InlineData(false, 4097, 129)]
+    [InlineData(true, 4097, 129)]
+    [InlineData(false, 16384, 512)]
+    [InlineData(true, 16384, 512)]
+    public void LinearBiasBackwardNarrowTilePreservesAccumulatedGradient(
+        bool bfloat16, int rows, int width)
+    {
+        CheckLinearBiasReduction(bfloat16, rows, width);
+    }
+
+    private static void CheckLinearBiasReduction(bool bfloat16, int rows, int width)
+    {
+        Assert.SkipWhen(!Tensor.IsCudaAvailable(), "CUDA is unavailable.");
 
         WithCuda(() =>
         {
-            const int rows = 1024;
-            const int width = 45;
             float[] source = Enumerable.Range(0, rows * width)
                 .Select(index =>
                 {

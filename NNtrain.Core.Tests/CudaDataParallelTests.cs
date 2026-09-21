@@ -211,8 +211,10 @@ public sealed class CudaDataParallelTests
         }
     }
 
-    [Fact]
-    public void ExplicitEngineTwoGpuGradientsMatchSingleGpu()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void ExplicitEngineTwoGpuGradientsMatchSingleGpu(int batch)
     {
         if (Tensor.CudaDeviceCount < 2)
             return;
@@ -222,10 +224,9 @@ public sealed class CudaDataParallelTests
         try
         {
             const int vocabulary = 32;
-            const int batch = 2;
             const int sequence = 4;
-            int[] input = [1, 2, 3, 4, 5, 6, 7, 8];
-            int[] target = [2, 3, 4, 5, 6, 7, 8, 9];
+            int[] input = Enumerable.Range(1, batch * sequence).ToArray();
+            int[] target = input.Select(value => value + 1).ToArray();
 
             (float Loss, float[][] Gradients) Run(int[] devices)
             {
@@ -296,10 +297,12 @@ public sealed class CudaDataParallelTests
     }
 
     [Theory]
-    [InlineData(TensorPrecisionMode.BFloat16)]
-    [InlineData(TensorPrecisionMode.Mix8_32)]
+    [InlineData(TensorPrecisionMode.BFloat16, 1)]
+    [InlineData(TensorPrecisionMode.Mix8_32, 1)]
+    [InlineData(TensorPrecisionMode.BFloat16, 2)]
+    [InlineData(TensorPrecisionMode.Mix8_32, 2)]
     public void TwoGpuAccumulatedGradientsMatchOneLargeBatch(
-        TensorPrecisionMode precisionMode)
+        TensorPrecisionMode precisionMode, int microBatchSize)
     {
         if (Tensor.CudaDeviceCount < 2)
             return;
@@ -309,9 +312,8 @@ public sealed class CudaDataParallelTests
         try
         {
             const int sequence = 4;
-            const int microBatchSize = 2;
             const int accumulationSteps = 12;
-            const int effectiveBatchSize =
+            int effectiveBatchSize =
                 microBatchSize * accumulationSteps;
             int[] input = Enumerable.Range(
                     0,

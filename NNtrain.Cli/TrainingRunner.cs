@@ -42,19 +42,6 @@ internal static class TrainingRunner
         return value / divisor + (value % divisor == 0 ? 0 : 1);
     }
 
-    internal static bool ShouldSaveCheckpoint(
-        int completedUnits,
-        int totalUnits)
-    {
-        if (completedUnits <= 0 || completedUnits > totalUnits)
-            throw new ArgumentOutOfRangeException(nameof(completedUnits));
-        if (totalUnits <= 0)
-            throw new ArgumentOutOfRangeException(nameof(totalUnits));
-        int previousTenth = (completedUnits - 1) * 10 / totalUnits;
-        int currentTenth = completedUnits * 10 / totalUnits;
-        return currentTenth > previousTenth;
-    }
-
     internal static void Shuffle<T>(Span<T> values, Random random)
     {
         ArgumentNullException.ThrowIfNull(random);

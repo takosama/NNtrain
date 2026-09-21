@@ -4,6 +4,38 @@ using Xunit;
 public sealed class WikiTrainingConfigurationTests
 {
     [Fact]
+    public void VersionTwoRuntimeAcceptsDrnHistoryBudget()
+    {
+        using var directory = new TemporaryDirectory();
+        var config = WikiTrainingConfiguration.Load(directory.Write("""
+            { "schemaVersion": 2, "task": { "type": "wiki-language-model" },
+              "runtime": { "cudaDrnRetainedHistoryMiB": 320 } }
+            """));
+        Assert.Equal(320, config.CudaDrnRetainedHistoryMiB);
+    }
+    [Theory]
+    [InlineData(0)]
+    [InlineData(320)]
+    [InlineData(1024)]
+    public void DrnHistoryBudgetLoadsFromJson(int mib)
+    {
+        using var directory = new TemporaryDirectory();
+        var config = WikiTrainingConfiguration.Load(directory.Write(
+            "{\"cudaDrnRetainedHistoryMiB\":" + mib + "}"));
+        Assert.Equal(mib, config.CudaDrnRetainedHistoryMiB);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(1025)]
+    public void InvalidDrnHistoryBudgetIsRejected(int mib)
+    {
+        var config = new WikiTrainingConfiguration { CudaDrnRetainedHistoryMiB = mib };
+        Assert.Equal(nameof(config.CudaDrnRetainedHistoryMiB),
+            Assert.Throws<ArgumentOutOfRangeException>(config.Validate).ParamName);
+    }
+
+    [Fact]
     public void FineWebSelectsFineWebDefaultsFromVersionTwoDataSection()
     {
         using var directory = new TemporaryDirectory();
@@ -77,17 +109,81 @@ public sealed class WikiTrainingConfigurationTests
     [InlineData("training.forgetscan-wiki-jp.json")]
     public void CheckedInWikiProfilesUseVersionTwoSchema(string fileName)
     {
-        string path = Path.GetFullPath(
-            Path.Combine(
-                AppContext.BaseDirectory,
-                "..", "..", "..", "..",
-                fileName));
+        string path = GetCheckedInProfilePath(fileName);
 
         WikiTrainingConfiguration configuration =
             WikiTrainingConfiguration.Load(path);
 
         Assert.True(WikiTrainingConfiguration.IsWikiConfiguration(path));
         Assert.True(configuration.Epochs > 0);
+    }
+
+    [Fact]
+    public void CheckedInForgetMemoryV2ProfileCreatesV2WithV2Settings()
+    {
+        string path = GetCheckedInProfilePath(
+            "training.forgetmemoryv2-wiki-jp.json");
+
+        WikiTrainingConfiguration configuration =
+            WikiTrainingConfiguration.Load(path);
+
+        Assert.True(configuration.IsForgetMemoryV2Architecture());
+        Assert.False(configuration.IsForgetMemoryDrnArchitecture());
+        Assert.Equal(2, configuration.BatchSize);
+        Assert.Equal(1024, configuration.ContextLength);
+        Assert.Equal(1024, configuration.MaxDocumentTokens);
+        Assert.Equal(256, configuration.ModelWidth);
+        Assert.Equal(512, configuration.HiddenSize);
+        Assert.Equal(8, configuration.Layers);
+        Assert.Equal(0.0003f, configuration.LearningRate);
+        Assert.Equal(0.0003f, configuration.AuxiliaryLearningRate);
+        Assert.Equal(5, configuration.NekoMuonNewtonSchulzInterval);
+        Assert.Equal(80, configuration.MaxNewTokens);
+        Assert.Equal(
+            "training.forgetmemoryv2-wiki-jp.model.json",
+            Path.GetFileName(configuration.CheckpointPath));
+
+        WikiTrainingConfiguration small = configuration with
+        {
+            VocabularySize = 64,
+            ContextLength = 8,
+            ModelWidth = 16,
+            Heads = 4,
+            HiddenSize = 32,
+            Layers = 1,
+            ForgetMemoryKeyWidth = 4,
+            ForgetMemoryValueWidth = 4,
+        };
+        LanguageModel model = WikiLanguageModelCommand.CreateModel(
+            small,
+            small.VocabularySize);
+
+        Assert.IsType<ForgetMemoryV2Gpt>(model);
+    }
+
+    private static string GetCheckedInProfilePath(
+        string fileName,
+        [System.Runtime.CompilerServices.CallerFilePath] string sourcePath = "")
+    {
+        string sourceCandidate = Path.GetFullPath(Path.Combine(
+            Path.GetDirectoryName(sourcePath)!, "..", fileName));
+        if (File.Exists(sourceCandidate))
+            return sourceCandidate;
+
+        string workingTreeCandidate = Path.GetFullPath(
+            Path.Combine(Directory.GetCurrentDirectory(), fileName));
+        if (File.Exists(workingTreeCandidate))
+            return workingTreeCandidate;
+
+        DirectoryInfo? directory = new(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "NNtrain.slnx")))
+                return Path.Combine(directory.FullName, fileName);
+            directory = directory.Parent;
+        }
+        throw new FileNotFoundException(
+            $"Could not locate checked-in training profile '{fileName}'.");
     }
 
     [Fact]

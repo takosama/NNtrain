@@ -179,7 +179,10 @@ internal static partial class TensorCudaKernels
         int deviceIndex = Tensor.CudaDeviceIndex;
         NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
         var output = Tensor.RentCudaBFloat16Buffer(deviceIndex, input.Numel);
-        input.EnsureCudaBFloat16Buffer(deviceIndex).View.CopyTo(output.View);
+        // Both replicas are on the same compute stream. A host synchronize
+        // here is unnecessary and invalidates CUDA Graph capture (error 900).
+        input.EnsureCudaBFloat16Buffer(deviceIndex).View.CopyTo(
+            accelerator.DefaultStream, output.View);
         return output;
     }
 
@@ -187,9 +190,10 @@ internal static partial class TensorCudaKernels
         CopyRangeForwardBFloat16Resident(Tensor input, int offset, int length)
     {
         int deviceIndex = Tensor.CudaDeviceIndex;
+        NativeCudaDevice accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
         var output = Tensor.RentCudaBFloat16Buffer(deviceIndex, length);
         input.EnsureCudaBFloat16Buffer(deviceIndex).View
-            .SubView(offset, length).CopyTo(output.View);
+            .SubView(offset, length).CopyTo(accelerator.DefaultStream, output.View);
         return output;
     }
 

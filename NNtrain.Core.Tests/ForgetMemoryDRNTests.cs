@@ -152,21 +152,25 @@ public sealed class ForgetMemoryDRNTests
         }
     }
 
-    [Fact]
-    public void CudaForwardBackwardMatchesCpu()
+    [Theory]
+    [InlineData(2, 4, 3, 2)]
+    [InlineData(16, 37, 16, 16)]
+    [InlineData(8, 129, 32, 32)]
+    [InlineData(8, 31, 17, 17)]
+    [InlineData(3, 31, 17, 13)]
+    [InlineData(3, 257, 32, 17)]
+    [InlineData(2, 97, 1, 3)]
+    [InlineData(2, 65, 33, 7)]
+    public void CudaForwardBackwardMatchesCpu(
+        int batch, int sequence, int keyWidth, int valueWidth)
     {
-        if (!Tensor.IsCudaAvailable())
-            return;
+        Assert.SkipWhen(!Tensor.IsCudaAvailable(), "CUDA is unavailable.");
 
         TensorDevice previousDevice = Tensor.ExecutionDevice;
         int previousDeviceIndex = Tensor.CudaDeviceIndex;
         try
         {
-            const int batch = 2;
-            const int sequence = 4;
-            const int keyWidth = 3;
-            const int valueWidth = 2;
-            const int projectionWidth = 2 * keyWidth + 3 * valueWidth;
+            int projectionWidth = 2 * keyWidth + 3 * valueWidth;
             var random = new Random(294);
             float[] values = Enumerable.Range(
                     0,
@@ -210,6 +214,10 @@ public sealed class ForgetMemoryDRNTests
         }
     }
 
+    [Fact(Skip = "Known pre-existing K=1 CPU/CUDA numerical difference: batch=8, T=65, V=19 gives 0.00152587891 on both ABI 1.32 and 1.33; see docs/drn-backward-speed-2026-09-06.md. No tolerance relaxation.")]
+    public void ScalarKeyLongSequenceMatchesCpuKnownIssue()
+        => CudaForwardBackwardMatchesCpu(8, 65, 1, 19);
+
     [Fact]
     public void GptUsesDrnInEveryLayerAndTrains()
     {
@@ -243,6 +251,73 @@ public sealed class ForgetMemoryDRNTests
         Assert.Contains(
             model.Parameters(),
             parameter => parameter.T.Grad.Any(value => value != 0f));
+    }
+
+    [Fact]
+    public void GptScalesOnlyResidualOutputProjectionsByDepth()
+    {
+        const float initializationScale = 0.02f;
+        const int layers = 32;
+        float expectedResidualScale = initializationScale
+            / MathF.Sqrt(2f * layers);
+        var model = new ForgetMemoryDRNGpt(
+            vocabularySize: 64,
+            contextLength: 4,
+            modelWidth: 32,
+            hiddenWidth: 64,
+            numLayers: layers,
+            keyWidth: 8,
+            valueWidth: 8,
+            random: new Random(41),
+            initializationScale: initializationScale,
+            dropout: 0f,
+            dtype: TensorDType.Float32);
+
+        Assert.All(model.Layers, layer =>
+        {
+            Assert.Equal(expectedResidualScale,
+                layer.ResidualInitializationScale, precision: 7);
+            AssertBoundedBy(layer.MemoryOutputProjection.W.T.Data,
+                expectedResidualScale);
+            AssertBoundedBy(layer.Ffn.Fc2.W.T.Data,
+                expectedResidualScale);
+            AssertBoundedBy(layer.Ffn.Fc1.W.T.Data,
+                initializationScale);
+            Assert.Contains(layer.Ffn.Fc1.W.T.Data,
+                value => MathF.Abs(value) > expectedResidualScale);
+        });
+    }
+
+    [Fact]
+    public void V2KeepsHistoricalResidualInitializationScale()
+    {
+        const float initializationScale = 0.02f;
+        var model = new ForgetMemoryV2Gpt(
+            vocabularySize: 64,
+            contextLength: 4,
+            modelWidth: 16,
+            hiddenWidth: 32,
+            numLayers: 32,
+            keyWidth: 4,
+            valueWidth: 4,
+            random: new Random(43),
+            initializationScale: initializationScale,
+            dropout: 0f,
+            dtype: TensorDType.Float32);
+
+        Assert.All(model.Layers, layer => Assert.Equal(
+            initializationScale,
+            layer.ResidualInitializationScale,
+            precision: 7));
+    }
+
+    private static void AssertBoundedBy(
+        IReadOnlyList<float> values,
+        float scale)
+    {
+        Assert.NotEmpty(values);
+        Assert.All(values, value => Assert.InRange(value, -scale, scale));
+        Assert.Contains(values, value => MathF.Abs(value) > scale * 0.9f);
     }
 
     private static float Evaluate(

@@ -4,10 +4,86 @@ NNtrain is a small neural-network training implementation for studying Tensor
 operations, reverse-mode automatic differentiation, Transformer modules,
 optimizers, dataset boundaries, and training orchestration in C#/.NET 10.
 
+## Intel Arc (Windows OpenCL)
+
+`device: "arc"`, `deviceIndex: 0`, `deviceIndices: [0]` select the Intel Arc
+backend independently of CPU/CUDA. `training.transformer.json` uses this route.
+Install the Intel graphics driver (including OpenCL); no CUDA toolkit or oneAPI
+installation is needed for Arc. The current scope is a single Arc GPU running
+Transformer training/generation with `float32`, `mix16_32`, or `mix8_32`, and
+Muon/NekoMuon/AdamW. Unsupported architectures or pure low-precision modes fail
+explicitly. DRN, multi-Arc data parallelism and LoRA/DPO are not implemented here.
+
+```powershell
+dotnet run --configuration Release --project .\NNtrain.Cli -- `
+  --config .\training.transformer.json
+```
+
+The default training route keeps packed weights/activations and FP32 gradients,
+masters and optimizer state **resident on Arc** across operators and updates.
+After initialization, training transfers only token/target IDs and small loss,
+norm and Muon statistics. Explicit inspection, checkpoint and session closure
+perform the necessary readback. BF16 matrix operands use **Intel XMX** when the
+driver advertises the matrix extension and a supported minimum subgroup size.
+Float32 mode keeps FP32 tiled arithmetic. In mixed modes, Linear/loss-head
+backward uses BF16-rounded GEMM operands, matching the CUDA precision contract,
+while gradient storage and accumulation remain FP32. Attention backward keeps
+FP32 arithmetic. Bounded allocation reuse, deferred frees, head-tiled attention
+and chunked loss heads control temporary storage. Mixed-precision operands
+retain their rounding contract with FP32 accumulation.
+The byte counters in the Arc benchmark are native backend allocations, not the
+driver's total VRAM reservation.
+
+Direct API usage owns the device lifetime explicitly:
+
+```csharp
+using var execution = Tensor.BeginArcExecution(0, TensorPrecisionMode.Mix8_32);
+model.to(TensorPrecisionMode.Mix8_32, 32).to("arc:0");
+// forward_loss -> BackwardAndRelease -> optimizer.step
+```
+
+Reproducible, bounded probes use synthetic seeded tokens and never overwrite the
+dataset, tokenizer, metrics or training checkpoint. Output JSON must be new:
+
+```powershell
+dotnet run --configuration Release --project .\NNtrain.Benchmarks -- `
+  --probe-arc-transformer .\training.transformer.json .\benchmark-results\arc-run.json `
+  --batch 4 --sequence 512 --layers 2 --accumulation 1 --warmup 3 --steps 10
+```
+
+Use `--arc-mode reference` for the untiled/staged reference, `staged` for the
+previous optimized but host-staged route, and `optimized`
+(default) for the optimized route; `--compare-cpu` adds a separate CPU run.
+The report includes wall-clock phase breakdowns, Amdahl fractions, GPU event
+times, transfer bytes, memory/allocation counters and config/binary hashes.
+Add `--profile` for per-phase/per-shape kernel timings, allocation-size counts
+and synchronization reasons. `--arc-mode pre-profile` freezes the path before
+the detailed-profile optimization pass for same-binary comparison.
+See [Arc residency measurements](docs/arc-backend-2026-09-20.md) and
+[XMX, tiling and command-batching measurements](docs/arc-tuning-2026-09-21.md), and
+[further backward/causal-attention tuning](docs/arc-backward-tuning-2026-09-21.md).
+The [detailed profile and repeated tuning results](docs/arc-profile-tuning-2026-09-21.md)
+cover mixed backward XMX, split-K, attention tiles and bounded memory reuse.
+The [XMX layout and attention tuning](docs/arc-xmx-layout-tuning-2026-09-21.md)
+adds packed subgroup block reads, transpose-specialized GEMMs, shape-selected
+128x64/256x128 tiles and ordered FP32 attention loop unrolling. These are default
+on the measured SG16 Arc route; `--arc-mode pre-xmx` provides a frozen A/B baseline.
+`--probe-arc-xmx-tune NEW.json` benchmarks retained GEMM routes and records
+driver-reported local/private/spill resources. No hand-written assembly or
+additional host packing is required.
+
+The latest [direct-XMX, storage, Attention and allocator tuning](docs/arc-deep-tuning-2026-09-21.md)
+adds direct BF16 panels from BFP8/BF16 storage, phase-local loss-head panel reuse,
+ordered FP32 attention tiles, fused DKV, coalesced norm-gradient writes and bounded
+LRU/retired-buffer reuse. Full-shape synthetic training measured about 12.06 to 8.27
+seconds/update (3 warmup + 10 measured); the additional 3x target is not achieved.
+`--next-features none` freezes the preceding path without changing production JSON.
+The report includes rejected candidates, exact tests and memory/transfer limits.
+
 ## Precision modes and native F16C dense kernels
 
-Training configurations expose exactly three precision modes through
-`precisionMode`: `float32`, `bfloat16`, and `mix16_32`. Both 16-bit modes keep
+Training configurations expose five precision modes through
+`precisionMode`: `float32`, `bfloat16`, `mix16_32`, `bfp8`, and `mix8_32`. Both 16-bit modes keep
 parameters and activations in physical BF16 storage. `bfloat16` also keeps the
 AdamW moments in BF16. `mix16_32` keeps GEMM accumulation, reductions,
 normalization statistics, losses, gradients, optimizer state, and master
@@ -15,6 +91,15 @@ weights in Float32. `ForgetMemoryV2Gpt` and `ForgetMemoryV3Gpt` use this mixed
 contract by default. The lower-level `TensorDType.Float16` remains available
 for legacy/raw IEEE binary16 tensor operations, but is not a configuration
 mode.
+
+Training resume inherits checkpoint precision when `precisionMode` is omitted.
+An explicit `float32`, `mix16_32`, or `mix8_32` can migrate a checkpoint from
+another of these three modes, loading its saved weights and FP32 optimizer
+state while preserving scheduler, global step and data cursor. The numerical
+trajectory changes; this is not a bit-exact continuation. Pure `bfloat16` and
+`bfp8` optimizer-state migration is not supported. To test whether 8-bit
+quantization limits convergence, use `mix16_32` (BF16 storage with FP32
+gradients/master weights), keeping effective batch and learning rates fixed.
 
 On Windows x64 CPUs with AVX2 and F16C, the optional native dense-kernel
 payload accelerates Float16 `Linear.ForwardBatch` forward and backward while
@@ -198,7 +283,7 @@ dotnet run --configuration Release --project NNtrain.Cli -- `
   --config training.example.json
 ```
 
-Every 0.1 epoch and every completed epoch updates a resumable checkpoint
+Every 30 minutes (after a safe optimizer-update boundary) and every completed epoch updates a resumable checkpoint
 containing
 the current model, optimizer, scheduler, epoch, and task-specific training
 state. The model weights are also written as standard F32 SafeTensors beside
@@ -229,7 +314,10 @@ Set `checkpoint.autoResume` to `true` in the training JSON to make this the
 default without passing a CLI flag. The supplied classification and Wikipedia
 JSON profiles enable it.
 
-Each 0.1-epoch save also keeps a timestamped SafeTensors history file named
+Set `checkpoint.intervalMinutes` to change the default 30-minute interval.
+The timer starts when training begins or resumes, and restarts after a successful save;
+wall-clock adjustments do not affect it. A timed save does not interrupt gradient accumulation.
+Each timed or epoch-end save also keeps a timestamped SafeTensors history file named
 `<ModelName>_<epoch>_epoch_<yyyyMMdd_HHmm>.safetensors`, for example
 `ForgetMemoryV2Gpt_0.1_epoch_20260312_1224.safetensors`. The fixed checkpoint
 name remains the latest resumable state.
@@ -431,9 +519,14 @@ loading and comparing existing V2 checkpoints.
 ForgetMemory DRN is selected with `modelArchitecture: "forgetmemorydrn"`.
 It L2-normalizes both query and key with epsilon `1e-8`, reads from the old
 memory before writing, predicts `pred = M[t-1]k`, and updates
-`M[t] = sigmoid(gate)*M[t-1] + beta*(v-pred)*k^T`. The configured retention
-floor schedule is retained in checkpoint/config metadata for structural
-compatibility but is intentionally not applied by DRN.
+`f = retentionFloor + (1-retentionFloor)*sigmoid(gate)` and
+`M[t] = f*M[t-1] + beta*(v-pred)*k^T`. The configured per-layer retention
+floor schedule (default 0.5 to 0.99) applies to both training and generation,
+including CUDA Tensor Core, chunk replay, and backward. The gate derivative
+includes `(1-retentionFloor)`. CUDA DRN requires native ABI 1.35 or newer;
+rebuild the CUDA DLL when updating. Existing checkpoints keep their stored
+floor schedule and can still load, but now use that schedule instead of the
+previously ignored floor.
 
 On a Ryzen 7 5700X, the reproducible two-layer training benchmark
 (`batch=2`, `width=64`, `hidden=128`, key/value width 32) measured:

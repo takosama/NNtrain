@@ -156,6 +156,7 @@ internal static class CudaBfp8Native
                 descriptor.GetEffectiveBlockSize(destination.Length),
                 stream),
             "CUDA BFP8 dequantize(bfloat16)");
+        CudaBfp8CodecTelemetry.Decoded(destination.Length);
     }
 
     internal static void QuantizeBFloat16(
@@ -191,6 +192,7 @@ internal static class CudaBfp8Native
                 descriptor.GetEffectiveBlockSize(source.Length),
                 stream),
             "CUDA BFP8 quantize(bfloat16)");
+        CudaBfp8CodecTelemetry.Encoded(source.Length);
     }
 
     internal static void RequantizeInt32(

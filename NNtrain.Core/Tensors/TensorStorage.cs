@@ -563,6 +563,13 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
         return _float16 is not null;
     }
 
+    internal bool TryGetBFloat16Buffer(out ushort[] values)
+    {
+        EnsureBacking();
+        values = _bfloat16!;
+        return values is not null;
+    }
+
     internal bool TryGetBfp8Buffers(
         out sbyte[] payload,
         out float[] scales,

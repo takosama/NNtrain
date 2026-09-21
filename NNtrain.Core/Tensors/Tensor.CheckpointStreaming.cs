@@ -34,6 +34,19 @@ public partial class Tensor
         if (sourceOffset > Numel - length)
             throw new ArgumentOutOfRangeException(nameof(length));
 
+        if (_arcReplica is { } arc && (arc.DataDirty || arc.MasterDirty))
+        {
+            float[] chunk = new float[length];
+            if (preferMaster && arc.Master is not null) arc.Lane.ReadFloatRange(arc.Master, sourceOffset, chunk);
+            else
+            {
+                using var values = DecodeArcReplica(arc);
+                arc.Lane.ReadFloatRange(values, sourceOffset, chunk);
+            }
+            chunk.AsSpan().CopyTo(staging.GetManagedSpan(length));
+            return staging.GetManagedSpan(length);
+        }
+
         lock (_deviceSync)
         {
             if (_hostDataCurrent)
@@ -272,6 +285,7 @@ public partial class Tensor
         internal CheckpointRestoreWriter(Tensor owner)
         {
             _owner = owner;
+            owner.ReleaseArcReplica(preserve: false);
             // The previous value is about to be replaced. Do not make an
             // authoritative CUDA replica current on the host merely to throw
             // it away. Invalidate also releases the old VRAM allocation.
@@ -354,6 +368,7 @@ public partial class Tensor
 
         internal Bfp8CheckpointRestoreWriter(Tensor owner)
         {
+            owner.ReleaseArcReplica(preserve: false);
             if (!owner.RequiresTwoPassBfp8CheckpointRestore)
             {
                 throw new InvalidOperationException(

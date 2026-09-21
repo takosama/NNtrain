@@ -73,6 +73,7 @@ internal static class AutogradEngine
             for (int index = topologicalOrder.Count - 1; index >= 0; index--)
             {
                 Tensor tensor = topologicalOrder[index];
+                if (Tensor.ExecutionDevice == TensorDevice.Arc) tensor.PrepareArcBackward();
                 tensor.Node.RunBackward();
                 if (notifyReducerLeavesAtLastConsumer)
                 {
@@ -173,6 +174,7 @@ internal static class AutogradEngine
 
         if (wasNonLeaf)
         {
+            if (Tensor.ExecutionDevice == TensorDevice.Arc) tensor.ReleaseArcIntermediateGradient();
             try
             {
                 // Existing context callbacks preserve the operation's stream

@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NNtrainArchitectureLayer>Arc</NNtrainArchitectureLayer>
+    <NNtrainAllowedProjectReferences>NNtrain.Runtime</NNtrainAllowedProjectReferences>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\NNtrain.Runtime\NNtrain.Runtime.csproj" />
+    <EmbeddedResource Include="Kernels\training.cl" />
+    <EmbeddedResource Include="Kernels\tiled.cl" />
+    <EmbeddedResource Include="Kernels\attention_streaming.cl" />
+    <EmbeddedResource Include="Kernels\resident.cl" />
+    <EmbeddedResource Include="Kernels\attention_coalesced.cl" />
+    <EmbeddedResource Include="Kernels\attention_batched.cl" />
+    <EmbeddedResource Include="Kernels\attention_compact.cl" />
+    <EmbeddedResource Include="Kernels\attention_unrolled.cl" />
+    <EmbeddedResource Include="Kernels\attention_xmx_panel.cl" />
+    <EmbeddedResource Include="Kernels\attention_fused_candidate.cl" />
+    <EmbeddedResource Include="Kernels\attention_dkv_special.cl" />
+    <EmbeddedResource Include="Kernels\attention_subgroup_candidate.cl" />
+    <EmbeddedResource Include="Kernels\attention_row_subgroup_candidate.cl" />
+    <EmbeddedResource Include="Kernels\attention_fp32_tiles_candidate.cl" />
+    <EmbeddedResource Include="Kernels\arc_norm_candidate.cl" />
+    <EmbeddedResource Include="Kernels\xmx.cl" />
+    <EmbeddedResource Include="Kernels\xmx_panel.cl" />
+    <EmbeddedResource Include="Kernels\xmx_next_candidate.cl" />
+    <EmbeddedResource Include="Kernels\xmx_direct_tune.cl" />
+    <EmbeddedResource Include="Kernels\xmx_pack_tune.cl" />
+    <EmbeddedResource Include="Kernels\xmx_storage_pack.cl" />
+    <EmbeddedResource Include="Kernels\xmx_storage_pack_linear_candidate.cl" />
+    <EmbeddedResource Include="Kernels\gradient_reduction.cl" />
+    <EmbeddedResource Include="Kernels\gemm_wide.cl" />
+    <EmbeddedResource Include="Kernels\gemm_deep.cl" />
+    <EmbeddedResource Include="Kernels\gemm_split.cl" />
+  </ItemGroup>
+</Project>

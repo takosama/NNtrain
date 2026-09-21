@@ -1,36 +1,40 @@
 {
   "task": "gpt_rin_wiki_jp",
-  "dataPath": "data/wiki",
+  "dataset": "fineweb",
+  "dataPath": "data/fineweb",
   "textColumn": "text",
-  "tokenizerPath": "wiki-jp-bpe.json",
+  "tokenizerPath": "fineweb-bpe.json",
   "checkpoint": {
     "directory": "checkpoints",
     "fileName": "training.forgetmemorydrn-wiki-jp.model.json",
     "resume": false,
-    "autoResume": true
+    "autoResume": true,
+    "intervalMinutes": 30
   },
 
-  "vocabularySize": 4096,
-  "tokenizerTrainingDocuments": 5000,
-  "tokenizerTrainingBytes": 2000000,
+  "vocabularySize": 11500,
+  "tokenizerTrainingDocuments": 500000,
+  "tokenizerTrainingBytes": 200000000,
 
   "maxTrainingDocuments": 0,
   "maxTrainingTokens": 0,
-  "maxDocumentTokens": 1024,
+  "maxDocumentTokens":  1024,
   "validationFraction": 0.0,
-  "epochs": 1,
-  "batchSize": 16,
+  "epochs":1,
+  "batchSize":24,
+  "gradientAccumulationSteps":1,
+  
 
   "contextLength": 1024,
-  "modelWidth": 512,
-  "heads": 8,
-  "hiddenSize": 1024,
-  "layers": 16,
+  "modelWidth": 768,
+  "heads": 48,
+  "hiddenSize": 2304,
+  "layers": 32,
   "modelArchitecture": "forgetmemorydrn",
   "device": "cuda",
   "deviceIndex": 0,
   "deviceIndices": [0, 1],
-  "precisionMode": "bfloat16",
+  "precisionMode": "mix8_32",
   "forgetMemoryKeyWidth": 16,
   "forgetMemoryValueWidth": 16,
   "forgetMemoryRetentionMinimum": 0.5,
@@ -40,27 +44,30 @@
 
   "optimization": {
     "optimizer": {
-      "type": "adamw",
-      "learningRate": 0.0003,
-      "auxiliaryLearningRate": 0.0003,
-      "nekoMuonNewtonSchulzInterval": 5,
+      "type": "muon",
+      "learningRate" :0.0003,
+      "auxiliaryLearningRate": 0.0001,
+          "nekoMuonNewtonSchulzDepthMode": "fixed",
+      "nekoMuonNewtonSchulzInterval": 1,
+      "nekoMuonNewtonSchulzDepth": 5,
+
       "weightDecay": 0.01
     },
     "scheduler": {
       "type": "warmupCosineProgress",
-      "warmupPercent": 20
+      "warmupPercent":0
     }
   },
   "seed": 1234,
   "logEveryBatches": 10,
   "showLossGraph": true,
-  "graphUpdateSteps": 100,
-  "datasetSampleEverySteps": 100,
+  "graphUpdateSteps": 10,
+  "datasetSampleEverySteps": 200,
   "datasetSamplePoolSize": 32,
   "useSimd": true,
   "maxDegreeOfParallelism": 0,
 
-  "maxNewTokens": 80,
+  "maxNewTokens": 400,
   "temperature": 0.8,
   "topK": 40
 }

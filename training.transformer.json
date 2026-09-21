@@ -8,7 +8,8 @@
     "directory": "checkpoints",
     "fileName": "training.transformer.tied.model.json",
     "resume": false,
-    "autoResume": true
+    "autoResume": true,
+    "intervalMinutes": 30
   },
 
   "vocabularySize": 11500,
@@ -17,25 +18,27 @@
 
   "maxTrainingDocuments": 0,
   "maxTrainingTokens": 0,
-  "maxDocumentTokens": 512,
+  "maxDocumentTokens": 1024,
   "validationFraction": 0.0,
-  "epochs": 5,
-  "batchSize": 72,
+  "epochs": 1,
+  "batchSize": 64,
+  "gradientAccumulationSteps": 4,
 
-  "contextLength": 512,
+  "contextLength": 1024,
   "modelWidth": 512,
   "heads":16,
-  "hiddenSize": 1538,
-  "layers": 16,
+  "hiddenSize": 1536,
+  "layers": 32,
   "modelArchitecture": "transformer",
-  "device": "cuda",
+  "device": "arc",
   "deviceIndex": 0,
-  "deviceIndices": [0, 1],
+  "deviceIndices": [0],
   "adaptiveCudaSharding": true,
   "cudaShardEmaAlpha": 0.2,
   "cudaMinimumRelativeShardSize": 0.5,
   "cudaMaximumBatchAdjustmentPerStep": 1,
-  "precisionMode": "mix16_32",
+  "precisionMode": "mix8_32",
+  "bfp8_block_size": 32,
   "tieWordEmbeddings": true,
   "forgetMemoryKeyWidth": 16,
   "forgetMemoryValueWidth": 16,
@@ -46,10 +49,9 @@
 
   "optimization": {
     "optimizer": {
-      "type": "nekomuon",
-      "learningRate": 0.0001,
+      "type": "muon",
+      "learningRate": 0.001,
       "auxiliaryLearningRate": 0.0003,
-      "nekoMuonBetaFast": 0.95,
       "nekoMuonNewtonSchulzInterval": 1,
       "nekoMuonNewtonSchulzDepthMode": "fixed",
       "nekoMuonNewtonSchulzDepth": 5,
@@ -63,13 +65,13 @@
   "seed": 1234,
   "logEveryBatches": 10,
   "showLossGraph": true,
-  "graphUpdateSteps": 100,
-  "datasetSampleEverySteps": 2000,
+  "graphUpdateSteps": 10,
+  "datasetSampleEverySteps": 200,
   "datasetSamplePoolSize": 32,
   "useSimd": true,
   "maxDegreeOfParallelism": 0,
 
   "maxNewTokens": 200,
-  "temperature": 0.8,
-  "topK": 40
+  "temperature": 1,
+  "topK": 1
 }

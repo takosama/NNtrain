@@ -211,6 +211,7 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
 
     internal NekoMuonState CaptureStateForStreaming()
     {
+        _arcState.Synchronize();
         if (_cudaStateAuthorityDevice is int primaryDevice)
         {
             for (int index = 0; index < _cudaStates.Length; index++)
@@ -359,8 +360,9 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
     {
         ArgumentNullException.ThrowIfNull(state);
         ValidateState(state);
+        NekoMuonState upgraded = UpgradeState(state);
         DisposeCudaResources();
-        _state = takeOwnership ? state : CloneState(state);
+        _state = takeOwnership ? upgraded : CloneState(upgraded);
     }
 
     internal void RestoreStateOwned(NekoMuonState state)
@@ -385,6 +387,7 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
 
     internal void Step()
     {
+        if (!Tensor.ArcResident) _arcState.Dispose();
         if (_state.Step == int.MaxValue)
         {
             throw new InvalidOperationException(
@@ -403,12 +406,19 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
             MakeCpuStateAuthoritative();
         }
 
-        _state = _state with { Step = _state.Step + 1 };
         NekoMuonOptions options = _state.Options;
-        float fastCorrection =
-            1f - MathF.Pow(options.BetaFast, _state.Step);
-        float slowCorrection =
-            1f - MathF.Pow(options.BetaSlow, _state.Step);
+        double fastDecayProduct =
+            _state.FastDecayProduct!.Value * options.BetaFast;
+        double slowDecayProduct =
+            _state.SlowDecayProduct!.Value * options.BetaSlow;
+        _state = _state with
+        {
+            Step = _state.Step + 1,
+            FastDecayProduct = fastDecayProduct,
+            SlowDecayProduct = slowDecayProduct,
+        };
+        float fastCorrection = (float)(1d - fastDecayProduct);
+        float slowCorrection = (float)(1d - slowDecayProduct);
         long[]? profileTicks = ProfilingEnabled ? new long[9] : null;
 
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
@@ -417,6 +427,14 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
                 options,
                 fastCorrection,
                 slowCorrection);
+            LastStepProfile = default;
+            return;
+        }
+
+        if (Tensor.ExecutionDevice == TensorDevice.Arc && Tensor.ArcLane.Options.ResidentMuonIterations)
+        {
+            for (int index = 0; index < _parameters.Count; index++)
+                UpdateArcParameter(index, options, fastCorrection, slowCorrection);
             LastStepProfile = default;
             return;
         }
@@ -500,7 +518,12 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
             float[] gram = workspace.Gram;
             float[] gramSquared = workspace.GramSquared;
             phaseStart = profileTicks is null ? 0L : Stopwatch.GetTimestamp();
-            for (int step = 0; step < wholeSteps; step++)
+            bool residentArc = Tensor.ExecutionDevice == TensorDevice.Arc && Tensor.ArcLane.Options.ResidentMuonIterations;
+            if (residentArc)
+                ArcMuonMath.Orthogonalize(x, rows, columns, wholeSteps, fraction,
+                    parameter.T.DType is TensorDType.BFloat16 or TensorDType.Bfp8,
+                    NewtonSchulzA, NewtonSchulzB, NewtonSchulzC);
+            for (int step = 0; !residentArc && step < wholeSteps; step++)
             {
                 NewtonSchulz(
                     x,
@@ -509,12 +532,13 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
                     gramSquared,
                     rows,
                     columns,
-                    parameter.T.DType == TensorDType.BFloat16,
+                    parameter.T.DType == TensorDType.BFloat16
+                        || (Tensor.ExecutionDevice == TensorDevice.Arc && parameter.T.DType == TensorDType.Bfp8),
                     profileTicks);
                 (x, next) = (next, x);
             }
 
-            if (fraction > 0f)
+            if (!residentArc && fraction > 0f)
             {
                 NewtonSchulz(
                     x,
@@ -523,7 +547,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
                     gramSquared,
                     rows,
                     columns,
-                    parameter.T.DType == TensorDType.BFloat16,
+                    parameter.T.DType == TensorDType.BFloat16
+                        || (Tensor.ExecutionDevice == TensorDevice.Arc && parameter.T.DType == TensorDType.Bfp8),
                     profileTicks);
                 InterpolateInPlace(x, next, fraction);
             }
@@ -1555,6 +1580,7 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
 
     internal void DisposeCudaResources()
     {
+        _arcState.Dispose();
         List<Exception>? failures = null;
         for (int index = 0; index < _cudaStates.Length; index++)
         {
@@ -1707,6 +1733,12 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
         bool transpose,
         float epsilon)
     {
+        if (Tensor.ExecutionDevice == TensorDevice.Arc)
+        {
+            float inverse = 1f / (MathF.Sqrt(ArcTrainingMath.Sum(source, squared: true)) + epsilon);
+            ArcTrainingMath.TransposeScale(source, destination, rows, columns, transpose, inverse);
+            return;
+        }
         double normSquared = 0d;
         int index = 0;
         if (Tensor.SimdEnabled
@@ -1753,6 +1785,14 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
         bool bfloat16MatrixOperands,
         long[]? profileTicks)
     {
+        if (Tensor.ExecutionDevice == TensorDevice.Arc)
+        {
+            long start = profileTicks is null ? 0 : Stopwatch.GetTimestamp();
+            ArcTrainingMath.NewtonSchulz(source, destination, gram, gramSquared, rows, columns,
+                bfloat16MatrixOperands, NewtonSchulzA, NewtonSchulzB, NewtonSchulzC);
+            AddProfileTicks(profileTicks, 8, start);
+            return;
+        }
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
         {
             long cudaStart = profileTicks is null
@@ -2392,6 +2432,11 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
         float[] next,
         float fraction)
     {
+        if (Tensor.ExecutionDevice == TensorDevice.Arc)
+        {
+            ArcTrainingMath.Combine(current, next, current, 1f - fraction, fraction);
+            return;
+        }
         int index = 0;
         if (Tensor.SimdEnabled
             && Vector256.IsHardwareAccelerated
@@ -2424,6 +2469,11 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
         int rows,
         int columns)
     {
+        if (Tensor.ExecutionDevice == TensorDevice.Arc)
+        {
+            ArcTrainingMath.TransposeScale(transposed, destination, columns, rows, true, 1f);
+            return;
+        }
         for (int row = 0; row < rows; row++)
         {
             for (int column = 0; column < columns; column++)

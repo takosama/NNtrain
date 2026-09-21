@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "architecture": "forgetmemorydrn",
+  "rank": 8,
+  "alpha": 16,
+  "targets": ["memoryOutput", "ffnInput", "ffnOutput"],
+  "precisionMode": "mix8_32",
+  "bfp8BlockSize": 32,
+  "seed": 1234
+}

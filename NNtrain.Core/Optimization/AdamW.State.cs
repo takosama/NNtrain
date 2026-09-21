@@ -285,7 +285,7 @@ public partial class AdamW
         bool applyWeightDecay)
     {
         internal Parameter Parameter { get; } = parameter;
-        internal float[] Data { get; } = data;
+        internal float[] Data { get; set; } = data;
         internal float[] Gradient { get; set; } = gradient;
         internal float[] FirstMoment { get; set; } = firstMoment;
         internal short[]? FirstMomentBFloat16 { get; set; } =

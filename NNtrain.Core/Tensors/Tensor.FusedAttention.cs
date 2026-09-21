@@ -43,6 +43,8 @@ partial class Tensor
         }
 
         int headWidth = modelWidth / numHeads;
+        if (ExecutionDevice == TensorDevice.Arc)
+            return ArcAttention(batch, sequence, modelWidth, numHeads, causal);
         float scale = 1f / MathF.Sqrt(headWidth);
         bool directBFloat16Gradients = DType == TensorDType.BFloat16
             && TensorExecutionContext.UsesBFloat16GradientStorage;

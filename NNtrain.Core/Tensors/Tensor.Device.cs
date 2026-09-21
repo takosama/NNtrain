@@ -661,7 +661,7 @@ public partial class Tensor
     public TorchDevice device
         => new(
             _device,
-            _device == TensorDevice.Cuda ? _cudaDeviceIndex : 0);
+            _device == TensorDevice.Cuda ? _cudaDeviceIndex : _device == TensorDevice.Arc ? _arcDeviceIndex : 0);
 
     internal int[] GetResidentCudaDeviceIndices()
     {
@@ -684,6 +684,16 @@ public partial class Tensor
 
     public Tensor to(TorchDevice device)
     {
+        if (!device.IsArc && _arcReplica is not null) ReleaseArcReplica(preserve: true);
+        if (device.IsArc)
+        {
+            if (!IsArcAvailable(device.Index))
+                throw new InvalidOperationException($"Intel Arc device {device.Index} is unavailable; no CPU fallback.");
+            EnsureHostDataCurrent();
+            _device = TensorDevice.Arc;
+            _arcDeviceIndex = device.Index;
+            return this;
+        }
         if (device.IsCuda)
         {
             if (DType == TensorDType.BFloat16)
@@ -1856,12 +1866,15 @@ public partial class Tensor
 
     private void EnsureHostDataCurrent()
     {
+        SynchronizeArcHostData();
+        ThrowIfForwardValuesRetired();
         lock (_deviceSync)
             SynchronizeHostFromCudaLocked();
     }
 
     private void EnsureHostGradientCurrent()
     {
+        SynchronizeArcHostGradient();
         lock (_deviceSync)
             SynchronizeHostGradientFromCudaLocked();
     }
@@ -1972,6 +1985,7 @@ public partial class Tensor
 
     private void MarkHostGradientMutable()
     {
+        InvalidateArcGradient();
         unchecked
         {
             _gradientVersion++;
@@ -2293,7 +2307,7 @@ public partial class Tensor
                 accelerator, static _ => new PoolState());
             lock (state.Sync)
             {
-                if (state.Buffers.TryGetValue(length, out var bucket)
+                while (state.Buffers.TryGetValue(length, out var bucket)
                     && bucket.Count > 0)
                 {
                     NativeCudaBuffer<float> buffer = bucket.Pop();
@@ -2303,7 +2317,9 @@ public partial class Tensor
                     CudaTransientBufferBudget.Release(
                         accelerator,
                         checked((long)length * sizeof(float)));
-                    return buffer;
+                    if (buffer.IsAlive && buffer.SessionGeneration == 0 && buffer.Arena is null)
+                        return buffer;
+                    buffer.Dispose();
                 }
             }
 
@@ -2329,7 +2345,9 @@ public partial class Tensor
             NativeCudaDevice accelerator,
             NativeCudaBuffer<float> buffer)
         {
-            if (buffer.IsLaneManagedReusable)
+            // Persistent and arena-backed session buffers are session-owned
+            // too: caching their wrappers past teardown creates dangling rents.
+            if (!buffer.IsAlive || buffer.SessionGeneration != 0 || buffer.Arena is not null)
             {
                 buffer.Dispose();
                 return;
@@ -2524,7 +2542,7 @@ public partial class Tensor
                 accelerator, static _ => new PoolState());
             lock (state.Sync)
             {
-                if (state.Buffers.TryGetValue(length, out var bucket)
+                while (state.Buffers.TryGetValue(length, out var bucket)
                     && bucket.Count > 0)
                 {
                     NativeCudaBuffer<int> buffer = bucket.Pop();
@@ -2534,7 +2552,10 @@ public partial class Tensor
                     CudaTransientBufferBudget.Release(
                         accelerator,
                         checked((long)length * sizeof(int)));
-                    return buffer;
+                    if (buffer.IsAlive && buffer.SessionGeneration == 0 && buffer.Arena is null)
+                        return buffer;
+                    if (state.Staging.Remove(buffer, out var staging)) staging.Dispose();
+                    buffer.Dispose();
                 }
             }
             return accelerator.Allocate1D<int>(length);
@@ -2596,7 +2617,7 @@ public partial class Tensor
             NativeCudaDevice accelerator,
             NativeCudaBuffer<int> buffer)
         {
-            if (buffer.IsLaneManagedReusable)
+            if (!buffer.IsAlive || buffer.SessionGeneration != 0 || buffer.Arena is not null)
             {
                 buffer.Dispose();
                 return;

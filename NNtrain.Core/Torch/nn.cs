@@ -43,6 +43,8 @@ public static class nn
             }
 
             Parameter[] retainedParameters = parameters.ToArray();
+            if (Tensor.ExecutionDevice == TensorDevice.Arc)
+                return ArcTrainingMath.Clip(retainedParameters, max_norm);
             if (Tensor.ExecutionDevice == TensorDevice.Cuda)
             {
                 return TensorCudaKernels.ClipGradientNormResident(

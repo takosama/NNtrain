@@ -1,0 +1,1085 @@
+{
+  "Configuration": "C:\\Users\\takos\\source\\repos\\NNtrain\\docs\\benchmarks\\drn-memory-2026-09-03\\config.json",
+  "TimestampUtc": "2026-09-03T09:01:02.8284771+00:00",
+  "Conditions": {
+    "Task": "gpt_rin_wiki_jp",
+    "Dataset": "fineweb",
+    "DataPath": "C:\\Users\\takos\\source\\repos\\NNtrain\\docs\\benchmarks\\drn-memory-2026-09-03\\data\\fineweb",
+    "TextColumn": "text",
+    "TokenizerPath": "C:\\Users\\takos\\source\\repos\\NNtrain\\docs\\benchmarks\\drn-memory-2026-09-03\\fineweb-bpe.json",
+    "CheckpointPath": "C:\\Users\\takos\\source\\repos\\NNtrain\\docs\\benchmarks\\drn-memory-2026-09-03\\checkpoints\\training.forgetmemorydrn-wiki-jp.model.json",
+    "CheckpointIntervalMinutes": 30,
+    "ResumeFromCheckpoint": false,
+    "AutoResume": true,
+    "Checkpoint": {
+      "Directory": "checkpoints",
+      "FileName": "training.forgetmemorydrn-wiki-jp.model.json",
+      "Resume": false,
+      "AutoResume": true,
+      "IntervalMinutes": 30
+    },
+    "VocabularySize": 4096,
+    "TokenizerTrainingDocuments": 5000,
+    "TokenizerTrainingBytes": 2000000,
+    "MaxTrainingDocuments": 0,
+    "MaxTrainingTokens": 0,
+    "MaxDocumentTokens": 1024,
+    "ShuffleBufferSize": 262144,
+    "ValidationFraction": 0,
+    "Epochs": 1,
+    "BatchSize": 32,
+    "GradientAccumulationSteps": 1,
+    "ContextLength": 1024,
+    "ModelWidth": 512,
+    "Heads": 16,
+    "HiddenSize": 1536,
+    "Layers": 32,
+    "ModelArchitecture": "forgetmemorydrn",
+    "PrecisionMode": "mix8_32",
+    "Precision": null,
+    "bfp8_block_size": 128,
+    "ModelDType": null,
+    "TieWordEmbeddings": false,
+    "Device": "cuda",
+    "DeviceIndex": 0,
+    "DeviceIndices": [
+      0,
+      1
+    ],
+    "AdaptiveCudaSharding": true,
+    "CudaShardEmaAlpha": 0.2,
+    "CudaMinimumRelativeShardSize": 0.5,
+    "CudaMaximumBatchAdjustmentPerStep": 1,
+    "CudaGraphCacheBudgetMiB": 512,
+    "ForgetMemoryKeyWidth": 16,
+    "ForgetMemoryValueWidth": 16,
+    "ForgetMemoryRetentionMinimum": 0.5,
+    "ForgetMemoryRetentionMaximum": 0.99,
+    "HyenaFilterWidth": 64,
+    "HyenaConvolutionAlgorithm": "auto",
+    "Dropout": 0.1,
+    "InitializationScale": 0.02,
+    "Optimizer": "nekomuon",
+    "LearningRate": 0.003,
+    "AuxiliaryLearningRate": 0.001,
+    "NekoMuonBetaFast": 0.9,
+    "NekoMuonNewtonSchulzInterval": 5,
+    "NekoMuonNewtonSchulzDepthMode": null,
+    "NekoMuonNewtonSchulzDepth": null,
+    "GainShareBlockDepth": 1,
+    "GainShareBeta1": 0.9,
+    "GainShareBeta2": 0.999,
+    "GainShareEpsilon": 1E-08,
+    "GainShareRho": 0.95,
+    "GainShareGamma": 1,
+    "GainShareMinScale": 0.5,
+    "GainShareMaxScale": 2,
+    "WarmupPercent": 0,
+    "WeightDecay": 0.01,
+    "Optimization": {
+      "Optimizer": {
+        "Type": "nekomuon",
+        "LearningRate": 0.003,
+        "AuxiliaryLearningRate": 0.001,
+        "NekoMuonBetaFast": 0.9,
+        "WeightDecay": 0.01,
+        "NekoMuonNewtonSchulzInterval": 5,
+        "NekoMuonNewtonSchulzDepthMode": null,
+        "NekoMuonNewtonSchulzDepth": null,
+        "GainShareBlockDepth": 1,
+        "GainShareBeta1": 0.9,
+        "GainShareBeta2": 0.999,
+        "GainShareEpsilon": 1E-08,
+        "GainShareRho": 0.95,
+        "GainShareGamma": 1,
+        "GainShareMinScale": 0.5,
+        "GainShareMaxScale": 2
+      },
+      "Scheduler": {
+        "Type": "warmupCosineProgress",
+        "WarmupPercent": 0
+      }
+    },
+    "Seed": 1234,
+    "LogEveryBatches": 10,
+    "ShowLossGraph": true,
+    "GraphUpdateSteps": 100,
+    "DatasetSampleEverySteps": 100,
+    "DatasetSamplePoolSize": 32,
+    "MaxNewTokens": 200,
+    "Temperature": 0.8,
+    "TopK": 40,
+    "UseSimd": true,
+    "MaxDegreeOfParallelism": 0
+  },
+  "WarmupSteps": 5,
+  "MeasuredSteps": 20,
+  "Workload": "synthetic full-length, configured fixed LR, no dataset/tokenizer/checkpoint I/O",
+  "MeanMilliseconds": 512.3833250000001,
+  "MedianMilliseconds": 505.0789,
+  "Samples": [
+    {
+      "Step": 6,
+      "Total": 504.8198,
+      "Loss": 7.8446712,
+      "GradientNorm": 1.0220069,
+      "Zero": 0.1389,
+      "ForwardBackward": 466.45230000000004,
+      "Clip": 0.9791999999999916,
+      "NekoMuon": 0,
+      "AdamW": 37.24939999999998,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 7,
+      "Total": 504.4238,
+      "Loss": 7.754012,
+      "GradientNorm": 0.98681325,
+      "Zero": 0.1282,
+      "ForwardBackward": 466.269,
+      "Clip": 0.2787000000000148,
+      "NekoMuon": 0,
+      "AdamW": 37.747900000000016,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 8,
+      "Total": 501.655,
+      "Loss": 7.6547604,
+      "GradientNorm": 1.008842,
+      "Zero": 0.1484,
+      "ForwardBackward": 465.9759,
+      "Clip": 0.4633000000000038,
+      "NekoMuon": 0,
+      "AdamW": 35.067399999999964,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 9,
+      "Total": 499.4745,
+      "Loss": 7.554867,
+      "GradientNorm": 1.0517323,
+      "Zero": 0.1384,
+      "ForwardBackward": 464.7416,
+      "Clip": 0.3446999999999889,
+      "NekoMuon": 0,
+      "AdamW": 34.24979999999999,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 10,
+      "Total": 543.1875,
+      "Loss": 7.4564867,
+      "GradientNorm": 0.9921195,
+      "Zero": 0.0716,
+      "ForwardBackward": 468.32890000000003,
+      "Clip": 0.13659999999998718,
+      "NekoMuon": 0,
+      "AdamW": 74.65039999999999,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 11,
+      "Total": 505.338,
+      "Loss": 7.294338,
+      "GradientNorm": 1.2248306,
+      "Zero": 0.0945,
+      "ForwardBackward": 465.5538,
+      "Clip": 0.36939999999998463,
+      "NekoMuon": 0,
+      "AdamW": 39.32030000000003,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 12,
+      "Total": 511.7086,
+      "Loss": 7.182619,
+      "GradientNorm": 1.1494491,
+      "Zero": 0.121,
+      "ForwardBackward": 468.6857,
+      "Clip": 0.3298000000000343,
+      "NekoMuon": 0,
+      "AdamW": 42.57209999999998,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 13,
+      "Total": 502.6752,
+      "Loss": 7.0732794,
+      "GradientNorm": 1.1286553,
+      "Zero": 0.1723,
+      "ForwardBackward": 466.0356,
+      "Clip": 0.5026000000000295,
+      "NekoMuon": 0,
+      "AdamW": 35.96469999999999,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 14,
+      "Total": 502.0936,
+      "Loss": 6.951498,
+      "GradientNorm": 1.2764065,
+      "Zero": 0.0759,
+      "ForwardBackward": 468.45820000000003,
+      "Clip": 0.39179999999998927,
+      "NekoMuon": 0,
+      "AdamW": 33.16769999999997,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 15,
+      "Total": 534.9972,
+      "Loss": 6.83345,
+      "GradientNorm": 1.199099,
+      "Zero": 0.0802,
+      "ForwardBackward": 464.17130000000003,
+      "Clip": 0.3395999999999617,
+      "NekoMuon": 0,
+      "AdamW": 70.40610000000004,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 16,
+      "Total": 507.5325,
+      "Loss": 6.65281,
+      "GradientNorm": 1.4557897,
+      "Zero": 0.0596,
+      "ForwardBackward": 470.30240000000003,
+      "Clip": 0.3883999999999901,
+      "NekoMuon": 0,
+      "AdamW": 36.782100000000014,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 17,
+      "Total": 516.6141,
+      "Loss": 6.5311995,
+      "GradientNorm": 1.042056,
+      "Zero": 0.0683,
+      "ForwardBackward": 467.3757,
+      "Clip": 7.1492999999999824,
+      "NekoMuon": 0,
+      "AdamW": 42.02080000000001,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 18,
+      "Total": 504.1992,
+      "Loss": 6.407376,
+      "GradientNorm": 1.1972493,
+      "Zero": 0.0651,
+      "ForwardBackward": 467.1562,
+      "Clip": 0.41840000000001965,
+      "NekoMuon": 0,
+      "AdamW": 36.559500000000014,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 19,
+      "Total": 511.6875,
+      "Loss": 6.277261,
+      "GradientNorm": 1.0671023,
+      "Zero": 0.0608,
+      "ForwardBackward": 465.4997,
+      "Clip": 0.48349999999999227,
+      "NekoMuon": 0,
+      "AdamW": 45.64350000000002,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 20,
+      "Total": 537.7848,
+      "Loss": 6.1403847,
+      "GradientNorm": 1.2771078,
+      "Zero": 0.0608,
+      "ForwardBackward": 468.51090000000005,
+      "Clip": 0.3532999999999902,
+      "NekoMuon": 0,
+      "AdamW": 68.8598,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 21,
+      "Total": 504.1303,
+      "Loss": 5.9503593,
+      "GradientNorm": 1.4579918,
+      "Zero": 0.1095,
+      "ForwardBackward": 465.9092,
+      "Clip": 0.37639999999998963,
+      "NekoMuon": 0,
+      "AdamW": 37.73519999999996,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 22,
+      "Total": 503.2996,
+      "Loss": 5.7983847,
+      "GradientNorm": 1.1106325,
+      "Zero": 0.0739,
+      "ForwardBackward": 467.5024,
+      "Clip": 0.35259999999999536,
+      "NekoMuon": 0,
+      "AdamW": 35.3707,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 23,
+      "Total": 500.5701,
+      "Loss": 5.661627,
+      "GradientNorm": 1.3976926,
+      "Zero": 0.061,
+      "ForwardBackward": 464.75320000000005,
+      "Clip": 0.3824999999999932,
+      "NekoMuon": 0,
+      "AdamW": 35.373400000000004,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 24,
+      "Total": 510.4261,
+      "Loss": 5.5166073,
+      "GradientNorm": 1.2772282,
+      "Zero": 0.0654,
+      "ForwardBackward": 467.22319999999996,
+      "Clip": 0.5353000000000065,
+      "NekoMuon": 0,
+      "AdamW": 42.60220000000004,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 25,
+      "Total": 541.0491,
+      "Loss": 5.3759966,
+      "GradientNorm": 1.4436977,
+      "Zero": 0.2174,
+      "ForwardBackward": 466.2466,
+      "Clip": 0.41030000000000655,
+      "NekoMuon": 0,
+      "AdamW": 74.17479999999995,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    }
+  ],
+  "GraphBefore": {
+    "CaptureCount": 1,
+    "ReplayCount": 5,
+    "FallbackCount": 0,
+    "CachedCompiledPlanCount": 1,
+    "GraphPinnedBytes": 7876317208,
+    "CapturedReadyEventRecordCount": 0,
+    "CapturedReadyEventRecordMilliseconds": 0
+  },
+  "GraphAfter": {
+    "CaptureCount": 1,
+    "ReplayCount": 25,
+    "FallbackCount": 0,
+    "CachedCompiledPlanCount": 1,
+    "GraphPinnedBytes": 7876317208,
+    "CapturedReadyEventRecordCount": 0,
+    "CapturedReadyEventRecordMilliseconds": 0
+  },
+  "Vram": [
+    {
+      "Device": 0,
+      "UsedBytes": 6606553088,
+      "Allocator": {
+        "AllocationCount": 3325,
+        "AllocatedBytes": 5129921088,
+        "ActiveAllocationCount": 2522,
+        "ActiveBytes": 1191762484,
+        "PendingAllocationCount": 0,
+        "PendingBytes": 0,
+        "CachedAllocationCount": 0,
+        "CachedBytes": 0,
+        "GraphPinnedAllocationCount": 803,
+        "GraphPinnedBytes": 3938158604
+      }
+    },
+    {
+      "Device": 1,
+      "UsedBytes": 7172878336,
+      "Allocator": {
+        "AllocationCount": 3321,
+        "AllocatedBytes": 5129818376,
+        "ActiveAllocationCount": 2518,
+        "ActiveBytes": 1191659772,
+        "PendingAllocationCount": 0,
+        "PendingBytes": 0,
+        "CachedAllocationCount": 0,
+        "CachedBytes": 0,
+        "GraphPinnedAllocationCount": 803,
+        "GraphPinnedBytes": 3938158604
+      }
+    }
+  ],
+  "SynchronizedPhases": [
+    {
+      "Step": 26,
+      "Total": 505.3693,
+      "Loss": 5.1752954,
+      "GradientNorm": 1.4676263,
+      "Zero": 0.2316,
+      "ForwardBackward": 467.19509999999997,
+      "Clip": 1.8799999999999955,
+      "NekoMuon": 19.5779,
+      "AdamW": 16.484700000000032,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 27,
+      "Total": 505.5531,
+      "Loss": 5.03034,
+      "GradientNorm": 1.3241575,
+      "Zero": 0.1138,
+      "ForwardBackward": 465.6146,
+      "Clip": 1.1148999999999774,
+      "NekoMuon": 23.186800000000005,
+      "AdamW": 15.522999999999968,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 28,
+      "Total": 506.7248,
+      "Loss": 4.8941813,
+      "GradientNorm": 1.5718945,
+      "Zero": 0.0876,
+      "ForwardBackward": 465.4479,
+      "Clip": 4.115299999999991,
+      "NekoMuon": 18.86160000000001,
+      "AdamW": 18.212400000000002,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 29,
+      "Total": 508.2158,
+      "Loss": 4.752021,
+      "GradientNorm": 1.5785072,
+      "Zero": 0.1404,
+      "ForwardBackward": 467.1127,
+      "Clip": 1.5396000000000072,
+      "NekoMuon": 18.454499999999996,
+      "AdamW": 20.96859999999998,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    },
+    {
+      "Step": 30,
+      "Total": 534.9755,
+      "Loss": 4.5843816,
+      "GradientNorm": 1.8091912,
+      "Zero": 0.0971,
+      "ForwardBackward": 465.549,
+      "Clip": 1.1317000000000235,
+      "NekoMuon": 52.53050000000002,
+      "AdamW": 15.66719999999998,
+      "Native": {
+        "AllocationCount": 0,
+        "AllocationBytes": 0,
+        "FreeCount": 0,
+        "FreeBytes": 0
+      },
+      "Transfers": {
+        "HostToDeviceCopyCount": 60,
+        "HostToDeviceBytes": 116285936,
+        "DeviceToHostCopyCount": 63,
+        "DeviceToHostBytes": 116023824
+      }
+    }
+  ],
+  "EagerProfile": {
+    "Loss": 4.384408,
+    "GradientPreparationMilliseconds": 0.2703,
+    "AllReduceMilliseconds": 10.3215,
+    "TotalMilliseconds": 764.4644,
+    "Shards": [
+      {
+        "Device": 0,
+        "BatchSize": 16,
+        "DataPreparationMilliseconds": 0.1542,
+        "ForwardMilliseconds": 361.0766,
+        "LossMilliseconds": 0.9651,
+        "BackwardMilliseconds": 385.6823
+      },
+      {
+        "Device": 1,
+        "BatchSize": 16,
+        "DataPreparationMilliseconds": 0.1534,
+        "ForwardMilliseconds": 373.7481,
+        "LossMilliseconds": 0.0672,
+        "BackwardMilliseconds": 379.2572
+      }
+    ]
+  },
+  "Operations": [
+    {
+      "Device": 0,
+      "Operation": "forward.forget_memory",
+      "Count": 32,
+      "TotalMilliseconds": 71.43429999999998,
+      "MaximumMilliseconds": 2.7034
+    },
+    {
+      "Device": 0,
+      "Operation": "forward.residual_dropout",
+      "Count": 64,
+      "TotalMilliseconds": 68.73960000000001,
+      "MaximumMilliseconds": 1.6788
+    },
+    {
+      "Device": 0,
+      "Operation": "backward.forget_memory",
+      "Count": 32,
+      "TotalMilliseconds": 66.94339999999998,
+      "MaximumMilliseconds": 2.6508
+    },
+    {
+      "Device": 0,
+      "Operation": "forward.linear_relu[512-\u003E1536]",
+      "Count": 32,
+      "TotalMilliseconds": 62.2967,
+      "MaximumMilliseconds": 3.4341
+    },
+    {
+      "Device": 0,
+      "Operation": "backward.linear_relu[512-\u003E1536]",
+      "Count": 32,
+      "TotalMilliseconds": 54.5107,
+      "MaximumMilliseconds": 1.757
+    },
+    {
+      "Device": 0,
+      "Operation": "forward.layer_norm",
+      "Count": 65,
+      "TotalMilliseconds": 51.7207,
+      "MaximumMilliseconds": 1.5921
+    },
+    {
+      "Device": 0,
+      "Operation": "backward.linear[1536-\u003E512]",
+      "Count": 32,
+      "TotalMilliseconds": 51.505100000000006,
+      "MaximumMilliseconds": 4.405
+    },
+    {
+      "Device": 0,
+      "Operation": "forward.linear[1536-\u003E512]",
+      "Count": 32,
+      "TotalMilliseconds": 44.22709999999999,
+      "MaximumMilliseconds": 1.7612
+    },
+    {
+      "Device": 0,
+      "Operation": "backward.residual_dropout",
+      "Count": 64,
+      "TotalMilliseconds": 33.0018,
+      "MaximumMilliseconds": 2.3917
+    },
+    {
+      "Device": 0,
+      "Operation": "backward.layer_norm",
+      "Count": 65,
+      "TotalMilliseconds": 28.1156,
+      "MaximumMilliseconds": 1.6239
+    },
+    {
+      "Device": 0,
+      "Operation": "forward.linear[16-\u003E512]",
+      "Count": 32,
+      "TotalMilliseconds": 21.7056,
+      "MaximumMilliseconds": 0.9445
+    },
+    {
+      "Device": 0,
+      "Operation": "forward.linear[512-\u003E80]",
+      "Count": 32,
+      "TotalMilliseconds": 19.736800000000002,
+      "MaximumMilliseconds": 0.9528
+    },
+    {
+      "Device": 0,
+      "Operation": "backward.linear[512-\u003E80]",
+      "Count": 32,
+      "TotalMilliseconds": 16.0654,
+      "MaximumMilliseconds": 2.7696
+    },
+    {
+      "Device": 0,
+      "Operation": "backward.linear[16-\u003E512]",
+      "Count": 32,
+      "TotalMilliseconds": 10.777700000000001,
+      "MaximumMilliseconds": 0.372
+    },
+    {
+      "Device": 0,
+      "Operation": "backward.cross_entropy",
+      "Count": 1,
+      "TotalMilliseconds": 9.2207,
+      "MaximumMilliseconds": 9.2207
+    },
+    {
+      "Device": 0,
+      "Operation": "forward.linear[512-\u003E4096]",
+      "Count": 1,
+      "TotalMilliseconds": 7.7759,
+      "MaximumMilliseconds": 7.7759
+    },
+    {
+      "Device": 0,
+      "Operation": "backward.linear[512-\u003E4096]",
+      "Count": 1,
+      "TotalMilliseconds": 5.3328,
+      "MaximumMilliseconds": 5.3328
+    },
+    {
+      "Device": 0,
+      "Operation": "forward.embedding",
+      "Count": 1,
+      "TotalMilliseconds": 3.5509,
+      "MaximumMilliseconds": 3.5509
+    },
+    {
+      "Device": 0,
+      "Operation": "forward.dropout",
+      "Count": 1,
+      "TotalMilliseconds": 1.8858,
+      "MaximumMilliseconds": 1.8858
+    },
+    {
+      "Device": 0,
+      "Operation": "forward.cross_entropy",
+      "Count": 1,
+      "TotalMilliseconds": 1.1308,
+      "MaximumMilliseconds": 1.1308
+    },
+    {
+      "Device": 0,
+      "Operation": "backward.embedding",
+      "Count": 1,
+      "TotalMilliseconds": 0.3287,
+      "MaximumMilliseconds": 0.3287
+    },
+    {
+      "Device": 0,
+      "Operation": "backward.dropout",
+      "Count": 1,
+      "TotalMilliseconds": 0.3175,
+      "MaximumMilliseconds": 0.3175
+    },
+    {
+      "Device": 1,
+      "Operation": "forward.forget_memory",
+      "Count": 32,
+      "TotalMilliseconds": 78.9744,
+      "MaximumMilliseconds": 2.9926
+    },
+    {
+      "Device": 1,
+      "Operation": "backward.forget_memory",
+      "Count": 32,
+      "TotalMilliseconds": 69.6105,
+      "MaximumMilliseconds": 2.631
+    },
+    {
+      "Device": 1,
+      "Operation": "forward.residual_dropout",
+      "Count": 64,
+      "TotalMilliseconds": 67.98299999999999,
+      "MaximumMilliseconds": 1.7808
+    },
+    {
+      "Device": 1,
+      "Operation": "forward.linear_relu[512-\u003E1536]",
+      "Count": 32,
+      "TotalMilliseconds": 67.82190000000001,
+      "MaximumMilliseconds": 3.0529
+    },
+    {
+      "Device": 1,
+      "Operation": "backward.linear_relu[512-\u003E1536]",
+      "Count": 32,
+      "TotalMilliseconds": 58.24079999999998,
+      "MaximumMilliseconds": 2.4234
+    },
+    {
+      "Device": 1,
+      "Operation": "backward.linear[1536-\u003E512]",
+      "Count": 32,
+      "TotalMilliseconds": 55.073,
+      "MaximumMilliseconds": 4.4948
+    },
+    {
+      "Device": 1,
+      "Operation": "forward.layer_norm",
+      "Count": 65,
+      "TotalMilliseconds": 51.9328,
+      "MaximumMilliseconds": 1.3022
+    },
+    {
+      "Device": 1,
+      "Operation": "forward.linear[1536-\u003E512]",
+      "Count": 32,
+      "TotalMilliseconds": 45.49159999999999,
+      "MaximumMilliseconds": 2.1103
+    },
+    {
+      "Device": 1,
+      "Operation": "backward.residual_dropout",
+      "Count": 64,
+      "TotalMilliseconds": 33.94849999999999,
+      "MaximumMilliseconds": 1.6774
+    },
+    {
+      "Device": 1,
+      "Operation": "backward.layer_norm",
+      "Count": 65,
+      "TotalMilliseconds": 28.559400000000007,
+      "MaximumMilliseconds": 0.7393
+    },
+    {
+      "Device": 1,
+      "Operation": "forward.linear[16-\u003E512]",
+      "Count": 32,
+      "TotalMilliseconds": 21.6469,
+      "MaximumMilliseconds": 0.875
+    },
+    {
+      "Device": 1,
+      "Operation": "forward.linear[512-\u003E80]",
+      "Count": 32,
+      "TotalMilliseconds": 18.512399999999996,
+      "MaximumMilliseconds": 0.8904
+    },
+    {
+      "Device": 1,
+      "Operation": "backward.linear[512-\u003E80]",
+      "Count": 32,
+      "TotalMilliseconds": 14.923800000000004,
+      "MaximumMilliseconds": 0.9906
+    },
+    {
+      "Device": 1,
+      "Operation": "backward.linear[16-\u003E512]",
+      "Count": 32,
+      "TotalMilliseconds": 10.726499999999998,
+      "MaximumMilliseconds": 0.4349
+    },
+    {
+      "Device": 1,
+      "Operation": "backward.cross_entropy",
+      "Count": 1,
+      "TotalMilliseconds": 8.9191,
+      "MaximumMilliseconds": 8.9191
+    },
+    {
+      "Device": 1,
+      "Operation": "forward.linear[512-\u003E4096]",
+      "Count": 1,
+      "TotalMilliseconds": 8.4595,
+      "MaximumMilliseconds": 8.4595
+    },
+    {
+      "Device": 1,
+      "Operation": "backward.linear[512-\u003E4096]",
+      "Count": 1,
+      "TotalMilliseconds": 6.3477,
+      "MaximumMilliseconds": 6.3477
+    },
+    {
+      "Device": 1,
+      "Operation": "forward.embedding",
+      "Count": 1,
+      "TotalMilliseconds": 3.5144,
+      "MaximumMilliseconds": 3.5144
+    },
+    {
+      "Device": 1,
+      "Operation": "forward.dropout",
+      "Count": 1,
+      "TotalMilliseconds": 1.8863,
+      "MaximumMilliseconds": 1.8863
+    },
+    {
+      "Device": 1,
+      "Operation": "forward.cross_entropy",
+      "Count": 1,
+      "TotalMilliseconds": 1.0168,
+      "MaximumMilliseconds": 1.0168
+    },
+    {
+      "Device": 1,
+      "Operation": "backward.embedding",
+      "Count": 1,
+      "TotalMilliseconds": 0.4196,
+      "MaximumMilliseconds": 0.4196
+    },
+    {
+      "Device": 1,
+      "Operation": "backward.dropout",
+      "Count": 1,
+      "TotalMilliseconds": 0.2823,
+      "MaximumMilliseconds": 0.2823
+    }
+  ]
+}

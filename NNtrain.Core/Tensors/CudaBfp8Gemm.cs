@@ -732,6 +732,82 @@ internal static class CudaBfp8Gemm
         }
     }
 
+    /// <summary>
+    /// Frozen LoRA base projection: only dX is accumulated. No input decode,
+    /// weight gradient or bias gradient is needed. BF16 is a temporary GEMM
+    /// operand; the input gradient remains a Float32 accumulator for mix8_32
+    /// and for the contribution from the parallel adapter branch.
+    /// </summary>
+    internal static void LinearBackwardInputFrozen(
+        Tensor input,
+        Tensor weight,
+        Tensor output,
+        int rows,
+        int inputWidth,
+        int outputWidth,
+        bool applyRelu)
+    {
+        int deviceIndex = Tensor.CudaDeviceIndex;
+        NativeCudaDevice accelerator =
+            ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+        int length = checked(rows * outputWidth);
+        NativeCudaBuffer<ushort>? rentedGradient = null;
+        CudaBfp8BFloat16Lease? weightDecode = null;
+        try
+        {
+            // A borrowed gradient can have other consumers. In particular,
+            // never mask it in place for a frozen branch with ReLU.
+            bool borrowedGradient = output.TryGetCudaBFloat16GradientBuffer(
+                deviceIndex, out NativeCudaBuffer<ushort>? encodedGradient)
+                && !applyRelu;
+            if (!borrowedGradient)
+            {
+                encodedGradient = rentedGradient =
+                    Tensor.RentCudaBFloat16Buffer(deviceIndex, length);
+                nint outputGradient = output
+                    .EnsureCudaGradientBuffer(deviceIndex).NativePtr;
+                if (applyRelu)
+                {
+                    CudaBfp8BufferView outputView =
+                        output.EnsureCudaBfp8Buffer(deviceIndex);
+                    CudaTensorNative.LinearEncodeBfp8Relu(
+                        deviceIndex,
+                        outputGradient,
+                        outputView.Payload.NativePtr,
+                        encodedGradient.NativePtr,
+                        length);
+                }
+                else
+                {
+                    CudaTensorNative.LinearEncodeBFloat16(
+                        deviceIndex,
+                        outputGradient,
+                        nint.Zero,
+                        encodedGradient.NativePtr,
+                        length,
+                        relu: false);
+                }
+            }
+            weightDecode = weight.AcquireCudaBfp8BFloat16Buffer(deviceIndex);
+            CudaBlas.LinearBackwardInputBFloat16(
+                accelerator,
+                deviceIndex,
+                encodedGradient!,
+                weightDecode.Buffer,
+                input.EnsureCudaGradientBuffer(deviceIndex),
+                rows,
+                inputWidth,
+                outputWidth);
+            input.MarkCudaGradientMutated(deviceIndex);
+        }
+        finally
+        {
+            weightDecode?.Dispose();
+            if (rentedGradient is not null)
+                Tensor.ReturnCudaBFloat16Buffer(accelerator, rentedGradient);
+        }
+    }
+
     internal static void MatMulTransposedRightBackward(
         Tensor left,
         Tensor right,

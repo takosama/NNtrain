@@ -12,6 +12,29 @@ public class ForgetMemoryV2Gpt : LanguageModel
     private readonly Linear _languageModelHead;
     private readonly Parameter[] _hiddenWeightParameters;
     private readonly Parameter[] _auxiliaryParameters;
+    private LoraAdapterSet? _loraAdapters;
+
+    /// <summary>Attach DRN-only LoRA; optimize only the returned adapter parameters.</summary>
+    public LoraAdapterSet AttachLora(int rank = 8, float alpha = 16,
+        string[]? targets = null, int seed = 1234)
+    {
+        if (!UseDrn) throw new NotSupportedException("LoRA currently supports ForgetMemoryDRN only.");
+        if (_loraAdapters is not null) throw new InvalidOperationException("LoRA is already attached.");
+        if (PrecisionMode is not (TensorPrecisionMode.Float32 or TensorPrecisionMode.Mix16_32 or TensorPrecisionMode.Mix8_32))
+            throw new NotSupportedException("LoRA requires float32, mix16_32 or mix8_32; convert the base model first.");
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(rank);
+        if (!float.IsFinite(alpha) || alpha <= 0) throw new ArgumentOutOfRangeException(nameof(alpha));
+        var selected = new HashSet<string>(targets ?? ["memoryOutput", "ffnInput", "ffnOutput"], StringComparer.Ordinal);
+        if (selected.Count == 0 || selected.Any(t => t is not ("memoryProjection" or "memoryOutput" or "ffnInput" or "ffnOutput")))
+            throw new ArgumentException("Unknown or empty DRN LoRA target list.", nameof(targets));
+        var adapters = new LoraAdapterSet(DType);
+        var random = new Random(seed);
+        for (int layer = 0; layer < _layers.Length; layer++)
+            _layers[layer].AttachLora(adapters, layer, rank, alpha, selected, random);
+        adapters.SetPrecisionMode(PrecisionMode);
+        _loraAdapters = adapters;
+        return adapters;
+    }
 
     public ForgetMemoryV2Gpt(
         int vocabularySize,
@@ -107,6 +130,14 @@ public class ForgetMemoryV2Gpt : LanguageModel
                 dtype));
         _embeddingDropout = RegisterModule(new Dropout(dropout, random, dtype));
         _layers = new ForgetMemoryV2Layer[numLayers];
+        // There are two residual branches per layer. Scaling only their final
+        // projections follows the 1/sqrt(number of residual branches) rule;
+        // input projections keep their full signal scale. This prevents a DRN
+        // residual stream from growing with depth while preserving old V2/V3
+        // initialization and all checkpoint-loaded weights.
+        float residualInitializationScale = useDrn
+            ? initializationScale / MathF.Sqrt(2f * numLayers)
+            : initializationScale;
         for (int layerIndex = 0; layerIndex < numLayers; layerIndex++)
         {
             float retentionFloor = numLayers == 1
@@ -127,7 +158,8 @@ public class ForgetMemoryV2Gpt : LanguageModel
                     dropout,
                     dtype,
                     useV3,
-                    useDrn));
+                    useDrn,
+                    residualInitializationScale));
         }
         _finalNorm = RegisterModule(
             new LayerNorm(modelWidth, dtype: dtype));
@@ -183,6 +215,102 @@ public class ForgetMemoryV2Gpt : LanguageModel
         int batchSize,
         int sequenceLength)
     {
+        Tensor hidden = ForwardHidden(tokenIds, batchSize, sequenceLength);
+        return _languageModelHead.ForwardBatch(
+            hidden.Reshape(batchSize * sequenceLength, ModelWidth));
+    }
+
+    internal void FreezeLoraBaseLinear(bool frozen = true)
+    {
+        if (_loraAdapters is null) throw new InvalidOperationException("Attach LoRA before freezing its base linear parameters.");
+        foreach (var layer in _layers) layer.FreezeLoraBaseLinear(frozen);
+        _languageModelHead.FrozenForLora = frozen;
+    }
+
+    internal Tensor[] ForwardCompletionScores(int[] tokenIds, int[][] labels, int sequenceLength)
+    {
+        if (labels.Length == 0 || labels.Any(row => row.Length != sequenceLength))
+            throw new ArgumentException("Invalid completion label shape.");
+        Tensor hidden = ForwardHidden(tokenIds, labels.Length, sequenceLength)
+            .Reshape(labels.Length * sequenceLength, ModelWidth);
+        var scores = new Tensor[labels.Length];
+        for (int i = 0; i < labels.Length; i++)
+        {
+            int first = Array.FindIndex(labels[i], token => token >= 0);
+            int last = Array.FindLastIndex(labels[i], token => token >= 0);
+            if (first < 0) throw new ArgumentException("Completion must contain at least one target.");
+            var selected = hidden.Slice(0, i * sequenceLength + first, last - first + 1);
+            scores[i] = _languageModelHead.ForwardBatch(selected)
+                .CrossEntropyWithLogits(labels[i][first..(last + 1)]);
+        }
+        return scores;
+    }
+
+    internal override Tensor ForwardLoss(
+        int[] tokenIds,
+        int[] targetIds,
+        int batchSize,
+        int sequenceLength,
+        int ignoreIndex = Tensor.DefaultCrossEntropyIgnoreIndex)
+    {
+        ArgumentNullException.ThrowIfNull(targetIds);
+        if (targetIds.Length != checked(batchSize * sequenceLength))
+            throw new ArgumentException("Target count must equal batchSize * sequenceLength.", nameof(targetIds));
+        if (!UseDrn || PrecisionMode != TensorPrecisionMode.Mix8_32
+            || Tensor.ExecutionDevice != TensorDevice.Cuda
+            || CudaDispatchPolicy.Current.DisableDirectDrnMix8LossHead)
+            return base.ForwardLoss(tokenIds, targetIds, batchSize, sequenceLength, ignoreIndex);
+
+        Tensor hidden = ForwardHidden(tokenIds, batchSize, sequenceLength);
+        return LossFromHidden(hidden, targetIds, batchSize, sequenceLength,
+            ignoreIndex);
+    }
+
+    /// <summary>
+    /// Diagnostic-only loss entry point which retains each residual-stream
+    /// output. Ordinary training passes null and pays no tensor retention or
+    /// device-to-host statistics cost.
+    /// </summary>
+    internal Tensor ForwardLossWithLayerOutputs(
+        int[] tokenIds,
+        int[] targetIds,
+        int batchSize,
+        int sequenceLength,
+        ICollection<Tensor> layerOutputs,
+        int ignoreIndex = Tensor.DefaultCrossEntropyIgnoreIndex)
+    {
+        ArgumentNullException.ThrowIfNull(layerOutputs);
+        ArgumentNullException.ThrowIfNull(targetIds);
+        if (layerOutputs.Count != 0)
+            throw new ArgumentException("The layer output collection must be empty.", nameof(layerOutputs));
+        if (targetIds.Length != checked(batchSize * sequenceLength))
+            throw new ArgumentException("Target count must equal batchSize * sequenceLength.", nameof(targetIds));
+        Tensor hidden = ForwardHidden(tokenIds, batchSize, sequenceLength,
+            layerOutputs);
+        return LossFromHidden(hidden, targetIds, batchSize, sequenceLength,
+            ignoreIndex);
+    }
+
+    private Tensor LossFromHidden(Tensor hidden, int[] targetIds,
+        int batchSize, int sequenceLength, int ignoreIndex)
+    {
+        hidden = hidden.Reshape(batchSize * sequenceLength, ModelWidth);
+        // Loss consumes BF16 directly; do not quantize vocabulary-sized logits
+        // to BFP8 and immediately decode them again. Public Forward stays BFP8.
+        Tensor logits = UseDrn && PrecisionMode == TensorPrecisionMode.Mix8_32
+            && Tensor.ExecutionDevice == TensorDevice.Cuda
+            && !CudaDispatchPolicy.Current.DisableDirectDrnMix8LossHead
+            && hidden.DType == TensorDType.Bfp8
+            && _languageModelHead.W.T.DType == TensorDType.Bfp8
+            && _languageModelHead.B.T.DType == TensorDType.Bfp8
+            ? hidden.LinearLastDimBFloat16ForLoss(_languageModelHead.W.T, _languageModelHead.B.T)
+            : _languageModelHead.ForwardBatch(hidden);
+        return logits.CrossEntropyWithLogits(targetIds, ignoreIndex: ignoreIndex);
+    }
+
+    private Tensor ForwardHidden(int[] tokenIds, int batchSize,
+        int sequenceLength, ICollection<Tensor>? layerOutputs = null)
+    {
         ArgumentNullException.ThrowIfNull(tokenIds);
         if (batchSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(batchSize));
@@ -205,11 +333,45 @@ public class ForgetMemoryV2Gpt : LanguageModel
                 tokenIds,
                 batchSize,
                 sequenceLength));
-        foreach (ForgetMemoryV2Layer layer in _layers)
-            hidden = layer.Forward(hidden);
-        hidden = _finalNorm.Forward(hidden);
-        return _languageModelHead.ForwardBatch(
-            hidden.Reshape(batchSize * sequenceLength, ModelWidth));
+        CudaDispatchPolicy policy = CudaDispatchPolicy.Current;
+        int retainedLayers = UseDrn && hidden.DType == TensorDType.Bfp8
+            && hidden.Device == TensorDevice.Cuda && IsTraining && AutogradContext.IsRecordingEnabled
+            && !policy.DisableDrnStateRecomputation
+            ? RetainedHistoryLayerCount(policy.DrnRetainedHistoryBudgetBytes,
+                batchSize, sequenceLength, KeyWidth, ValueWidth, _layers.Length)
+            : 0;
+        if (retainedLayers > 0)
+        {
+            // One nested immutable policy scope; disposal restores the original
+            // policy on exceptions and cannot leak into another replica worker.
+            using (CudaDispatchPolicy.Push(policy with { DisableDrnStateRecomputation = true }))
+                for (int layer = 0; layer < retainedLayers; layer++)
+                {
+                    hidden = _layers[layer].Forward(hidden);
+                    layerOutputs?.Add(hidden);
+                }
+        }
+        // Bound retained chunk boundaries per model/replica, including when
+        // users increase depth. The remaining layers keep full recomputation.
+        int chunkedLayers = UseDrn && hidden.DType is TensorDType.Bfp8 or TensorDType.BFloat16
+            && hidden.Device == TensorDevice.Cuda && IsTraining
+            && CudaDrnChunk.CanUse(batchSize, sequenceLength, KeyWidth, ValueWidth)
+            ? Math.Min(_layers.Length - retainedLayers, (int)(256L * 1024 * 1024
+                / ((long)CudaDrnChunk.CheckpointLength(batchSize, sequenceLength, KeyWidth, ValueWidth) * sizeof(float))))
+            : 0;
+        for (int layer = retainedLayers; layer < retainedLayers + chunkedLayers; layer++)
+        {
+            hidden = _layers[layer].Forward(hidden);
+            layerOutputs?.Add(hidden);
+        }
+        using IDisposable? chunkBudgetScope = chunkedLayers > 0 && retainedLayers + chunkedLayers < _layers.Length
+            ? CudaDispatchPolicy.Push(policy with { DisableDrnChunkBackward = true }) : null;
+        for (int layer = retainedLayers + chunkedLayers; layer < _layers.Length; layer++)
+        {
+            hidden = _layers[layer].Forward(hidden);
+            layerOutputs?.Add(hidden);
+        }
+        return _finalNorm.Forward(hidden);
     }
 
     /// <summary>
@@ -217,6 +379,19 @@ public class ForgetMemoryV2Gpt : LanguageModel
     /// </summary>
     public ForgetMemoryV2RecurrentState CreateRecurrentState()
         => new(_layers.Length, checked(KeyWidth * ValueWidth));
+
+    internal static int RetainedHistoryLayerCount(long budgetBytes, int batch,
+        int sequence, int keyWidth, int valueWidth, int layers)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(budgetBytes);
+        ArgumentOutOfRangeException.ThrowIfLessThan(batch, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(sequence, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(keyWidth, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(valueWidth, 1);
+        ArgumentOutOfRangeException.ThrowIfNegative(layers);
+        long perLayer = checked((long)batch * sequence * keyWidth * valueWidth * sizeof(float));
+        return (int)Math.Min(layers, budgetBytes / perLayer);
+    }
 
     /// <summary>
     /// Advances <paramref name="state"/> by <paramref name="tokenIds"/> and
@@ -362,6 +537,9 @@ public class ForgetMemoryV2Gpt : LanguageModel
         if (result.Any(token => (uint)token >= (uint)VocabularySize))
             throw new ArgumentOutOfRangeException(nameof(promptTokenIds));
 
+        if (maxNewTokens == 0)
+            return result.ToArray();
+
         random ??= new Random();
         bool wasTraining = IsTraining;
         Eval();
@@ -381,7 +559,19 @@ public class ForgetMemoryV2Gpt : LanguageModel
                     CudaInferenceScope.Begin();
                 try
                 {
-                    Tensor logits = AdvanceToLastLogits(result, state);
+                    // A dataset prompt can be much longer than ContextLength.
+                    // Retain only fixed-size recurrent state between bounded
+                    // prefills, not all layers' activations for the whole prompt.
+                    // The final chunk belongs to inferenceScope until sampled.
+                    int chunkSize = Math.Min(ContextLength, GenerationPrefillChunkTokens);
+                    int offset = 0;
+                    while (result.Count - offset > chunkSize)
+                    {
+                        using (CudaInferenceScope chunkScope = CudaInferenceScope.Begin())
+                            _ = AdvanceToLastLogits(result.GetRange(offset, chunkSize), state);
+                        offset += chunkSize;
+                    }
+                    Tensor logits = AdvanceToLastLogits(result.GetRange(offset, result.Count - offset), state);
                     for (int generated = 0; generated < maxNewTokens; generated++)
                     {
                         int nextToken = SampleLogits(
@@ -417,6 +607,8 @@ public class ForgetMemoryV2Gpt : LanguageModel
 
         return result.ToArray();
     }
+
+    internal const int GenerationPrefillChunkTokens = 128;
 
     internal override string Generate(
         string prompt,

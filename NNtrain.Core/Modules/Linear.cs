@@ -4,6 +4,16 @@ class Linear : Module
 {
     public Parameter W { get; } // (out, in)
     public Parameter B { get; } // (out)
+    private LoraAdapter? _lora;
+    internal bool FrozenForLora { get; set; }
+
+    internal LoraAdapter AttachLora(int rank, float alpha, Random random)
+    {
+        if (_lora is not null) throw new InvalidOperationException("LoRA is already attached.");
+        _lora = RegisterModule(new LoraAdapter(W.T.Shape[1], W.T.Shape[0], rank, alpha, random, DType,
+            W.T.Bfp8Quantization?.BlockSize ?? 32));
+        return _lora;
+    }
 
     public Linear(
         int inFeatures,
@@ -65,19 +75,27 @@ class Linear : Module
 
     public Tensor Forward(Tensor x) // x: (in)
     {
-        return W.T.MatMul(x) + B.T;
+        return _lora is null ? W.T.MatMul(x) + B.T : ForwardBatch(x.Reshape(1, x.Numel)).Reshape(B.T.Numel);
     }
 
     public Tensor ForwardBatch(Tensor x) // x: (..., in)
     {
         ArgumentNullException.ThrowIfNull(x);
-        return x.LinearLastDim(W.T, B.T, applyRelu: false);
+        Tensor output = FrozenForLora ? x.LinearLastDimFrozen(W.T, B.T, false) : x.LinearLastDim(W.T, B.T, applyRelu: false);
+        if (_lora is null || !_lora.Enabled) return output;
+        Tensor adapterOutput = _lora.Forward(x);
+        Tensor combined = output + adapterOutput;
+        // This private base output has one consumer. Equal-shape addition
+        // and non-ReLU linear backward need its gradient, never its values.
+        output.RetireExclusiveCudaLinearOutputValues();
+        adapterOutput.RetireExclusiveCudaOutputValues();
+        return combined;
     }
 
     public Tensor ForwardBatchRelu(Tensor x)
     {
         ArgumentNullException.ThrowIfNull(x);
-        return x.LinearLastDim(W.T, B.T, applyRelu: true);
+        return _lora is null ? (FrozenForLora ? x.LinearLastDimFrozen(W.T, B.T, true) : x.LinearLastDim(W.T, B.T, applyRelu: true)) : ForwardBatch(x).Relu();
     }
 
     /// <summary>
@@ -88,7 +106,7 @@ class Linear : Module
     internal Tensor ForwardBatchExclusiveInputGradient(Tensor x)
     {
         ArgumentNullException.ThrowIfNull(x);
-        return x.LinearLastDimExclusiveBfp8InputGradient(W.T, B.T);
+        return _lora is null && !FrozenForLora ? x.LinearLastDimExclusiveBfp8InputGradient(W.T, B.T) : ForwardBatch(x);
     }
 
     /// <summary>
@@ -98,7 +116,7 @@ class Linear : Module
     internal Tensor ForwardBatchReluExclusiveOutputGradient(Tensor x)
     {
         ArgumentNullException.ThrowIfNull(x);
-        return x.LinearLastDimReluExclusiveBfp8OutputGradient(W.T, B.T);
+        return _lora is null && !FrozenForLora ? x.LinearLastDimReluExclusiveBfp8OutputGradient(W.T, B.T) : ForwardBatchRelu(x);
     }
 
 }

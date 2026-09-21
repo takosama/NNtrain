@@ -1,0 +1,62 @@
+[
+  {
+    "Batch": 8,
+    "Sequence": 2048,
+    "Key": 32,
+    "Value": 32,
+    "MeanMilliseconds": 3.8567349999999996,
+    "Compared": false,
+    "MaxAbsoluteError": 0,
+    "RelativeL2Error": 0
+  },
+  {
+    "Batch": 16,
+    "Sequence": 512,
+    "Key": 16,
+    "Value": 16,
+    "MeanMilliseconds": 0.95694,
+    "Compared": false,
+    "MaxAbsoluteError": 0,
+    "RelativeL2Error": 0
+  },
+  {
+    "Batch": 8,
+    "Sequence": 129,
+    "Key": 17,
+    "Value": 17,
+    "MeanMilliseconds": 0.15381,
+    "Compared": false,
+    "MaxAbsoluteError": 0,
+    "RelativeL2Error": 0
+  },
+  {
+    "Batch": 8,
+    "Sequence": 65,
+    "Key": 1,
+    "Value": 19,
+    "MeanMilliseconds": 0.08437,
+    "Compared": false,
+    "MaxAbsoluteError": 0,
+    "RelativeL2Error": 0
+  },
+  {
+    "Batch": 2,
+    "Sequence": 33,
+    "Key": 32,
+    "Value": 32,
+    "MeanMilliseconds": 0.05073999999999999,
+    "Compared": false,
+    "MaxAbsoluteError": 0,
+    "RelativeL2Error": 0
+  },
+  {
+    "Batch": 2,
+    "Sequence": 33,
+    "Key": 48,
+    "Value": 32,
+    "MeanMilliseconds": 0.98469,
+    "Compared": false,
+    "MaxAbsoluteError": 0,
+    "RelativeL2Error": 0
+  }
+]

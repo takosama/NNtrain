@@ -21,6 +21,12 @@ public sealed class CudaDispatchPolicyTests
             ["NNTRAIN_DISABLE_PARALLEL_ATTENTION_DKV"] = "1",
             ["NNTRAIN_DISABLE_ASYNC_ATTENTION_BACKWARD"] = "1",
             ["NNTRAIN_DISABLE_TENSOR_CORE_FORGET_MEMORY"] = "1",
+            ["NNTRAIN_DISABLE_DRN_STATE_RECOMPUTATION"] = "1",
+            ["NNTRAIN_DISABLE_DIRECT_BFP8_ELEMENTWISE"] = "1",
+            ["NNTRAIN_DISABLE_DIRECT_DRN_MIX8_LOSS_HEAD"] = "1",
+            ["NNTRAIN_DISABLE_BFP8_LAYERNORM_PARAMETER_CACHE"] = "1",
+            ["NNTRAIN_DRN_RETAINED_HISTORY_MIB"] = "256",
+            ["NNTRAIN_DISABLE_EXCLUSIVE_LINEAR_OUTPUT_RETIREMENT"] = "1",
             ["NNTRAIN_DISABLE_TENSOR_CORE_NEKOMUON"] = "1",
             ["NNTRAIN_DISABLE_BATCHED_NEKOMUON"] = "1",
             ["NNTRAIN_NEKOMUON_BATCH_SIZE"] = "12",
@@ -54,6 +60,12 @@ public sealed class CudaDispatchPolicyTests
         Assert.True(policy.DisableParallelAttentionDkv);
         Assert.True(policy.DisableAsyncAttentionBackward);
         Assert.True(policy.DisableTensorCoreForgetMemory);
+        Assert.True(policy.DisableDrnStateRecomputation);
+        Assert.True(policy.DisableDirectBfp8Elementwise);
+        Assert.True(policy.DisableDirectDrnMix8LossHead);
+        Assert.True(policy.DisableBfp8LayerNormParameterCache);
+        Assert.Equal(256L * 1024 * 1024, policy.DrnRetainedHistoryBudgetBytes);
+        Assert.True(policy.DisableExclusiveLinearOutputRetirement);
         Assert.True(policy.DisableTensorCoreNekoMuon);
         Assert.True(policy.DisableBatchedNekoMuon);
         Assert.Equal(12, policy.NekoMuonBatchSize);

@@ -503,6 +503,9 @@ partial class Tensor
         gamma.CheckRank(1);
         beta.CheckRank(1);
 
+        if (ExecutionDevice == TensorDevice.Arc)
+            return ArcNorm(gamma, beta, eps);
+
         if (ExecutionDevice == TensorDevice.Cuda)
         {
             int columns = _shape[^1];

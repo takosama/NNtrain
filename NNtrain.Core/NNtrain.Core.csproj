@@ -6,12 +6,13 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <NNtrainArchitectureLayer>Core</NNtrainArchitectureLayer>
-    <NNtrainAllowedProjectReferences>NNtrain.Runtime;NNtrain.Cuda</NNtrainAllowedProjectReferences>
+    <NNtrainAllowedProjectReferences>NNtrain.Runtime;NNtrain.Cuda;NNtrain.Arc</NNtrainAllowedProjectReferences>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\NNtrain.Runtime\NNtrain.Runtime.csproj" />
     <ProjectReference Include="..\NNtrain.Cuda\NNtrain.Cuda.csproj" />
+    <ProjectReference Include="..\NNtrain.Arc\NNtrain.Arc.csproj" />
   </ItemGroup>
 
   <!-- The native F16C accelerator is optional.  A portable managed AVX2/

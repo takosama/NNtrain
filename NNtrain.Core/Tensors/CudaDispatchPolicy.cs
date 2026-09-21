@@ -20,6 +20,15 @@ internal sealed record CudaDispatchPolicy
     internal bool DisableParallelAttentionDkv { get; init; }
     internal bool DisableAsyncAttentionBackward { get; init; }
     internal bool DisableTensorCoreForgetMemory { get; init; }
+    internal bool DisableDrnStateRecomputation { get; init; }
+    internal bool DisableDrnChunkBackward { get; init; }
+    internal bool DisableDrnChunkParallelForward { get; init; }
+    // Per replica and per model forward, not a process-wide growing cache.
+    internal long DrnRetainedHistoryBudgetBytes { get; init; }
+    internal bool DisableExclusiveLinearOutputRetirement { get; init; }
+    internal bool DisableDirectBfp8Elementwise { get; init; }
+    internal bool DisableDirectDrnMix8LossHead { get; init; }
+    internal bool DisableBfp8LayerNormParameterCache { get; init; }
     internal bool DisableTensorCoreNekoMuon { get; init; }
     internal bool DisableBatchedNekoMuon { get; init; }
     internal int NekoMuonBatchSize { get; init; } = 8;
@@ -60,6 +69,9 @@ internal sealed record CudaDispatchPolicy
 
     internal CudaDispatchPolicy Validate()
     {
+        if (DrnRetainedHistoryBudgetBytes < 0
+            || DrnRetainedHistoryBudgetBytes > 1024L * 1024 * 1024)
+            throw new ArgumentOutOfRangeException(nameof(DrnRetainedHistoryBudgetBytes));
         if (NekoMuonBatchSize is < 1 or > 32)
         {
             throw new ArgumentOutOfRangeException(
@@ -130,6 +142,18 @@ internal sealed record CudaDispatchPolicy
             DisableTensorCoreForgetMemory = ReadFlag(
                 readEnvironment,
                 "NNTRAIN_DISABLE_TENSOR_CORE_FORGET_MEMORY"),
+            DisableDrnStateRecomputation = ReadFlag(
+                readEnvironment,
+                "NNTRAIN_DISABLE_DRN_STATE_RECOMPUTATION"),
+            DrnRetainedHistoryBudgetBytes = (long)ReadPositiveInt(
+                readEnvironment, "NNTRAIN_DRN_RETAINED_HISTORY_MIB",
+                defaultValue: 0, minimum: 0, maximum: 1024) * 1024 * 1024,
+            DisableExclusiveLinearOutputRetirement = ReadFlag(
+                readEnvironment,
+                "NNTRAIN_DISABLE_EXCLUSIVE_LINEAR_OUTPUT_RETIREMENT"),
+            DisableDirectBfp8Elementwise = ReadFlag(readEnvironment, "NNTRAIN_DISABLE_DIRECT_BFP8_ELEMENTWISE"),
+            DisableDirectDrnMix8LossHead = ReadFlag(readEnvironment, "NNTRAIN_DISABLE_DIRECT_DRN_MIX8_LOSS_HEAD"),
+            DisableBfp8LayerNormParameterCache = ReadFlag(readEnvironment, "NNTRAIN_DISABLE_BFP8_LAYERNORM_PARAMETER_CACHE"),
             DisableTensorCoreNekoMuon = ReadFlag(
                 readEnvironment,
                 "NNTRAIN_DISABLE_TENSOR_CORE_NEKOMUON"),

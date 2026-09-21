@@ -13,6 +13,8 @@ partial class Tensor
         Tensor weight,
         Tensor bias)
     {
+        if (ExecutionDevice == TensorDevice.Arc)
+            return ArcLinear(weight, bias, false, TensorDType.BFloat16);
         ArgumentNullException.ThrowIfNull(weight);
         ArgumentNullException.ThrowIfNull(bias);
         if (ExecutionDevice != TensorDevice.Cuda
@@ -140,7 +142,8 @@ partial class Tensor
         Tensor bias,
         bool applyRelu,
         bool preferDirectBfp8InputGradient,
-        bool allowExclusiveBfp8ReluGradientMask)
+        bool allowExclusiveBfp8ReluGradientMask,
+        bool parameterGradients = true)
     {
         if (preferDirectBfp8InputGradient
             && (applyRelu || allowExclusiveBfp8ReluGradientMask))
@@ -164,6 +167,9 @@ partial class Tensor
         weight.CheckRank(2);
         bias.CheckRank(1);
 
+        Tensor[] parents = parameterGradients ? [this, weight, bias] : [this];
+        long frozenWeightVersion = weight.DataVersion;
+
         int inputWidth = _shape[^1];
         int outputWidth = weight._shape[0];
         if (weight._shape[1] != inputWidth
@@ -176,6 +182,11 @@ partial class Tensor
 
         int rows = Numel / inputWidth;
         int outputLength = checked(rows * outputWidth);
+        if (ExecutionDevice == TensorDevice.Arc)
+        {
+            if (!parameterGradients) throw new NotSupportedException("Arc frozen/LoRA linear is not supported yet.");
+            return ArcLinear(weight, bias, applyRelu);
+        }
         bool bfloat16MatrixOperands = DType == TensorDType.BFloat16
             && weight.DType == TensorDType.BFloat16
             && bias.DType == TensorDType.BFloat16;
@@ -225,7 +236,7 @@ partial class Tensor
                     mixedOutput,
                     CudaDeviceIndex,
                     cudaOutputShape,
-                    [this, weight, bias],
+                    parents,
                     TensorDType.BFloat16);
             }
             if (bfp8MatrixOperands)
@@ -258,7 +269,7 @@ partial class Tensor
                     bfp8Output,
                     CudaDeviceIndex,
                     cudaOutputShape,
-                    [this, weight, bias]);
+                    parents);
                 if (AutogradContext.IsRecordingEnabled)
                 {
                     string backwardOperation = CudaOperationProfiler.IsEnabled
@@ -267,23 +278,33 @@ partial class Tensor
                         : applyRelu ? "backward.linear_relu" : "backward.linear";
                     bfp8Result.Node.BackwardAction = () =>
                     {
-                        void Backward() => CudaBfp8Gemm.LinearBackward(
-                            this,
-                            weight,
-                            bias,
-                            bfp8Result,
-                            rows,
-                            inputWidth,
-                            outputWidth,
-                            applyRelu,
-                            preferDirectBfp8InputGradient,
-                            allowExclusiveBfp8ReluGradientMask);
+                        void Backward()
+                        {
+                            if (!parameterGradients)
+                            {
+                                BackwardFrozenLinear(
+                                    bfp8Result, weight, applyRelu, frozenWeightVersion);
+                                return;
+                            }
+                            CudaBfp8Gemm.LinearBackward(
+                                this,
+                                weight,
+                                bias,
+                                bfp8Result,
+                                rows,
+                                inputWidth,
+                                outputWidth,
+                                applyRelu,
+                                preferDirectBfp8InputGradient,
+                                allowExclusiveBfp8ReluGradientMask);
+                        }
                         if (CudaOperationProfiler.IsEnabled)
                             CudaOperationProfiler.Measure(backwardOperation, Backward);
                         else
                             Backward();
                     };
                 }
+                bfp8Result._cudaLinearBackwardIgnoresOutputValues = !applyRelu;
                 return bfp8Result;
             }
             if (bfloat16Compute)
@@ -311,7 +332,7 @@ partial class Tensor
                     bfloat16Output,
                     CudaDeviceIndex,
                     cudaOutputShape,
-                    [this, weight, bias],
+                    parents,
                     TensorDType.BFloat16);
                 if (AutogradContext.IsRecordingEnabled)
                 {
@@ -321,6 +342,7 @@ partial class Tensor
                         : applyRelu ? "backward.linear_relu" : "backward.linear";
                     bfloat16Result.Node.BackwardAction = () =>
                     {
+                        if (!parameterGradients) { BackwardFrozenLinear(bfloat16Result, weight, applyRelu, frozenWeightVersion); return; }
                         if (CudaOperationProfiler.IsEnabled)
                         {
                             CudaOperationProfiler.Measure(
@@ -376,7 +398,7 @@ partial class Tensor
                 outputBuffer,
                 CudaDeviceIndex,
                 cudaOutputShape,
-                [this, weight, bias]);
+                parents);
             if (AutogradContext.IsRecordingEnabled)
             {
                 string backwardOperation = CudaOperationProfiler.IsEnabled
@@ -385,6 +407,7 @@ partial class Tensor
                     : applyRelu ? "backward.linear_relu" : "backward.linear";
                 cudaResult.Node.BackwardAction = () =>
                 {
+                    if (!parameterGradients) { BackwardFrozenLinear(cudaResult, weight, applyRelu, frozenWeightVersion); return; }
                     if (CudaOperationProfiler.IsEnabled)
                     {
                         CudaOperationProfiler.Measure(
@@ -599,10 +622,11 @@ partial class Tensor
         int[] outputShape = (int[])_shape.Clone();
         outputShape[^1] = outputWidth;
         Tensor result = nativeOutput is not null
-            ? FromFloat16Result(nativeOutput, outputShape, [this, weight, bias])
-            : new Tensor(output!, outputShape, [this, weight, bias]);
+            ? FromFloat16Result(nativeOutput, outputShape, parents)
+            : new Tensor(output!, outputShape, parents);
         result.Node.BackwardAction = () =>
         {
+            if (!parameterGradients) { BackwardFrozenLinear(result, weight, applyRelu, frozenWeightVersion); return; }
             Half[]? nativeBackwardInput = null;
             Half[]? nativeBackwardWeight = null;
             Half[]? nativeBackwardOutput = null;

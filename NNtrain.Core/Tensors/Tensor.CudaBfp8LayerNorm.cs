@@ -95,8 +95,8 @@ internal static partial class TensorCudaKernels
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
         NativeCudaBuffer<ushort>? decodedInput = null;
         NativeCudaBuffer<ushort>? decodedBranch = null;
-        NativeCudaBuffer<ushort>? decodedGamma = null;
-        NativeCudaBuffer<ushort>? decodedBeta = null;
+        CudaBfp8BFloat16Lease? decodedGamma = null;
+        CudaBfp8BFloat16Lease? decodedBeta = null;
         NativeCudaBuffer<ushort>? decodedOutput = null;
         NativeCudaBuffer<float>? means = null;
         NativeCudaBuffer<float>? inverses = null;
@@ -150,10 +150,8 @@ internal static partial class TensorCudaKernels
                 decodedBranch = Tensor.RentCudaBFloat16Buffer(
                     deviceIndex, branch.Numel);
             }
-            decodedGamma = Tensor.RentCudaBFloat16Buffer(
-                deviceIndex, columns);
-            decodedBeta = Tensor.RentCudaBFloat16Buffer(
-                deviceIndex, columns);
+            decodedGamma = AcquireLayerNormParameter(gamma, deviceIndex);
+            decodedBeta = AcquireLayerNormParameter(beta, deviceIndex);
             decodedOutput = Tensor.RentCudaBFloat16Buffer(
                 deviceIndex, input.Numel);
             means = Tensor.RentCudaFloatBuffer(deviceIndex, rows);
@@ -174,17 +172,13 @@ internal static partial class TensorCudaKernels
                     deviceIndex,
                     stream);
             }
-            DecodeLayerNormOperand(
-                gamma, decodedGamma, deviceIndex, stream);
-            DecodeLayerNormOperand(
-                beta, decodedBeta, deviceIndex, stream);
 
             bool succeeded = branch is null
                 ? CudaLayerNorm.TryForwardBFloat16(
                     accelerator,
                     decodedInput,
-                    decodedGamma,
-                    decodedBeta,
+                    decodedGamma.Buffer,
+                    decodedBeta.Buffer,
                     decodedOutput,
                     means,
                     inverses,
@@ -198,8 +192,8 @@ internal static partial class TensorCudaKernels
                         decodedBranch
                             ?? throw new InvalidOperationException(
                                 "The fused LayerNorm branch decode is missing."),
-                        decodedGamma,
-                        decodedBeta,
+                        decodedGamma.Buffer,
+                        decodedBeta.Buffer,
                         decodedOutput,
                         means,
                         inverses,
@@ -215,8 +209,8 @@ internal static partial class TensorCudaKernels
                         decodedBranch
                             ?? throw new InvalidOperationException(
                                 "The fused LayerNorm branch decode is missing."),
-                        decodedGamma,
-                        decodedBeta,
+                        decodedGamma.Buffer,
+                        decodedBeta.Buffer,
                         decodedOutput,
                         means,
                         inverses,
@@ -247,9 +241,9 @@ internal static partial class TensorCudaKernels
             // every Transformer layer.
             Tensor.ReturnCudaBFloat16Buffer(accelerator, decodedOutput);
             decodedOutput = null;
-            Tensor.ReturnCudaBFloat16Buffer(accelerator, decodedBeta);
+            decodedBeta.Dispose();
             decodedBeta = null;
-            Tensor.ReturnCudaBFloat16Buffer(accelerator, decodedGamma);
+            decodedGamma.Dispose();
             decodedGamma = null;
             if (decodedBranch is not null)
             {
@@ -284,10 +278,10 @@ internal static partial class TensorCudaKernels
                 accelerator, means, ref cleanupFailures);
             TryReturnBfp8LayerNormBFloat16(
                 accelerator, decodedOutput, ref cleanupFailures);
-            TryReturnBfp8LayerNormBFloat16(
-                accelerator, decodedBeta, ref cleanupFailures);
-            TryReturnBfp8LayerNormBFloat16(
-                accelerator, decodedGamma, ref cleanupFailures);
+            if (decodedBeta is not null)
+                TryCleanupBfp8LayerNorm(decodedBeta.Dispose, ref cleanupFailures);
+            if (decodedGamma is not null)
+                TryCleanupBfp8LayerNorm(decodedGamma.Dispose, ref cleanupFailures);
             TryReturnBfp8LayerNormBFloat16(
                 accelerator, decodedBranch, ref cleanupFailures);
             TryReturnBfp8LayerNormBFloat16(
@@ -319,22 +313,19 @@ internal static partial class TensorCudaKernels
         NativeCudaDevice accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
         NativeCudaBuffer<ushort>? decodedInput = null;
-        NativeCudaBuffer<ushort>? decodedGamma = null;
+        CudaBfp8BFloat16Lease? decodedGamma = null;
         try
         {
             decodedInput = Tensor.RentCudaBFloat16Buffer(
                 deviceIndex, input.Numel);
-            decodedGamma = Tensor.RentCudaBFloat16Buffer(
-                deviceIndex, columns);
+            decodedGamma = AcquireLayerNormParameter(gamma, deviceIndex);
             nint stream = accelerator.DefaultStream;
             DecodeLayerNormOperand(
                 input, decodedInput, deviceIndex, stream);
-            DecodeLayerNormOperand(
-                gamma, decodedGamma, deviceIndex, stream);
             CudaLayerNorm.BackwardBFloat16(
                 accelerator,
                 decodedInput,
-                decodedGamma,
+                decodedGamma.Buffer,
                 context.Means,
                 context.Inverses,
                 output.EnsureCudaGradientBuffer(deviceIndex),
@@ -351,8 +342,7 @@ internal static partial class TensorCudaKernels
         {
             if (decodedGamma is not null)
             {
-                Tensor.ReturnCudaBFloat16Buffer(
-                    accelerator, decodedGamma);
+                decodedGamma.Dispose();
             }
             if (decodedInput is not null)
             {
@@ -393,7 +383,7 @@ internal static partial class TensorCudaKernels
             : branch.EnsureCudaGradientBuffer(deviceIndex);
         NativeCudaBuffer<ushort>? decodedResidual = null;
         NativeCudaBuffer<ushort>? decodedBranch = null;
-        NativeCudaBuffer<ushort>? decodedGamma = null;
+        CudaBfp8BFloat16Lease? decodedGamma = null;
         try
         {
             if (CanUseDirectBfp8FusedLayerNorm(
@@ -435,22 +425,19 @@ internal static partial class TensorCudaKernels
                 deviceIndex, residual.Numel);
             decodedBranch = Tensor.RentCudaBFloat16Buffer(
                 deviceIndex, branch.Numel);
-            decodedGamma = Tensor.RentCudaBFloat16Buffer(
-                deviceIndex, columns);
+            decodedGamma = AcquireLayerNormParameter(gamma, deviceIndex);
             nint stream = accelerator.DefaultStream;
             DecodeLayerNormOperand(
                 residual, decodedResidual, deviceIndex, stream);
             DecodeLayerNormOperand(
                 branch, decodedBranch, deviceIndex, stream);
-            DecodeLayerNormOperand(
-                gamma, decodedGamma, deviceIndex, stream);
             if (graphToken is { } token)
             {
                 CudaLayerNorm.FusedBackwardBFloat16Graph(
                     accelerator,
                     decodedResidual,
                     decodedBranch,
-                    decodedGamma,
+                    decodedGamma.Buffer,
                     context.Means,
                     context.Inverses,
                     output.EnsureCudaGradientBuffer(deviceIndex),
@@ -471,7 +458,7 @@ internal static partial class TensorCudaKernels
                     accelerator,
                     decodedResidual,
                     decodedBranch,
-                    decodedGamma,
+                    decodedGamma.Buffer,
                     context.Means,
                     context.Inverses,
                     output.EnsureCudaGradientBuffer(deviceIndex),
@@ -496,8 +483,7 @@ internal static partial class TensorCudaKernels
         {
             if (decodedGamma is not null)
             {
-                Tensor.ReturnCudaBFloat16Buffer(
-                    accelerator, decodedGamma);
+                decodedGamma.Dispose();
             }
             if (decodedBranch is not null)
             {
@@ -578,6 +564,27 @@ internal static partial class TensorCudaKernels
         => descriptor is not null
             && descriptor.Granularity == Bfp8ScaleGranularity.Block
             && descriptor.GetEffectiveBlockSize(length) == blockSize;
+
+    private static CudaBfp8BFloat16Lease AcquireLayerNormParameter(Tensor parameter, int deviceIndex)
+    {
+        // The existing versioned leaf cache refreshes once per optimizer
+        // publication, including one explicit refresh node during graph capture.
+        // Non-leaf affine operands still receive a temporary lease.
+        if (!CudaDispatchPolicy.Current.DisableBfp8LayerNormParameterCache)
+            return parameter.AcquireCudaBfp8BFloat16Buffer(deviceIndex);
+        var accelerator = ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);
+        var decoded = Tensor.RentCudaBFloat16Buffer(deviceIndex, parameter.Numel);
+        try
+        {
+            DecodeLayerNormOperand(parameter, decoded, deviceIndex, accelerator.DefaultStream);
+            return new CudaBfp8BFloat16Lease(decoded, accelerator);
+        }
+        catch
+        {
+            Tensor.ReturnCudaBFloat16Buffer(accelerator, decoded);
+            throw;
+        }
+    }
 
     private static void DecodeLayerNormOperand(
         Tensor tensor,

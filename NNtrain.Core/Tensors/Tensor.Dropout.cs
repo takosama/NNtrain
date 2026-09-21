@@ -21,6 +21,8 @@ partial class Tensor
         uint seed = NextDropoutSeed(random);
         float scale = 1f / (1f - probability);
         uint dropThreshold = (uint)(probability * (uint.MaxValue + 1d));
+        if (ExecutionDevice == TensorDevice.Arc)
+            return ArcDropout(null, seed, dropThreshold, scale);
         int columns = _shape[^1];
         int rows = Numel / columns;
         CudaGraphDropoutToken? graphToken =
@@ -244,6 +246,8 @@ partial class Tensor
         uint seed = NextDropoutSeed(random);
         float scale = 1f / (1f - probability);
         uint dropThreshold = (uint)(probability * (uint.MaxValue + 1d));
+        if (ExecutionDevice == TensorDevice.Arc)
+            return branch.ArcDropout(this, seed, dropThreshold, scale);
         int columns = _shape[^1];
         int rows = Numel / columns;
         CudaGraphDropoutToken? graphToken =

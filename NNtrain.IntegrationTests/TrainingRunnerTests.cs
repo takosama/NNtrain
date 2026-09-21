@@ -40,17 +40,4 @@ public sealed class TrainingRunnerTests
         Assert.NotEqual(first, TrainingRunner.CombineSeed(1234, 2, 0x31B7));
     }
 
-    [Theory]
-    [InlineData(1, 20, false)]
-    [InlineData(1, 10, true)]
-    [InlineData(10, 10, true)]
-    public void CheckpointBoundaryUsesTenths(
-        int completed,
-        int total,
-        bool expected)
-    {
-        Assert.Equal(
-            expected,
-            TrainingRunner.ShouldSaveCheckpoint(completed, total));
-    }
 }

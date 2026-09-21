@@ -71,6 +71,7 @@ internal static class CudaBfp8ForgetMemory
         int matrixSize = checked(keyWidth * valueWidth);
         int outputLength = checked(batch * sequence * valueWidth);
         int projectedLength = checked(batch * sequence * projectionWidth);
+        bool chunked = useDrn && CudaDrnChunk.CanUse(batch, sequence, keyWidth, valueWidth);
 
         NativeCudaBuffer<ushort>? decodedProjection = null;
         NativeCudaBuffer<ushort>? decodedOutput = null;
@@ -86,7 +87,8 @@ internal static class CudaBfp8ForgetMemory
                 deviceIndex,
                 outputLength);
             states = accelerator.Allocate1D<float>(
-                checked(batch * sequence * matrixSize),
+                chunked ? CudaDrnChunk.CheckpointLength(batch, sequence, keyWidth, valueWidth)
+                    : checked(batch * sequence * matrixSize),
                 CudaMemoryKind.Transient);
             state = accelerator.Allocate1D<float>(
                 checked(batch * matrixSize),
@@ -108,7 +110,14 @@ internal static class CudaBfp8ForgetMemory
                 stream);
             state.MemSetToZero();
 
-            bool tensorCore = LaunchForward(
+            bool tensorCore;
+            if (chunked)
+            {
+                CudaDrnChunk.Forward(accelerator, decodedProjection, decodedOutput, states, state,
+                    batch, sequence, projectionWidth, keyWidth, valueWidth, retentionFloor);
+                tensorCore = true;
+            }
+            else tensorCore = LaunchForward(
                 accelerator,
                 decodedProjection,
                 decodedOutput,
@@ -146,12 +155,24 @@ internal static class CudaBfp8ForgetMemory
             state = null;
             completedState.Dispose();
 
+            // DRN backward can reproduce the FP32 history exactly from the
+            // immutable decoded projection. Keep only that small projection,
+            // not a B*T*K*V history for every layer. The same ordered lane
+            // fences/reuses this scratch (including during Graph capture).
+            if (!chunked && useDrn && !CudaDispatchPolicy.Current.DisableDrnStateRecomputation)
+            {
+                NativeCudaBuffer<float> completedStates = states;
+                states = null;
+                completedStates.Dispose();
+            }
+
             var context = new CudaBfp8ForgetMemoryResidentContext(
                 deviceIndex,
                 accelerator,
                 decodedProjection,
                 states,
-                encodedOutput);
+                encodedOutput,
+                chunked);
             decodedProjection = null;
             states = null;
             encodedOutput = null;
@@ -205,6 +226,24 @@ internal static class CudaBfp8ForgetMemory
         int deviceIndex = forward.DeviceIndex;
         NativeCudaDevice accelerator = forward.Accelerator;
         int matrixSize = checked(keyWidth * valueWidth);
+        if (forward.ChunkStates is { } checkpoints)
+        {
+            using var boundaryGradient = accelerator.Allocate1D<float>(
+                checked(batch * matrixSize), CudaMemoryKind.Transient);
+            using var adjoints = accelerator.Allocate1D<float>(
+                CudaDrnChunk.AdjointLength(batch, sequence, keyWidth, valueWidth), CudaMemoryKind.Transient);
+            boundaryGradient.MemSetToZero();
+            CudaDrnChunk.Backward(accelerator, forward.DecodedProjection,
+                projected.EnsureCudaGradientBuffer(deviceIndex), output.EnsureCudaGradientBuffer(deviceIndex),
+                checkpoints, boundaryGradient, adjoints, batch, sequence, projectionWidth, keyWidth, valueWidth, retentionFloor);
+            if (!TensorExecutionContext.TryGetCudaStreamLane(deviceIndex, out _)) accelerator.Synchronize();
+            projected.MarkCudaGradientMutated(deviceIndex);
+            return;
+        }
+        using NativeCudaBuffer<float>? recomputedStates = forward.States is null
+            ? RecomputeStates(forward, batch, sequence, projectionWidth,
+                keyWidth, valueWidth, retentionFloor, useV3, useDrn)
+            : null;
         using NativeCudaBuffer<float> stateGradient =
             accelerator.Allocate1D<float>(
                 checked(batch * matrixSize),
@@ -216,13 +255,18 @@ internal static class CudaBfp8ForgetMemory
         stateGradient.MemSetToZero();
         previousGradient.MemSetToZero();
 
+        int preparedLength = useDrn
+            ? CudaForgetMemoryNative.PreparedBackwardScratchLength(batch, sequence, keyWidth, valueWidth) : 0;
+        using NativeCudaBuffer<float>? prepared = preparedLength > 0
+            ? accelerator.Allocate1D<float>(preparedLength, CudaMemoryKind.Transient) : null;
+
         CudaForgetMemoryNative.Backward(
             accelerator,
             projected: 0,
             forward.DecodedProjection.NativePtr,
             projected.EnsureCudaGradientBuffer(deviceIndex).NativePtr,
             output.EnsureCudaGradientBuffer(deviceIndex).NativePtr,
-            forward.States.NativePtr,
+            (forward.States ?? recomputedStates!).NativePtr,
             stateGradient.NativePtr,
             previousGradient.NativePtr,
             batch,
@@ -232,7 +276,7 @@ internal static class CudaBfp8ForgetMemory
             valueWidth,
             retentionFloor,
             useDrn ? 2 : useV3 ? 1 : 0,
-            bfloat16: true);
+            bfloat16: true, prepared: prepared?.NativePtr ?? 0);
         if (!TensorExecutionContext.TryGetCudaStreamLane(
                 deviceIndex,
                 out _))
@@ -240,6 +284,57 @@ internal static class CudaBfp8ForgetMemory
             accelerator.Synchronize();
         }
         projected.MarkCudaGradientMutated(deviceIndex);
+    }
+
+    internal static NativeCudaBuffer<float> RecomputeStates(
+        CudaBfp8ForgetMemoryResidentContext forward, int batch, int sequence,
+        int projectionWidth, int keyWidth, int valueWidth, float retentionFloor,
+        bool useV3, bool useDrn)
+    {
+        NativeCudaDevice accelerator = forward.Accelerator;
+        int matrixSize = checked(keyWidth * valueWidth);
+        NativeCudaBuffer<float>? history = null;
+        NativeCudaBuffer<float>? state = null;
+        NativeCudaBuffer<ushort>? discardedOutput = null;
+        try
+        {
+            history = accelerator.Allocate1D<float>(
+                checked(batch * sequence * matrixSize), CudaMemoryKind.Transient);
+            state = accelerator.Allocate1D<float>(
+                checked(batch * matrixSize), CudaMemoryKind.Transient);
+            discardedOutput = Tensor.RentCudaBFloat16Buffer(
+                forward.DeviceIndex, checked(batch * sequence * valueWidth));
+            state.MemSetToZero();
+            // No RNG, parameter reads, or quantization: exactly the same FP32
+            // recurrence and BF16 Tensor Core operands as the original forward.
+            using (CudaDispatchPolicy.Push(forward.DispatchPolicy))
+                LaunchForward(accelerator, forward.DecodedProjection, discardedOutput,
+                    history, state, batch, sequence, projectionWidth, keyWidth,
+                    valueWidth, retentionFloor, useV3, useDrn);
+            if (!TensorExecutionContext.TryGetCudaStreamLane(forward.DeviceIndex, out _))
+                accelerator.Synchronize();
+            List<Exception>? cleanupFailures = null;
+            NativeCudaBuffer<float> completedState = state;
+            state = null;
+            TryCleanup(completedState, ref cleanupFailures);
+            NativeCudaBuffer<ushort> completedOutput = discardedOutput;
+            discardedOutput = null;
+            TryReturnBFloat16(accelerator, completedOutput, ref cleanupFailures);
+            if (cleanupFailures is not null)
+                throw new AggregateException("DRN recomputation scratch cleanup failed.", cleanupFailures);
+            NativeCudaBuffer<float> result = history;
+            history = null;
+            return result;
+        }
+        catch (Exception failure)
+        {
+            List<Exception>? cleanupFailures = null;
+            TryCleanup(history, ref cleanupFailures);
+            TryCleanup(state, ref cleanupFailures);
+            TryReturnBFloat16(accelerator, discardedOutput, ref cleanupFailures);
+            RethrowWithCleanup(failure, cleanupFailures, "DRN recomputation and rollback failed.");
+            throw;
+        }
     }
 
     /// <summary>
@@ -581,20 +676,25 @@ internal sealed class CudaBfp8ForgetMemoryResidentContext : IDisposable
         int deviceIndex,
         NativeCudaDevice accelerator,
         NativeCudaBuffer<ushort> decodedProjection,
-        NativeCudaBuffer<float> states,
-        CudaBfp8OwnedBuffers encodedOutput)
+        NativeCudaBuffer<float>? states,
+        CudaBfp8OwnedBuffers encodedOutput,
+        bool chunked = false)
     {
         DeviceIndex = deviceIndex;
         Accelerator = accelerator;
         DecodedProjection = decodedProjection;
-        States = states;
+        States = chunked ? null : states;
+        ChunkStates = chunked ? states : null;
+        DispatchPolicy = CudaDispatchPolicy.Current;
         _encodedOutput = encodedOutput;
     }
 
     internal int DeviceIndex { get; }
     internal NativeCudaDevice Accelerator { get; }
     internal NativeCudaBuffer<ushort> DecodedProjection { get; }
-    internal NativeCudaBuffer<float> States { get; }
+    internal NativeCudaBuffer<float>? States { get; }
+    internal NativeCudaBuffer<float>? ChunkStates { get; }
+    internal CudaDispatchPolicy DispatchPolicy { get; }
 
     internal CudaBfp8OwnedBuffers DetachEncodedOutput()
     {
@@ -626,6 +726,7 @@ internal sealed class CudaBfp8ForgetMemoryResidentContext : IDisposable
             (failures ??= []).Add(exception);
         }
         TryCleanup(States, ref failures);
+        TryCleanup(ChunkStates, ref failures);
         GC.SuppressFinalize(this);
 
         if (failures is [Exception failure])

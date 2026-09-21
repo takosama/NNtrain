@@ -54,7 +54,7 @@ public sealed class WikiParquetCorpusTests
     }
 
     [Fact]
-    public async Task SeededReaderUsesGlobalOrderAndDisposesAllReaders()
+    public async Task SeededReaderPreservesGlobalOrderAndDisposesAllReaders()
     {
         string directory = Path.Combine(
             Path.GetTempPath(),
@@ -62,23 +62,75 @@ public sealed class WikiParquetCorpusTests
         Directory.CreateDirectory(directory);
         try
         {
-            await WriteShard(
-                Path.Combine(directory, "train-00000.parquet"),
-                ["a0", "a1"]);
-            await WriteShard(
-                Path.Combine(directory, "train-00001.parquet"),
-                ["b0", "b1"]);
-            await WriteShard(
-                Path.Combine(directory, "train-00002.parquet"),
-                ["c0", "c1"]);
+            int shardCount = WikiParquetCorpus.ShuffledReaderCacheCapacity * 2
+                + 3;
+            for (int index = 0; index < shardCount; index++)
+            {
+                await WriteShard(
+                    Path.Combine(directory, $"train-{index:D5}.parquet"),
+                    [$"doc-{index:D5}"]);
+            }
 
             string[] first = await ReadAll(directory, 31415);
             string[] repeated = await ReadAll(directory, 31415);
 
             Assert.Equal(first, repeated);
+            string[] files = WikiParquetCorpus.OrderFiles(
+                Directory.GetFiles(directory, "*.parquet"), 31415);
+            string[] expected = WikiParquetCorpus.OrderRowGroups(
+                Enumerable.Repeat(1, shardCount).ToArray(), 31415)
+                .Select(group => "doc-" + Path.GetFileNameWithoutExtension(
+                    files[group.FileIndex])[6..])
+                .ToArray();
+            Assert.Equal(expected, first);
             Assert.Equal(
-                new[] { "a0", "a1", "b0", "b1", "c0", "c1" },
+                Enumerable.Range(0, shardCount)
+                    .Select(index => $"doc-{index:D5}"),
                 first.Order(StringComparer.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SeededReaderBoundsOpenReadersAndClosesOnEarlyExit()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            $"NNtrain.WikiParquetBounded-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            int shardCount = WikiParquetCorpus.ShuffledReaderCacheCapacity * 2 + 1;
+            string[] paths = Enumerable.Range(0, shardCount)
+                .Select(index => Path.Combine(
+                    directory,
+                    $"train-{index:D5}.parquet"))
+                .ToArray();
+            const int Seed = 27182;
+            foreach (string path in paths)
+            {
+                await WriteShard(
+                    path,
+                    [Path.GetFileNameWithoutExtension(path)]);
+            }
+
+            var values = new List<string>();
+            await foreach (string value in WikiParquetCorpus.ReadTextsAsync(
+                directory,
+                maxDocuments: shardCount - 1,
+                cancellationToken: TestContext.Current.CancellationToken,
+                shuffleSeed: Seed))
+            {
+                values.Add(value);
+                Assert.InRange(CountLockedFiles(paths), 1,
+                    WikiParquetCorpus.ShuffledReaderCacheCapacity);
+            }
+
+            Assert.Equal(shardCount - 1, values.Count);
+            Assert.Equal(0, CountLockedFiles(paths));
         }
         finally
         {
@@ -117,15 +169,36 @@ public sealed class WikiParquetCorpusTests
         }
     }
 
-    private static async Task WriteShard(string path, string[] values)
+    private static async Task WriteShard(
+        string path,
+        string[] values,
+        string fieldName = "text")
     {
-        var field = new DataField<string>("text");
+        var field = new DataField<string>(fieldName);
         var schema = new ParquetSchema(field);
         await using Stream stream = File.Create(path);
         await using ParquetWriter writer =
             await ParquetWriter.CreateAsync(schema, stream);
         using ParquetRowGroupWriter rowGroup = writer.CreateRowGroup();
         await rowGroup.WriteAsync(field, values);
+    }
+
+    private static int CountLockedFiles(IEnumerable<string> paths)
+    {
+        int locked = 0;
+        foreach (string path in paths)
+        {
+            try
+            {
+                using FileStream stream = File.Open(
+                    path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException)
+            {
+                locked++;
+            }
+        }
+        return locked;
     }
 
     private static async Task<string[]> ReadAll(

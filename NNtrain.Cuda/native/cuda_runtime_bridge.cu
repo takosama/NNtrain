@@ -16,7 +16,7 @@
 
 namespace {
 constexpr std::uint32_t nntrain_abi_major = 1;
-constexpr std::uint32_t nntrain_abi_minor = 31;
+constexpr std::uint32_t nntrain_abi_minor = 35;
 constexpr std::uint32_t nntrain_abi_version_value =
     (nntrain_abi_major << 16) | nntrain_abi_minor;
 
@@ -68,6 +68,7 @@ enum nntrain_native_operation : std::uint32_t {
     nntrain_operation_graph_add_dropout_forward = 84,
     nntrain_operation_graph_dropout_backward = 85,
     nntrain_operation_graph_add_dropout_backward = 86,
+    nntrain_operation_bfp8_elementwise = 106,
 };
 
 struct nntrain_native_error_info {
@@ -1245,6 +1246,60 @@ __device__ __forceinline__ float graph_dropout_multiplier(
     return random >= threshold ? keep_scale : 0.0f;
 }
 
+// Preserve every BF16 rounding boundary of decode -> op -> encode, while
+// keeping the intermediates in registers. One warp owns one scale block.
+template <int Block>
+__global__ void bfp8_elementwise_kernel(const signed char* left, const float* ls,
+    const signed char* right, const float* rs, signed char* output, float* os,
+    int length, int lb, int rb, int operation, unsigned int seed,
+    unsigned int threshold, float keep_scale,
+    const unsigned long long* counter, unsigned long long operation_seed) {
+    const int lane = threadIdx.x & 31;
+    const int block = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
+    const int start = block * Block;
+    if (start >= length) return;
+    float values[Block / 32];
+    float maximum = 0.f;
+    #pragma unroll
+    for (int item = 0; item < Block / 32; ++item) {
+        const int i = start + lane + item * 32;
+        float value = 0.f;
+        if (i < length) {
+            const float l = __bfloat162float(__float2bfloat16_rn(
+                static_cast<float>(left[i]) * ls[lb == Block ? block : i / lb]));
+            float multiplier = 1.f;
+            if (operation != 2) {
+                if (counter != nullptr) {
+                    multiplier = graph_dropout_multiplier(counter, operation_seed, i, threshold, keep_scale);
+                } else {
+                    unsigned int bits = seed + 0x9E3779B9u * static_cast<unsigned int>(i + 1);
+                    bits ^= bits >> 16; bits *= 0x7FEB352Du;
+                    bits ^= bits >> 15; bits *= 0x846CA68Bu; bits ^= bits >> 16;
+                    multiplier = bits < threshold ? 0.f : keep_scale;
+                }
+            }
+            value = l * multiplier;
+            if (operation != 0) {
+                const float r = __bfloat162float(__float2bfloat16_rn(
+                    static_cast<float>(right[i]) * rs[rb == Block ? block : i / rb]));
+                value = l + r * multiplier;
+            }
+            value = __bfloat162float(__float2bfloat16_rn(value));
+        }
+        values[item] = value;
+        maximum = fmaxf(maximum, fabsf(value));
+    }
+    for (int offset = 16; offset > 0; offset >>= 1)
+        maximum = fmaxf(maximum, __shfl_down_sync(0xffffffffu, maximum, offset));
+    const float scale = bfp8_scale_from_maximum(__shfl_sync(0xffffffffu, maximum, 0));
+    if (lane == 0) os[block] = scale;
+    #pragma unroll
+    for (int item = 0; item < Block / 32; ++item) {
+        const int i = start + lane + item * 32;
+        if (i < length) output[i] = static_cast<signed char>(bfp8_quantized_code(values[item], scale));
+    }
+}
+
 __global__ void graph_dropout_forward_float_kernel(
     const unsigned long long* step_counter,
     unsigned long long operation_seed,
@@ -2060,6 +2115,29 @@ NNTRAIN_EXPORT int nntrain_cuda_bfp8_quantize_bf16(
         nntrain_operation_bfp8_quantize_bf16,
         device,
         static_cast<int>(cudaPeekAtLastError()));
+}
+
+NNTRAIN_EXPORT int nntrain_cuda_bfp8_elementwise(
+    int device, const signed char* left, const float* ls,
+    const signed char* right, const float* rs, signed char* output, float* os,
+    int length, int lb, int rb, int ob, int operation, unsigned int seed,
+    unsigned int threshold, float keep_scale,
+    const unsigned long long* counter, unsigned long long operation_seed, void* stream) {
+    if (!left || !ls || !output || !os || length <= 0 || lb <= 0 || rb <= 0
+        || (ob != 32 && ob != 128) || operation < 0 || operation > 2
+        || (operation != 0 && (!right || !rs)))
+        return complete(nntrain_operation_bfp8_elementwise, device, static_cast<int>(cudaErrorInvalidValue));
+    int status = select_device(device);
+    if (status != cudaSuccess) return complete(nntrain_operation_bfp8_elementwise, device, status);
+    const int blocks = static_cast<int>((static_cast<long long>(length) + ob * 8 - 1) / (ob * 8));
+    cudaStream_t s = reinterpret_cast<cudaStream_t>(stream);
+    if (ob == 128)
+        bfp8_elementwise_kernel<128><<<blocks, 256, 0, s>>>(left, ls, right, rs,
+            output, os, length, lb, rb, operation, seed, threshold, keep_scale, counter, operation_seed);
+    else
+        bfp8_elementwise_kernel<32><<<blocks, 256, 0, s>>>(left, ls, right, rs,
+            output, os, length, lb, rb, operation, seed, threshold, keep_scale, counter, operation_seed);
+    return complete(nntrain_operation_bfp8_elementwise, device, static_cast<int>(cudaPeekAtLastError()));
 }
 
 NNTRAIN_EXPORT int nntrain_cuda_bfp8_requantize_i32(

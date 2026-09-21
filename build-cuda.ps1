@@ -1,3 +1,5 @@
+param([string]$OutputDirectory)
+
 $ErrorActionPreference = 'Stop'
 
 $cudaRoot = [Environment]::GetEnvironmentVariable('CUDA_PATH', 'Machine')
@@ -22,6 +24,9 @@ $nativeProjectRoot = Join-Path $PSScriptRoot 'NNtrain.Cuda'
 $nativeSourceRoot = Join-Path $nativeProjectRoot 'native'
 $nativeRuntimeRoot = Join-Path $nativeProjectRoot `
     'runtimes\win-x64\native'
+if ($OutputDirectory) {
+    $nativeRuntimeRoot = [System.IO.Path]::GetFullPath($OutputDirectory)
+}
 $sources = @(
     (Join-Path $nativeSourceRoot 'bfp8_embedding.cu'),
     (Join-Path $nativeSourceRoot 'classification_accuracy.cu'),
@@ -61,7 +66,16 @@ if ($LASTEXITCODE -ne 0) {
     throw "dumpbin failed with exit code $LASTEXITCODE"
 }
 $requiredGatewayExports = @(
+    'nntrain_drn_chunk_forward_with_floor',
+    'nntrain_drn_chunk_parallel_forward_with_floor',
+    'nntrain_drn_chunk_backward_with_floor',
+    'nntrain_drn_backward_prepared_with_floor',
+    'nntrain_drn_chunk_forward',
+    'nntrain_drn_chunk_parallel_forward',
+    'nntrain_drn_chunk_backward',
+    'nntrain_drn_backward_prepared',
     'nntrain_abi_version',
+    'nntrain_cuda_bfp8_elementwise',
     'nntrain_tensor_accumulate_scalar',
     'nntrain_tensor_linear_encode_bfp8_relu',
     'nntrain_tensor_linear_mask_bfp8_relu_bf16_gradient_in_place',

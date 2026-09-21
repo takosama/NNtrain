@@ -9,6 +9,8 @@ namespace NNtrain;
 /// </summary>
 public static class WikiParquetCorpus
 {
+    internal const int ShuffledReaderCacheCapacity = 8;
+
     public static async Task<long> CountRowsAsync(
         string directoryPath,
         CancellationToken cancellationToken = default)
@@ -98,28 +100,12 @@ public static class WikiParquetCorpus
         foreach (string file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await using ParquetReader reader = await ParquetReader.CreateAsync(
-                file,
-                cancellationToken: cancellationToken);
-            DataField[] fields = reader.Schema.GetDataFields();
-            DataField? field = fields.FirstOrDefault(candidate =>
-                string.Equals(
-                    candidate.Name,
+            (ParquetReader openedReader, DataField field) =
+                await OpenTextReaderAsync(
+                    file,
                     textColumn,
-                    StringComparison.OrdinalIgnoreCase));
-            if (field is null)
-            {
-                throw new InvalidDataException(
-                    $"Parquet file '{file}' does not contain text column " +
-                    $"'{textColumn}'. Available columns: " +
-                    string.Join(", ", fields.Select(candidate => candidate.Name)));
-            }
-            if (field.ClrType != typeof(string))
-            {
-                throw new InvalidDataException(
-                    $"Parquet column '{textColumn}' in '{file}' has CLR type " +
-                    $"'{field.ClrType.Name}', not String.");
-            }
+                    cancellationToken);
+            await using ParquetReader reader = openedReader;
 
             for (int group = 0; group < reader.RowGroupCount; group++)
             {
@@ -181,9 +167,8 @@ public static class WikiParquetCorpus
     }
 
     /// <summary>
-    /// Builds a global row-group permutation. Wikipedia shards in the current
-    /// corpus contain small row groups, so this mixes long-article and
-    /// short-article shards while only materializing one row group at a time.
+    /// Preserves the original global permutation for checkpoint cursor replay.
+    /// Only compact locations are retained, not shard readers or metadata.
     /// </summary>
     internal static RowGroupLocation[] OrderRowGroups(
         IReadOnlyList<int> groupCounts,
@@ -192,22 +177,23 @@ public static class WikiParquetCorpus
         ArgumentNullException.ThrowIfNull(groupCounts);
         if (groupCounts.Any(count => count < 0))
             throw new ArgumentOutOfRangeException(nameof(groupCounts));
-        var groups = new List<RowGroupLocation>(groupCounts.Sum());
+        var groups = new RowGroupLocation[groupCounts.Sum()];
+        int offset = 0;
         for (int fileIndex = 0; fileIndex < groupCounts.Count; fileIndex++)
         {
             int count = groupCounts[fileIndex];
             for (int groupIndex = 0; groupIndex < count; groupIndex++)
-                groups.Add(new RowGroupLocation(fileIndex, groupIndex));
+                groups[offset++] = new RowGroupLocation(fileIndex, groupIndex);
         }
 
         var random = new Random(shuffleSeed);
-        for (int index = groups.Count - 1; index > 0; index--)
+        for (int index = groups.Length - 1; index > 0; index--)
         {
             int swapIndex = random.Next(index + 1);
             (groups[index], groups[swapIndex]) =
                 (groups[swapIndex], groups[index]);
         }
-        return groups.ToArray();
+        return groups;
     }
 
     private static async IAsyncEnumerable<string>
@@ -218,81 +204,119 @@ public static class WikiParquetCorpus
             int shuffleSeed,
             [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var readers = new List<(ParquetReader Reader, DataField Field)>(
-            files.Length);
+        // Read metadata one shard at a time. Keep the historical permutation:
+        // changing to windowed shuffle would silently invalidate resume cursors.
+        var groupCounts = new int[files.Length];
+        for (int index = 0; index < files.Length; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            (ParquetReader reader, _) = await OpenTextReaderAsync(
+                files[index], textColumn, cancellationToken);
+            await using (reader)
+                groupCounts[index] = reader.RowGroupCount;
+        }
+
+        RowGroupLocation[] groups = OrderRowGroups(groupCounts, shuffleSeed);
+        var readers = new Dictionary<int, (ParquetReader Reader, DataField Field)>();
+        var recency = new LinkedList<int>();
+        int emitted = 0;
         try
         {
-            foreach (string file in files)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                ParquetReader reader = await ParquetReader.CreateAsync(
-                    file,
-                    cancellationToken: cancellationToken);
-                DataField[] fields = reader.Schema.GetDataFields();
-                DataField? field = fields.FirstOrDefault(candidate =>
-                    string.Equals(
-                        candidate.Name,
-                        textColumn,
-                        StringComparison.OrdinalIgnoreCase));
-                if (field is null)
-                {
-                    await reader.DisposeAsync();
-                    throw new InvalidDataException(
-                        $"Parquet file '{file}' does not contain text column " +
-                        $"'{textColumn}'. Available columns: " +
-                        string.Join(", ", fields.Select(candidate => candidate.Name)));
-                }
-                if (field.ClrType != typeof(string))
-                {
-                    await reader.DisposeAsync();
-                    throw new InvalidDataException(
-                        $"Parquet column '{textColumn}' in '{file}' has CLR " +
-                        $"type '{field.ClrType.Name}', not String.");
-                }
-                readers.Add((reader, field));
-            }
-
-            RowGroupLocation[] groups = OrderRowGroups(
-                readers.Select(item => item.Reader.RowGroupCount).ToArray(),
-                shuffleSeed);
-            int emitted = 0;
             foreach (RowGroupLocation location in groups)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                (ParquetReader reader, DataField field) =
-                    readers[location.FileIndex];
-                using ParquetRowGroupReader rowGroup =
-                    reader.OpenRowGroupReader(location.GroupIndex);
-                if (rowGroup.RowCount > int.MaxValue)
+                if (!readers.TryGetValue(location.FileIndex, out var entry))
                 {
-                    throw new InvalidDataException(
-                        $"Parquet row group {location.GroupIndex} in " +
-                        $"'{files[location.FileIndex]}' is too large.");
-                }
-
-                var values = new string?[(int)rowGroup.RowCount];
-                await rowGroup.ReadAsync(
-                    field,
-                    values,
-                    cancellationToken: cancellationToken);
-                foreach (string? value in values)
-                {
-                    if (string.IsNullOrEmpty(value))
-                        continue;
-                    yield return value;
-                    emitted++;
-                    if (maxDocuments.HasValue
-                        && emitted >= maxDocuments.Value)
+                    if (readers.Count == ShuffledReaderCacheCapacity)
                     {
-                        yield break;
+                        int evicted = recency.First!.Value;
+                        var old = readers[evicted];
+                        readers.Remove(evicted);
+                        recency.RemoveFirst();
+                        await old.Reader.DisposeAsync();
+                    }
+                    entry = await OpenTextReaderAsync(
+                        files[location.FileIndex], textColumn, cancellationToken);
+                    readers.Add(location.FileIndex, entry);
+                }
+                recency.Remove(location.FileIndex);
+                recency.AddLast(location.FileIndex);
+                {
+                    (ParquetReader reader, DataField field) = entry;
+                    using ParquetRowGroupReader rowGroup =
+                        reader.OpenRowGroupReader(location.GroupIndex);
+                    if (rowGroup.RowCount > int.MaxValue)
+                    {
+                        throw new InvalidDataException(
+                            $"Parquet row group {location.GroupIndex} in " +
+                            $"'{files[location.FileIndex]}' is too large.");
+                    }
+
+                    var values = new string?[(int)rowGroup.RowCount];
+                    await rowGroup.ReadAsync(
+                        field,
+                        values,
+                        cancellationToken: cancellationToken);
+                    foreach (string? value in values)
+                    {
+                        if (string.IsNullOrEmpty(value))
+                            continue;
+                        yield return value;
+                        emitted++;
+                        if (maxDocuments.HasValue
+                            && emitted >= maxDocuments.Value)
+                        {
+                            yield break;
+                        }
                     }
                 }
             }
         }
         finally
         {
-            foreach ((ParquetReader reader, _) in readers)
-                await reader.DisposeAsync();
+            // Start every disposal even if another reader fails to close.
+            await Task.WhenAll(readers.Values.Select(async entry =>
+                await entry.Reader.DisposeAsync()));
+        }
+    }
+
+    private static async Task<(ParquetReader Reader, DataField Field)>
+        OpenTextReaderAsync(
+            string file,
+            string textColumn,
+            CancellationToken cancellationToken)
+    {
+        ParquetReader reader = await ParquetReader.CreateAsync(
+            file,
+            cancellationToken: cancellationToken);
+        try
+        {
+            DataField[] fields = reader.Schema.GetDataFields();
+            DataField? field = fields.FirstOrDefault(candidate =>
+                string.Equals(
+                    candidate.Name,
+                    textColumn,
+                    StringComparison.OrdinalIgnoreCase));
+            if (field is null)
+            {
+                throw new InvalidDataException(
+                    $"Parquet file '{file}' does not contain text column " +
+                    $"'{textColumn}'. Available columns: " +
+                    string.Join(", ", fields.Select(
+                        candidate => candidate.Name)));
+            }
+            if (field.ClrType != typeof(string))
+            {
+                throw new InvalidDataException(
+                    $"Parquet column '{textColumn}' in '{file}' has CLR " +
+                    $"type '{field.ClrType.Name}', not String.");
+            }
+            return (reader, field);
+        }
+        catch
+        {
+            await reader.DisposeAsync();
+            throw;
         }
     }
 

@@ -277,13 +277,16 @@ internal static partial class CudaOptimizerKernels
     {
         NekoMuonBFloat16ResidentState.NekoBuffers buffers =
             state.GetOrCreate(deviceIndex);
-        float confidence;
-        float depth;
-        if (deviceOnlyFixedFive)
-        {
-            confidence = previousConfidence;
-            depth = 5f;
-            CudaOptimizerNative.NekoInitializeBFloat16FromDeviceStats(
+        // Confidence and normalization are device-owned for every policy,
+        // including the steps on which Newton-Schulz is not scheduled.
+        bool adaptive = !deviceOnlyFixedFive && !forceFullNewtonSchulz
+            && depthMode != NekoMuonNewtonSchulzDepthMode.Fixed;
+        float depth = !runNewtonSchulz ? 0f
+            : deviceOnlyFixedFive ? 5f
+            : forceFullNewtonSchulz || adaptive ? maxNewtonSchulzSteps
+            : NekoMuon.ResolveNewtonSchulzDepth(maxNewtonSchulzSteps,
+                depthMode, configuredDepth, previousConfidence, true);
+        CudaOptimizerNative.NekoInitializeBFloat16FromDeviceStats(
                 deviceIndex,
                 (nesterov ? buffers.Slow : buffers.Fast).NativePtr,
                 scratch.X.NativePtr,
@@ -295,33 +298,6 @@ internal static partial class CudaOptimizerKernels
                 buffers.Stats.NativePtr,
                 epsilon,
                 finiteStatus.NativePtr);
-        }
-        else
-        {
-            float[] stats = buffers.StatsHost;
-            confidence = CalculateNekoMuonConfidence(
-                stats, epsilon, previousConfidence, rho);
-            depth = forceFullNewtonSchulz && runNewtonSchulz
-                ? maxNewtonSchulzSteps
-                : NekoMuon.ResolveNewtonSchulzDepth(
-                    maxNewtonSchulzSteps,
-                    depthMode,
-                    configuredDepth,
-                    confidence,
-                    runNewtonSchulz);
-            float inverseNorm =
-                1f / ((float)Math.Sqrt(stats[1]) + epsilon);
-            CudaOptimizerNative.NekoInitializeBFloat16(
-                deviceIndex,
-                buffers.Fast.NativePtr,
-                scratch.X.NativePtr,
-                parameter.Numel,
-                originalRows,
-                originalColumns,
-                originalRows > originalColumns,
-                1f / fastCorrection,
-                inverseNorm);
-        }
 
         int rows = Math.Min(originalRows, originalColumns);
         int columns = Math.Max(originalRows, originalColumns);
@@ -329,6 +305,9 @@ internal static partial class CudaOptimizerKernels
         float fraction = depth - wholeSteps;
         NativeCudaBuffer<float> x = scratch.X;
         NativeCudaBuffer<float> next = scratch.Next;
+        NativeCudaBuffer<nint>? confidencePointers = adaptive && runNewtonSchulz
+            ? scratch.GetAdaptiveConfidencePointers([buffers.Confidence.NativePtr])
+            : null;
         for (int step = 0; step < wholeSteps; step++)
         {
             NekoMuonNewtonSchulzResident(
@@ -344,7 +323,17 @@ internal static partial class CudaOptimizerKernels
                 coefficientB,
                 coefficientC,
                 scratch.UseBFloat16TensorCores);
-            (x, next) = (next, x);
+            if (adaptive)
+            {
+                CudaOptimizerNative.NekoAdaptiveAcceptBatched(deviceIndex,
+                    x.NativePtr, next.NativePtr, confidencePointers!.NativePtr,
+                    parameter.Numel, 1, step, maxNewtonSchulzSteps,
+                    depthMode, configuredDepth);
+            }
+            else
+            {
+                (x, next) = (next, x);
+            }
         }
         if (fraction > 0f)
         {
@@ -390,6 +379,6 @@ internal static partial class CudaOptimizerKernels
             finalScale,
             weightDecay,
             applyWeightDecay);
-        return confidence;
+        return previousConfidence; // Captured explicitly from device when requested.
     }
 }

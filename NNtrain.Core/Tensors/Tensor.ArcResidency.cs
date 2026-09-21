@@ -1,0 +1,230 @@
+using NNtrain.Arc;
+using NNtrain.Runtime.Execution;
+using static NNtrain.Arc.ArcExecutionLane;
+
+namespace NNtrain;
+
+partial class Tensor
+{
+    private ArcReplica? _arcReplica;
+    private bool _arcValuesReleased;
+    internal static bool ArcResident => ExecutionDevice == TensorDevice.Arc && ArcLane.Options.ResidentTensors;
+
+    // Packed payload, FP32 master and FP32 gradient have independent host authority.
+    // Only explicit inspection/checkpoint/session closure materializes host arrays.
+    private sealed class ArcReplica(ArcExecutionLane lane) : IDisposable
+    {
+        internal readonly ArcExecutionLane Lane = lane;
+        internal ArcBuffer? Value, Scales, Gradient, Master;
+        internal bool DataDirty, GradientDirty, MasterDirty;
+        internal IDisposable? Registration;
+        public void Dispose()
+        {
+            Value?.Dispose(); Scales?.Dispose(); Gradient?.Dispose(); Master?.Dispose();
+            Value = Scales = Gradient = Master = null;
+            Registration?.Dispose(); Registration = null;
+            GC.SuppressFinalize(this);
+        }
+        ~ArcReplica() { try { Dispose(); } catch { /* lane owns the final native cleanup */ } }
+    }
+
+    private ArcReplica ArcOwner()
+    {
+        if (_arcReplica is { } old && !ReferenceEquals(old.Lane, ArcLane)) ReleaseArcReplica(preserve: true);
+        if (_arcReplica is null)
+        {
+            _arcReplica = new(ArcLane);
+            _arcReplica.Registration = ExecutionSession.Current!.RegisterBeforeDispose(this,
+                static owner => ((Tensor)owner).ReleaseArcReplica(preserve: true));
+        }
+        return _arcReplica;
+    }
+
+    private void EnsureArcPacked()
+    {
+        if (_arcValuesReleased) throw new InvalidOperationException("Arc forward values were released by BackwardAndRelease.");
+        ArcReplica state = ArcOwner();
+        if (state.Value is not null) return;
+        EnsureHostDataCurrent();
+        if (_data.TryGetBfp8Buffers(out sbyte[] bytes, out float[] scales, out _))
+        {
+            state.Value = state.Lane.UploadRaw(bytes);
+            state.Scales = state.Lane.Upload(scales);
+        }
+        else if (_data.TryGetBFloat16Buffer(out ushort[] bf16)) state.Value = state.Lane.UploadRaw(bf16);
+        else state.Value = state.Lane.Upload(_data.ToFloat32Array());
+    }
+
+    private ArcBuffer ArcResidentValues(bool matrixOperand = false)
+    {
+        EnsureArcPacked();
+        return DecodeArcReplica(_arcReplica!, matrixOperand);
+    }
+
+    private ArcBuffer DecodeArcReplica(ArcReplica state, bool matrixOperand = false)
+    {
+        if (DType == TensorDType.Float32) return state.Value!.Borrow();
+        var output = state.Lane.Allocate(Numel);
+        try
+        {
+            if (DType == TensorDType.Bfp8)
+                state.Lane.Run("decode_bfp8", Numel, 0, state.Value!, state.Scales!, output, Numel,
+                    Bfp8Quantization!.GetEffectiveBlockSize(Numel), matrixOperand ? 1 : 0);
+            else state.Lane.Run("decode_bf16", Numel, 0, state.Value!, output, Numel);
+            return output;
+        }
+        catch { output.Dispose(); throw; }
+    }
+
+    private void PublishArcValues(ArcBuffer source)
+    {
+        ArcReplica state = ArcOwner();
+        state.Value ??= state.Lane.AllocateBytes(checked(Numel * (DType == TensorDType.Float32 ? 4 : DType == TensorDType.BFloat16 ? 2 : 1)));
+        if (DType == TensorDType.Bfp8)
+        {
+            int groups = Bfp8Quantization!.GetScaleCount(Numel);
+            state.Scales ??= state.Lane.Allocate(groups);
+            state.Lane.Run("resident_bfp8", groups, 0, source, state.Value, state.Scales, state.Lane.NumericStatus, Numel, Bfp8Quantization.GetEffectiveBlockSize(Numel));
+        }
+        else if (DType == TensorDType.BFloat16) state.Lane.Run("resident_bf16", Numel, 0, source, state.Value, Numel);
+        else state.Lane.Run("copy_scale", Numel, 0, source, state.Value, Numel, 1f, 0);
+        state.DataDirty = true;
+        _device = TensorDevice.Arc;
+        _arcDeviceIndex = state.Lane.DeviceIndex;
+    }
+
+    private static Tensor ArcDeviceResult(ArcBuffer values, int[] shape, Tensor[] parents, TensorDType? dtype = null)
+    {
+        TensorDType format = dtype ?? TensorDTypeContract.Promote(parents);
+        if (format is not (TensorDType.Float32 or TensorDType.BFloat16 or TensorDType.Bfp8))
+            throw new NotSupportedException($"Arc does not implement storage format {format}.");
+        int length = checked(shape.Aggregate(1, (a, b) => checked(a * b)));
+        TensorStorage placeholder = format == TensorDType.Bfp8
+            ? TensorStorage.CreateDeviceBfp8Placeholder(length, parents.Any(p => p.DType == TensorDType.Bfp8)
+                ? SelectBfp8ResultDescriptor(parents) : Bfp8QuantizationDescriptor.TensorWide)
+            : TensorStorage.CreateDevicePlaceholder(length, format);
+        Tensor result = FromStorageResult(placeholder, shape, parents);
+        try { result.PublishArcValues(values); ArcInferenceFrame.Current?.Add(result); return result; }
+        catch { result.ReleaseArcReplica(preserve: false); throw; }
+    }
+
+    internal ArcBuffer ArcGradient()
+    {
+        ArcReplica state = ArcOwner();
+        if (state.Gradient is null)
+        {
+            state.Gradient = _grad.Length == Numel ? state.Lane.Upload(_grad) : state.Lane.Allocate(Numel);
+            if (_grad.Length != Numel) state.Lane.Run("resident_zero", Numel, 0, state.Gradient, Numel);
+        }
+        // Conservatively dirty on access: kernels can accumulate into it.
+        state.GradientDirty = true;
+        return state.Gradient;
+    }
+
+    internal ArcBuffer ArcMaster()
+    {
+        ArcReplica state = ArcOwner();
+        if (state.Master is null) state.Master = state.Lane.Upload(DataBuffer);
+        return state.Master;
+    }
+
+    internal void CompleteArcUpdate()
+    {
+        ArcReplica state = ArcOwner();
+        PublishArcValues(state.Master!);
+        state.MasterDirty = true;
+        unchecked { _dataVersion++; }
+        _physicalFloat32CacheDataVersion = -1;
+    }
+
+    private void SynchronizeArcHostData()
+    {
+        if (_arcValuesReleased) throw new InvalidOperationException("Arc forward values were released by BackwardAndRelease.");
+        if (_arcReplica is not { } state) return;
+        if (state.DataDirty)
+        {
+            if (DType == TensorDType.Bfp8)
+            {
+                state.Lane.CheckNumericStatus();
+                var bytes = new sbyte[Numel]; var scales = new float[Bfp8Quantization!.GetScaleCount(Numel)];
+                state.Lane.ReadRaw(state.Value!, bytes); state.Lane.Read(state.Scales!, scales);
+                _data.CopyFromBfp8Encoded(bytes, scales);
+            }
+            else if (DType == TensorDType.BFloat16)
+            {
+                var bytes = new ushort[Numel]; state.Lane.ReadRaw(state.Value!, bytes);
+                _data.TryGetBFloat16Buffer(out ushort[] host);
+                bytes.CopyTo(host, 0);
+            }
+            else
+            {
+                float[] host = _data.GetMutableFloat32Buffer();
+                state.Lane.Read(state.Value!, host);
+            }
+            state.DataDirty = false;
+        }
+        if (state.MasterDirty)
+        {
+            if (DType == TensorDType.Float32) state.Lane.Read(state.Master!, _data.GetMutableFloat32Buffer());
+            else { _masterData ??= new float[Numel]; state.Lane.Read(state.Master!, _masterData); }
+            state.MasterDirty = false;
+        }
+    }
+
+    private void SynchronizeArcHostGradient()
+    {
+        if (_arcReplica is not { GradientDirty: true, Gradient: not null } state) return;
+        if (_grad.Length != Numel) _grad = new float[Numel];
+        state.Lane.Read(state.Gradient, _grad);
+        state.GradientDirty = false;
+    }
+
+    private void InvalidateArcGradient()
+    {
+        if (_arcReplica is not { } state) return;
+        state.Gradient?.Dispose(); state.Gradient = null; state.GradientDirty = false;
+    }
+
+    private bool ClearArcGradient()
+    {
+        if (_arcReplica is not { Gradient: not null } state) return false;
+        state.Lane.Run("resident_zero", Numel, 0, state.Gradient, Numel);
+        state.GradientDirty = true;
+        return true;
+    }
+
+    private void InvalidateArcValues()
+    {
+        if (_arcReplica is not { } state) return;
+        state.Value?.Dispose(); state.Scales?.Dispose(); state.Master?.Dispose();
+        state.Value = state.Scales = state.Master = null;
+        state.DataDirty = state.MasterDirty = false;
+    }
+
+    private void ReleaseArcReplica(bool preserve)
+    {
+        ArcReplica? state = _arcReplica;
+        if (state is null) return;
+        try { if (preserve) { SynchronizeArcHostData(); SynchronizeArcHostGradient(); } }
+        finally { state.Dispose(); _arcReplica = null; }
+    }
+
+    internal void ReleaseArcGraph()
+    {
+        // Preserve an already-read scalar loss; do not transfer discarded activations.
+        if (_arcReplica is { DataDirty: true }) _arcValuesReleased = true;
+        ReleaseArcReplica(preserve: false);
+        _grad = [];
+    }
+
+    internal static IDisposable? BeginArcInferenceFrame() => ArcResident ? new ArcInferenceFrame() : null;
+    private sealed class ArcInferenceFrame : IDisposable
+    {
+        [ThreadStatic] internal static ArcInferenceFrame? Current;
+        private readonly ArcInferenceFrame? _previous = Current;
+        private readonly List<Tensor> _values = [];
+        internal ArcInferenceFrame() => Current = this;
+        internal void Add(Tensor value) { if (value.Node.IsDetached) _values.Add(value); }
+        public void Dispose() { foreach (Tensor value in _values) value.ReleaseArcGraph(); _values.Clear(); Current = _previous; }
+    }
+}

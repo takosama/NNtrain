@@ -1,0 +1,72 @@
+[
+  {
+    "BFloat16": false,
+    "Rows": 16384,
+    "Width": 512,
+    "MeanMilliseconds": 0.071852,
+    "MaxAbsoluteError": 1.0173421287618112E-06
+  },
+  {
+    "BFloat16": false,
+    "Rows": 16384,
+    "Width": 1536,
+    "MeanMilliseconds": 0.187024,
+    "MaxAbsoluteError": 2.1879767473365064E-06
+  },
+  {
+    "BFloat16": false,
+    "Rows": 16384,
+    "Width": 160,
+    "MeanMilliseconds": 0.046807999999999995,
+    "MaxAbsoluteError": 7.680871760840091E-07
+  },
+  {
+    "BFloat16": false,
+    "Rows": 4097,
+    "Width": 129,
+    "MeanMilliseconds": 0.03484,
+    "MaxAbsoluteError": 2.437243438180303E-07
+  },
+  {
+    "BFloat16": false,
+    "Rows": 1024,
+    "Width": 45,
+    "MeanMilliseconds": 0.02711,
+    "MaxAbsoluteError": 1.1059182725148275E-07
+  },
+  {
+    "BFloat16": true,
+    "Rows": 16384,
+    "Width": 512,
+    "MeanMilliseconds": 0.040382,
+    "MaxAbsoluteError": 3.3993273973464966E-07
+  },
+  {
+    "BFloat16": true,
+    "Rows": 16384,
+    "Width": 1536,
+    "MeanMilliseconds": 0.104026,
+    "MaxAbsoluteError": 2.384185791015625E-07
+  },
+  {
+    "BFloat16": true,
+    "Rows": 16384,
+    "Width": 160,
+    "MeanMilliseconds": 0.061900000000000004,
+    "MaxAbsoluteError": 2.942979335784912E-07
+  },
+  {
+    "BFloat16": true,
+    "Rows": 4097,
+    "Width": 129,
+    "MeanMilliseconds": 0.021330000000000002,
+    "MaxAbsoluteError": 4.470348358154297E-08
+  },
+  {
+    "BFloat16": true,
+    "Rows": 1024,
+    "Width": 45,
+    "MeanMilliseconds": 0.021288,
+    "MaxAbsoluteError": 1.4901161193847656E-08
+  }
+]

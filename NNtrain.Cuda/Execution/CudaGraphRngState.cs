@@ -24,6 +24,18 @@ public sealed class CudaGraphRngState : IDisposable
 
     public int DeviceIndex => _lane.DeviceIndex;
 
+    public void EnqueueBfp8Elementwise(nint left, nint ls, nint right, nint rs,
+        nint output, nint os, int length, int lb, int rb, int ob, int operation,
+        uint threshold, float scale, ulong operationSeed)
+    {
+        EnsureActive();
+        _lane.ActivateComputeStream();
+        CudaGraphStatus.Check(CudaNativeGateway.Bfp8Elementwise(DeviceIndex,
+            left, ls, right, rs, output, os, length, lb, rb, ob, operation,
+            0, threshold, scale, _counter.Pointer, operationSeed, _lane.ComputeStreamHandle),
+            "CUDA Graph direct BFP8 elementwise", DeviceIndex);
+    }
+
     public static CudaGraphRngState Create(
         CudaExecutionLane lane,
         ulong initialCounter = 0)

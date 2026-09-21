@@ -871,16 +871,16 @@ __global__ void linear_bias_backward_kernel(const T* output_gradient,
 // A linear bias gradient reduces every row into one output column. Assigning
 // one thread to a column leaves production FFN shapes (width 512) with only
 // two resident blocks while each thread serially walks 16K rows. Instead,
-// eight warps cooperatively reduce 32 adjacent columns. A block exclusively
+// row groups cooperatively reduce 8 or 32 adjacent columns. A block exclusively
 // owns its column tile, so the final accumulation remains deterministic and
 // requires no atomics or temporary global workspace.
-template <typename T>
+template <typename T, int Columns = 32>
 __global__ void linear_bias_backward_block_kernel(
     const T* output_gradient,
     float* bias_gradient,
     int rows,
     int width) {
-    constexpr int kColumnsPerBlock = 32;
+    constexpr int kColumnsPerBlock = Columns;
     constexpr int kWarpsPerBlock = kThreads / kColumnsPerBlock;
     __shared__ float partial[kWarpsPerBlock][kColumnsPerBlock];
 
@@ -2340,8 +2340,7 @@ __global__ void forget_forward_kernel(const float* projected,
         int row = state_batch + value_index * key_width;
         float gate = stable_sigmoid(forget_load(projected, projected_bf16,
             gate_offset + value_index, bfloat16));
-        float retention = use_drn ? gate
-            : retention_floor + (1.f - retention_floor) * gate;
+        float retention = retention_floor + (1.f - retention_floor) * gate;
         float beta = stable_sigmoid(forget_load(projected, projected_bf16,
             beta_offset + value_index, bfloat16));
         float write = (use_v3 || use_drn) ? beta
@@ -2492,8 +2491,7 @@ __global__ void forget_backward_kernel(const float* projected,
         }
         float gate = stable_sigmoid(forget_load(projected, projected_bf16,
             gate_offset + value_index, bfloat16));
-        float retention = use_drn ? gate
-            : retention_floor + (1.f - retention_floor) * gate;
+        float retention = retention_floor + (1.f - retention_floor) * gate;
         float beta = stable_sigmoid(forget_load(projected, projected_bf16,
             beta_offset + value_index, bfloat16));
         float write = (use_v3 || use_drn) ? beta
@@ -2535,7 +2533,7 @@ __global__ void forget_backward_kernel(const float* projected,
         projected_gradient[value_offset + value_index] +=
             error_gradient * (1.f - value * value);
         projected_gradient[gate_offset + value_index] += retention_gradient
-            * (use_drn ? 1.f : 1.f - retention_floor)
+            * (1.f - retention_floor)
             * gate * (1.f - gate);
         projected_gradient[beta_offset + value_index] += write_gradient
             * ((use_v3 || use_drn) ? 1.f : 1.f - retention)
@@ -2581,6 +2579,121 @@ __global__ void forget_backward_kernel(const float* projected,
                 previous_gradient[gradient_row + key];
     }
 }
+
+__device__ __forceinline__ float drn_warp_sum(float value) {
+    for (int offset = 16; offset > 0; offset >>= 1)
+        value += __shfl_xor_sync(0xffffffffu, value, offset);
+    return value;
+}
+
+// One warp owns one value row across time. Keys are coalesced lanes and the
+// recurrent adjoint stays in registers, not two global scratch arrays on
+// every token. Rows still combine Q/K through FP32 atomic addition. The
+// generic kernel remains available for wider keys and V2/V3 semantics.
+template<bool Prepared>
+__global__ void drn_backward_warp_kernel(const float* projected,
+    const unsigned short* projected_bf16, float* projected_gradient,
+    const float* output_gradient, const float* states, float* state_gradient,
+    float* previous_gradient, int sequence, int projection_width,
+    int key_width, int value_width, int bfloat16, const float* prepared,
+    float retention_floor) {
+    const int worker = blockIdx.x;
+    const int lane = threadIdx.x;
+    const int batch = worker / value_width;
+    const int value_index = worker % value_width;
+    const int matrix_size = key_width * value_width;
+    const int row = value_index * key_width;
+    const int gradient_index = batch * matrix_size + row + lane;
+    float gradient = lane < key_width ? state_gradient[gradient_index] : 0.f;
+    for (int time = sequence - 1; time >= 0; --time) {
+        const int p = (batch * sequence + time) * projection_width;
+        const int v = p + 2 * key_width + value_index;
+        const int base = (batch * sequence + time) * (projection_width + 2);
+        const float q = lane < key_width
+            ? (Prepared ? prepared[base + lane]
+                : tanhf(forget_load(projected, projected_bf16, p + lane, bfloat16))) : 0.f;
+        const float k = lane < key_width
+            ? (Prepared ? prepared[base + key_width + lane]
+                : tanhf(forget_load(projected, projected_bf16, p + key_width + lane, bfloat16))) : 0.f;
+        const float qs = Prepared ? prepared[base + projection_width]
+            : rsqrtf(drn_warp_sum(q * q) + 1e-8f);
+        const float ks = Prepared ? prepared[base + projection_width + 1]
+            : 1.f / sqrtf(drn_warp_sum(k * k) + 1e-8f);
+        const float previous = lane < key_width && time > 0
+            ? states[((batch * sequence + time - 1) * matrix_size) + row + lane] : 0.f;
+        const float dy = output_gradient[(batch * sequence + time) * value_width + value_index];
+        const float gate = Prepared ? prepared[base + 2 * key_width + value_index + value_width]
+            : stable_sigmoid(forget_load(projected, projected_bf16, v + value_width, bfloat16));
+        const float retention = retention_floor + (1.f - retention_floor) * gate;
+        const float beta = Prepared ? prepared[base + 2 * key_width + value_index + 2 * value_width]
+            : stable_sigmoid(forget_load(projected, projected_bf16, v + 2 * value_width, bfloat16));
+        const float value = Prepared ? prepared[base + 2 * key_width + value_index]
+            : tanhf(forget_load(projected, projected_bf16, v, bfloat16));
+        const float nk = k * ks;
+        const float predicted = drn_warp_sum(previous * nk);
+        const float dot_key = drn_warp_sum(gradient * nk);
+        const float dgate = drn_warp_sum(gradient * previous);
+        const float error = value - predicted;
+        const float dwrite = error * dot_key;
+        const float derror = beta * dot_key;
+        const float dq = previous * dy;
+        const float qdot = drn_warp_sum(q * dq);
+        const float dk = gradient * beta * error - previous * derror;
+        const float kdot = drn_warp_sum(k * dk);
+        if (lane < key_width) {
+            const float gq = (dq * qs - q * qdot * qs * qs * qs) * (1.f - q * q);
+            const float gk = (dk * ks - k * kdot * ks * ks * ks) * (1.f - k * k);
+            atomicAdd(projected_gradient + p + lane, gq);
+            atomicAdd(projected_gradient + p + key_width + lane, gk);
+        }
+        if (lane == 0) {
+            projected_gradient[v] += derror * (1.f - value * value);
+            projected_gradient[v + value_width] +=
+                dgate * (1.f - retention_floor) * gate * (1.f - gate);
+            projected_gradient[v + 2 * value_width] += dwrite * beta * (1.f - beta);
+        }
+        gradient = q * qs * dy + (gradient * retention - nk * derror);
+    }
+    if (lane < key_width) {
+        state_gradient[gradient_index] = gradient;
+        previous_gradient[gradient_index] = gradient;
+    }
+}
+
+// Token-local work is independent of the recurrent adjoint. Compute it once
+// per token instead of once per value row in the serial time loop.
+__global__ void drn_prepare_backward_kernel(const float* projected,
+    const unsigned short* projected_bf16, float* prepared, int tokens,
+    int projection_width, int key_width, int value_width, int bfloat16) {
+    const int token = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
+    const int lane = threadIdx.x & 31;
+    if (token >= tokens) return;
+    const int p = token * projection_width;
+    const int base = token * (projection_width + 2);
+    const float q = lane < key_width
+        ? tanhf(forget_load(projected, projected_bf16, p + lane, bfloat16)) : 0.f;
+    const float k = lane < key_width
+        ? tanhf(forget_load(projected, projected_bf16, p + key_width + lane, bfloat16)) : 0.f;
+    const float qs = rsqrtf(drn_warp_sum(q * q) + 1e-8f);
+    const float ks = 1.f / sqrtf(drn_warp_sum(k * k) + 1e-8f);
+    if (lane < key_width) {
+        prepared[base + lane] = q;
+        prepared[base + key_width + lane] = k;
+    }
+    if (lane == 0) {
+        prepared[base + projection_width] = qs;
+        prepared[base + projection_width + 1] = ks;
+    }
+    for (int row = lane; row < value_width; row += 32) {
+        const int v = p + 2 * key_width + row;
+        const int o = base + 2 * key_width + row;
+        prepared[o] = tanhf(forget_load(projected, projected_bf16, v, bfloat16));
+        // Keep the raw sigmoid for dgate; the recurrent consumer applies floor.
+        prepared[o + value_width] = stable_sigmoid(forget_load(projected, projected_bf16, v + value_width, bfloat16));
+        prepared[o + 2 * value_width] = stable_sigmoid(forget_load(projected, projected_bf16, v + 2 * value_width, bfloat16));
+    }
+}
+
 
 template <typename T>
 __global__ void cross_entropy_stats_kernel(const T* logits,
@@ -3027,6 +3140,12 @@ NNTRAIN_EXPORT int nntrain_tensor_linear_bias_backward_float(
             output_gradient, bias_gradient, rows, width);
     }
     constexpr int kColumnsPerBlock = 32;
+    if (rows >= 4096 && width >= 128 && width <= 512) {
+        linear_bias_backward_block_kernel<float, 8>
+            <<<(width + 7) / 8, kThreads, 0, g_stream>>>(
+                output_gradient, bias_gradient, rows, width);
+        return launch_status();
+    }
     linear_bias_backward_block_kernel<float>
         <<<(width + kColumnsPerBlock - 1) / kColumnsPerBlock,
             kThreads, 0, g_stream>>>(
@@ -3042,6 +3161,12 @@ NNTRAIN_EXPORT int nntrain_tensor_linear_bias_backward_bf16(
             output_gradient, bias_gradient, rows, width);
     }
     constexpr int kColumnsPerBlock = 32;
+    if (rows >= 4096 && width >= 128 && width <= 512) {
+        linear_bias_backward_block_kernel<unsigned short, 8>
+            <<<(width + 7) / 8, kThreads, 0, g_stream>>>(
+                output_gradient, bias_gradient, rows, width);
+        return launch_status();
+    }
     linear_bias_backward_block_kernel<unsigned short>
         <<<(width + kColumnsPerBlock - 1) / kColumnsPerBlock,
             kThreads, 0, g_stream>>>(
@@ -3616,11 +3741,62 @@ NNTRAIN_EXPORT int nntrain_forget_backward(const float* projected,
     int key_width, int value_width, float retention_floor,
     int memory_variant, int bfloat16) {
     int workers = batch * value_width;
-    NNTRAIN_LAUNCH_1D(forget_backward_kernel, workers, projected,
+    if (memory_variant == 2 && key_width > 0 && key_width <= 32) {
+        drn_backward_warp_kernel<false><<<workers, 32, 0, g_stream>>>(projected,
+            projected_bf16, projected_gradient, output_gradient, states,
+            state_gradient, previous_gradient, sequence, projection_width,
+            key_width, value_width, bfloat16, nullptr, retention_floor);
+        return launch_status();
+    }
+    // Each worker owns a recurrent value row for the entire sequence. A
+    // generic 256-thread block puts a typical 16 x 16 shard on just one SM.
+    // Warp-sized CTAs distribute these long-lived independent rows without
+    // changing their recurrence or the within-warp q/k accumulation.
+    constexpr int recurrent_threads = 32;
+    forget_backward_kernel<<<(workers + recurrent_threads - 1) / recurrent_threads,
+        recurrent_threads, 0, g_stream>>>(projected,
         projected_bf16, projected_gradient, output_gradient, states,
         state_gradient, previous_gradient, workers, sequence,
         projection_width, key_width, value_width, retention_floor,
         memory_variant, bfloat16);
+    return launch_status();
+}
+
+NNTRAIN_EXPORT int nntrain_drn_backward_prepared_with_floor(const float* projected,
+    const unsigned short* projected_bf16, float* projected_gradient,
+    const float* output_gradient, const float* states, float* state_gradient,
+    float* previous_gradient, float* partial, int batch, int sequence,
+    int projection_width, int key_width, int value_width, int bfloat16,
+    float retention_floor) {
+    if (!partial || !projected_gradient || !output_gradient || !states
+        || !state_gradient || !previous_gradient || batch <= 0 || sequence <= 0
+        || key_width <= 0 || key_width > 32 || value_width <= 0
+        || projection_width != 2 * key_width + 3 * value_width
+        || (bfloat16 ? !projected_bf16 : !projected)
+        || !(retention_floor >= 0.f && retention_floor < 1.f))
+        return (int)cudaErrorInvalidValue;
+    drn_prepare_backward_kernel<<<(batch * sequence + 3) / 4, 128, 0, g_stream>>>(
+        projected, projected_bf16, partial, batch * sequence,
+        projection_width, key_width, value_width, bfloat16);
+    int status = launch_status();
+    if (status != 0) return status;
+    drn_backward_warp_kernel<true><<<batch * value_width, 32, 0, g_stream>>>(
+        projected, projected_bf16, projected_gradient, output_gradient, states,
+        state_gradient, previous_gradient, sequence, projection_width,
+        key_width, value_width, bfloat16, partial, retention_floor);
+    return launch_status();
+}
+
+// Preserve the legacy ABI and its floor-free DRN semantics for old callers.
+NNTRAIN_EXPORT int nntrain_drn_backward_prepared(const float* projected,
+    const unsigned short* projected_bf16, float* projected_gradient,
+    const float* output_gradient, const float* states, float* state_gradient,
+    float* previous_gradient, float* partial, int batch, int sequence,
+    int projection_width, int key_width, int value_width, int bfloat16) {
+    return nntrain_drn_backward_prepared_with_floor(projected, projected_bf16,
+        projected_gradient, output_gradient, states, state_gradient,
+        previous_gradient, partial, batch, sequence, projection_width,
+        key_width, value_width, bfloat16, 0.f);
 }
 
 NNTRAIN_EXPORT int nntrain_tensor_cross_entropy_float(const float* logits,

@@ -58,7 +58,10 @@ public partial class Tensor
 
     /// <summary>Gets the active adapter name and initializes CUDA on demand.</summary>
     public static string ExecutionDeviceName
-        => TensorBackends.Get(ExecutionDevice).GetName(CudaDeviceIndex);
+        => TensorBackends.Get(ExecutionDevice).GetName(ExecutionDevice == TensorDevice.Arc ? TensorExecutionContext.Device.Index : CudaDeviceIndex);
+
+    public static bool IsArcAvailable(int deviceIndex = 0)
+        => TensorBackends.Get(TensorDevice.Arc).IsAvailable(deviceIndex);
 
     /// <summary>Reports whether the requested CUDA adapter can be initialized.</summary>
     public static bool IsCudaAvailable(int deviceIndex = 0)
@@ -220,6 +223,7 @@ public partial class Tensor
             lock (_deviceSync)
             {
                 return _grad.Length != 0
+                    || _arcReplica?.Gradient is not null
                     || _cudaGradientBuffers.Count != 0
                     || _cudaBFloat16GradientBuffers.Count != 0
                     || _cudaBfp8GradientBuffers.Count != 0;
@@ -338,7 +342,7 @@ public partial class Tensor
             ? TensorStorage.FromOwnedFloat32(data)
             : TensorStorage.Create(data, resultDType);
         bool isRecording = AutogradContext.IsRecordingEnabled;
-        _grad = isRecording && ExecutionDevice != TensorDevice.Cuda
+        _grad = isRecording && ExecutionDevice is not (TensorDevice.Cuda or TensorDevice.Arc)
             ? new float[data.Length]
             : [];
         _shape = (int[])shape.Clone();
@@ -351,8 +355,8 @@ public partial class Tensor
         {
             foreach (Tensor parent in prev)
             {
-                if (ExecutionDevice != TensorDevice.Cuda
-                    || parent.Device != TensorDevice.Cuda)
+                if (ExecutionDevice != TensorDevice.Arc && (ExecutionDevice != TensorDevice.Cuda
+                    || parent.Device != TensorDevice.Cuda))
                     parent.EnsureGradientBuffer();
             }
             Node = new AutogradNode(prev);
@@ -376,7 +380,7 @@ public partial class Tensor
 
         _data = data;
         bool isRecording = AutogradContext.IsRecordingEnabled;
-        _grad = isRecording && ExecutionDevice != TensorDevice.Cuda
+        _grad = isRecording && ExecutionDevice is not (TensorDevice.Cuda or TensorDevice.Arc)
             ? new float[data.Count]
             : [];
         _shape = (int[])shape.Clone();
@@ -395,7 +399,7 @@ public partial class Tensor
                 // parameter's gradient through the shared host mirror here
                 // would merge one data-parallel lane into the next before the
                 // explicit all-reduce.
-                if (!cudaResult
+                if (!cudaResult && ExecutionDevice != TensorDevice.Arc
                     && (ExecutionDevice != TensorDevice.Cuda
                         || parent.Device != TensorDevice.Cuda))
                 {
@@ -485,6 +489,14 @@ public partial class Tensor
         if (dtype == DType)
             return this;
 
+        if (ArcResident)
+        {
+            using var values = ArcUploadValues();
+            Tensor converted = ArcDeviceResult(values, _shape, [this], dtype);
+            converted.Node.BackwardAction = () => ArcLane.Run("copy_scale", Numel, 0, converted.ArcGradient(), ArcGradient(), Numel, 1f, 1);
+            return converted;
+        }
+
         if (ExecutionDevice == TensorDevice.Cuda)
             return ToCuda(dtype);
 
@@ -513,6 +525,7 @@ public partial class Tensor
         Bfp8QuantizationDescriptor? bfp8Quantization = null,
         bool? preserveFloat32Master = null)
     {
+        ReleaseArcReplica(preserve: true);
         TensorDTypeContract.ValidateImplemented(dtype, nameof(dtype));
         if (dtype == TensorDType.Bfp8)
         {
@@ -575,6 +588,7 @@ public partial class Tensor
         ReadOnlySpan<float> values,
         bool preserveFloat32Master)
     {
+        ReleaseArcReplica(preserve: false);
         if (DType != TensorDType.Bfp8)
         {
             throw new InvalidOperationException(
@@ -623,6 +637,7 @@ public partial class Tensor
         get
         {
             CheckRank(1);
+            EnsureHostDataCurrent();
             return _data[index];
         }
     }
@@ -645,6 +660,7 @@ public partial class Tensor
 
     internal void ClearGradient()
     {
+        if (ClearArcGradient()) return;
         // During CUDA training the device gradient is authoritative. Clearing
         // the equally large host mirror every step needlessly writes the full
         // parameter set on the CPU. Mark the host mirror stale instead; a rare
@@ -660,6 +676,8 @@ public partial class Tensor
 
     internal void ClearGradientRange(int start, int length)
     {
+        SynchronizeArcHostGradient();
+        InvalidateArcGradient();
         if (_grad.Length != 0)
             _grad.AsSpan(start, length).Clear();
     }
@@ -676,9 +694,11 @@ public partial class Tensor
     internal DataMutation BeginDataMutation() => new(this);
 
     internal float[] DataBuffer
-        => DType == TensorDType.Float32
+    {
+        get { SynchronizeArcHostData(); return DType == TensorDType.Float32
             ? _data.GetMutableFloat32Buffer()
-            : _masterData ??= _data.ToFloat32Array();
+            : _masterData ??= _data.ToFloat32Array(); }
+    }
 
     internal int StorageByteLength => _data.ByteLength;
 
@@ -754,6 +774,7 @@ public partial class Tensor
 
     internal void MarkDataMutated()
     {
+        InvalidateArcValues();
         InvalidateCudaBuffers();
         CudaResidentArrayCache.Invalidate(_physicalFloat32Cache);
         if (DType == TensorDType.Float32

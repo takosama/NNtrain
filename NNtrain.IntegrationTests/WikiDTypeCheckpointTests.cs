@@ -187,8 +187,10 @@ public sealed class WikiDTypeCheckpointTests
         }
     }
 
-    [Fact]
-    public void V8Mix8Block96InterruptedResumeMatchesUninterruptedNextStep()
+    [Theory]
+    [InlineData(WikiTrainingConfiguration.AdamWOptimizer)]
+    [InlineData(WikiTrainingConfiguration.MuonOptimizer)]
+    public void V8Mix8Block96InterruptedResumeMatchesUninterruptedNextStep(string optimizerName)
     {
         const int blockSize = 96;
         string checkpointPath = CreateCheckpointPath("mix8-block96-resume");
@@ -201,7 +203,7 @@ public sealed class WikiDTypeCheckpointTests
             {
                 Precision = WikiTrainingConfiguration.Mix8_32PrecisionMode,
                 Bfp8BlockSize = blockSize,
-                Optimizer = WikiTrainingConfiguration.AdamWOptimizer,
+                Optimizer = optimizerName,
             };
             LanguageModel uninterrupted = WikiLanguageModelCommand.CreateModel(
                 sourceConfig,
@@ -262,7 +264,7 @@ public sealed class WikiDTypeCheckpointTests
                 precisionMode: null,
                 resume: true) with
             {
-                Optimizer = WikiTrainingConfiguration.AdamWOptimizer,
+                Optimizer = optimizerName,
             };
             Assert.False(resumeConfig.HasExplicitBfp8BlockSize);
             WikiLanguageModelCommand.WikiPrecisionSelection selection =
@@ -366,6 +368,52 @@ public sealed class WikiDTypeCheckpointTests
             AssertOptimizerStatesEqual(
                 checkpointOptimizer,
                 reblockedOptimizer.state_dict());
+
+            foreach (TensorPrecisionMode destination in new[] {
+                TensorPrecisionMode.Mix16_32, TensorPrecisionMode.Float32 })
+            {
+                var migrationConfig = resumeConfig with {
+                    PrecisionMode = TensorPrecisionModeNames.Format(destination) };
+                var migratedSelection = WikiLanguageModelCommand.ResolvePrecisionForTraining(migrationConfig);
+                Assert.Equal(destination, migratedSelection.Mode);
+                Assert.Equal(destination.ToStorageDType(), migratedSelection.StorageDType);
+                var migrated = WikiLanguageModelCommand.CreateModel(migrationConfig,
+                    migrationConfig.VocabularySize, migratedSelection.Mode, migratedSelection.StorageDType);
+                var migratedOptimizer = WikiLanguageModelCommand.CreateOptimizer(migrated, migrationConfig);
+                var migratedScheduler = lr_scheduler.WarmupCosineProgressLR(migratedOptimizer, migrationConfig.WarmupPercent);
+                ModuleState? migratedBest = null;
+                float migratedLoss = float.PositiveInfinity;
+                int migratedEpoch = 0;
+                long migratedStep = 0;
+                var position = WikiLanguageModelCommand.RestoreTrainingCheckpoint(migrationConfig,
+                    migrated, migratedOptimizer, migratedScheduler, ref migratedBest,
+                    ref migratedLoss, ref migratedEpoch, ref migratedStep, output);
+                Assert.Equal(1, migratedStep);
+                Assert.Equal(2, position.Epoch);
+                Assert.Equal(uninterruptedScheduler.state_dict(), migratedScheduler.state_dict());
+                AssertOptimizerStatesEqual(checkpointOptimizer, migratedOptimizer.state_dict());
+                Assert.All(checkpointMaster.Parameters.Zip(migrated.state_dict().Parameters),
+                    pair => Assert.Equal(pair.First.Values, pair.Second.Values));
+                TrainOneStep(migrated, migratedOptimizer, migratedScheduler, progress: 0.5d);
+                Assert.All(migrated.state_dict().Parameters,
+                    p => Assert.All(p.Values, v => Assert.True(float.IsFinite(v))));
+                string migratedPath = CreateCheckpointPath("migrated-resave");
+                try
+                {
+                    var resaveConfig = migrationConfig with { CheckpointPath = migratedPath };
+                    WikiLanguageModelCommand.SaveTrainingCheckpoint(resaveConfig,
+                        resaveConfig.VocabularySize, completedEpoch: 1,
+                        migrated.state_dict(), bestLoss: 1.25f, bestEpoch: 1,
+                        migrated, migratedOptimizer, migratedScheduler, globalStep: 2);
+                    var saved = torch.load<WikiLanguageModelCommand.WikiModelCheckpoint>(migratedPath);
+                    Assert.Equal(destination, saved.PrecisionMode);
+                    Assert.Equal(destination.ToStorageDType(), saved.ModelDType);
+                    Assert.Equal(2, saved.GlobalStep);
+                    Assert.Equal(destination,
+                        WikiLanguageModelCommand.ResolvePrecisionForTraining(resaveConfig).Mode);
+                }
+                finally { DeleteCheckpointArtifacts(migratedPath); }
+            }
 
             TrainOneStep(
                 uninterrupted,
@@ -837,7 +885,7 @@ public sealed class WikiDTypeCheckpointTests
     }
 
     [Fact]
-    public void ResumeRejectsAnExplicitDTypeDifferentFromCheckpoint()
+    public void ResumeUsesExplicitPrecisionButPreservesLegacyStorageWhenUnchanged()
     {
         string checkpointPath = CreateCheckpointPath("dtype-mismatch");
         try
@@ -885,14 +933,8 @@ public sealed class WikiDTypeCheckpointTests
                 ResumeFromCheckpoint = true,
                 PrecisionMode = WikiTrainingConfiguration.Float32PrecisionMode,
             };
-            InvalidDataException exception =
-                Assert.Throws<InvalidDataException>(
-                    () => WikiLanguageModelCommand
-                        .ResolveModelDTypeForTraining(resumeConfig));
-
-            Assert.Contains("does not match checkpoint", exception.Message);
-            Assert.Contains("float32", exception.Message);
-            Assert.Contains("mix16_32", exception.Message);
+            Assert.Equal(TensorDType.Float32,
+                WikiLanguageModelCommand.ResolveModelDTypeForTraining(resumeConfig));
         }
         finally
         {

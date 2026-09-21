@@ -3,6 +3,7 @@ namespace NNtrain;
 public partial class AdamW : IOptimizer, ILearningRateAdjustable,
     IMix8QuantizationDiagnosticsProvider
 {
+    private readonly ArcOptimizerStateCache _arcState = new();
     private readonly List<Parameter> _parameters;
     private readonly long _totalElements;
     private readonly AdamWParameterRuntime[] _parameterRuntime;
@@ -169,6 +170,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable,
     /// </summary>
     internal void SynchronizeStateForStreaming()
     {
+        _arcState.Synchronize();
         if (_cudaStateAuthorityDevice is not int primaryDevice)
             return;
         foreach (AdamWParameterRuntime runtime in _parameterRuntime)
@@ -289,7 +291,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable,
 
     internal void ZeroGrad()
     {
-        if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+        if (Tensor.ExecutionDevice is TensorDevice.Cuda or TensorDevice.Arc)
         {
             foreach (AdamWParameterRuntime runtime in _parameterRuntime)
                 runtime.Parameter.T.ClearGradient();
@@ -322,6 +324,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable,
 
     internal void Step()
     {
+        if (!Tensor.ArcResident) _arcState.Dispose();
         if (_step == int.MaxValue)
         {
             throw new InvalidOperationException(
@@ -523,16 +526,51 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable,
             return;
         }
 
+        if (Tensor.ArcResident)
+        {
+            foreach (AdamWParameterRuntime runtime in _parameterRuntime)
+            {
+                if (runtime.FirstMomentBFloat16 is not null || runtime.SecondMomentBFloat16 is not null)
+                    throw new NotSupportedException("Arc AdamW currently requires FP32 optimizer moments.");
+                Tensor tensor = runtime.Parameter.T;
+                Tensor.ArcLane.Run("adam", tensor.Numel, 0, tensor.ArcGradient(),
+                    _arcState.Get(runtime.FirstMoment), _arcState.Get(runtime.SecondMoment), tensor.ArcMaster(), tensor.Numel,
+                    options.Beta1, options.Beta2, _stepUpdateScale, _stepScaledEpsilon,
+                    runtime.ApplyWeightDecay ? 1f - options.LearningRate * options.WeightDecay : 1f);
+                tensor.CompleteArcUpdate();
+            }
+            return;
+        }
+
         for (int parameterIndex = 0;
             parameterIndex < _parameters.Count;
             parameterIndex++)
         {
             AdamWParameterRuntime runtime =
                 _parameterRuntime[parameterIndex];
+            // Loading BFP8 values or converting storage can replace the FP32
+            // master after optimizer construction. Resolve its current owner
+            // before updating, just as gradients are refreshed each step.
+            runtime.Data = runtime.Parameter.DataBuffer;
             runtime.Gradient = runtime.Parameter.T.GradientBuffer;
         }
 
-        if (_workItems.Length > 1 && _totalElements >= 32_768)
+        if (Tensor.ExecutionDevice == TensorDevice.Arc)
+        {
+            foreach (AdamWParameterRuntime runtime in _parameterRuntime)
+            {
+                if (runtime.FirstMomentBFloat16 is not null || runtime.SecondMomentBFloat16 is not null)
+                    throw new NotSupportedException("Arc AdamW currently requires FP32 optimizer moments.");
+                Tensor.ArcLane.Run("adam", runtime.Data.Length, 0,
+                    NNtrain.Arc.ArcExecutionLane.In(runtime.Gradient.Length == 0 ? new float[runtime.Data.Length] : runtime.Gradient),
+                    NNtrain.Arc.ArcExecutionLane.InOut(runtime.FirstMoment),
+                    NNtrain.Arc.ArcExecutionLane.InOut(runtime.SecondMoment),
+                    NNtrain.Arc.ArcExecutionLane.InOut(runtime.Data), runtime.Data.Length,
+                    options.Beta1, options.Beta2, _stepUpdateScale, _stepScaledEpsilon,
+                    runtime.ApplyWeightDecay ? 1f - options.LearningRate * options.WeightDecay : 1f);
+            }
+        }
+        else if (_workItems.Length > 1 && _totalElements >= 32_768)
             Tensor.RunParallel(0, _workItems.Length, _updateWorkItemAction);
         else
             for (int index = 0; index < _workItems.Length; index++)
@@ -885,6 +923,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable,
 
     internal void DisposeCudaResources()
     {
+        _arcState.Dispose();
         List<Exception>? failures = null;
         foreach (CudaOptimizerKernels.AdamWMultiTensorPlan plan
             in _cudaMultiTensorPlans.Values)

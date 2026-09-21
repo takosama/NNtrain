@@ -10,6 +10,7 @@ public sealed record ExecutionOptions
     public ExecutionDeviceKind Device { get; init; } = ExecutionDeviceKind.Cpu;
 
     public DeviceSet CudaDevices { get; init; } = DeviceSet.Default;
+    public int ArcDeviceIndex { get; init; }
 
     public PrecisionPolicy Precision { get; init; } = PrecisionPolicy.Float32;
 
@@ -23,6 +24,7 @@ public sealed record ExecutionOptions
     {
         ArgumentNullException.ThrowIfNull(CudaDevices);
         ArgumentNullException.ThrowIfNull(Precision);
+        ArgumentOutOfRangeException.ThrowIfNegative(ArcDeviceIndex);
         if (!Enum.IsDefined(Device))
             throw new ArgumentOutOfRangeException(nameof(Device));
         return this;

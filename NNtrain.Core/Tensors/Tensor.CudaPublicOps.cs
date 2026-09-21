@@ -150,6 +150,7 @@ partial class Tensor
                 result,
                 plan,
                 cudaOperation);
+            result._cudaBinaryBackwardIgnoresOutputValues = result.DType == TensorDType.Bfp8;
         }
         return result;
     }
@@ -161,6 +162,16 @@ partial class Tensor
         BinaryBroadcastPlan plan,
         CudaPublicBinaryOperation operation)
     {
+        // Equal-shape addition has constant derivatives. In particular an
+        // exclusive residual branch may already have retired its values;
+        // decoding either BFP8 operand here is unnecessary and incorrect.
+        if (left.DType == TensorDType.Bfp8
+            && operation == CudaPublicBinaryOperation.Add
+            && left.Numel == output.Numel && right.Numel == output.Numel)
+        {
+            TensorCudaKernels.AddBackwardResident(output, left, right);
+            return;
+        }
         int deviceIndex = CudaDeviceIndex;
         NativeCudaDevice accelerator =
             ForgetMemoryV2Cuda.GetAccelerator(deviceIndex);

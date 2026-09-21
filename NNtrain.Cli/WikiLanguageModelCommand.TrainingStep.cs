@@ -156,7 +156,7 @@ internal static partial class WikiLanguageModelCommand
             Exception? backwardFailure = null;
             try
             {
-                if (Tensor.ExecutionDevice == TensorDevice.Cuda)
+                if (Tensor.ExecutionDevice is TensorDevice.Cuda or TensorDevice.Arc)
                     loss.BackwardAndRelease();
                 else
                     loss.backward();
@@ -253,7 +253,10 @@ internal static partial class WikiLanguageModelCommand
             if (Tensor.ExecutionDevice != TensorDevice.Cuda)
             {
                 float cpuValue = loss.item();
-                loss.backward([gradientWeight]);
+                if (Tensor.ExecutionDevice == TensorDevice.Arc)
+                    loss.BackwardAndRelease([gradientWeight]);
+                else
+                    loss.backward([gradientWeight]);
                 return cpuValue;
             }
 

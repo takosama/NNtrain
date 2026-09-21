@@ -11,6 +11,15 @@ public sealed partial class NekoMuon
         bool applyWeightDecay =
             parameter.WeightDecay == WeightDecayPolicy.Apply
             || (options.Decay1D && parameter.T.Rank == 1);
+        if (Tensor.ExecutionDevice == TensorDevice.Arc)
+        {
+            float[] master = parameter.DataBuffer;
+            ArcTrainingMath.Combine(master, update, master,
+                applyWeightDecay ? 1f - options.LearningRate * options.WeightDecay : 1f,
+                -options.LearningRate * finalScale);
+            parameter.CompleteUpdate();
+            return;
+        }
         if (Tensor.ExecutionDevice == TensorDevice.Cuda)
         {
             CudaOptimizerKernels.NekoMuonApplyUpdate(

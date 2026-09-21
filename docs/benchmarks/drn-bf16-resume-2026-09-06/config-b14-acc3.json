@@ -1,0 +1,73 @@
+{
+  "task": "gpt_rin_wiki_jp",
+  "dataset": "fineweb",
+  "dataPath": "data/fineweb",
+  "textColumn": "text",
+  "tokenizerPath": "fineweb-bpe.json",
+  "checkpoint": {
+    "directory": "checkpoints",
+    "fileName": "training.forgetmemorydrn-wiki-jp.model.json",
+    "resume": false,
+    "autoResume": true,
+    "intervalMinutes": 30
+  },
+
+  "vocabularySize": 11500,
+  "tokenizerTrainingDocuments": 500000,
+  "tokenizerTrainingBytes": 200000000,
+
+  "maxTrainingDocuments": 0,
+  "maxTrainingTokens": 0,
+  "maxDocumentTokens":  1024,
+  "validationFraction": 0.0,
+  "epochs":3,
+  "batchSize":14,
+  "gradientAccumulationSteps":3,
+  
+
+  "contextLength": 1024,
+  "modelWidth": 256,
+  "heads": 32,
+  "hiddenSize": 768,
+  "layers": 48,
+  "modelArchitecture": "forgetmemorydrn",
+  "device": "cuda",
+  "deviceIndex": 0,
+  "deviceIndices": [0, 1],
+  "precisionMode": "mix16_32",
+  "forgetMemoryKeyWidth": 32,
+  "forgetMemoryValueWidth": 32,
+  "forgetMemoryRetentionMinimum": 0.5,
+  "forgetMemoryRetentionMaximum": 0.99,
+  "dropout": 0.1,
+  "initializationScale": 0.02,
+
+  "optimization": {
+    "optimizer": {
+      "type": "muon",
+      "learningRate" :0.001,
+      "auxiliaryLearningRate": 0.0003,
+          "nekoMuonNewtonSchulzDepthMode": "fixed",
+      "nekoMuonNewtonSchulzInterval": 1,
+      "nekoMuonNewtonSchulzDepth": 5,
+
+      "weightDecay": 0.01
+    },
+    "scheduler": {
+      "type": "warmupCosineProgress",
+      "warmupPercent":0
+    }
+  },
+  "seed": 1234,
+  "logEveryBatches": 10,
+  "showLossGraph": true,
+  "graphUpdateSteps": 10,
+  "datasetSampleEverySteps": 200,
+  "datasetSamplePoolSize": 32,
+  "useSimd": true,
+  "maxDegreeOfParallelism": 0,
+
+  "maxNewTokens": 400,
+  "temperature": 0.8,
+  "topK": 40
+}

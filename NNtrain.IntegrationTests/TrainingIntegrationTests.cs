@@ -232,6 +232,7 @@ public sealed class TrainingIntegrationTests
                     showLossGraph = false,
                     resumeFromCheckpoint = resume,
                     checkpointPath = checkpoint,
+                    checkpointIntervalMinutes = 0.0000001d,
                     seed = 37,
                     model = new
                     {
@@ -395,27 +396,8 @@ public sealed class TrainingIntegrationTests
         resumed.Complete();
     }
 
-    [Theory]
-    [InlineData(1, 10, true)]
-    [InlineData(2, 10, true)]
-    [InlineData(9, 10, true)]
-    [InlineData(1, 20, false)]
-    [InlineData(2, 20, true)]
-    [InlineData(20, 20, true)]
-    public void CheckpointBoundaryTracksTenthsOfAnEpoch(
-        int completedUpdates,
-        int totalUpdates,
-        bool expected)
-    {
-        Assert.Equal(
-            expected,
-            TrainingRunner.ShouldSaveCheckpoint(
-                completedUpdates,
-                totalUpdates));
-    }
-
     [Fact]
-    public void ProgramSavesCheckpointAtEveryTenthEpochBoundary()
+    public void ProgramSavesOnlyEpochEndCheckpointBeforeThirtyMinutes()
     {
         using var directory = new TemporaryDirectory();
         DatasetFiles training = WriteDataset(
@@ -465,16 +447,12 @@ public sealed class TrainingIntegrationTests
 
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, error.ToString());
-        for (int tenth = 1; tenth <= 10; tenth++)
-        {
-            Assert.Contains(
-                $"at epoch {tenth / 10d:F1}",
-                output.ToString());
-        }
+        Assert.Contains("checkpoint interval = 30 minutes", output.ToString());
+        Assert.DoesNotContain("at epoch ", output.ToString());
         string[] snapshots = Directory.GetFiles(
             directory.Root,
             "TransformerClassifier_*_epoch_*.safetensors");
-        Assert.Equal(10, snapshots.Length);
+        Assert.Single(snapshots);
         Assert.All(
             snapshots,
             path => Assert.NotEmpty(
