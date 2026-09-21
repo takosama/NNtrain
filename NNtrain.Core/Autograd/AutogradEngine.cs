@@ -38,9 +38,28 @@ internal static class AutogradEngine
         Tensor output,
         float[]? seed,
         bool releaseGraph)
+        => BackwardCore(output, seed, releaseGraph, arcSeed: null);
+
+    // Activation checkpoint recomputation starts from a resident, non-scalar
+    // gradient. Do not round-trip that activation-sized seed through the host.
+    internal static void BackwardArcSeed(
+        Tensor output,
+        NNtrain.Arc.ArcExecutionLane.ArcBuffer seed)
+    {
+        ArgumentNullException.ThrowIfNull(seed);
+        if (!Tensor.ArcResident)
+            throw new InvalidOperationException("Arc gradient seeds require resident Arc execution.");
+        BackwardCore(output, seed: null, releaseGraph: true, arcSeed: seed);
+    }
+
+    private static void BackwardCore(
+        Tensor output,
+        float[]? seed,
+        bool releaseGraph,
+        NNtrain.Arc.ArcExecutionLane.ArcBuffer? arcSeed)
     {
         ArgumentNullException.ThrowIfNull(output);
-        ValidateSeed(output, seed);
+        if (arcSeed is null) ValidateSeed(output, seed);
 
         List<Tensor> topologicalOrder = BuildTopologicalOrder(output);
         Dictionary<Tensor, int>? remainingLeafConsumers = null;
@@ -66,7 +85,8 @@ internal static class AutogradEngine
                 CudaBfp8GradientPublicationScope.TryCreate(topologicalOrder);
             ValidateGraphVersions(topologicalOrder);
             ClearIntermediateGradients(topologicalOrder);
-            AccumulateOutputGradient(output, seed);
+            if (arcSeed is null) AccumulateOutputGradient(output, seed);
+            else output.AccumulateArcCheckpointSeed(arcSeed);
             if (notifyReducerLeavesAtLastConsumer && output.Node.IsLeaf)
                 CudaGradientReductionContext.NotifyLeaf(output);
 

@@ -1,0 +1,975 @@
+{
+  "Device": {
+    "Index": 0,
+    "Name": "Intel(R) Arc(TM) B580 Graphics",
+    "DriverVersion": "32.0.101.9030",
+    "GlobalMemoryBytes": 12452507648,
+    "MaximumAllocationBytes": 12452507648,
+    "Extensions": "cl_khr_byte_addressable_store cl_khr_device_uuid cl_khr_fp16 cl_khr_global_int32_base_atomics cl_khr_global_int32_extended_atomics cl_khr_icd cl_khr_icd_unloadable cl_khr_local_int32_base_atomics cl_khr_local_int32_extended_atomics cl_intel_command_queue_families cl_intel_subgroups cl_intel_required_subgroup_size cl_intel_subgroups_short cl_intel_accelerator cl_intel_driver_diagnostics cl_khr_priority_hints cl_khr_throttle_hints cl_khr_create_command_queue cl_intel_subgroups_char cl_intel_subgroups_long cl_khr_il_program cl_intel_mem_force_host_memory cl_khr_subgroup_extended_types cl_khr_subgroup_non_uniform_vote cl_khr_subgroup_ballot cl_khr_subgroup_non_uniform_arithmetic cl_khr_subgroup_shuffle cl_khr_subgroup_shuffle_relative cl_khr_subgroup_clustered_reduce cl_intel_device_attribute_query cl_khr_expect_assume cl_khr_extended_bit_ops cl_khr_suggested_local_work_size cl_intel_split_work_group_barrier cl_khr_int64_base_atomics cl_khr_int64_extended_atomics cl_khr_integer_dot_product cl_intel_spirv_subgroups cl_khr_spirv_linkonce_odr cl_khr_spirv_no_integer_wrap_decoration cl_khr_spirv_queries cl_intel_unified_shared_memory cl_ext_float_atomics cl_intel_kernel_allocations_info cl_khr_fp64 cl_khr_subgroups cl_khr_mipmap_image cl_khr_mipmap_image_writes cl_khr_external_memory cl_intel_planar_yuv cl_intel_packed_yuv cl_khr_image2d_from_buffer cl_khr_depth_images cl_khr_3d_image_writes cl_intel_bfloat16_conversions cl_intel_create_buffer_with_properties cl_intel_subgroup_local_block_io cl_intel_subgroup_matrix_multiply_accumulate cl_intel_subgroup_matrix_multiply_accumulate_tf32 cl_khr_subgroup_named_barrier cl_intel_subgroup_extended_block_read cl_intel_subgroup_2d_block_io cl_intel_subgroup_buffer_prefetch cl_khr_gl_sharing cl_khr_gl_depth_images cl_khr_gl_event cl_khr_gl_msaa_sharing cl_intel_dx9_media_sharing cl_khr_dx9_media_sharing cl_khr_d3d10_sharing cl_khr_d3d11_sharing cl_intel_d3d11_nv12_media_sharing cl_intel_sharing_format_query cl_khr_pci_bus_info cl_intel_simultaneous_sharing ",
+    "MinimumSubgroupSize": 16,
+    "SupportsXmx": true
+  },
+  "Note": "Same packed BF16 operands, FP32 accumulation; all outputs bit-exact after two accumulations against K2048/tile256. 3 warmup \u002B 10 timed dispatch groups; packing and seed reset excluded.",
+  "Results": [
+    {
+      "M": 1536,
+      "N": 512,
+      "K": 16384,
+      "Tile": 256,
+      "Chunk": 2048,
+      "WallP50Ms": 2.3481500000000004,
+      "GpuP50Ms": 2.2734869999999923,
+      "Wall": [
+        2.3473,
+        2.3488,
+        2.3498,
+        2.3635,
+        2.3526,
+        2.3493,
+        2.3452,
+        2.3455,
+        2.3475,
+        2.3431
+      ],
+      "Gpu": [
+        2.2751009999999994,
+        2.2723919999999964,
+        2.271038000000001,
+        2.2722890000000007,
+        2.271975000000001,
+        2.274476,
+        2.2743720000000067,
+        2.273747,
+        2.274580999999994,
+        2.2732269999999843
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 1536,
+      "N": 512,
+      "K": 16384,
+      "Tile": 256,
+      "Chunk": 4096,
+      "WallP50Ms": 2.29265,
+      "GpuP50Ms": 2.2465094999999984,
+      "Wall": [
+        2.2962,
+        2.2891,
+        2.281,
+        2.2967,
+        2.2869,
+        2.2821,
+        2.3057,
+        2.2962,
+        2.2763,
+        2.362
+      ],
+      "Gpu": [
+        2.252707000000001,
+        2.244373000000003,
+        2.2483310000000003,
+        2.2498939999999976,
+        2.2442690000000027,
+        2.246143999999994,
+        2.2464569999999995,
+        2.2465619999999973,
+        2.245519999999999,
+        2.247497999999993
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 1536,
+      "N": 512,
+      "K": 16384,
+      "Tile": 256,
+      "Chunk": 8192,
+      "WallP50Ms": 2.37685,
+      "GpuP50Ms": 2.337811500000001,
+      "Wall": [
+        2.3813,
+        2.3775,
+        2.3724,
+        2.3822,
+        2.3762,
+        2.365,
+        2.3849,
+        2.3792,
+        2.3685,
+        2.3677
+      ],
+      "Gpu": [
+        2.340519999999998,
+        2.33802,
+        2.3342699999999894,
+        2.3431250000000006,
+        2.3368739999999946,
+        2.333645000000004,
+        2.3442699999999945,
+        2.3455199999999934,
+        2.3376030000000014,
+        2.3359370000000013
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 1536,
+      "N": 512,
+      "K": 16384,
+      "Tile": 256,
+      "Chunk": 16384,
+      "WallP50Ms": 2.62315,
+      "GpuP50Ms": 2.5934369999999944,
+      "Wall": [
+        2.6262,
+        2.6241,
+        2.6233,
+        2.623,
+        2.6158,
+        2.6044,
+        2.6183,
+        2.6161,
+        2.6295,
+        2.6292
+      ],
+      "Gpu": [
+        2.5978120000000047,
+        2.5983329999999967,
+        2.5941660000000013,
+        2.5962499999999977,
+        2.5903120000000115,
+        2.5846870000000024,
+        2.59104099999999,
+        2.5913539999999955,
+        2.5927079999999876,
+        2.596145000000007
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 1536,
+      "N": 512,
+      "K": 16384,
+      "Tile": 128,
+      "Chunk": 2048,
+      "WallP50Ms": 2.35805,
+      "GpuP50Ms": 2.2789020000000306,
+      "Wall": [
+        2.3587,
+        2.3262,
+        2.3586,
+        2.3645,
+        2.3268,
+        2.3619,
+        2.3556,
+        2.3575,
+        2.351,
+        2.39
+      ],
+      "Gpu": [
+        2.278850000000034,
+        2.2789540000000272,
+        2.277498000000037,
+        2.279892000000018,
+        2.2781209999999987,
+        2.285516000000001,
+        2.277809000000019,
+        2.2832260000000133,
+        2.2790580000000205,
+        2.2762460000000146
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_8x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 1536,
+      "N": 512,
+      "K": 16384,
+      "Tile": 128,
+      "Chunk": 4096,
+      "WallP50Ms": 2.3127,
+      "GpuP50Ms": 2.2648949999999957,
+      "Wall": [
+        2.3173,
+        2.3145,
+        2.3168,
+        2.3054,
+        2.3102,
+        2.3105,
+        2.311,
+        2.311,
+        2.3148,
+        2.3144
+      ],
+      "Gpu": [
+        2.265104000000008,
+        2.2646859999999833,
+        2.2694779999999923,
+        2.259789000000012,
+        2.263227999999998,
+        2.266664999999989,
+        2.264476999999971,
+        2.260624000000007,
+        2.267081999999988,
+        2.2682279999999935
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_8x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 1536,
+      "N": 512,
+      "K": 16384,
+      "Tile": 128,
+      "Chunk": 8192,
+      "WallP50Ms": 2.4517499999999997,
+      "GpuP50Ms": 2.413072000000014,
+      "Wall": [
+        2.4494,
+        2.4316,
+        2.4614,
+        2.4415,
+        2.4621,
+        2.4361,
+        2.4548,
+        2.4402,
+        2.5094,
+        2.4541
+      ],
+      "Gpu": [
+        2.416353000000015,
+        2.4068739999999877,
+        2.4228119999999933,
+        2.4014569999999935,
+        2.420416000000017,
+        2.4013530000000003,
+        2.4214570000000037,
+        2.408436999999992,
+        2.4097910000000127,
+        2.417186999999984
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_8x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 1536,
+      "N": 512,
+      "K": 16384,
+      "Tile": 128,
+      "Chunk": 16384,
+      "WallP50Ms": 2.9288999999999996,
+      "GpuP50Ms": 2.898906000000011,
+      "Wall": [
+        2.9395,
+        2.9335,
+        2.9191,
+        2.9269,
+        2.9229,
+        2.9345,
+        2.9309,
+        2.9403,
+        2.9268,
+        2.9109
+      ],
+      "Gpu": [
+        2.8996869999999717,
+        2.899062000000015,
+        2.895832999999982,
+        2.898750000000007,
+        2.899583000000007,
+        2.9023950000000127,
+        2.8920830000000137,
+        2.9072909999999865,
+        2.8978119999999876,
+        2.888750000000016
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_8x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 512,
+      "N": 1536,
+      "K": 16384,
+      "Tile": 256,
+      "Chunk": 2048,
+      "WallP50Ms": 2.069,
+      "GpuP50Ms": 1.9978100000000154,
+      "Wall": [
+        2.0687,
+        2.0645,
+        2.0724,
+        2.0717,
+        2.0636,
+        2.0693,
+        2.0648,
+        2.0524,
+        2.0832,
+        2.0734
+      ],
+      "Gpu": [
+        1.9980180000000018,
+        1.996870000000058,
+        1.9984349999999722,
+        1.997600000000034,
+        1.9935389999999984,
+        1.997602000000029,
+        1.9917659999999273,
+        2.000204999999994,
+        2.0002059999999346,
+        2.000829999999894
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 512,
+      "N": 1536,
+      "K": 16384,
+      "Tile": 256,
+      "Chunk": 4096,
+      "WallP50Ms": 2.1532999999999998,
+      "GpuP50Ms": 2.1119764999999973,
+      "Wall": [
+        2.1667,
+        2.1701,
+        2.1424,
+        2.154,
+        2.1414,
+        2.1727,
+        2.1431,
+        2.1455,
+        2.1526,
+        2.1732
+      ],
+      "Gpu": [
+        2.1157269999999926,
+        2.1209369999999694,
+        2.111559999999997,
+        2.1078109999999697,
+        2.1082269999999994,
+        2.1277069999999867,
+        2.099476999999979,
+        2.1022899999999822,
+        2.1123929999999973,
+        2.1191650000000095
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 512,
+      "N": 1536,
+      "K": 16384,
+      "Tile": 256,
+      "Chunk": 8192,
+      "WallP50Ms": 2.436,
+      "GpuP50Ms": 2.396197000000001,
+      "Wall": [
+        2.4255,
+        2.4352,
+        2.4368,
+        2.4202,
+        2.4933,
+        2.4412,
+        2.4252,
+        2.4391,
+        2.4372,
+        2.4329
+      ],
+      "Gpu": [
+        2.3927079999999705,
+        2.398956999999996,
+        2.3967700000000036,
+        2.387498999999991,
+        2.3937500000000114,
+        2.4058330000000296,
+        2.3872910000000047,
+        2.399895000000015,
+        2.4038529999999696,
+        2.395623999999998
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 512,
+      "N": 1536,
+      "K": 16384,
+      "Tile": 256,
+      "Chunk": 16384,
+      "WallP50Ms": 2.60395,
+      "GpuP50Ms": 2.5808850000000234,
+      "Wall": [
+        2.6164,
+        2.5995,
+        2.599,
+        2.6212,
+        2.6016,
+        2.6131,
+        2.6414,
+        2.6063,
+        2.5948,
+        2.5977
+      ],
+      "Gpu": [
+        2.5915620000000104,
+        2.5715619999999717,
+        2.5692700000000173,
+        2.592187000000024,
+        2.576562000000024,
+        2.588124999999991,
+        2.601249999999993,
+        2.585208000000023,
+        2.5742700000000127,
+        2.5691659999999956
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 512,
+      "N": 1536,
+      "K": 16384,
+      "Tile": 128,
+      "Chunk": 2048,
+      "WallP50Ms": 2.1374500000000003,
+      "GpuP50Ms": 2.0665590000000122,
+      "Wall": [
+        2.1452,
+        2.1402,
+        2.1564,
+        2.1233,
+        2.1347,
+        2.1278,
+        2.12,
+        2.1423,
+        2.1191,
+        2.1544
+      ],
+      "Gpu": [
+        2.069684000000109,
+        2.072496000000001,
+        2.076037000000042,
+        2.051663000000019,
+        2.0658300000000054,
+        2.0577049999999986,
+        2.067288000000019,
+        2.058851000000004,
+        2.0502050000000054,
+        2.076144000000056
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_8x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 512,
+      "N": 1536,
+      "K": 16384,
+      "Tile": 128,
+      "Chunk": 4096,
+      "WallP50Ms": 2.33385,
+      "GpuP50Ms": 2.2840610000000083,
+      "Wall": [
+        2.3347,
+        2.3389,
+        2.333,
+        2.3357,
+        2.3276,
+        2.3066,
+        2.3484,
+        2.3206,
+        2.323,
+        2.3407
+      ],
+      "Gpu": [
+        2.2857270000000085,
+        2.2959350000000427,
+        2.2923940000000016,
+        2.282395000000008,
+        2.276247000000012,
+        2.263017999999988,
+        2.299580999999989,
+        2.2778110000000424,
+        2.2810399999999618,
+        2.297081999999989
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_8x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 512,
+      "N": 1536,
+      "K": 16384,
+      "Tile": 128,
+      "Chunk": 8192,
+      "WallP50Ms": 2.8481,
+      "GpuP50Ms": 2.814999499999999,
+      "Wall": [
+        2.8319,
+        2.8518,
+        2.8693,
+        2.8108,
+        2.8578,
+        2.8494,
+        2.8468,
+        2.8571,
+        2.832,
+        2.81
+      ],
+      "Gpu": [
+        2.799687000000006,
+        2.8156249999999545,
+        2.8466649999999163,
+        2.7809369999999944,
+        2.8229160000000775,
+        2.82353999999998,
+        2.8143740000000435,
+        2.8289579999999432,
+        2.7898950000000013,
+        2.787290999999982
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_8x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 512,
+      "N": 1536,
+      "K": 16384,
+      "Tile": 128,
+      "Chunk": 16384,
+      "WallP50Ms": 3.0932500000000003,
+      "GpuP50Ms": 3.061926500000027,
+      "Wall": [
+        3.0955,
+        3.1517,
+        3.0738,
+        3.1178,
+        3.1051,
+        3.0784,
+        3.0913,
+        3.0952,
+        3.0874,
+        3.0586
+      ],
+      "Gpu": [
+        3.0710410000000365,
+        3.0540620000000445,
+        3.0541660000000093,
+        3.093020000000024,
+        3.0779159999999592,
+        3.049582999999984,
+        3.0678120000000035,
+        3.0731250000000045,
+        3.05604100000005,
+        3.0397910000000365
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_8x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 137,
+      "N": 71,
+      "K": 4101,
+      "Tile": 256,
+      "Chunk": 2048,
+      "WallP50Ms": 0.1491,
+      "GpuP50Ms": 0.11520700000011175,
+      "Wall": [
+        0.1475,
+        0.1495,
+        0.1495,
+        0.1453,
+        0.1487,
+        0.1484,
+        0.1497,
+        0.1484,
+        0.1513,
+        0.1534
+      ],
+      "Gpu": [
+        0.11593599999991966,
+        0.11531100000013339,
+        0.11479099999996834,
+        0.11416499999995722,
+        0.11447799999996278,
+        0.11562500000013642,
+        0.11541599999998198,
+        0.1151030000000901,
+        0.1155189999999493,
+        0.11499900000001162
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 137,
+      "N": 71,
+      "K": 4101,
+      "Tile": 256,
+      "Chunk": 4096,
+      "WallP50Ms": 0.13855,
+      "GpuP50Ms": 0.10874900000004573,
+      "Wall": [
+        0.1348,
+        0.1369,
+        0.1373,
+        0.1371,
+        0.1398,
+        0.146,
+        0.1371,
+        0.1422,
+        0.1398,
+        0.1635
+      ],
+      "Gpu": [
+        0.10781200000008084,
+        0.10926999999992404,
+        0.10885300000006737,
+        0.1074989999999616,
+        0.10916599999995924,
+        0.10822799999994004,
+        0.10937400000000252,
+        0.10864500000002408,
+        0.10989499999993768,
+        0.1085409999999456
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 137,
+      "N": 71,
+      "K": 4101,
+      "Tile": 256,
+      "Chunk": 8192,
+      "WallP50Ms": 0.12455,
+      "GpuP50Ms": 0.1021870000000149,
+      "Wall": [
+        0.1247,
+        0.1243,
+        0.1206,
+        0.1243,
+        0.1246,
+        0.1209,
+        0.1274,
+        0.1245,
+        0.131,
+        0.1246
+      ],
+      "Gpu": [
+        0.10229100000003655,
+        0.10208299999999326,
+        0.10135400000001482,
+        0.10135400000001482,
+        0.10312499999997726,
+        0.10083299999996598,
+        0.1026040000000421,
+        0.1026040000000421,
+        0.10249999999996362,
+        0.10197900000002846
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 137,
+      "N": 71,
+      "K": 4101,
+      "Tile": 256,
+      "Chunk": 16384,
+      "WallP50Ms": 0.1245,
+      "GpuP50Ms": 0.10213499999997566,
+      "Wall": [
+        0.1252,
+        0.1245,
+        0.1245,
+        0.1256,
+        0.1212,
+        0.1195,
+        0.1245,
+        0.1207,
+        0.1247,
+        0.1248
+      ],
+      "Gpu": [
+        0.1027080000000069,
+        0.1026040000000421,
+        0.10218699999995806,
+        0.10208299999999326,
+        0.1017699999999877,
+        0.10114499999997406,
+        0.10135400000001482,
+        0.10083299999996598,
+        0.10364500000002863,
+        0.1027080000000069
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 137,
+      "N": 71,
+      "K": 4101,
+      "Tile": 128,
+      "Chunk": 2048,
+      "WallP50Ms": 0.14205,
+      "GpuP50Ms": 0.10723849999999402,
+      "Wall": [
+        0.1399,
+        0.1397,
+        0.1416,
+        0.1425,
+        0.1404,
+        0.1431,
+        0.1442,
+        0.143,
+        0.1432,
+        0.1387
+      ],
+      "Gpu": [
+        0.10666500000002088,
+        0.10666599999990467,
+        0.10781199999996716,
+        0.10676999999998316,
+        0.10697899999991023,
+        0.10822800000005373,
+        0.10749900000007528,
+        0.10718699999995351,
+        0.10791500000004817,
+        0.10729000000003452
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_8x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 137,
+      "N": 71,
+      "K": 4101,
+      "Tile": 128,
+      "Chunk": 4096,
+      "WallP50Ms": 0.1318,
+      "GpuP50Ms": 0.10458300000004783,
+      "Wall": [
+        0.132,
+        0.1363,
+        0.1307,
+        0.1323,
+        0.1302,
+        0.1316,
+        0.1295,
+        0.1369,
+        0.1312,
+        0.1321
+      ],
+      "Gpu": [
+        0.10426999999992859,
+        0.10458300000004783,
+        0.10468700000001263,
+        0.10458300000004783,
+        0.10468700000001263,
+        0.10458300000004783,
+        0.10447900000008303,
+        0.10458299999993415,
+        0.10458300000004783,
+        0.10468700000001263
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_8x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 137,
+      "N": 71,
+      "K": 4101,
+      "Tile": 128,
+      "Chunk": 8192,
+      "WallP50Ms": 0.12335,
+      "GpuP50Ms": 0.10083300000002282,
+      "Wall": [
+        0.1268,
+        0.13,
+        0.1258,
+        0.1231,
+        0.1236,
+        0.12,
+        0.1301,
+        0.1221,
+        0.1216,
+        0.1208
+      ],
+      "Gpu": [
+        0.10041599999999562,
+        0.10197900000002846,
+        0.09989499999994678,
+        0.1017699999999877,
+        0.10104100000000926,
+        0.0993750000000091,
+        0.10104100000000926,
+        0.10114499999997406,
+        0.09927000000004682,
+        0.10062500000003638
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_8x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "M": 137,
+      "N": 71,
+      "K": 4101,
+      "Tile": 128,
+      "Chunk": 16384,
+      "WallP50Ms": 0.12175,
+      "GpuP50Ms": 0.10078099999998358,
+      "Wall": [
+        0.1247,
+        0.1287,
+        0.1197,
+        0.1227,
+        0.1279,
+        0.1208,
+        0.1197,
+        0.12,
+        0.1306,
+        0.12
+      ],
+      "Gpu": [
+        0.10156199999994442,
+        0.10114499999997406,
+        0.09958300000005238,
+        0.10083299999996598,
+        0.10125000000005002,
+        0.09906200000000354,
+        0.10072900000000118,
+        0.10062500000003638,
+        0.10218699999995806,
+        0.09989499999994678
+      ],
+      "Resources": {
+        "Name": "gemm_xmx_streamed_block_8x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    }
+  ]
+}

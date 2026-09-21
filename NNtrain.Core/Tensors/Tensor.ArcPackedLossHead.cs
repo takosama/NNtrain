@@ -67,7 +67,7 @@ partial class Tensor
         {
             float[] total = new float[1];
             using (var input = ArcMatrixOperand())
-            using (var weights = weight.ArcMatrixOperand())
+            using (var weights = weight.ArcMatrixOperand(cacheWeightPanels: true))
             using (var packedWeights = weights.PackB(vocabulary, width, true))
             using (var biases = bias.ArcUploadValues())
             using (var logits = lane.Allocate(capacity * vocabulary))
@@ -92,7 +92,7 @@ partial class Tensor
             if (result.Node.IsDetached) { ids.Dispose(); return result; }
             result.Node.RegisterResource(ids);
             result.Node.BackwardAction = () => {
-                using var input = ArcMatrixOperand(); using var weights = weight.ArcMatrixOperand();
+                using var input = ArcMatrixOperand(); using var weights = weight.ArcMatrixOperand(cacheWeightPanels: true);
                 // These two immutable weight panels live only during this
                 // backward callback and are retired before optimizer commit.
                 using var forwardWeights = weights.PackB(vocabulary, width, true);

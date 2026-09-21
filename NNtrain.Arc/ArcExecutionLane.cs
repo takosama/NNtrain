@@ -9,7 +9,7 @@ namespace NNtrain.Arc;
 /// Session-owned OpenCL lane for resident training and an explicit staged A/B reference.
 /// All native allocations and the in-order queue are owned by this session.
 /// </summary>
-public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKernelCapabilitySet
+public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKernelCapabilitySet
 {
     private readonly object _sync = new();
     private readonly Dictionary<string, nint> _kernels = [];
@@ -19,6 +19,7 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
     private readonly LinkedList<CachedBuffer> _freeLru = [];
     private readonly List<(nint Handle, long Bytes)> _retired = [];
     private readonly List<(string Name, nint Event, string? Label)> _pendingEvents = [];
+    private readonly List<(string Kind, nint Event, long Bytes)> _pendingCopyEvents = [];
     private bool _queuedCopies;
     private nint _context, _queue, _program;
     private bool _disposed;
@@ -51,6 +52,12 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
     public IKernelCapabilitySet Capabilities => this;
     public IExecutionProfiler Profiler => NullExecutionProfiler.Instance;
     public long AllocationCount { get; private set; }
+    /// <summary>Cumulative logical requests; not simultaneous VRAM use.</summary>
+    public long RequestedBytes { get; private set; }
+    /// <summary>Cumulative successful clCreateBuffer bytes, including initial model upload.</summary>
+    public long NativeAllocatedBytes { get; private set; }
+    public long NativeReleasedBytes { get; private set; }
+    public long NativeReleaseCount { get; private set; }
     public long AllocatedBytes { get; private set; }
     public long KernelLaunchCount { get; private set; }
     public long CachedBytes { get; private set; }
@@ -96,6 +103,13 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
         DetailedProfiler = Options.DetailedProfiling ? new() : null;
         ArgumentOutOfRangeException.ThrowIfNegative(Options.BufferPoolBytes);
         ArgumentOutOfRangeException.ThrowIfNegative(Options.DeferredReleaseBytes);
+        ArgumentOutOfRangeException.ThrowIfNegative(Options.PhysicalBufferBudgetBytes);
+        ArgumentOutOfRangeException.ThrowIfNegative(Options.TransformerCheckpointLayers);
+        if (Options.MatrixPanelCacheMiB is < 0 or > 1024)
+            throw new ArgumentOutOfRangeException(nameof(options), "Matrix panel cache must be 0..1024 MiB.");
+        if (Options.AttentionDkvRows is not (2 or 4 or 8 or 16)) throw new ArgumentOutOfRangeException(nameof(options), "DKV rows must be 2, 4, 8 or 16.");
+        if (Options.StreamedWeightGradientWorkspaceMiB is < 0 or > 256)
+            throw new ArgumentOutOfRangeException(nameof(options), "Streamed weight-gradient workspace must be between 0 and 256 MiB.");
         if (Options.QueuedKernelLimit is < 16 or > 4096) throw new ArgumentOutOfRangeException(nameof(Options.QueuedKernelLimit));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(Options.LossChunkRows);
         if (!Enum.IsDefined(Options.XmxGemmMode)) throw new ArgumentOutOfRangeException(nameof(options));
@@ -112,6 +126,10 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
             var assembly = typeof(ArcExecutionLane).Assembly;
             foreach (string resourceName in assembly.GetManifestResourceNames().Where(n => n.EndsWith(".cl", StringComparison.Ordinal)).Order())
             {
+                // Flash has its own compiler policy; never change GEMM/codec
+                // register allocation to accommodate a different kernel group.
+                if (resourceName.EndsWith(".attention_flash.cl", StringComparison.Ordinal)
+                    || resourceName.EndsWith(".attention_xmx_products.cl", StringComparison.Ordinal)) continue;
                 using Stream resource = assembly.GetManifestResourceStream(resourceName)!;
                 using var reader = new StreamReader(resource);
                 sourceText.AppendLine(reader.ReadToEnd());
@@ -123,6 +141,7 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
             finally { pin.Free(); }
             OpenClNative.Check(error, "create program");
             string buildOptions = "-cl-std=CL1.2 -cl-fp32-correctly-rounded-divide-sqrt";
+            if (Options.ExperimentalOptimizationKernels) buildOptions += " -DARC_OPTIMIZATION_PROBES=1";
             if (Device.SupportsXmx && Options.XmxMatrices)
                 buildOptions += $" -DARC_XMX=1 -DARC_SG={Device.MinimumSubgroupSize}";
             if (Device.Extensions.Split(' ').Contains("cl_intel_subgroup_local_block_io"))
@@ -153,7 +172,7 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_kernels.TryGetValue(name, out nint kernel))
             {
-                kernel = OpenClNative.clCreateKernel(_program, name, out int error);
+                kernel = OpenClNative.clCreateKernel(ProgramForKernel(name), name, out int error);
                 OpenClNative.Check(error, $"create kernel {name}");
                 _kernels.Add(name, kernel);
             }
@@ -185,7 +204,7 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
         lock (_sync) Transfer(buffer, values, read: true, checked(elementOffset * 4L));
     }
 
-    public void CopyBytes(ArcBuffer source, ArcBuffer target, int sourceOffset, int targetOffset, int bytes)
+    public unsafe void CopyBytes(ArcBuffer source, ArcBuffer target, int sourceOffset, int targetOffset, int bytes)
     {
         lock (_sync)
         {
@@ -194,8 +213,11 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
                 || sourceOffset + (long)bytes > source.Bytes || targetOffset + (long)bytes > target.Bytes)
                 throw new ArgumentException("Invalid Arc device copy range.");
             if (bytes == 0) return;
-            OpenClNative.Check(OpenClNative.clEnqueueCopyBuffer(_queue, source.Handle, target.Handle,
-                (nuint)sourceOffset, (nuint)targetOffset, (nuint)bytes, 0, 0, 0), "device copy");
+            nint evt = 0;
+            using (Timeline?.Host("queue-submit", "D2D"))
+                OpenClNative.Check(OpenClNative.clEnqueueCopyBuffer(_queue, source.Handle, target.Handle,
+                    (nuint)sourceOffset, (nuint)targetOffset, (nuint)bytes, 0, 0, Timeline is null ? 0 : (nint)(&evt)), "device copy");
+            if (evt != 0) _pendingCopyEvents.Add(("D2D", evt, bytes));
             _queuedCopies = true;
             if (!Options.BatchDispatch) Synchronize();
         }
@@ -218,7 +240,7 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
         lock (_sync) Transfer(buffer, values, read: true);
     }
 
-    private void Transfer(ArcBuffer buffer, Array values, bool read, long offset = 0)
+    private unsafe void Transfer(ArcBuffer buffer, Array values, bool read, long offset = 0)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (buffer.Owner != this || buffer.Handle == 0 || offset < 0 || Buffer.ByteLength(values) + offset > buffer.Bytes)
@@ -226,13 +248,17 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
         if (values.Length == 0) return;
         GCHandle pin = GCHandle.Alloc(values, GCHandleType.Pinned);
         long start = Stopwatch.GetTimestamp();
+        nint evt = 0;
         try
         {
             nuint bytes = (nuint)Buffer.ByteLength(values);
-            int result = read
-                ? OpenClNative.clEnqueueReadBuffer(_queue, buffer.Handle, 1, (nuint)offset, bytes, pin.AddrOfPinnedObject(), 0, 0, 0)
-                : OpenClNative.clEnqueueWriteBuffer(_queue, buffer.Handle, 1, (nuint)offset, bytes, pin.AddrOfPinnedObject(), 0, 0, 0);
+            int result;
+            using (Timeline?.Host("blocking-transfer-wait", read ? "D2H" : "H2D"))
+                result = read
+                    ? OpenClNative.clEnqueueReadBuffer(_queue, buffer.Handle, 1, (nuint)offset, bytes, pin.AddrOfPinnedObject(), 0, 0, Timeline is null ? 0 : (nint)(&evt))
+                    : OpenClNative.clEnqueueWriteBuffer(_queue, buffer.Handle, 1, (nuint)offset, bytes, pin.AddrOfPinnedObject(), 0, 0, Timeline is null ? 0 : (nint)(&evt));
             OpenClNative.Check(result, read ? "download" : "upload");
+            Timeline?.Device(read ? "D2H" : "H2D", DetailedProfiler?.Phase, evt, read ? "D2H" : "H2D", (long)bytes);
             // Blocking transfers complete all earlier commands in our in-order queue.
             DrainCompletedEvents();
             if (read) D2HBytes += (long)bytes; else H2DBytes += (long)bytes;
@@ -240,14 +266,16 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
             TransferMilliseconds += elapsed;
             DetailedProfiler?.Add(read ? "D2H" : "H2D", $"{DetailedProfiler.Phase}/{bytes}B", elapsed, (long)bytes);
         }
-        finally { pin.Free(); }
+        finally { if (evt != 0) OpenClNative.clReleaseEvent(evt); pin.Free(); }
     }
 
     private ArcBuffer AllocateCore(long bytes, Array? data)
     {
+        using var allocationScope = Timeline?.Host("allocation-pool", DetailedProfiler?.Phase ?? "");
         ObjectDisposedException.ThrowIf(_disposed, this);
         if ((ulong)bytes > Device.MaximumAllocationBytes)
             throw new InvalidOperationException($"Arc allocation {bytes:N0} exceeds device maximum {Device.MaximumAllocationBytes:N0} bytes.");
+        RequestedBytes += bytes;
         GCHandle pin = default;
         try
         {
@@ -266,14 +294,19 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
             }
             else
             {
+                TrimCacheForAllocation(bytes);
                 // COPY_HOST_PTR copies the full allocation, not the array length.
                 // Tiny packed payloads must not read padding beyond their managed array.
-                if (data is { Length: > 0 } && Buffer.ByteLength(data) == bytes)
+                if (!Options.ExplicitHostUploads && data is { Length: > 0 } && Buffer.ByteLength(data) == bytes)
                     pin = GCHandle.Alloc(data, GCHandleType.Pinned);
-                pointer = OpenClNative.clCreateBuffer(_context, pin.IsAllocated ? 33UL : 1UL,
-                    (nuint)bytes, pin.IsAllocated ? pin.AddrOfPinnedObject() : 0, out int error);
+                int error;
+                using (Timeline?.Host(pin.IsAllocated ? "native-allocation-with-upload" : "native-allocation"))
+                    pointer = OpenClNative.clCreateBuffer(_context, pin.IsAllocated ? 33UL : 1UL,
+                        (nuint)bytes, pin.IsAllocated ? pin.AddrOfPinnedObject() : 0, out error);
+                if (pin.IsAllocated && Timeline is { } timeline) timeline.OpaqueAllocationCopies++;
                 OpenClNative.Check(error, $"allocate {bytes:N0} bytes");
                 AllocationCount++;
+                NativeAllocatedBytes += bytes;
             }
             double elapsed = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
             AllocationMilliseconds += elapsed;
@@ -324,7 +357,8 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_kernels.TryGetValue(name, out nint kernel))
             {
-                kernel = OpenClNative.clCreateKernel(_program, name, out int error);
+                using var compilation = Timeline?.Host("kernel-create-compile", name);
+                kernel = OpenClNative.clCreateKernel(ProgramForKernel(name), name, out int error);
                 OpenClNative.Check(error, $"create kernel {name}");
                 _kernels.Add(name, kernel);
             }
@@ -334,6 +368,8 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
             string? label = DetailedProfiler?.KernelLabel(name, arguments);
             try
             {
+                using (Timeline?.Host("queue-submit", label ?? name))
+                {
                 for (int i = 0; i < arguments.Length; i++)
                 {
                     object argument = arguments[i];
@@ -363,27 +399,38 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
                 OpenClNative.Check(OpenClNative.clEnqueueNDRangeKernel(_queue, kernel, (uint)global.Length, 0,
                     global, localSize, 0, 0, (nint)(&kernelEvent)), $"launch {name}");
                 KernelLaunchCount++;
+                }
                 if (label is not null) DetailedProfiler!.Add("host-submit", label, Stopwatch.GetElapsedTime(submitStart).TotalMilliseconds);
                 foreach (var (buffer, host) in temporary)
                 {
                     if (!host.ReadBack || host.Values.Length == 0) continue;
                     GCHandle pin = GCHandle.Alloc(host.Values, GCHandleType.Pinned);
                     long readStart = Stopwatch.GetTimestamp();
-                    try { OpenClNative.Check(OpenClNative.clEnqueueReadBuffer(_queue, buffer.Handle, 1, 0,
-                        (nuint)Buffer.ByteLength(host.Values), pin.AddrOfPinnedObject(), 0, 0, 0), $"read {name}");
+                    nint readEvent = 0;
+                    try {
+                        using (Timeline?.Host("blocking-transfer-wait", "host-result"))
+                            OpenClNative.Check(OpenClNative.clEnqueueReadBuffer(_queue, buffer.Handle, 1, 0,
+                                (nuint)Buffer.ByteLength(host.Values), pin.AddrOfPinnedObject(), 0, 0,
+                                Timeline is null ? 0 : (nint)(&readEvent)), $"read {name}");
+                        Timeline?.Device("D2H", label, readEvent, "D2H", Buffer.ByteLength(host.Values));
                         D2HBytes += Buffer.ByteLength(host.Values);
                         double elapsed = Stopwatch.GetElapsedTime(readStart).TotalMilliseconds;
                         TransferMilliseconds += elapsed;
                         DetailedProfiler?.Add("D2H", $"{DetailedProfiler.Phase}/host-result/{Buffer.ByteLength(host.Values)}B", elapsed, Buffer.ByteLength(host.Values));
                     }
-                    finally { pin.Free(); }
+                    finally { if (readEvent != 0) OpenClNative.clReleaseEvent(readEvent); pin.Free(); }
                 }
                 _pendingEvents.Add((name, kernelEvent, label));
                 kernelEvent = 0;
                 // Bound queued command/event resources. No per-kernel fence is
                 // necessary when all uses (including pooled reuse) share this queue.
-                if (!Options.BatchDispatch || _pendingEvents.Count >= Options.QueuedKernelLimit || temporary.Any(t => t.Array.ReadBack))
-                    SynchronizeCore(!Options.BatchDispatch ? "unbatched" : temporary.Any(t => t.Array.ReadBack) ? "host-result" : "event-limit");
+                if (!Options.BatchDispatch || temporary.Any(t => t.Array.ReadBack))
+                    SynchronizeCore(!Options.BatchDispatch ? "unbatched" : "host-result");
+                else if (_pendingEvents.Count >= Options.QueuedKernelLimit)
+                {
+                    if (Options.PipelineEventCollection) DrainOldestEventHalf();
+                    else SynchronizeCore("event-limit");
+                }
             }
             catch { if (_queue != 0) OpenClNative.clFinish(_queue); DrainCompletedEvents(); throw; }
             finally {
@@ -396,13 +443,45 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
     /// <summary>Finish queued work and collect profiling events without transferring tensor data.</summary>
     public void Synchronize() => SynchronizeCore("explicit");
 
+    // Keep the newer half executing while CPU queries/releases older events.
+    // This is NOT a retirement fence: retired allocations and D2D events stay
+    // owned until the existing full-queue synchronization / memory budget fence.
+    private unsafe void DrainOldestEventHalf()
+    {
+        int count = _pendingEvents.Count / 2;
+        nint last = _pendingEvents[count - 1].Event;
+        long start = Stopwatch.GetTimestamp();
+        using (Timeline?.Host("queue-partial-wait", "event-half"))
+        {
+            OpenClNative.Check(OpenClNative.clFlush(_queue), "flush event window");
+            OpenClNative.Check(OpenClNative.clWaitForEvents(1, (nint)(&last)), "wait oldest event window");
+        }
+        DetailedProfiler?.Add("partial-wait", DetailedProfiler.Phase, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+        using (Timeline?.Host("profiler-event-collection", "completed-half"))
+        {
+            // Remove each owner even if profiling throws; the caller's failure
+            // cleanup must never release the same native event twice.
+            int removed = 0;
+            try
+            {
+                for (; removed < count;)
+                {
+                    var entry = _pendingEvents[removed++];
+                    try { RecordKernelTime(entry.Name, entry.Event, entry.Label); }
+                    finally { OpenClNative.clReleaseEvent(entry.Event); }
+                }
+            }
+            finally { _pendingEvents.RemoveRange(0, removed); }
+        }
+    }
+
     private void SynchronizeCore(string reason)
     {
         lock (_sync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             long start = Stopwatch.GetTimestamp();
-            try { OpenClNative.Check(OpenClNative.clFinish(_queue), "synchronize"); }
+            try { using var wait = Timeline?.Host("queue-sync-wait", reason); OpenClNative.Check(OpenClNative.clFinish(_queue), "synchronize"); }
             finally {
                 DetailedProfiler?.Add("synchronize", $"{DetailedProfiler.Phase}/{reason}", Stopwatch.GetElapsedTime(start).TotalMilliseconds);
                 DrainCompletedEvents();
@@ -412,19 +491,27 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
 
     private void DrainCompletedEvents()
     {
+        using var collection = Timeline?.Host("profiler-event-collection");
         foreach (var entry in _pendingEvents)
         {
             try { RecordKernelTime(entry.Name, entry.Event, entry.Label); }
             finally { OpenClNative.clReleaseEvent(entry.Event); }
         }
         _pendingEvents.Clear();
+        foreach (var entry in _pendingCopyEvents)
+        {
+            try { Timeline?.Device(entry.Kind, entry.Kind, entry.Event, entry.Kind, entry.Bytes); }
+            finally { OpenClNative.clReleaseEvent(entry.Event); }
+        }
+        _pendingCopyEvents.Clear();
         _queuedCopies = false;
-        foreach (var entry in _retired) OpenClNative.clReleaseMemObject(entry.Handle);
+        foreach (var entry in _retired) ReleaseNative(entry.Handle, entry.Bytes);
         _retired.Clear(); RetiredBytes = 0;
     }
 
     private void RecordKernelTime(string name, nint evt, string? label)
     {
+        Timeline?.Device(name, label, evt, "kernel", 0);
         if (evt == 0) return;
         if (OpenClNative.clGetEventProfilingInfo(evt, 0x1282, 8, out ulong start, out _) != 0
             || OpenClNative.clGetEventProfilingInfo(evt, 0x1283, 8, out ulong end, out _) != 0) return;
@@ -443,6 +530,7 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
     {
         lock (_sync)
         {
+            using var releaseScope = Timeline?.Host("release-pool");
             nint handle = buffer.Handle;
             if (handle == 0) return;
             buffer.Handle = 0;
@@ -525,6 +613,26 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
         if (free.Count == 0) _lruPool.Remove(entry.Bytes);
     }
 
+    private void TrimCacheForAllocation(long bytes)
+    {
+        long budget = Options.PhysicalBufferBudgetBytes > 0
+            ? Options.PhysicalBufferBudgetBytes : checked((long)(Device.GlobalMemoryBytes / 10 * 9));
+        if (!Options.LruBufferPool) return;
+        // Retired bytes can be reclaimed at the single fence below. Do not
+        // evict additional useful cache entries merely because that fence has
+        // not yet completed.
+        while (AllocatedBytes + CachedBytes + bytes > budget && _freeLru.First is { } node)
+        {
+            CachedBuffer victim = node.Value;
+            RemoveLruEntry(victim);
+            CachedBytes -= victim.Bytes;
+            RetireOrRelease(victim.Handle, victim.Bytes, "physical-budget");
+            DetailedProfiler?.Add("cache-budget-trim", $"{DetailedProfiler.Phase}/{victim.Bytes}B", bytes: victim.Bytes);
+        }
+        if (RetiredBytes > 0 && AllocatedBytes + CachedBytes + RetiredBytes + bytes > budget)
+            SynchronizeCore("physical-budget-retired");
+    }
+
     // Called only under _sync after an exact-size pool miss. Retired entries
     // still own their native reference; their original ArcBuffer and all its
     // borrowed views are already invalid. Earlier commands and every new use
@@ -558,7 +666,19 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
             return;
         }
         try { if (!_disposed && (_pendingEvents.Count != 0 || _queuedCopies)) SynchronizeCore(fenceReason); }
-        finally { OpenClNative.clReleaseMemObject(handle); }
+        finally { ReleaseNative(handle, bytes); }
+    }
+
+    private void ReleaseNative(nint handle, long bytes)
+    {
+        using var releaseScope = Timeline?.Host("native-free");
+        int status = OpenClNative.clReleaseMemObject(handle);
+        if (status == 0)
+        {
+            NativeReleasedBytes += bytes;
+            NativeReleaseCount++;
+            DetailedProfiler?.Add("native-release", $"{DetailedProfiler.Phase}/{bytes}B", bytes: bytes);
+        }
     }
 
     public void Dispose()
@@ -570,13 +690,19 @@ public sealed class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKe
             if (_queue != 0) OpenClNative.clFinish(_queue);
             DrainCompletedEvents();
             foreach (ArcBuffer buffer in _buffers.ToArray()) Release(buffer);
-            foreach (var free in _pool.Values)
-                foreach (nint pointer in free) OpenClNative.clReleaseMemObject(pointer);
-            foreach (CachedBuffer entry in _freeLru) OpenClNative.clReleaseMemObject(entry.Handle);
+            foreach (var pair in _pool)
+                foreach (nint pointer in pair.Value) ReleaseNative(pointer, pair.Key);
+            foreach (CachedBuffer entry in _freeLru) ReleaseNative(entry.Handle, entry.Bytes);
             _pool.Clear(); _lruPool.Clear(); _freeLru.Clear(); CachedBytes = 0;
             foreach (nint kernel in _kernels.Values) OpenClNative.clReleaseKernel(kernel);
             _kernels.Clear();
             if (_program != 0) OpenClNative.clReleaseProgram(_program);
+            foreach (nint program in _flashPrograms.Values) OpenClNative.clReleaseProgram(program);
+            _flashPrograms.Clear();
+            if (_attentionProductsProgram != 0) OpenClNative.clReleaseProgram(_attentionProductsProgram);
+            _attentionProductsProgram = 0;
+            if (_largeEpilogueProgram != 0) OpenClNative.clReleaseProgram(_largeEpilogueProgram);
+            _largeEpilogueProgram = 0;
             if (_queue != 0) OpenClNative.clReleaseCommandQueue(_queue);
             if (_context != 0) OpenClNative.clReleaseContext(_context);
             _program = _queue = _context = 0;

@@ -8,18 +8,21 @@ namespace NNtrain.Benchmarks;
 /// <summary>Experimental GEMM probes; GPU packing/allocation is included.</summary>
 internal static class ArcXmxDirectTuneProbe
 {
-    private enum Candidate { Reference, Block8x64Wg4, Block8x64Wg8, Block8x64Wg16, Scalar8x64Wg8, Block8x32Wg8, Block8x32Wg16, Block16x32Wg8, Block16x32Wg16 }
+    private enum Candidate { Reference, Block8x64Wg4, Block8x64Wg8, Block8x64Wg16, Scalar8x64Wg8, Block8x32Wg8, Block8x32Wg16, Block16x32Wg8, Block16x32Wg16,
+        Block16x64Wg4, Block16x64Wg8, Block16x64Wg16, Block32x32Wg4, Block32x32Wg8, Block32x32Wg16 }
 
-    internal static void Run(string path)
+    internal static void Run(string path, bool expanded = false)
     {
         path = Path.GetFullPath(path);
         if (File.Exists(path)) throw new IOException("Probe output must be a new file.");
         using var lane = new ArcExecutionLane();
         if (!lane.Device.SupportsXmx || lane.Device.MinimumSubgroupSize != 16)
             throw new NotSupportedException("The experimental XMX layouts require SG16 Intel XMX.");
-        Validate(lane);
+        Candidate[] candidates = Enum.GetValues<Candidate>()
+            .Where(c => expanded ? c >= Candidate.Block16x32Wg16 : c <= Candidate.Block16x32Wg16).ToArray();
+        Validate(lane, candidates);
         var results = new List<object>();
-        foreach (Candidate candidate in Enum.GetValues<Candidate>())
+        foreach (Candidate candidate in candidates)
         foreach (var (m, n, k, ta, tb) in new[] {
             (16384,1536,512,false,true), (16384,512,1536,false,true),
             (16384,512,1536,false,false), (16384,1536,512,false,false),
@@ -78,6 +81,12 @@ internal static class ArcXmxDirectTuneProbe
         Candidate.Block8x32Wg16 => ("gemm_xmx_direct_block_8x32_wg16", 128, 32, 16),
         Candidate.Block16x32Wg8 => ("gemm_xmx_direct_block_16x32_wg8", 128, 32, 8),
         Candidate.Block16x32Wg16 => ("gemm_xmx_direct_block_16x32_wg16", 256, 32, 16),
+        Candidate.Block16x64Wg4 => ("gemm_xmx_direct_block_16x64_wg4", 64, 64, 4),
+        Candidate.Block16x64Wg8 => ("gemm_xmx_direct_block_16x64_wg8", 128, 64, 8),
+        Candidate.Block16x64Wg16 => ("gemm_xmx_direct_block_16x64_wg16", 256, 64, 16),
+        Candidate.Block32x32Wg4 => ("gemm_xmx_direct_block_32x32_wg4", 128, 32, 4),
+        Candidate.Block32x32Wg8 => ("gemm_xmx_direct_block_32x32_wg8", 256, 32, 8),
+        Candidate.Block32x32Wg16 => ("gemm_xmx_direct_block_32x32_wg16", 512, 32, 16),
         _ => throw new ArgumentOutOfRangeException(nameof(candidate)),
     };
 
@@ -115,7 +124,7 @@ internal static class ArcXmxDirectTuneProbe
         finally { packedA?.Dispose(); packedB?.Dispose(); }
     }
 
-    private static void Validate(ArcExecutionLane lane)
+    private static void Validate(ArcExecutionLane lane, Candidate[] candidates)
     {
         foreach (var (m, n, k) in new[] { (137, 131, 67), (67, 71, 4101), (257, 513, 35) })
         foreach (bool ta in new[] { false, true }) foreach (bool tb in new[] { false, true })
@@ -125,7 +134,7 @@ internal static class ArcXmxDirectTuneProbe
             using var b = lane.Upload(Enumerable.Range(0, k * n).Select(i => (i % 19 - 9) / 32f).ToArray());
             using var bias = lane.Upload(Enumerable.Range(0, n).Select(i => (i % 7 - 3) / 32f).ToArray());
             float[]? expected = null;
-            foreach (Candidate candidate in Enum.GetValues<Candidate>())
+            foreach (Candidate candidate in candidates)
             {
                 using var c = lane.Upload(Enumerable.Repeat(.125f, m * n).ToArray());
                 long h2d = lane.H2DBytes, d2h = lane.D2HBytes;

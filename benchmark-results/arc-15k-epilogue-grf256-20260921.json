@@ -1,0 +1,3282 @@
+{
+  "Name": "Intel(R) Arc(TM) B580 Graphics",
+  "DriverVersion": "32.0.101.9030",
+  "Results": [
+    {
+      "M": 137,
+      "N": 64,
+      "K": 79,
+      "Relu": false,
+      "Fused": false,
+      "Columns": 0,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_direct_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.008593,
+      "P50Ms": 0.04445,
+      "GpuSamples": [
+        0.008541,
+        0.008645,
+        0.008645,
+        0.008437000000000007,
+        0.008540999999999993,
+        0.008645,
+        0.008333000000000007,
+        0.008645
+      ],
+      "Samples": [
+        0.0524,
+        0.0575,
+        0.0389,
+        0.0482,
+        0.0375,
+        0.045,
+        0.0439,
+        0.0385
+      ]
+    },
+    {
+      "M": 137,
+      "N": 64,
+      "K": 79,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 32,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.013489000000000001,
+      "P50Ms": 0.03595,
+      "GpuSamples": [
+        0.013333000000000012,
+        0.014061999999999991,
+        0.01364499999999999,
+        0.01364499999999999,
+        0.013540999999999997,
+        0.013437000000000004,
+        0.013333000000000012,
+        0.013020000000000004
+      ],
+      "Samples": [
+        0.0348,
+        0.0379,
+        0.0369,
+        0.0376,
+        0.0537,
+        0.035,
+        0.0337,
+        0.0328
+      ]
+    },
+    {
+      "M": 137,
+      "N": 64,
+      "K": 79,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x64",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.024479,
+      "P50Ms": 0.04795,
+      "GpuSamples": [
+        0.024791000000000007,
+        0.02437499999999998,
+        0.024478999999999973,
+        0.024895,
+        0.024478999999999973,
+        0.024478999999999973,
+        0.024687000000000014,
+        0.02447900000000003
+      ],
+      "Samples": [
+        0.0597,
+        0.0479,
+        0.0475,
+        0.0474,
+        0.048,
+        0.0551,
+        0.0476,
+        0.0481
+      ]
+    },
+    {
+      "M": 137,
+      "N": 64,
+      "K": 79,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.045781000000000016,
+      "P50Ms": 0.06795,
+      "GpuSamples": [
+        0.04562500000000003,
+        0.04625000000000001,
+        0.04583300000000001,
+        0.04583300000000001,
+        0.04572900000000002,
+        0.04583300000000001,
+        0.045624999999999916,
+        0.04562500000000003
+      ],
+      "Samples": [
+        0.0698,
+        0.0672,
+        0.0652,
+        0.0876,
+        0.0687,
+        0.0662,
+        0.0654,
+        0.0689
+      ]
+    },
+    {
+      "M": 137,
+      "N": 64,
+      "K": 79,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.046041,
+      "P50Ms": 0.07045,
+      "GpuSamples": [
+        0.045936999999999895,
+        0.046041,
+        0.0461450000000001,
+        0.04645799999999989,
+        0.0461450000000001,
+        0.046041,
+        0.045936999999999895,
+        0.046041
+      ],
+      "Samples": [
+        0.0722,
+        0.0762,
+        0.0821,
+        0.0681,
+        0.0735,
+        0.0648,
+        0.065,
+        0.0687
+      ]
+    },
+    {
+      "M": 137,
+      "N": 64,
+      "K": 79,
+      "Relu": true,
+      "Fused": false,
+      "Columns": 0,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_direct_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.008437000000000028,
+      "P50Ms": 0.04005,
+      "GpuSamples": [
+        0.00854099999999991,
+        0.008437000000000028,
+        0.008435999999999888,
+        0.00854099999999991,
+        0.008437000000000028,
+        0.00854099999999991,
+        0.008332000000000006,
+        0.008227999999999902
+      ],
+      "Samples": [
+        0.0417,
+        0.0403,
+        0.0431,
+        0.0358,
+        0.0412,
+        0.0371,
+        0.0398,
+        0.0363
+      ]
+    },
+    {
+      "M": 137,
+      "N": 64,
+      "K": 79,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 32,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.013125000000000053,
+      "P50Ms": 0.03435,
+      "GpuSamples": [
+        0.013228999999999935,
+        0.013125000000000053,
+        0.01333300000000004,
+        0.013125000000000053,
+        0.013125000000000053,
+        0.013125000000000053,
+        0.01333300000000004,
+        0.013020000000000032
+      ],
+      "Samples": [
+        0.0375,
+        0.0325,
+        0.0324,
+        0.0358,
+        0.044,
+        0.0349,
+        0.0338,
+        0.0325
+      ]
+    },
+    {
+      "M": 137,
+      "N": 64,
+      "K": 79,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x64",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.024375000000000036,
+      "P50Ms": 0.048049999999999995,
+      "GpuSamples": [
+        0.024478999999999917,
+        0.024375000000000036,
+        0.024478999999999917,
+        0.024270000000000014,
+        0.024269999999999792,
+        0.024375000000000036,
+        0.0245829999999998,
+        0.024270000000000014
+      ],
+      "Samples": [
+        0.0478,
+        0.0483,
+        0.0536,
+        0.0481,
+        0.0477,
+        0.048,
+        0.0474,
+        0.0509
+      ]
+    },
+    {
+      "M": 137,
+      "N": 64,
+      "K": 79,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.04572900000000013,
+      "P50Ms": 0.06845,
+      "GpuSamples": [
+        0.04572900000000013,
+        0.04572900000000013,
+        0.04572900000000013,
+        0.045624999999999805,
+        0.04572900000000013,
+        0.04551999999999978,
+        0.04572900000000013,
+        0.045624999999999805
+      ],
+      "Samples": [
+        0.0719,
+        0.0687,
+        0.0706,
+        0.0679,
+        0.0682,
+        0.068,
+        0.0707,
+        0.0679
+      ]
+    },
+    {
+      "M": 137,
+      "N": 64,
+      "K": 79,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.045936999999999895,
+      "P50Ms": 0.06920000000000001,
+      "GpuSamples": [
+        0.04604099999999978,
+        0.0461450000000001,
+        0.045936999999999895,
+        0.045936999999999895,
+        0.04583300000000001,
+        0.04604099999999978,
+        0.04583300000000001,
+        0.045936999999999895
+      ],
+      "Samples": [
+        0.0717,
+        0.0688,
+        0.0681,
+        0.0678,
+        0.0726,
+        0.0689,
+        0.0695,
+        0.0763
+      ]
+    },
+    {
+      "M": 256,
+      "N": 96,
+      "K": 128,
+      "Relu": false,
+      "Fused": false,
+      "Columns": 0,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_direct_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.01072850000000014,
+      "P50Ms": 0.0412,
+      "GpuSamples": [
+        0.010728999999999989,
+        0.01051999999999964,
+        0.010728000000000293,
+        0.010833000000000315,
+        0.010833000000000315,
+        0.010415999999999759,
+        0.010728999999999989,
+        0.010728000000000293
+      ],
+      "Samples": [
+        0.0405,
+        0.0413,
+        0.0413,
+        0.0411,
+        0.0407,
+        0.0413,
+        0.0498,
+        0.0407
+      ]
+    },
+    {
+      "M": 256,
+      "N": 96,
+      "K": 128,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 32,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.015052000000000065,
+      "P50Ms": 0.04015,
+      "GpuSamples": [
+        0.015104000000000006,
+        0.015104000000000006,
+        0.015000000000000124,
+        0.015104000000000006,
+        0.015104000000000006,
+        0.015000000000000124,
+        0.015000000000000124,
+        0.015000000000000124
+      ],
+      "Samples": [
+        0.0379,
+        0.0415,
+        0.0532,
+        0.047,
+        0.0389,
+        0.0386,
+        0.0379,
+        0.0414
+      ]
+    },
+    {
+      "M": 256,
+      "N": 96,
+      "K": 128,
+      "Relu": true,
+      "Fused": false,
+      "Columns": 0,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_direct_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.010677000000000048,
+      "P50Ms": 0.0435,
+      "GpuSamples": [
+        0.010833000000000315,
+        0.010415999999999759,
+        0.010623999999999967,
+        0.010625000000000107,
+        0.010833000000000315,
+        0.010415999999999759,
+        0.010728999999999989,
+        0.010728999999999989
+      ],
+      "Samples": [
+        0.0423,
+        0.0483,
+        0.0408,
+        0.0461,
+        0.0411,
+        0.045,
+        0.0403,
+        0.0447
+      ]
+    },
+    {
+      "M": 256,
+      "N": 96,
+      "K": 128,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 32,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.015052000000000065,
+      "P50Ms": 0.03805,
+      "GpuSamples": [
+        0.015104000000000006,
+        0.015000000000000124,
+        0.015000000000000124,
+        0.014895000000000103,
+        0.015104000000000006,
+        0.015104000000000006,
+        0.015000000000000124,
+        0.015104000000000006
+      ],
+      "Samples": [
+        0.0479,
+        0.0456,
+        0.0387,
+        0.0373,
+        0.0428,
+        0.0374,
+        0.0372,
+        0.0372
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": false,
+      "Columns": 0,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_direct_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.41171749999999996,
+      "P50Ms": 0.44320000000000004,
+      "GpuSamples": [
+        0.4113530000000001,
+        0.41208199999999984,
+        0.4106240000000003,
+        0.4090620000000005,
+        0.4140620000000004,
+        0.4128110000000005,
+        0.4129149999999999,
+        0.4108330000000011
+      ],
+      "Samples": [
+        0.4489,
+        0.4436,
+        0.4377,
+        0.4381,
+        0.4494,
+        0.444,
+        0.4424,
+        0.4428
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 32,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.3289059999999999,
+      "P50Ms": 0.35214999999999996,
+      "GpuSamples": [
+        0.32968699999999984,
+        0.32854099999999953,
+        0.3284369999999992,
+        0.32937500000000064,
+        0.32885399999999976,
+        0.3290620000000004,
+        0.32885399999999976,
+        0.3289580000000001
+      ],
+      "Samples": [
+        0.353,
+        0.3515,
+        0.3505,
+        0.3512,
+        0.3573,
+        0.3633,
+        0.3505,
+        0.3528
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x64",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.28630200000000006,
+      "P50Ms": 0.30794999999999995,
+      "GpuSamples": [
+        0.28635399999999933,
+        0.2860410000000009,
+        0.28593700000000055,
+        0.2862500000000008,
+        0.28697900000000054,
+        0.28729099999999974,
+        0.2866660000000003,
+        0.2862500000000008
+      ],
+      "Samples": [
+        0.3082,
+        0.3077,
+        0.3077,
+        0.3099,
+        0.3099,
+        0.3103,
+        0.3072,
+        0.3068
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.4030725000000004,
+      "P50Ms": 0.42569999999999997,
+      "GpuSamples": [
+        0.4022909999999982,
+        0.40385399999999905,
+        0.4017699999999991,
+        0.40343700000000027,
+        0.40625,
+        0.4027080000000005,
+        0.4030200000000015,
+        0.4031249999999993
+      ],
+      "Samples": [
+        0.4255,
+        0.4251,
+        0.4247,
+        0.4293,
+        0.4286,
+        0.4252,
+        0.4261,
+        0.4259
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.4005725000000009,
+      "P50Ms": 0.4235,
+      "GpuSamples": [
+        0.40197900000000075,
+        0.40020799999999923,
+        0.40062500000000156,
+        0.4010409999999993,
+        0.3999999999999986,
+        0.4005200000000002,
+        0.4013540000000013,
+        0.3996870000000001
+      ],
+      "Samples": [
+        0.4269,
+        0.421,
+        0.4236,
+        0.4208,
+        0.4236,
+        0.4233,
+        0.4245,
+        0.4234
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.3802075000000009,
+      "P50Ms": 0.4032,
+      "GpuSamples": [
+        0.3790620000000011,
+        0.38114500000000007,
+        0.3819790000000012,
+        0.38052000000000064,
+        0.38135400000000175,
+        0.3798950000000012,
+        0.3793749999999996,
+        0.37885400000000047
+      ],
+      "Samples": [
+        0.4033,
+        0.4017,
+        0.4064,
+        0.4031,
+        0.4031,
+        0.4044,
+        0.404,
+        0.4
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.3822915000000009,
+      "P50Ms": 0.40485,
+      "GpuSamples": [
+        0.38156199999999885,
+        0.3812500000000014,
+        0.3825000000000003,
+        0.38062499999999844,
+        0.3825000000000003,
+        0.38333300000000037,
+        0.3820830000000015,
+        0.38395800000000335
+      ],
+      "Samples": [
+        0.4041,
+        0.4054,
+        0.4048,
+        0.4027,
+        0.4047,
+        0.4049,
+        0.4057,
+        0.4097
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": false,
+      "Columns": 0,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_direct_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.41031149999999883,
+      "P50Ms": 0.4524,
+      "GpuSamples": [
+        0.4117699999999971,
+        0.40926999999999936,
+        0.409478,
+        0.40833200000000147,
+        0.40926999999999936,
+        0.41156200000000354,
+        0.4117699999999971,
+        0.41114499999999765
+      ],
+      "Samples": [
+        0.4523,
+        0.4525,
+        0.4523,
+        0.4523,
+        0.4483,
+        0.4548,
+        0.4526,
+        0.453
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 32,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.3285410000000013,
+      "P50Ms": 0.35415,
+      "GpuSamples": [
+        0.328437000000001,
+        0.32885399999999976,
+        0.32833300000000065,
+        0.32864500000000163,
+        0.32937499999999886,
+        0.3276040000000009,
+        0.328125,
+        0.32864500000000163
+      ],
+      "Samples": [
+        0.3503,
+        0.3582,
+        0.3725,
+        0.3716,
+        0.3567,
+        0.3504,
+        0.3516,
+        0.3505
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x64",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.28682249999999954,
+      "P50Ms": 0.30965,
+      "GpuSamples": [
+        0.28718700000000297,
+        0.286875000000002,
+        0.28625000000000256,
+        0.2867699999999971,
+        0.2875000000000014,
+        0.2869790000000023,
+        0.2867699999999971,
+        0.2858329999999967
+      ],
+      "Samples": [
+        0.309,
+        0.3098,
+        0.3082,
+        0.31,
+        0.3115,
+        0.3098,
+        0.3094,
+        0.3095
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.40255149999999773,
+      "P50Ms": 0.42655,
+      "GpuSamples": [
+        0.40124999999999744,
+        0.40218699999999785,
+        0.40270799999999696,
+        0.4019789999999972,
+        0.4037500000000023,
+        0.4023949999999985,
+        0.4028119999999973,
+        0.40354099999999704
+      ],
+      "Samples": [
+        0.4271,
+        0.4269,
+        0.4264,
+        0.4267,
+        0.429,
+        0.4248,
+        0.4264,
+        0.4237
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.4004159999999999,
+      "P50Ms": 0.42395000000000005,
+      "GpuSamples": [
+        0.40135399999999777,
+        0.40031199999999956,
+        0.39979100000000045,
+        0.39937499999999915,
+        0.4005200000000002,
+        0.4005200000000002,
+        0.400624999999998,
+        0.4001039999999989
+      ],
+      "Samples": [
+        0.4318,
+        0.4236,
+        0.42,
+        0.4253,
+        0.4262,
+        0.4216,
+        0.4237,
+        0.4242
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.37989499999999765,
+      "P50Ms": 0.4059,
+      "GpuSamples": [
+        0.3787499999999966,
+        0.3805199999999971,
+        0.3791659999999979,
+        0.37989499999999765,
+        0.3816660000000027,
+        0.3812500000000014,
+        0.37801999999999936,
+        0.37989499999999765
+      ],
+      "Samples": [
+        0.4102,
+        0.4101,
+        0.4015,
+        0.4008,
+        0.4085,
+        0.4084,
+        0.3999,
+        0.4034
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.38187500000000085,
+      "P50Ms": 0.41885,
+      "GpuSamples": [
+        0.38187500000000085,
+        0.38093700000000297,
+        0.3840620000000001,
+        0.38177000000000305,
+        0.3811449999999965,
+        0.38187500000000085,
+        0.38229100000000216,
+        0.3820830000000015
+      ],
+      "Samples": [
+        0.4316,
+        0.4261,
+        0.4386,
+        0.4172,
+        0.4074,
+        0.4049,
+        0.4205,
+        0.407
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 512,
+      "K": 1536,
+      "Relu": false,
+      "Fused": false,
+      "Columns": 0,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_direct_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.32447799999999916,
+      "P50Ms": 0.35355000000000003,
+      "GpuSamples": [
+        0.32677000000000334,
+        0.3240610000000004,
+        0.3264569999999978,
+        0.32489499999999794,
+        0.3246859999999998,
+        0.32260300000000086,
+        0.3242699999999985,
+        0.3210410000000081
+      ],
+      "Samples": [
+        0.3553,
+        0.3536,
+        0.3559,
+        0.3515,
+        0.3558,
+        0.3535,
+        0.3533,
+        0.3518
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 512,
+      "K": 1536,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 32,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.23078100000000035,
+      "P50Ms": 0.25305,
+      "GpuSamples": [
+        0.22989499999999907,
+        0.2325000000000017,
+        0.23083300000000406,
+        0.23072899999999663,
+        0.22739500000000135,
+        0.23020800000000463,
+        0.23083300000000406,
+        0.23135399999999606
+      ],
+      "Samples": [
+        0.2556,
+        0.2526,
+        0.2543,
+        0.251,
+        0.2513,
+        0.2535,
+        0.2523,
+        0.2576
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 512,
+      "K": 1536,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x64",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.18208299999999866,
+      "P50Ms": 0.20305,
+      "GpuSamples": [
+        0.182186999999999,
+        0.1827080000000052,
+        0.18250000000000455,
+        0.18156199999999956,
+        0.18197899999999834,
+        0.181666000000007,
+        0.18312500000000398,
+        0.18197899999999834
+      ],
+      "Samples": [
+        0.202,
+        0.2037,
+        0.2046,
+        0.2015,
+        0.2032,
+        0.2029,
+        0.2049,
+        0.2014
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 512,
+      "K": 1536,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.26312450000000354,
+      "P50Ms": 0.28585,
+      "GpuSamples": [
+        0.26291600000000415,
+        0.2617699999999985,
+        0.26479100000000244,
+        0.2628119999999967,
+        0.2659369999999939,
+        0.2661449999999945,
+        0.26208300000000406,
+        0.2633330000000029
+      ],
+      "Samples": [
+        0.2857,
+        0.289,
+        0.286,
+        0.2852,
+        0.2866,
+        0.2878,
+        0.2828,
+        0.2828
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 512,
+      "K": 1536,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.258801499999997,
+      "P50Ms": 0.28559999999999997,
+      "GpuSamples": [
+        0.2598950000000002,
+        0.2590620000000001,
+        0.2584370000000007,
+        0.25916599999999335,
+        0.2585409999999939,
+        0.2608330000000052,
+        0.25833299999999326,
+        0.2573950000000025
+      ],
+      "Samples": [
+        0.2888,
+        0.2913,
+        0.2864,
+        0.2837,
+        0.2796,
+        0.2834,
+        0.2848,
+        0.2931
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 512,
+      "K": 1536,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.2347389999999976,
+      "P50Ms": 0.25525,
+      "GpuSamples": [
+        0.23562499999999886,
+        0.23739500000000646,
+        0.23593700000000695,
+        0.23312500000000114,
+        0.2338539999999938,
+        0.23364499999999566,
+        0.23551999999999396,
+        0.23395800000000122
+      ],
+      "Samples": [
+        0.2563,
+        0.2599,
+        0.2604,
+        0.2542,
+        0.2531,
+        0.2542,
+        0.2586,
+        0.2532
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 512,
+      "K": 1536,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.23505200000000315,
+      "P50Ms": 0.25680000000000003,
+      "GpuSamples": [
+        0.23510400000000686,
+        0.23583299999999952,
+        0.2347910000000013,
+        0.23499999999999943,
+        0.23520800000000008,
+        0.23447899999999322,
+        0.2347910000000013,
+        0.23562499999999886
+      ],
+      "Samples": [
+        0.2599,
+        0.2562,
+        0.2535,
+        0.2574,
+        0.2529,
+        0.256,
+        0.2603,
+        0.2654
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 512,
+      "K": 1536,
+      "Relu": true,
+      "Fused": false,
+      "Columns": 0,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_direct_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.32328049999999564,
+      "P50Ms": 0.35705,
+      "GpuSamples": [
+        0.32541599999998994,
+        0.3262500000000017,
+        0.3217700000000008,
+        0.3214580000000069,
+        0.32260399999999834,
+        0.3241649999999936,
+        0.3222909999999928,
+        0.32395699999999295
+      ],
+      "Samples": [
+        0.3536,
+        0.3553,
+        0.3493,
+        0.3557,
+        0.3697,
+        0.3686,
+        0.3584,
+        0.3588
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 512,
+      "K": 1536,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 32,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.23052050000000435,
+      "P50Ms": 0.24985,
+      "GpuSamples": [
+        0.23093699999999728,
+        0.23041600000000528,
+        0.2306250000000034,
+        0.22968699999999842,
+        0.2323949999999968,
+        0.229061999999999,
+        0.23114499999999794,
+        0.22989499999999907
+      ],
+      "Samples": [
+        0.2537,
+        0.2536,
+        0.2501,
+        0.2488,
+        0.2548,
+        0.2489,
+        0.2496,
+        0.2483
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 512,
+      "K": 1536,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x64",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.18213500000000238,
+      "P50Ms": 0.20265,
+      "GpuSamples": [
+        0.18145800000000634,
+        0.18187500000000512,
+        0.18239499999999964,
+        0.18156199999999956,
+        0.18281199999999842,
+        0.1827080000000052,
+        0.1813539999999989,
+        0.18312500000000398
+      ],
+      "Samples": [
+        0.2006,
+        0.2018,
+        0.2013,
+        0.2013,
+        0.2045,
+        0.2046,
+        0.2035,
+        0.2058
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 512,
+      "K": 1536,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.2644784999999956,
+      "P50Ms": 0.28835,
+      "GpuSamples": [
+        0.2654160000000019,
+        0.2651039999999938,
+        0.26301999999999737,
+        0.2640619999999956,
+        0.2631250000000023,
+        0.26489499999999566,
+        0.2652080000000012,
+        0.2627080000000035
+      ],
+      "Samples": [
+        0.285,
+        0.2895,
+        0.2837,
+        0.2872,
+        0.2857,
+        0.3582,
+        0.3045,
+        0.3045
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 512,
+      "K": 1536,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.2586975000000038,
+      "P50Ms": 0.27855,
+      "GpuSamples": [
+        0.25864500000000135,
+        0.25770799999999383,
+        0.25781200000000126,
+        0.26208300000000406,
+        0.2585409999999939,
+        0.25875000000000625,
+        0.2590620000000001,
+        0.2589580000000069
+      ],
+      "Samples": [
+        0.2794,
+        0.2775,
+        0.2775,
+        0.2838,
+        0.2776,
+        0.2785,
+        0.2817,
+        0.2786
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 512,
+      "K": 1536,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.2352599999999967,
+      "P50Ms": 0.2583,
+      "GpuSamples": [
+        0.2353119999999933,
+        0.23499999999999943,
+        0.23406199999999444,
+        0.23416600000000187,
+        0.23604100000000017,
+        0.23520800000000008,
+        0.2357290000000063,
+        0.23739500000000646
+      ],
+      "Samples": [
+        0.2583,
+        0.2583,
+        0.2606,
+        0.2544,
+        0.2578,
+        0.2576,
+        0.2591,
+        0.259
+      ]
+    },
+    {
+      "M": 4096,
+      "N": 512,
+      "K": 1536,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.2357290000000063,
+      "P50Ms": 0.2573,
+      "GpuSamples": [
+        0.2357290000000063,
+        0.23687499999999773,
+        0.2357290000000063,
+        0.23499999999999943,
+        0.23489499999999452,
+        0.2362499999999983,
+        0.23551999999999396,
+        0.23635400000000573
+      ],
+      "Samples": [
+        0.2582,
+        0.2575,
+        0.255,
+        0.2552,
+        0.2584,
+        0.2575,
+        0.2543,
+        0.2571
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": false,
+      "Columns": 0,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_direct_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.5736975000000015,
+      "P50Ms": 1.6174,
+      "GpuSamples": [
+        1.5806240000000003,
+        1.5801030000000083,
+        1.573750000000004,
+        1.570414999999997,
+        1.573644999999999,
+        1.5732289999999978,
+        1.5735410000000059,
+        1.5770830000000018
+      ],
+      "Samples": [
+        1.6309,
+        1.6206,
+        1.6179,
+        1.6141,
+        1.61,
+        1.6091,
+        1.6169,
+        1.6503
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 32,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.416249999999998,
+      "P50Ms": 1.4422000000000001,
+      "GpuSamples": [
+        1.4154159999999933,
+        1.418333000000004,
+        1.4171869999999984,
+        1.4162500000000051,
+        1.4139579999999938,
+        1.4177080000000046,
+        1.416249999999991,
+        1.4161450000000002
+      ],
+      "Samples": [
+        1.4446,
+        1.4446,
+        1.4416,
+        1.4416,
+        1.4406,
+        1.4428,
+        1.4372,
+        1.4487
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x64",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.1745310000000018,
+      "P50Ms": 1.1989999999999998,
+      "GpuSamples": [
+        1.1758330000000115,
+        1.1737500000000125,
+        1.1725000000000136,
+        1.172708,
+        1.180833000000007,
+        1.175311999999991,
+        1.1719789999999932,
+        1.176040999999998
+      ],
+      "Samples": [
+        1.1998,
+        1.1984,
+        1.1996,
+        1.1963,
+        1.2023,
+        1.1982,
+        1.1959,
+        1.2001
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.8860409999999916,
+      "P50Ms": 1.9140000000000001,
+      "GpuSamples": [
+        1.8854159999999922,
+        1.8756250000000136,
+        1.886665999999991,
+        1.8812499999999943,
+        1.8802080000000103,
+        1.8897910000000024,
+        1.8990619999999865,
+        1.9002079999999921
+      ],
+      "Samples": [
+        1.9784,
+        1.9052,
+        1.9116,
+        1.9054,
+        1.9033,
+        1.9164,
+        1.9437,
+        1.9526
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.7340619999999944,
+      "P50Ms": 1.7655,
+      "GpuSamples": [
+        1.7331250000000011,
+        1.7387500000000102,
+        1.7270829999999933,
+        1.736978999999991,
+        1.7344789999999932,
+        1.7348949999999945,
+        1.7336449999999957,
+        1.7279159999999933
+      ],
+      "Samples": [
+        1.7658,
+        1.7813,
+        1.7536,
+        1.7731,
+        1.7855,
+        1.7652,
+        1.7594,
+        1.7576
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.5941140000000047,
+      "P50Ms": 1.6207500000000001,
+      "GpuSamples": [
+        1.5969790000000046,
+        1.596145000000007,
+        1.5920830000000024,
+        1.5986450000000048,
+        1.5900000000000034,
+        1.6126040000000046,
+        1.5847909999999956,
+        1.5809370000000058
+      ],
+      "Samples": [
+        1.6225,
+        1.6183,
+        1.6263,
+        1.648,
+        1.619,
+        1.6368,
+        1.6125,
+        1.6038
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.5913534999999968,
+      "P50Ms": 1.623,
+      "GpuSamples": [
+        1.59104099999999,
+        1.5927079999999876,
+        1.5980199999999911,
+        1.5919790000000091,
+        1.5903120000000115,
+        1.5867700000000013,
+        1.5823949999999911,
+        1.5916660000000036
+      ],
+      "Samples": [
+        1.6299,
+        1.6272,
+        1.6528,
+        1.6381,
+        1.6188,
+        1.6145,
+        1.605,
+        1.615
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": false,
+      "Columns": 0,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_direct_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.573749499999991,
+      "P50Ms": 1.6013,
+      "GpuSamples": [
+        1.573332999999991,
+        1.5793749999999989,
+        1.5715620000000001,
+        1.5764569999999765,
+        1.574165999999991,
+        1.5745829999999899,
+        1.5712489999999946,
+        1.573124000000007
+      ],
+      "Samples": [
+        1.6064,
+        1.6104,
+        1.5998,
+        1.6061,
+        1.6007,
+        1.6015,
+        1.5982,
+        1.6011
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 32,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.4151035000000007,
+      "P50Ms": 1.4412500000000001,
+      "GpuSamples": [
+        1.4163540000000125,
+        1.4155199999999866,
+        1.4108329999999967,
+        1.4148950000000013,
+        1.4145829999999933,
+        1.413958000000008,
+        1.4182289999999966,
+        1.4153120000000001
+      ],
+      "Samples": [
+        1.4398,
+        1.4388,
+        1.4427,
+        1.4588,
+        1.4516,
+        1.4384,
+        1.4433,
+        1.4369
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x64",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.1753645000000006,
+      "P50Ms": 1.20655,
+      "GpuSamples": [
+        1.1802079999999933,
+        1.17739499999999,
+        1.185104000000024,
+        1.1744790000000194,
+        1.1730200000000082,
+        1.1738540000000057,
+        1.1717699999999809,
+        1.1762499999999818
+      ],
+      "Samples": [
+        1.332,
+        1.2074,
+        1.2131,
+        1.2188,
+        1.2057,
+        1.1953,
+        1.1936,
+        1.1966
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.8847389999999962,
+      "P50Ms": 1.9116,
+      "GpuSamples": [
+        1.8830199999999877,
+        1.894375000000025,
+        1.8883329999999887,
+        1.880104000000017,
+        1.8864580000000046,
+        1.8878119999999967,
+        1.8804160000000252,
+        1.8804160000000252
+      ],
+      "Samples": [
+        1.9147,
+        1.9382,
+        1.9297,
+        1.9057,
+        1.9118,
+        1.9114,
+        1.9062,
+        1.9043
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.7338014999999984,
+      "P50Ms": 1.75895,
+      "GpuSamples": [
+        1.7318750000000023,
+        1.7384369999999763,
+        1.734166000000016,
+        1.7334369999999808,
+        1.7315619999999967,
+        1.7307289999999966,
+        1.738958000000025,
+        1.7355200000000082
+      ],
+      "Samples": [
+        1.7735,
+        1.8347,
+        1.7586,
+        1.7581,
+        1.7574,
+        1.7522,
+        1.7602,
+        1.7593
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.59161450000002,
+      "P50Ms": 1.6179000000000001,
+      "GpuSamples": [
+        1.594062000000008,
+        1.5990620000000035,
+        1.581770000000006,
+        1.5998950000000036,
+        1.5834370000000035,
+        1.591354000000024,
+        1.5885410000000206,
+        1.591875000000016
+      ],
+      "Samples": [
+        1.6197,
+        1.623,
+        1.6048,
+        1.62,
+        1.6059,
+        1.6161,
+        1.6121,
+        1.6219
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.5926034999999956,
+      "P50Ms": 1.6196000000000002,
+      "GpuSamples": [
+        1.6022909999999797,
+        1.5922909999999888,
+        1.6004159999999956,
+        1.5882290000000125,
+        1.5936449999999809,
+        1.5929160000000024,
+        1.592187000000024,
+        1.5888540000000262
+      ],
+      "Samples": [
+        1.6966,
+        1.6158,
+        1.621,
+        1.6117,
+        1.6182,
+        1.6243,
+        1.6259,
+        1.6122
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 512,
+      "K": 1536,
+      "Relu": false,
+      "Fused": false,
+      "Columns": 0,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_direct_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.3848429999999894,
+      "P50Ms": 1.4257499999999999,
+      "GpuSamples": [
+        1.3828120000000013,
+        1.3906240000000025,
+        1.385624000000007,
+        1.3848949999999718,
+        1.3872910000000047,
+        1.384791000000007,
+        1.3807279999999764,
+        1.382395000000031
+      ],
+      "Samples": [
+        1.4132,
+        1.4237,
+        1.4313,
+        1.4305,
+        1.4278,
+        1.4796,
+        1.411,
+        1.4096
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 512,
+      "K": 1536,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 32,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.2020310000000052,
+      "P50Ms": 1.2279499999999999,
+      "GpuSamples": [
+        1.2028119999999944,
+        1.2048950000000218,
+        1.199374999999975,
+        1.202083000000016,
+        1.2014580000000024,
+        1.1963539999999853,
+        1.204478999999992,
+        1.2019789999999944
+      ],
+      "Samples": [
+        1.2259,
+        1.2287,
+        1.225,
+        1.2269,
+        1.2272,
+        1.2299,
+        1.2311,
+        1.2309
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 512,
+      "K": 1536,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x64",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.9039060000000063,
+      "P50Ms": 0.92815,
+      "GpuSamples": [
+        0.9047909999999888,
+        0.9044789999999807,
+        0.9034369999999967,
+        0.9043750000000159,
+        0.9068750000000136,
+        0.9020830000000046,
+        0.9018750000000182,
+        0.900936999999999
+      ],
+      "Samples": [
+        0.9286,
+        0.9354,
+        0.9379,
+        0.9283,
+        0.928,
+        0.9233,
+        0.9256,
+        0.9227
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 512,
+      "K": 1536,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.4022910000000195,
+      "P50Ms": 1.4367,
+      "GpuSamples": [
+        1.4021870000000263,
+        1.4023950000000127,
+        1.4023950000000127,
+        1.4039579999999887,
+        1.4044789999999807,
+        1.4007290000000125,
+        1.4013540000000262,
+        1.398541000000023
+      ],
+      "Samples": [
+        1.4547,
+        1.4369,
+        1.4323,
+        1.4365,
+        1.4304,
+        1.4257,
+        1.439,
+        1.4522
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 512,
+      "K": 1536,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.3912494999999865,
+      "P50Ms": 1.4216,
+      "GpuSamples": [
+        1.3931249999999977,
+        1.3907290000000216,
+        1.3894789999999944,
+        1.3908329999999864,
+        1.3886449999999968,
+        1.3916659999999865,
+        1.3920830000000137,
+        1.391978999999992
+      ],
+      "Samples": [
+        1.4493,
+        1.4357,
+        1.419,
+        1.4884,
+        1.4152,
+        1.4146,
+        1.4159,
+        1.4242
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 512,
+      "K": 1536,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.116927000000004,
+      "P50Ms": 1.14625,
+      "GpuSamples": [
+        1.1206250000000182,
+        1.114582999999982,
+        1.1182289999999853,
+        1.1161450000000173,
+        1.1176040000000285,
+        1.1162499999999795,
+        1.1175000000000068,
+        1.1163540000000012
+      ],
+      "Samples": [
+        1.146,
+        1.1465,
+        1.1415,
+        1.1407,
+        1.156,
+        1.1636,
+        1.1497,
+        1.1416
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 512,
+      "K": 1536,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.111197500000003,
+      "P50Ms": 1.13355,
+      "GpuSamples": [
+        1.113540999999998,
+        1.1109369999999785,
+        1.1120829999999842,
+        1.1113540000000057,
+        1.1073949999999968,
+        1.1110410000000002,
+        1.1117699999999786,
+        1.1100000000000136
+      ],
+      "Samples": [
+        1.1378,
+        1.135,
+        1.1324,
+        1.1362,
+        1.1281,
+        1.1337,
+        1.1331,
+        1.1334
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 512,
+      "K": 1536,
+      "Relu": true,
+      "Fused": false,
+      "Columns": 0,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_direct_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.3842179999999757,
+      "P50Ms": 1.41315,
+      "GpuSamples": [
+        1.3856239999999502,
+        1.3854159999999638,
+        1.379478000000006,
+        1.3822900000000118,
+        1.38395799999995,
+        1.3844780000000014,
+        1.3817700000000173,
+        1.3854160000000206
+      ],
+      "Samples": [
+        1.438,
+        1.4294,
+        1.4123,
+        1.412,
+        1.4149,
+        1.4114,
+        1.412,
+        1.414
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 512,
+      "K": 1536,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 32,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.203437000000008,
+      "P50Ms": 1.2344499999999998,
+      "GpuSamples": [
+        1.2053119999999922,
+        1.2027079999999728,
+        1.2032290000000216,
+        1.2036449999999945,
+        1.2042700000000082,
+        1.2018749999999727,
+        1.2024999999999864,
+        1.203958
+      ],
+      "Samples": [
+        1.2391,
+        1.2248,
+        1.2297,
+        1.2303,
+        1.251,
+        1.2447,
+        1.2345,
+        1.2344
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 512,
+      "K": 1536,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x64",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 0.9033850000000143,
+      "P50Ms": 0.9263999999999999,
+      "GpuSamples": [
+        0.9042699999999968,
+        0.9023950000000127,
+        0.9027080000000183,
+        0.9017699999999991,
+        0.9040620000000104,
+        0.901457999999991,
+        0.9055200000000241,
+        0.905208000000016
+      ],
+      "Samples": [
+        0.9286,
+        0.9236,
+        0.9269,
+        0.9244,
+        0.9297,
+        0.921,
+        0.9275,
+        0.9259
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 512,
+      "K": 1536,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.4022910000000195,
+      "P50Ms": 1.4299499999999998,
+      "GpuSamples": [
+        1.4032290000000103,
+        1.404687000000024,
+        1.400624999999991,
+        1.399062000000015,
+        1.4021870000000263,
+        1.399583000000007,
+        1.4039579999999887,
+        1.4023950000000127
+      ],
+      "Samples": [
+        1.4325,
+        1.4296,
+        1.4303,
+        1.4488,
+        1.4265,
+        1.4212,
+        1.4247,
+        1.4929
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 512,
+      "K": 1536,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.3913014999999973,
+      "P50Ms": 1.4142000000000001,
+      "GpuSamples": [
+        1.3862500000000182,
+        1.3949999999999818,
+        1.3920830000000137,
+        1.3908329999999864,
+        1.3917700000000082,
+        1.3923950000000218,
+        1.3897910000000024,
+        1.388229000000024
+      ],
+      "Samples": [
+        1.4086,
+        1.4211,
+        1.4167,
+        1.4117,
+        1.415,
+        1.4139,
+        1.4145,
+        1.4093
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 512,
+      "K": 1536,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.115312500000016,
+      "P50Ms": 1.14015,
+      "GpuSamples": [
+        1.1163540000000012,
+        1.1132289999999898,
+        1.1180200000000013,
+        1.115000000000009,
+        1.1156250000000227,
+        1.1145830000000387,
+        1.116457999999966,
+        1.1147909999999683
+      ],
+      "Samples": [
+        1.1412,
+        1.1517,
+        1.1528,
+        1.1358,
+        1.1372,
+        1.1357,
+        1.1412,
+        1.1391
+      ]
+    },
+    {
+      "M": 16384,
+      "N": 512,
+      "K": 1536,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 1.1122389999999882,
+      "P50Ms": 1.13995,
+      "GpuSamples": [
+        1.1134369999999763,
+        1.1109370000000354,
+        1.1136450000000195,
+        1.1108329999999569,
+        1.1142700000000332,
+        1.113020000000006,
+        1.1114579999999705,
+        1.1085409999999456
+      ],
+      "Samples": [
+        1.1381,
+        1.1414,
+        1.1535,
+        1.1436,
+        1.1423,
+        1.1385,
+        1.1339,
+        1.1348
+      ]
+    },
+    {
+      "M": 65536,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": false,
+      "Columns": 0,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_direct_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 6.1535409999999615,
+      "P50Ms": 6.1882,
+      "GpuSamples": [
+        6.153644999999983,
+        6.141977999999995,
+        6.15343699999994,
+        6.1602080000000115,
+        6.156665999999973,
+        6.157081999999946,
+        6.15145700000005,
+        6.14739499999996
+      ],
+      "Samples": [
+        6.1898,
+        6.1702,
+        6.1839,
+        6.1963,
+        6.1866,
+        6.2001,
+        6.1952,
+        6.1789
+      ]
+    },
+    {
+      "M": 65536,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 32,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 5.6421869999999785,
+      "P50Ms": 5.6721,
+      "GpuSamples": [
+        5.6416659999999865,
+        5.647187000000031,
+        5.646040999999968,
+        5.640625,
+        5.638124999999945,
+        5.6427079999999705,
+        5.643436999999949,
+        5.636875000000032
+      ],
+      "Samples": [
+        5.6745,
+        5.6854,
+        5.6841,
+        5.6647,
+        5.6709,
+        5.6733,
+        5.6648,
+        5.6627
+      ]
+    },
+    {
+      "M": 65536,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x64",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 4.561770499999966,
+      "P50Ms": 4.5946,
+      "GpuSamples": [
+        4.560936999999967,
+        4.566561999999976,
+        4.560729000000038,
+        4.562603999999965,
+        4.56760399999996,
+        4.544582999999989,
+        4.558957999999961,
+        4.565519999999992
+      ],
+      "Samples": [
+        4.5946,
+        4.6007,
+        4.6052,
+        4.589,
+        4.596,
+        4.5827,
+        4.5946,
+        4.5895
+      ]
+    },
+    {
+      "M": 65536,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 7.383697500000039,
+      "P50Ms": 7.43155,
+      "GpuSamples": [
+        7.397187000000031,
+        7.39020800000003,
+        7.356769999999983,
+        7.401562000000013,
+        7.419166000000018,
+        7.353645000000029,
+        7.377187000000049,
+        7.361041
+      ],
+      "Samples": [
+        7.447,
+        7.4397,
+        7.3891,
+        7.4453,
+        7.4736,
+        7.4032,
+        7.4234,
+        7.3975
+      ]
+    },
+    {
+      "M": 65536,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 6.6855204999999955,
+      "P50Ms": 6.72105,
+      "GpuSamples": [
+        6.693020000000047,
+        6.678125000000023,
+        6.689894999999979,
+        6.662812000000031,
+        6.6853119999999535,
+        6.682290999999964,
+        6.685729000000038,
+        6.691874999999982
+      ],
+      "Samples": [
+        6.7453,
+        6.721,
+        6.7253,
+        6.7083,
+        6.7211,
+        6.7268,
+        6.7113,
+        6.721
+      ]
+    },
+    {
+      "M": 65536,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 6.3561975000000075,
+      "P50Ms": 6.39545,
+      "GpuSamples": [
+        6.3789580000000115,
+        6.372291000000018,
+        6.404269999999997,
+        6.353749999999991,
+        6.307708000000048,
+        6.341144999999983,
+        6.319375000000036,
+        6.358645000000024
+      ],
+      "Samples": [
+        6.4326,
+        6.5254,
+        6.4444,
+        6.4063,
+        6.3353,
+        6.3749,
+        6.3536,
+        6.3846
+      ]
+    },
+    {
+      "M": 65536,
+      "N": 1536,
+      "K": 512,
+      "Relu": false,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 6.251666,
+      "P50Ms": 6.2831,
+      "GpuSamples": [
+        6.251562000000035,
+        6.250937000000022,
+        6.251769999999965,
+        6.2582290000000285,
+        6.2478119999999535,
+        6.235832999999957,
+        6.256457999999952,
+        6.2553120000000035
+      ],
+      "Samples": [
+        6.2934,
+        6.2753,
+        6.2807,
+        6.2879,
+        6.2816,
+        6.4012,
+        6.2836,
+        6.2826
+      ]
+    },
+    {
+      "M": 65536,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": false,
+      "Columns": 0,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_direct_block_16x32_wg16",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 6.151144499999987,
+      "P50Ms": 6.18685,
+      "GpuSamples": [
+        6.133436999999958,
+        6.145833000000039,
+        6.153227999999899,
+        6.137291000000005,
+        6.159374000000071,
+        6.153332000000091,
+        6.150415000000066,
+        6.151873999999907
+      ],
+      "Samples": [
+        6.1693,
+        6.1912,
+        6.1857,
+        6.1697,
+        6.2019,
+        6.188,
+        6.1844,
+        6.1911
+      ]
+    },
+    {
+      "M": 65536,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 32,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 5.6417185000000245,
+      "P50Ms": 5.68,
+      "GpuSamples": [
+        5.643332999999984,
+        5.641978999999992,
+        5.640625,
+        5.633019999999988,
+        5.641978999999992,
+        5.641458000000057,
+        5.644375000000082,
+        5.639582999999902
+      ],
+      "Samples": [
+        5.696,
+        5.68,
+        5.6759,
+        5.6806,
+        5.68,
+        5.673,
+        5.6892,
+        5.6675
+      ]
+    },
+    {
+      "M": 65536,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 16,
+      "Subgroups": 16,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x64",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 4.561926500000027,
+      "P50Ms": 4.592700000000001,
+      "GpuSamples": [
+        4.561666000000059,
+        4.566250000000082,
+        4.562186999999994,
+        4.560833000000002,
+        4.5592699999999695,
+        4.5530200000000605,
+        4.562603999999965,
+        4.567187000000104
+      ],
+      "Samples": [
+        4.5986,
+        4.6117,
+        4.5833,
+        4.5868,
+        4.6025,
+        4.5786,
+        4.5841,
+        4.6028
+      ]
+    },
+    {
+      "M": 65536,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 7.389791500000001,
+      "P50Ms": 7.4374,
+      "GpuSamples": [
+        7.373644999999897,
+        7.404999999999973,
+        7.4212500000001,
+        7.364479000000074,
+        7.404583000000002,
+        7.408541000000014,
+        7.375,
+        7.365103999999974
+      ],
+      "Samples": [
+        7.4141,
+        7.4492,
+        7.4528,
+        7.4253,
+        7.455,
+        7.4495,
+        7.4256,
+        7.4065
+      ]
+    },
+    {
+      "M": 65536,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 64,
+      "Rows": 32,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_32x64_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 6.68708300000003,
+      "P50Ms": 6.72195,
+      "GpuSamples": [
+        6.681145000000015,
+        6.66947899999991,
+        6.688437000000022,
+        6.685729000000038,
+        6.684166000000005,
+        6.6970830000000205,
+        6.692291000000068,
+        6.691561999999976
+      ],
+      "Samples": [
+        6.7245,
+        6.697,
+        6.7216,
+        6.7176,
+        6.7236,
+        6.8194,
+        6.7198,
+        6.7223
+      ]
+    },
+    {
+      "M": 65536,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 4,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg4",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 6.36406199999999,
+      "P50Ms": 6.39635,
+      "GpuSamples": [
+        6.378228999999919,
+        6.360104000000092,
+        6.368019999999888,
+        6.389374999999973,
+        6.355833000000075,
+        6.3470830000001115,
+        6.3803120000000035,
+        6.350208000000066
+      ],
+      "Samples": [
+        6.41,
+        6.3986,
+        6.3941,
+        6.4226,
+        6.3861,
+        6.3776,
+        6.4213,
+        6.3842
+      ]
+    },
+    {
+      "M": 65536,
+      "N": 1536,
+      "K": 512,
+      "Relu": true,
+      "Fused": true,
+      "Columns": 128,
+      "Rows": 16,
+      "Subgroups": 8,
+      "Resources": {
+        "Name": "gemm_xmx_bfp8_epilogue_16x128_wg8",
+        "MaximumWorkGroupSize": 512,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "GpuP50Ms": 6.253125000000068,
+      "P50Ms": 6.30295,
+      "GpuSamples": [
+        6.252500000000055,
+        6.259686999999985,
+        6.24718699999994,
+        6.2625000000000455,
+        6.245832999999948,
+        6.245104000000083,
+        6.262291000000005,
+        6.253750000000082
+      ],
+      "Samples": [
+        6.3084,
+        6.3033,
+        6.2929,
+        6.3011,
+        6.2858,
+        6.3026,
+        6.3056,
+        6.3104
+      ]
+    }
+  ]
+}

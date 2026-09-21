@@ -1,0 +1,99 @@
+{
+  "Timestamp": "2026-09-21T06:03:03.0013199+00:00",
+  "Conditions": "Attention forward\u002Bbackward including pack, raw-output replay, allocations and synchronization. Resident FP32 gradient seed. Causal, mix16_32, 3 warmup \u002B 5 samples. All heads. Stage0 existing, 1 online softmax\u002BFP32 products, 2 compensated XMX products, 3 asynchronous collective ping-pong, 4 materialized compensated XMX products.",
+  "Results": [
+    {
+      "Stage": 4,
+      "Batch": 64,
+      "Sequence": 1024,
+      "Heads": 16,
+      "HeadWidth": 32,
+      "P50Ms": 253.6255,
+      "ForwardP50Ms": 44.5928,
+      "BackwardP50Ms": 209.09969999999998,
+      "GpuP50Ms": 242.0415930000038,
+      "Samples": [
+        253.722,
+        253.5741,
+        252.7582,
+        253.6817,
+        253.6255
+      ],
+      "ForwardSamples": [
+        44.5928,
+        44.6174,
+        44.7478,
+        44.497,
+        44.5258
+      ],
+      "BackwardSamples": [
+        209.12920000000003,
+        208.95669999999998,
+        208.0104,
+        209.18470000000002,
+        209.09969999999998
+      ],
+      "GpuSamples": [
+        241.9303849999992,
+        242.18694600000106,
+        242.01174300001048,
+        242.20850700000506,
+        242.0415930000038
+      ],
+      "Allocations": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "Launches": [
+        2564,
+        2564,
+        2564,
+        2564,
+        2564
+      ],
+      "PeakBytes": 1419247616,
+      "H2DBytes": 0,
+      "D2HBytes": 0,
+      "Kernels": {
+        "decode_bf16": 22.689786,
+        "attention_qk_pack_combined_candidate": 55.1630010000016,
+        "attention_qk_direct_256x32_candidate": 49.18439999999841,
+        "attention_probabilities_register_1024": 101.33326200000052,
+        "attention_xmx_products_n32_b0": 1016.9301359999992,
+        "resident_bf16": 5.559894,
+        "resident_zero": 1.575726,
+        "attention_xmx_products_n64_b0": 97.89606499999987,
+        "attention_derivatives": 61.79630600000182,
+        "attention_xmx_products_n32_b1": 523.0380749999995
+      },
+      "Resources": {
+        "attention_xmx_products_n32_b0": {
+          "Name": "attention_xmx_products_n32_b0",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 10496,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_xmx_products_n64_b0": {
+          "Name": "attention_xmx_products_n64_b0",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 12544,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        },
+        "attention_xmx_products_n32_b1": {
+          "Name": "attention_xmx_products_n32_b1",
+          "MaximumWorkGroupSize": 1024,
+          "LocalMemoryBytes": 12544,
+          "PrivateMemoryBytes": 0,
+          "SpillMemoryBytes": 0
+        }
+      },
+      "Device": "Intel(R) Arc(TM) B580 Graphics",
+      "DriverVersion": "32.0.101.9030"
+    }
+  ]
+}

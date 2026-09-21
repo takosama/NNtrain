@@ -4,6 +4,8 @@
 // The 64-key variants keep the reference 32-key causal FMA start for each half;
 // skipping the extra zero products also preserves non-finite classification.
 // global=(16,(sequence/KEYS)*16,tileHeads), local=(16,16,1).
+// Experimental 16-key tiles share their enclosing 32-key reference start;
+// evaluating fewer zero*nonfinite products would change the existing semantics.
 #define ARC_DKV_SPECIAL(NAME,KEYS,QUERIES,CAUSAL,FIXED_HEADS) \
 __attribute__((reqd_work_group_size(16,16,1))) \
 __kernel void NAME(__global const float* qkv,__global const float* dy, \
@@ -22,7 +24,7 @@ __kernel void NAME(__global const float* qkv,__global const float* dy, \
   const int off=qbase+(kb+ly+16*r)*3*width+width+lx; \
   dk[r]=(float2)(dx[off],dx[off+16]);dv[r]=(float2)(dx[off+width],dx[off+width+16]); \
  } \
- for(int base=CAUSAL?(kb/QUERIES)*QUERIES:0;base<seq;base+=QUERIES){ \
+ for(int base=CAUSAL?((kb/32)*32/QUERIES)*QUERIES:0;base<seq;base+=QUERIES){ \
   _Pragma("unroll") \
   for(int i=tid;i<KEYS*QUERIES;i+=256){ \
    const int query=i/KEYS,key=i%KEYS,qi=base+query; \
@@ -44,7 +46,7 @@ __kernel void NAME(__global const float* qkv,__global const float* dy, \
    const float2 yv=(float2)(ys[inner][lx],ys[inner][lx+16]); \
    _Pragma("unroll") \
    for(int r=0;r<KEYS/16;r++){ \
-    if(!CAUSAL||(KEYS>=QUERIES&&r<2)||base+inner>=kb+(r/2)*32){ \
+    if(!CAUSAL||(KEYS>=QUERIES&&r<2)||base+inner>=(kb/32)*32+(r/2)*32){ \
      dk[r]=fma((float2)(ss[ly+16*r][inner]),qv,dk[r]); \
      dv[r]=fma((float2)(ps[ly+16*r][inner]),yv,dv[r]); \
     } \
@@ -68,4 +70,10 @@ ARC_DKV_SPECIAL(attention_dkv_d32_k64_q16_dense,64,16,0,0)
 ARC_DKV_SPECIAL(attention_dkv_d32_k64_q16_causal,64,16,1,0)
 ARC_DKV_SPECIAL(attention_dkv_d32_h16_k64_q32_dense,64,32,0,16)
 ARC_DKV_SPECIAL(attention_dkv_d32_h16_k64_q32_causal,64,32,1,16)
+ARC_DKV_SPECIAL(attention_dkv_d32_k16_q16_causal,16,16,1,0)
+ARC_DKV_SPECIAL(attention_dkv_d32_k16_q16_dense,16,16,0,0)
+ARC_DKV_SPECIAL(attention_dkv_d32_k16_q32_causal,16,32,1,0)
+ARC_DKV_SPECIAL(attention_dkv_d32_k16_q32_dense,16,32,0,0)
+ARC_DKV_SPECIAL(attention_dkv_d32_k16_q64_causal,16,64,1,0)
+ARC_DKV_SPECIAL(attention_dkv_d32_k16_q64_dense,16,64,0,0)
 #undef ARC_DKV_SPECIAL

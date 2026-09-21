@@ -72,13 +72,47 @@ on the measured SG16 Arc route; `--arc-mode pre-xmx` provides a frozen A/B basel
 driver-reported local/private/spill resources. No hand-written assembly or
 additional host packing is required.
 
-The latest [direct-XMX, storage, Attention and allocator tuning](docs/arc-deep-tuning-2026-09-21.md)
+The [direct-XMX, storage, Attention and allocator tuning](docs/arc-deep-tuning-2026-09-21.md)
 adds direct BF16 panels from BFP8/BF16 storage, phase-local loss-head panel reuse,
 ordered FP32 attention tiles, fused DKV, coalesced norm-gradient writes and bounded
-LRU/retired-buffer reuse. Full-shape synthetic training measured about 12.06 to 8.27
-seconds/update (3 warmup + 10 measured); the additional 3x target is not achieved.
-`--next-features none` freezes the preceding path without changing production JSON.
+LRU/retired-buffer reuse. Batch16 with accumulation4 measured about 12.06 to 8.27
+seconds/update (3 warmup + 10 measured); the additional 3x target was not achieved.
+`--next-features none` disables that pass's listed features only; later feature
+switches must also be disabled to reproduce a historical configuration.
 The report includes rejected candidates, exact tests and memory/transfer limits.
+
+The earlier batch64 configuration is covered separately by the
+[large-batch memory and kernel tuning report](docs/arc-b64-memory-tuning-2026-09-21.md).
+The subsequent [reprofile and optimization report](docs/arc-reprofile-2026-09-21.md)
+records separate forward/backward attention tiles, bounded streamed split-K,
+packed ReLU gradients, exact BFP8 codec changes, and rejected candidates.
+The [exclusive wall-time profile](docs/arc-exclusive-timeline-2026-09-21.md)
+accounts for GPU work and exposed host/queue/allocator/transfer waits without
+double counting. Its four-update measurement improved 31.918 to 29.705 seconds
+per update using pipelined event collection, exact block-scale addressing and
+phase-local Q/K panels. The report includes clock uncertainty, numerical tests,
+rejected DKV variants and the B580 FP8 capability decision.
+The [microbatch and fused-XMX throughput report](docs/arc-throughput-fusion-2026-09-21.md)
+keeps the effective batch at 256 and compares 64x4, 32x8, 16x16 and 8x32.
+The selected 16x16 configuration avoids activation recomputation. Large BF16
+GEMMs use shape-specific tiles and publish block32 BFP8 directly from FP32
+accumulators, without a full FP32 output round-trip. The report records separate
+kernel/end-to-end comparisons, transfer and allocation counts, and rejected paths.
+The [15,000 tokens/s optimization attempt](docs/arc-15000-target-2026-09-21.md)
+adds exact-order coalesced SLM block reads for D32 K/V backward and extends the
+fused XMX tile to smaller microbatches. It also records rejected larger-GRF GEMM,
+attention fusion, split-reduction and weight-cache experiments. The throughput
+target remains unmet; optional weight-panel caching stays disabled by default.
+Batch64 with accumulation4 measured 70.46 to 34.10 seconds/update (2.07x;
+the requested 2.5x remains unmet). OpenCL buffer-accounting peak fell from
+15.73 to 10.00 GiB; this is not a measurement of driver-reserved physical VRAM.
+It uses bounded streamed XMX panels, exact-order coalesced LayerNorm, direct QK
+packing, row-register softmax, and shape-based activation recomputation. Small shapes keep their saved
+activations; large shapes first recompute FFN, then only the required prefix of
+full blocks. Dropout masks and FP32 gradient accumulation are preserved. A 4 GiB
+idle-buffer cache is a ceiling, not an eager allocation; idle buffers are trimmed
+against a soft device-memory budget before new allocations. This cannot guarantee
+available VRAM when other applications consume GPU memory.
 
 ## Precision modes and native F16C dense kernels
 

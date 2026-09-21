@@ -11,18 +11,24 @@ partial class Tensor
             throw new ArgumentException("Arc linear dimensions do not match.");
         var lane = ArcLane;
         using var biases = bias.ArcUploadValues();
-        using var output = lane.Allocate(checked(rows * no));
         int operandPrecision = DType != TensorDType.Float32 && weight.DType != TensorDType.Float32 ? 3 : 0;
-        if (!lane.Options.PackedMatrixStorage || !TryArcPackedLinear(weight, output, biases, relu))
-        {
-            using var input = ArcUploadValues(true);
-            using var weights = weight.ArcUploadValues(true);
-            ArcMuonMath.Gemm(lane, input, weights, output, rows, no, ni, tb: true, bf16: operandPrecision, bias: biases, relu: relu);
-        }
         int[] shape = (int[])_shape.Clone(); shape[^1] = no;
-        Tensor result = ArcDeviceResult(output, shape, [this, weight, bias], dtype);
+        Tensor? result = TryArcFusedBfp8Linear(weight, bias, biases, shape, relu, dtype);
+        if (result is null)
+        {
+            using var output = lane.Allocate(checked(rows * no));
+            if (!lane.Options.PackedMatrixStorage || !TryArcPackedLinear(weight, output, biases, relu))
+            {
+                using var input = ArcUploadValues(true);
+                using var weights = weight.ArcUploadValues(true);
+                ArcMuonMath.Gemm(lane, input, weights, output, rows, no, ni, tb: true, bf16: operandPrecision, bias: biases, relu: relu);
+            }
+            result = ArcDeviceResult(output, shape, [this, weight, bias], dtype);
+        }
         result.Node.BackwardAction = () => {
             ArcBuffer dy = result.ArcGradient(), dx = ArcGradient(), dw = weight.ArcGradient(), db = bias.ArcGradient();
+            if (relu && operandPrecision == 3 && ArcUsesMixedMatrixOperands && lane.Options.InlineMatrixGradient
+                && TryArcPackedReluBackward(weight, result, dy, dx, dw, db)) return;
             using var gate = relu ? result.ArcUploadValues() : null;
             bool mixed = operandPrecision == 3 && ArcUsesMixedMatrixOperands;
             bool inline = mixed && lane.Options.InlineMatrixGradient;
@@ -88,8 +94,17 @@ partial class Tensor
         var lane = ArcLane;
         if (lane.Options.BlockResidualNorm && width <= 2048 && rows >= 512 && lane.Options.ParallelReductions)
             return ArcBlockResidualNorm(gamma, beta, eps, branch, seed, threshold, scale, width, rows);
+        // SG16 coalesces each row's loads but keeps the original increasing-
+        // channel sum order. Four independent rows per workgroup need neither
+        // scratch buffers nor barriers; no parallel reduction changes rounding.
+        bool ordered = lane.Options.OrderedTiledNorm && rows >= 128 && width is >= 64 and <= 2048
+            && lane.Options.XmxMatrices && lane.Device.SupportsXmx && lane.Device.MinimumSubgroupSize == 16;
+        long normWork = ordered ? ((rows + 3L) / 4) * 64 : rows;
+        int normLocal = ordered ? 64 : 0;
         ArcBuffer Input()
         {
+            if (branch is not null && lane.Options.PackedNormInput)
+                return ArcPackedResidualInput(branch, seed, threshold, scale);
             ArcBuffer value = ArcUploadValues();
             if (branch is null) return value;
             using (value)
@@ -105,14 +120,16 @@ partial class Tensor
         var stats = lane.Allocate(checked(2 * rows));
         try
         {
-            lane.Run("norm", rows, 0, input, g, b, output, stats, rows, width, eps);
+            lane.Run(ordered ? "norm_row_sg16_w64_candidate" : "norm", normWork, normLocal,
+                input, g, b, output, stats, rows, width, eps);
             Tensor result = ArcDeviceResult(output, _shape, branch is null ? [this, gamma, beta] : [this, branch, gamma, beta]);
             if (result.Node.IsDetached) { stats.Dispose(); return result; }
             result.Node.RegisterResource(stats);
             result.Node.BackwardAction = () => {
                 using var x = Input(); using var gammaValue = gamma.ArcUploadValues(); using var dx = lane.Allocate(Numel);
                 ArcBuffer dy = result.ArcGradient();
-                lane.Run("norm_dx_set", rows, 0, x, gammaValue, dy, stats, dx, rows, width);
+                lane.Run(ordered ? "norm_dx_row_sg16_w64_candidate" : "norm_dx_set", normWork, normLocal,
+                    x, gammaValue, dy, stats, dx, rows, width);
                 ArcNormGradient(x, dy, stats, gamma.ArcGradient(), beta.ArcGradient(), rows, width);
                 if (branch is not null && lane.Options.FusedNormGradient)
                     lane.Run("norm_residual_back_accumulate", Numel, 0, dx, ArcGradient(), branch.ArcGradient(),
@@ -131,6 +148,8 @@ partial class Tensor
 
     private Tensor ArcResidentAttention(int batch, int sequence, int width, int heads, bool causal)
     {
+        if (CanUseArcFlashAttention(sequence, width, heads))
+            return ArcFlashAttention(batch, sequence, width, heads, causal);
         if (ArcLane.Options.BatchedAttention && (long)sequence * sequence * 4 <= 32 * 1024 * 1024)
             return ArcBatchedAttention(batch, sequence, width, heads, causal);
         var lane = ArcLane;

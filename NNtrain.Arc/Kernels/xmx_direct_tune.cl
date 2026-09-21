@@ -66,5 +66,11 @@ XMX_DIRECT_TUNE(gemm_xmx_direct_block_8x32_wg8,1,32,8,1)
 XMX_DIRECT_TUNE(gemm_xmx_direct_block_8x32_wg16,1,32,16,1)
 XMX_DIRECT_TUNE(gemm_xmx_direct_block_16x32_wg8,2,32,8,1)
 XMX_DIRECT_TUNE(gemm_xmx_direct_block_16x32_wg16,2,32,16,1)
+XMX_DIRECT_TUNE(gemm_xmx_direct_block_16x64_wg4,2,64,4,1)
+XMX_DIRECT_TUNE(gemm_xmx_direct_block_16x64_wg8,2,64,8,1)
+XMX_DIRECT_TUNE(gemm_xmx_direct_block_16x64_wg16,2,64,16,1)
+XMX_DIRECT_TUNE(gemm_xmx_direct_block_32x32_wg4,4,32,4,1)
+XMX_DIRECT_TUNE(gemm_xmx_direct_block_32x32_wg8,4,32,8,1)
+XMX_DIRECT_TUNE(gemm_xmx_direct_block_32x32_wg16,4,32,16,1)
 #undef XMX_DIRECT_TUNE
 #endif

@@ -16,10 +16,12 @@ partial class Tensor
     {
         internal readonly ArcExecutionLane Lane = lane;
         internal ArcBuffer? Value, Scales, Gradient, Master;
+        internal ArcMatrixPanelCache? MatrixPanels;
         internal bool DataDirty, GradientDirty, MasterDirty;
         internal IDisposable? Registration;
         public void Dispose()
         {
+            MatrixPanels?.Dispose(); MatrixPanels = null;
             Value?.Dispose(); Scales?.Dispose(); Gradient?.Dispose(); Master?.Dispose();
             Value = Scales = Gradient = Master = null;
             Registration?.Dispose(); Registration = null;
@@ -79,12 +81,18 @@ partial class Tensor
     private void PublishArcValues(ArcBuffer source)
     {
         ArcReplica state = ArcOwner();
+        state.MatrixPanels?.Clear();
         state.Value ??= state.Lane.AllocateBytes(checked(Numel * (DType == TensorDType.Float32 ? 4 : DType == TensorDType.BFloat16 ? 2 : 1)));
         if (DType == TensorDType.Bfp8)
         {
             int groups = Bfp8Quantization!.GetScaleCount(Numel);
             state.Scales ??= state.Lane.Allocate(groups);
-            state.Lane.Run("resident_bfp8", groups, 0, source, state.Value, state.Scales, state.Lane.NumericStatus, Numel, Bfp8Quantization.GetEffectiveBlockSize(Numel));
+            int block = Bfp8Quantization.GetEffectiveBlockSize(Numel);
+            bool coalesced = state.Lane.Options.CoalescedBfp8Publication && state.Lane.Options.XmxMatrices
+                && state.Lane.Device.SupportsXmx && state.Lane.Device.MinimumSubgroupSize == 16 && block is 32 or 128;
+            string kernel = !coalesced ? "resident_bfp8" : block == 32 ? "resident_bfp8_quad4_32" : "resident_bfp8_sg16_128";
+            state.Lane.Run(kernel, groups * (coalesced ? block == 32 ? 4L : 16L : 1L), coalesced ? 256 : 0,
+                source, state.Value, state.Scales, state.Lane.NumericStatus, Numel, block);
         }
         else if (DType == TensorDType.BFloat16) state.Lane.Run("resident_bf16", Numel, 0, source, state.Value, Numel);
         else state.Lane.Run("copy_scale", Numel, 0, source, state.Value, Numel, 1f, 0);
@@ -104,7 +112,7 @@ partial class Tensor
                 ? SelectBfp8ResultDescriptor(parents) : Bfp8QuantizationDescriptor.TensorWide)
             : TensorStorage.CreateDevicePlaceholder(length, format);
         Tensor result = FromStorageResult(placeholder, shape, parents);
-        try { result.PublishArcValues(values); ArcInferenceFrame.Current?.Add(result); return result; }
+        try { result.PublishArcValues(values); ArcInferenceFrame.Current?.Add(result); ArcCheckpointFrame.Current?.Add(result); return result; }
         catch { result.ReleaseArcReplica(preserve: false); throw; }
     }
 
@@ -196,6 +204,7 @@ partial class Tensor
     private void InvalidateArcValues()
     {
         if (_arcReplica is not { } state) return;
+        state.MatrixPanels?.Clear();
         state.Value?.Dispose(); state.Scales?.Dispose(); state.Master?.Dispose();
         state.Value = state.Scales = state.Master = null;
         state.DataDirty = state.MasterDirty = false;

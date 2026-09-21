@@ -6,6 +6,61 @@ public sealed class ArcOptimizedTrainingTests
 {
     [Theory]
     [InlineData(TensorPrecisionMode.Float32, false)]
+    [InlineData(TensorPrecisionMode.Mix16_32, false)]
+    [InlineData(TensorPrecisionMode.Mix8_32, false)]
+    [InlineData(TensorPrecisionMode.Mix8_32, true)]
+    public void BlockIoAndPanelCachePreserveFullOptimizerUpdates(TensorPrecisionMode precision, bool muon)
+    {
+        Assert.SkipWhen(!Tensor.IsArcAvailable(), "Intel Arc is required.");
+        AssertTrainingClose(RunTraining(precision, muon, true, false),
+            RunTraining(precision, muon, true, false, blockIo: true, panelCacheMiB: 32));
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ExpandedTilesPreserveFullTransformerUpdates(bool muon)
+    {
+        Assert.SkipWhen(!Tensor.IsArcAvailable(), "Intel Arc is required.");
+        Assert.SkipWhen(!ArcDevices.Enumerate()[0].SupportsXmx || ArcDevices.Enumerate()[0].MinimumSubgroupSize != 16, "SG16 Intel XMX is required.");
+        AssertTrainingClose(
+            RunTraining(TensorPrecisionMode.Mix8_32, muon, true, false, batch: 64, fusedLinear: false, width: 512, layers: 1),
+            RunTraining(TensorPrecisionMode.Mix8_32, muon, true, false, batch: 64, fusedLinear: true, width: 512, layers: 1, expandedTiles: true));
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FusedBfp8LinearPreservesTrainingAndOptimizerState(bool muon)
+    {
+        Assert.SkipWhen(!Tensor.IsArcAvailable(), "Intel Arc is required.");
+        Assert.SkipWhen(!ArcDevices.Enumerate()[0].SupportsXmx || ArcDevices.Enumerate()[0].MinimumSubgroupSize != 16, "SG16 Intel XMX is required.");
+        AssertTrainingClose(
+            RunTraining(TensorPrecisionMode.Mix8_32, muon, true, false, batch: 32, fusedLinear: false),
+            RunTraining(TensorPrecisionMode.Mix8_32, muon, true, false, batch: 32, fusedLinear: true));
+    }
+    [Theory]
+    [InlineData(TensorPrecisionMode.Mix16_32)]
+    [InlineData(TensorPrecisionMode.Mix8_32)]
+    public void PackedAddressAndBulkPanelsPreserveTraining(TensorPrecisionMode precision)
+    {
+        Assert.SkipWhen(!Tensor.IsArcAvailable(), "Intel Arc is required.");
+        AssertTrainingClose(RunTraining(precision, true, true, false, true),
+            RunTraining(precision, true, true, false, true, true));
+    }
+    [Theory]
+    [InlineData(TensorPrecisionMode.Float32, false)]
+    [InlineData(TensorPrecisionMode.Float32, true)]
+    [InlineData(TensorPrecisionMode.Mix16_32, false)]
+    [InlineData(TensorPrecisionMode.Mix16_32, true)]
+    [InlineData(TensorPrecisionMode.Mix8_32, false)]
+    [InlineData(TensorPrecisionMode.Mix8_32, true)]
+    public void PipelinedEventsPreserveTrainingAndResidency(TensorPrecisionMode precision, bool muon)
+    {
+        Assert.SkipWhen(!Tensor.IsArcAvailable(), "Intel Arc is required.");
+        AssertTrainingClose(RunTraining(precision, muon, true, false, false),
+            RunTraining(precision, muon, true, false, true));
+    }
+    [Theory]
+    [InlineData(TensorPrecisionMode.Float32, false)]
     [InlineData(TensorPrecisionMode.Float32, true)]
     [InlineData(TensorPrecisionMode.Mix16_32, false)]
     [InlineData(TensorPrecisionMode.Mix16_32, true)]
@@ -87,12 +142,20 @@ public sealed class ArcOptimizedTrainingTests
         Assert.Equal(expected.Gradient, actual.Gradient);
     }
 
-    private static StepSnapshot[] RunTraining(TensorPrecisionMode precision, bool muon, bool optimized, bool blockNorm)
+    private static StepSnapshot[] RunTraining(TensorPrecisionMode precision, bool muon, bool optimized, bool blockNorm, bool? pipeline = null, bool packedCandidates = false,
+        int batch = 4, bool? fusedLinear = null, int width = 128, int layers = 2, bool expandedTiles = false,
+        bool blockIo = false, int panelCacheMiB = 0)
     {
-        const int batch = 4, sequence = 128, width = 128, heads = 4, vocabulary = 129, microbatches = 2;
-        using var execution = Tensor.BeginArcExecution(precision: precision, options: Options(optimized, blockNorm));
+        const int sequence = 128, vocabulary = 129, microbatches = 2;
+        int heads = width / 32;
+        var options = Options(optimized, blockNorm);
+        if (pipeline.HasValue) options = options with { PipelineEventCollection = pipeline.Value, QueuedKernelLimit = 16 };
+        options = options with { PowerOfTwoPackScales = packedCandidates, BulkAttentionQkPanels = packedCandidates };
+        if (fusedLinear.HasValue) options = options with { FusedBfp8Linear = fusedLinear.Value };
+        options = options with { ExpandedXmxTiles = expandedTiles, BlockIoAttention = blockIo, MatrixPanelCacheMiB = panelCacheMiB };
+        using var execution = Tensor.BeginArcExecution(precision: precision, options: options);
         ArcExecutionLane lane = Tensor.ArcLane;
-        var model = new GptRinWikiJp(vocabulary, sequence, width, heads, 384, 2, new Random(57),
+        var model = new GptRinWikiJp(vocabulary, sequence, width, heads, width * 3, layers, new Random(57),
             dropout: .1f, tieWordEmbeddings: true);
         model.to(precision, 32);
         Parameter[] parameters = model.parameters().ToArray();
@@ -148,6 +211,13 @@ public sealed class ArcOptimizedTrainingTests
             Assert.Contains(Enumerable.Range(0, parameters.Length),
                 p => !snapshots[0].Masters[p].SequenceEqual(snapshots[1].Masters[p]));
             Assert.All(parameters, p => Assert.Equal(precision.ToStorageDType(), p.T.DType));
+            if (fusedLinear.HasValue)
+                Assert.Equal(fusedLinear.Value, lane.KernelTimings.Keys.Any(k => k.StartsWith("gemm_xmx_bfp8_epilogue_")));
+            if (expandedTiles)
+            {
+                Assert.Contains("gemm_xmx_direct_block_32x32_wg16", lane.KernelTimings.Keys);
+                Assert.Contains("gemm_xmx_bfp8_epilogue_16x64", lane.KernelTimings.Keys);
+            }
             Assert.Equal(optimized && blockNorm, lane.KernelTimings.ContainsKey("norm_residual_serial"));
             Assert.Equal(optimized && !blockNorm, lane.KernelTimings.ContainsKey("norm_residual_back_accumulate"));
             if (optimized)
@@ -155,7 +225,7 @@ public sealed class ArcOptimizedTrainingTests
                 Assert.Contains("attention_fp32_pv_d32_aligned", lane.KernelTimings.Keys);
                 Assert.Contains("attention_fp32_dp_d32_aligned", lane.KernelTimings.Keys);
                 Assert.Contains("attention_fp32_dq_d32_aligned", lane.KernelTimings.Keys);
-                Assert.Contains("attention_dkv_d32_k32_q32_causal", lane.KernelTimings.Keys);
+                Assert.Contains(blockIo ? "attention_dkv_block_slm_causal" : "attention_dkv_d32_k32_q32_causal", lane.KernelTimings.Keys);
             }
             return snapshots;
         }

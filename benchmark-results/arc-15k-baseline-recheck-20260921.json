@@ -1,0 +1,4932 @@
+{
+  "SchemaVersion": 1,
+  "TimestampUtc": "2026-09-21T09:14:54.2740939+00:00",
+  "ConfigurationPath": "C:\\Users\\takos\\source\\repos\\NNtrain\\training.transformer.json",
+  "ConfigurationSha256": "D52B38CE5D91EF53A1643D8E7061D0E974872BA6D1DDD69C5047DDB10B0C9E39",
+  "BinarySha256": {
+    "NNtrain.Core": "D02A9F92820C35A86332ED987C797C2A1F070294E59B530FE93267E25060FD97",
+    "NNtrain.Arc": "072CF510F52010905700104536EF7518EA00EE239161540A5DC7A289E3D3F52A",
+    "NNtrain.Benchmarks": "FFC59290718D418A44A6685E13F6E1AAF473A1D4EE135E2DF35013FFDA28696A"
+  },
+  "Seed": 1234,
+  "Shape": {
+    "BatchSize": 16,
+    "GradientAccumulationSteps": 16,
+    "ContextLength": 1024,
+    "ModelWidth": 512,
+    "Heads": 16,
+    "HiddenSize": 1536,
+    "Layers": 32,
+    "VocabularySize": 11500,
+    "Dropout": 0.1,
+    "TieWordEmbeddings": true
+  },
+  "Precision": {
+    "Mode": "mix8_32",
+    "Bfp8BlockSize": 32
+  },
+  "Optimizer": {
+    "Optimizer": "muon",
+    "LearningRate": 0.001,
+    "AuxiliaryLearningRate": 0.0003,
+    "WeightDecay": 0.01,
+    "NekoMuonNewtonSchulzInterval": 1,
+    "DepthMode": "Fixed",
+    "Depth": 5,
+    "NekoMuonBetaFast": 0.9
+  },
+  "WarmupSteps": 2,
+  "MeasuredSteps": 2,
+  "ArcOptions": {
+    "ResidentTensors": true,
+    "CoalescedAttention": true,
+    "BatchedAttention": true,
+    "XmxMatrices": true,
+    "XmxGemmMode": 0,
+    "ParallelReductions": true,
+    "WideMatrices": true,
+    "DeepMatrices": true,
+    "CausalAttentionBounds": true,
+    "ParallelWeightGradients": true,
+    "AttentionWorkspaceMiB": 64,
+    "DetailedProfiling": true,
+    "CompactAttentionTiles": true,
+    "UnrolledAttentionTiles": true,
+    "PanelAttention": true,
+    "MixedBackwardMatrixOperands": true,
+    "InlineMatrixGradient": true,
+    "FusedAttentionDkv": true,
+    "AttentionDkvRows": 16,
+    "FusedAttentionDq": false,
+    "FusedAttentionPv": false,
+    "BlockResidualNorm": false,
+    "FusedNormGradient": true,
+    "DirectXmxMatrices": true,
+    "PackedMatrixStorage": true,
+    "SubgroupAttentionReduction": false,
+    "CachedAttentionProbabilities": true,
+    "CacheSizedAttentionBackward": true,
+    "TunedFp32Attention": true,
+    "QueuedKernelLimit": 128,
+    "PipelineEventCollection": true,
+    "PowerOfTwoPackScales": true,
+    "BulkAttentionQkPanels": true,
+    "FusedBfp8Linear": true,
+    "ExpandedXmxTiles": true,
+    "BlockIoAttention": false,
+    "MatrixPanelCacheMiB": 0,
+    "ExperimentalOptimizationKernels": false,
+    "ExplicitHostUploads": true,
+    "DeferredReleaseBytes": 134217728,
+    "BatchDispatch": true,
+    "LossChunkRows": 512,
+    "TiledMatrices": true,
+    "StreamingAttention": true,
+    "FlashAttention": false,
+    "FlashAttentionXmxProducts": false,
+    "FlashAttentionAsyncCopy": false,
+    "FlashAttentionLargeRegisters": true,
+    "XmxAttentionProducts": false,
+    "DirectXmxAttentionProducts": true,
+    "ResidentMuonIterations": true,
+    "ChunkedLossHead": true,
+    "PackedUploads": true,
+    "FusedNormalization": true,
+    "BufferPoolBytes": 4294967296,
+    "LruBufferPool": true,
+    "ReuseRetiredBuffers": true,
+    "PhysicalBufferBudgetBytes": 0,
+    "StreamedXmxMatrices": true,
+    "StreamedWeightGradientWorkspaceMiB": 96,
+    "PackedReluBackward": true,
+    "CoalescedBfp8Publication": true,
+    "DirectAttentionQk": true,
+    "TransformerCheckpointing": false,
+    "TransformerCheckpointLayers": 2147483647,
+    "TransformerFfnCheckpointing": false,
+    "AutomaticTransformerMemoryPlan": true,
+    "OrderedTiledNorm": true,
+    "PackedNormInput": true
+  },
+  "Notes": "Fixed synthetic full-length tokens. Fresh seeded model; no LR scheduling, evaluation, checkpoint or corpus I/O. Gradient clipping max_norm=1 matches WikiLanguageModelCommand.TrainingStep. Host process working set is not dedicated VRAM. Lane byte counters describe backend allocations/transfers, not driver-reported VRAM. Legacy allocation, transfer and kernel duration counters overlap: do not add them. Timeline.Partition.WallCategories is the disjoint wall-time partition; GPU-idle means no measured command executing on this lane, not system-wide GPU idleness. HostExclusive and queued-command idle are alternative views, not extra wall time. Phase fences, progress output and event collection are inside wall time; trace export and gradient validation are outside. Managed allocation/GC snapshots exclude trace export. Amdahl fractions use sums of measured synchronous phase wall durations.",
+  "Overrides": {
+    "--warmup": "2",
+    "--steps": "2",
+    "--block-io-attention": "off"
+  },
+  "Results": [
+    {
+      "Device": "Arc",
+      "DeviceName": "Intel(R) Arc(TM) B580 Graphics",
+      "DriverVersion": "32.0.101.9030",
+      "ParameterCount": 90507500,
+      "StepP50Ms": 24617.350599999998,
+      "StepMeanMs": 24617.350599999998,
+      "TokensPerSecond": 10648.749504343494,
+      "Amdahl": [
+        {
+          "Phase": "backward",
+          "MeanMs": 17851.38495,
+          "Fraction": 0.725154596855764,
+          "MaximumTotalSpeedup": 3.638409042174194,
+          "TotalSpeedupIfPhase2X": 1.5688176739448305
+        },
+        {
+          "Phase": "forward",
+          "MeanMs": 6542.64015,
+          "Fraction": 0.26577352926029335,
+          "MaximumTotalSpeedup": 1.3619775911818273,
+          "TotalSpeedupIfPhase2X": 1.1532519159086136
+        },
+        {
+          "Phase": "optimizer",
+          "MeanMs": 194.34845,
+          "Fraction": 0.007894775240354257,
+          "MaximumTotalSpeedup": 1.0079575986934923,
+          "TotalSpeedupIfPhase2X": 1.0039630312406347
+        },
+        {
+          "Phase": "clip",
+          "MeanMs": 21.48725,
+          "Fraction": 0.0008728498183716002,
+          "MaximumTotalSpeedup": 1.0008736123507533,
+          "TotalSpeedupIfPhase2X": 1.0004366154590478
+        },
+        {
+          "Phase": "zeroGrad",
+          "MeanMs": 6.892250000000001,
+          "Fraction": 0.00027997529514813024,
+          "MaximumTotalSpeedup": 1.0002800537032663,
+          "TotalSpeedupIfPhase2X": 1.0001400072468591
+        }
+      ],
+      "Samples": [
+        {
+          "Step": 3,
+          "Loss": 9.314206,
+          "GradientNorm": 0.07345349,
+          "FiniteGradient": true,
+          "TotalMs": 24620.2788,
+          "ZeroGradMs": 6.9953,
+          "ForwardMs": 6541.8548,
+          "BackwardMs": 17854.8073,
+          "ClipMs": 22.1084,
+          "OptimizerMs": 193.9174,
+          "ManagedAllocatedBytes": 1360863888,
+          "ManagedBytes": 1196014928,
+          "WorkingSetBytes": 1370558464,
+          "GcCollections": [
+            82,
+            3,
+            0
+          ],
+          "LaneDelta": {
+            "AllocatedBytes": 0,
+            "AllocationCount": 0,
+            "KernelLaunchCount": 312387,
+            "H2DBytes": 2097152,
+            "D2HBytes": 2636,
+            "PeakAllocatedBytes": 0,
+            "RetainedMatrixPanelBytes": 0,
+            "KernelMilliseconds": 24337.33116600877,
+            "TransferMilliseconds": 375.8132000000039,
+            "AllocationMilliseconds": 7.261600000177907,
+            "CachedBytes": 0,
+            "RetiredBytes": 0,
+            "PoolHits": 54561,
+            "RetiredReuseCount": 0,
+            "BufferReuseCount": null,
+            "RequestedBytes": 911326874160,
+            "NativeAllocatedBytes": 0,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0
+          },
+          "LaneSnapshot": {
+            "AllocatedBytes": 1549940944,
+            "AllocationCount": 2935,
+            "KernelLaunchCount": 937942,
+            "H2DBytes": 1194202396,
+            "D2HBytes": 7916,
+            "PeakAllocatedBytes": 5626520740,
+            "RetainedMatrixPanelBytes": 0,
+            "KernelMilliseconds": 73026.68515597467,
+            "TransferMilliseconds": 2288.5853000000034,
+            "AllocationMilliseconds": 221.84350000047982,
+            "CachedBytes": 4076579796,
+            "RetiredBytes": 0,
+            "PoolHits": 163085,
+            "RetiredReuseCount": 0,
+            "BufferReuseCount": null,
+            "RequestedBytes": 2735530563432,
+            "NativeAllocatedBytes": 5626520740,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0
+          },
+          "KernelGpuMs": {
+            "decode_bfp8": 585.3091969999552,
+            "embedding": 2.850722,
+            "resident_zero": 209.77433099998478,
+            "resident_bfp8_quad4_32": 278.7898029999949,
+            "dropout": 2.879263999999999,
+            "xmx_storage_pack_b_transpose_bfp8": 25.145872000000274,
+            "xmx_storage_pack_a_linear_vec4_bfp8": 323.69359199998905,
+            "gemm_xmx_bfp8_epilogue_16x64": 1866.2512359999969,
+            "attention_qk_pack_combined_candidate": 440.98716499999944,
+            "attention_qk_direct_256x32_offset": 985.0526990001442,
+            "attention_probabilities_register_1024": 1618.1871040007436,
+            "attention_fp32_pv_d32_aligned": 1205.9343640001011,
+            "norm_packed_residual_input": 710.8896660000021,
+            "norm_row_sg16_w64_candidate": 292.6736339999974,
+            "gemm_xmx_direct_block_16x64_wg4": 266.53872200000103,
+            "round_bf16_values": 92.87340800000072,
+            "cross_entropy_rows": 102.03603799999908,
+            "loss_total": 9.712738000000662,
+            "resident_validate_loss": 0.017804000000000007,
+            "xmx_storage_pack_b_bfp8": 610.971282999989,
+            "cross_entropy_gradient": 68.40050899999949,
+            "xmx_storage_pack_a_linear_vec4_f32": 521.3586960000225,
+            "gemm_xmx_direct_block_8x32_wg16": 324.78270400000486,
+            "copy_range": 1.6309859999999894,
+            "xmx_storage_pack_a_transpose_f32": 480.19239600001106,
+            "gemm_xmx_direct_block_16x64_wg16": 1859.6969569999756,
+            "gradient_rows": 532.6591429999835,
+            "gradient_rows_finish": 75.27355200000372,
+            "norm_dx_row_sg16_w64_candidate": 315.96529399999804,
+            "copy_scale": 2.585095,
+            "norm_residual_back_accumulate": 238.19519099999906,
+            "gemm_xmx_direct_block_32x32_wg16": 1959.1490309999872,
+            "gemm_split_finish": 133.16134600000044,
+            "linear_relu_grad_packed": 411.0409269999991,
+            "xmx_storage_pack_a_linear_vec4_bf16": 218.58259700000127,
+            "xmx_storage_pack_a_transpose_bf16": 195.47269699999856,
+            "gradient_rows_packed_bf16": 113.52760100000114,
+            "attention_fp32_dp_d32_aligned": 925.0300390002942,
+            "attention_derivatives": 1032.456130000664,
+            "attention_fp32_dq_d32_aligned": 1455.3186289998707,
+            "attention_dkv_d32_k32_q32_causal": 3710.5387799992977,
+            "dropout_back": 2.575931999999998,
+            "embedding_back": 6.018742,
+            "reduce_sum": 6.407182999999968,
+            "resident_clip_total": 0.0012500000000000002,
+            "resident_clip_apply": 2.149320000000042,
+            "moments": 6.159219,
+            "confidence_blocks": 3.4150519999999798,
+            "confidence_finish": 19.420369999999963,
+            "transpose_scale": 4.542407999999993,
+            "xmx_pack_tune_b_transpose": 6.624549000000128,
+            "gemm_xmx_direct_block_16x32_wg16": 63.94315499999976,
+            "ns_coefficient": 2.1546790000000104,
+            "xmx_next_pack_b": 5.652219000000034,
+            "axpby": 1.824948000000004,
+            "adam": 0.8560309999999911,
+            "resident_finite": 1.6709770000000308
+          },
+          "Profile": [
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/attention_probabilities_register_1024",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 191269.45098499933
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/attention_qk_direct_256x32_offset",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 190985.46454599965
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/attention_derivatives",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 187868.12808299845
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/attention_fp32_dp_d32_aligned",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 187145.04995499874
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/attention_dkv_d32_k32_q32_causal",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 185086.9427419996
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/attention_fp32_dq_d32_aligned",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 183859.68698399985
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/attention_qk_direct_256x32_offset",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 146964.76548300113
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/attention_probabilities_register_1024",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 145205.0995240007
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/attention_fp32_pv_d32_aligned",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 144124.2873700009
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/xmx_storage_pack_b_bfp8",
+              "Count": 4624,
+              "Bytes": 0,
+              "Milliseconds": 46507.000299000116
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/resident_zero",
+              "Count": 3632,
+              "Bytes": 0,
+              "Milliseconds": 44292.152220999975
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gradient_rows_finish",
+              "Count": 3600,
+              "Bytes": 0,
+              "Milliseconds": 41031.124510000045
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/decode_bfp8",
+              "Count": 4720,
+              "Bytes": 0,
+              "Milliseconds": 34355.747981000124
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gradient_rows",
+              "Count": 3088,
+              "Bytes": 0,
+              "Milliseconds": 33194.486002
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_8x32_wg16 M=512 N=512 K=11500 TA=0 TB=0",
+              "Count": 3072,
+              "Bytes": 0,
+              "Milliseconds": 26335.586704000027
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_split_finish",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 24471.765852999975
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/decode_bfp8",
+              "Count": 1584,
+              "Bytes": 0,
+              "Milliseconds": 19911.567158000053
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/xmx_storage_pack_a_transpose_f32",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 19490.278543000004
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_f32",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 17899.897517000034
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/xmx_storage_pack_a_linear_vec4_bfp8",
+              "Count": 2560,
+              "Bytes": 0,
+              "Milliseconds": 16792.43996599999
+            },
+            {
+              "Kind": "partial-wait",
+              "Detail": "backward",
+              "Count": 3664,
+              "Bytes": 0,
+              "Milliseconds": 14430.466499999986
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/xmx_storage_pack_b_transpose_bfp8",
+              "Count": 2064,
+              "Bytes": 0,
+              "Milliseconds": 13899.99070600001
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/norm_residual_back_accumulate",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 11634.688160000002
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/norm_dx_row_sg16_w64_candidate",
+              "Count": 1040,
+              "Bytes": 0,
+              "Milliseconds": 11361.344833
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/norm_packed_residual_input",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 10977.193469999991
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/resident_bfp8_quad4_32",
+              "Count": 1584,
+              "Bytes": 0,
+              "Milliseconds": 10690.003919000008
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=1536 N=512 K=16384 TA=1 TB=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 9604.248757000005
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/attention_qk_pack_combined_candidate",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 8683.230597000002
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=512 N=512 K=16384 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 8216.746313
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=1536 TA=0 TB=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 8008.089607000001
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=512 TA=0 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 7893.178050000001
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/norm_row_sg16_w64_candidate",
+              "Count": 1040,
+              "Bytes": 0,
+              "Milliseconds": 7403.725765999999
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gradient_rows_packed_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 7350.82236200001
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=1536 K=512 offset=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 7302.603502000001
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/norm_packed_residual_input",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 7248.324321
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/xmx_storage_pack_a_transpose_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 6522.242572000007
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 5812.056741000003
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/linear_relu_grad_packed",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 5442.042593000003
+            },
+            {
+              "Kind": "partial-wait",
+              "Detail": "forward",
+              "Count": 992,
+              "Bytes": 0,
+              "Milliseconds": 5317.845500000003
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/attention_qk_pack_combined_candidate",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4880.608344000002
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=512 N=1536 K=16384 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4843.985217000002
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/copy_range",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4368.969820000003
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=11500 N=512 K=512 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4317.978398999999
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/cross_entropy_rows",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4276.6696100000045
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/round_bf16_values",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4233.831895000001
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/cross_entropy_gradient",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4228.860276999996
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_bfp8",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4203.363831
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4201.166791999995
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=1536 K=512 TA=0 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4043.9234669999955
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=1536 offset=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3752.122427999996
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/attention_dkv_d32_k32_q32_causal",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 3710.5387799998502
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/loss_total",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3107.5251909999997
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/cross_entropy_rows",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3059.457786
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/round_bf16_values",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3016.3132309999987
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=512 offset=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 2972.9152790000007
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 2886.6430889999992
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/attention_fp32_dq_d32_aligned",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 1455.3186289999906
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/attention_fp32_pv_d32_aligned",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 1205.9343639999986
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=1536 K=512 offset=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 1193.3382220000015
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=1536 N=512 K=16384 TA=1 TB=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 1153.5138359999994
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=1536 TA=0 TB=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 1063.8894839999994
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/attention_derivatives",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 1032.456130000008
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/attention_fp32_dp_d32_aligned",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 925.030039000095
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/attention_probabilities_register_1024",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 897.5995599999053
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/attention_probabilities_register_1024",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 720.5875439999044
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/xmx_storage_pack_b_bfp8",
+              "Count": 4624,
+              "Bytes": 0,
+              "Milliseconds": 610.9712830000034
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=512 N=1536 K=16384 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 579.1498859999996
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gradient_rows",
+              "Count": 3088,
+              "Bytes": 0,
+              "Milliseconds": 532.6591429999985
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_f32",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 514.3466340000004
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/attention_qk_direct_256x32_offset",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 497.82587399994867
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/attention_qk_direct_256x32_offset",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 487.2268249999919
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/xmx_storage_pack_a_transpose_f32",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 480.1923959999982
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=1536 K=512 TA=0 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 476.9560389999998
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=1536 offset=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 455.50707900000003
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/linear_relu_grad_packed",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 411.04092699999967
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/norm_packed_residual_input",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 361.33112999999884
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/norm_packed_residual_input",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 349.55853599999926
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_8x32_wg16 M=512 N=512 K=11500 TA=0 TB=0",
+              "Count": 3072,
+              "Bytes": 0,
+              "Milliseconds": 324.78270400000247
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/xmx_storage_pack_a_linear_vec4_f32",
+              "Count": 1920,
+              "Bytes": 0,
+              "Milliseconds": 324.16286199999985
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/xmx_storage_pack_a_linear_vec4_bfp8",
+              "Count": 2560,
+              "Bytes": 0,
+              "Milliseconds": 320.5258169999996
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/norm_dx_row_sg16_w64_candidate",
+              "Count": 1040,
+              "Bytes": 0,
+              "Milliseconds": 315.965293999999
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/attention_fp32_dp_d32_aligned",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 297.3321000000144
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/decode_bfp8",
+              "Count": 4720,
+              "Bytes": 0,
+              "Milliseconds": 296.131387000004
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/attention_fp32_dq_d32_aligned",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 294.1997000000048
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/norm_row_sg16_w64_candidate",
+              "Count": 1040,
+              "Bytes": 0,
+              "Milliseconds": 292.67363399999994
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/decode_bfp8",
+              "Count": 1584,
+              "Bytes": 0,
+              "Milliseconds": 289.1778100000009
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/resident_bfp8_quad4_32",
+              "Count": 1584,
+              "Bytes": 0,
+              "Milliseconds": 275.6692239999989
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/norm_residual_back_accumulate",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 238.1951909999993
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/attention_qk_direct_256x32_offset",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 227.74880000003265
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=512 N=512 K=16384 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 226.4853089999999
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/attention_dkv_d32_k32_q32_causal",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 225.32920000006933
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/attention_qk_pack_combined_candidate",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 221.6855149999995
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/attention_qk_pack_combined_candidate",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 219.30164999999963
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 218.582597
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=512 offset=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 217.4059350000002
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/resident_zero",
+              "Count": 3632,
+              "Bytes": 0,
+              "Milliseconds": 209.2062880000069
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/attention_probabilities_register_1024",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 209.20139999998457
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/xmx_pack_tune_b_transpose",
+              "Count": 1280,
+              "Bytes": 0,
+              "Milliseconds": 205.34173099999953
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/attention_derivatives",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 201.114899999945
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/xmx_storage_pack_a_transpose_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 195.47269699999976
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=512 TA=0 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 181.87654900000018
+            },
+            {
+              "Kind": "H2D",
+              "Detail": "forward/65536B",
+              "Count": 32,
+              "Bytes": 2097152,
+              "Milliseconds": 150.12799999999996
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/attention_fp32_pv_d32_aligned",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 150.09550000000854
+            },
+            {
+              "Kind": "D2H",
+              "Detail": "forward/4B",
+              "Count": 16,
+              "Bytes": 64,
+              "Milliseconds": 147.0575
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/resident_validate_loss",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 140.598647
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=11500 N=512 K=512 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 136.97488499999997
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 133.93925500000006
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_split_finish",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 133.16134600000024
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 132.59946700000023
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/ns_coefficient",
+              "Count": 640,
+              "Bytes": 0,
+              "Milliseconds": 119.81280900000013
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/copy_scale",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 116.50156100000001
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=1",
+              "Count": 800,
+              "Bytes": 0,
+              "Milliseconds": 115.31904599999986
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/xmx_next_pack_b",
+              "Count": 640,
+              "Bytes": 0,
+              "Milliseconds": 114.32413399999997
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gradient_rows_packed_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 113.52760100000022
+            },
+            {
+              "Kind": "synchronize",
+              "Detail": "backward/explicit",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 111.6635
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/attention_probabilities_register_1024",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 110.00489999999294
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/attention_qk_direct_256x32_offset",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 109.91990000000942
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=1536 K=512 TA=0 TB=0",
+              "Count": 480,
+              "Bytes": 0,
+              "Milliseconds": 109.79314700000009
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/embedding_back",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 100.16448
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/dropout_back",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 97.794897
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=1536 TA=0 TB=1",
+              "Count": 480,
+              "Bytes": 0,
+              "Milliseconds": 87.38152999999998
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gradient_rows_finish",
+              "Count": 3600,
+              "Bytes": 0,
+              "Milliseconds": 75.2735519999998
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/resident_bfp8_quad4_32",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 73.41346299999987
+            },
+            {
+              "Kind": "D2H",
+              "Detail": "optimizer/host-result/16B",
+              "Count": 128,
+              "Bytes": 2048,
+              "Milliseconds": 72.71760000000003
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/cross_entropy_gradient",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 68.40050900000014
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/confidence_finish",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 52.268808999999976
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/cross_entropy_rows",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 51.15197600000022
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/cross_entropy_rows",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 50.88406200000013
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/confidence_blocks",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 49.642404000000006
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/round_bf16_values",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 46.43884000000006
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/round_bf16_values",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 46.434567999999935
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/moments",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 44.32740199999999
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/axpby",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 43.53912499999999
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/xmx_storage_pack_b_bfp8",
+              "Count": 4624,
+              "Bytes": 0,
+              "Milliseconds": 39.119899999999994
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/decode_bfp8",
+              "Count": 4720,
+              "Bytes": 0,
+              "Milliseconds": 36.494699999999796
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/adam",
+              "Count": 261,
+              "Bytes": 0,
+              "Milliseconds": 29.548810999999958
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gradient_rows_finish",
+              "Count": 3600,
+              "Bytes": 0,
+              "Milliseconds": 28.462200000000106
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/transpose_scale",
+              "Count": 192,
+              "Bytes": 0,
+              "Milliseconds": 28.053758
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=1536 TA=0 TB=1",
+              "Count": 480,
+              "Bytes": 0,
+              "Milliseconds": 25.665496999999892
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/xmx_storage_pack_b_transpose_bfp8",
+              "Count": 2064,
+              "Bytes": 0,
+              "Milliseconds": 23.794108000000065
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_8x32_wg16 M=512 N=512 K=11500 TA=0 TB=0",
+              "Count": 3072,
+              "Bytes": 0,
+              "Milliseconds": 23.7525000000002
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gradient_rows",
+              "Count": 3088,
+              "Bytes": 0,
+              "Milliseconds": 23.20789999999987
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/resident_zero",
+              "Count": 3632,
+              "Bytes": 0,
+              "Milliseconds": 22.468100000000288
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/xmx_storage_pack_a_linear_vec4_bfp8",
+              "Count": 2560,
+              "Bytes": 0,
+              "Milliseconds": 19.85730000000002
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/xmx_storage_pack_b_transpose_bfp8",
+              "Count": 2064,
+              "Bytes": 0,
+              "Milliseconds": 19.502099999999892
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/confidence_finish",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 19.420370000000005
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=1536 K=512 TA=0 TB=0",
+              "Count": 480,
+              "Bytes": 0,
+              "Milliseconds": 18.916353999999973
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_f32",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 17.89840000000003
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=1",
+              "Count": 800,
+              "Bytes": 0,
+              "Milliseconds": 16.135824000000035
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/xmx_storage_pack_a_transpose_f32",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 15.557000000000077
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_split_finish",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 15.236800000000033
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/resident_bfp8_quad4_32",
+              "Count": 1584,
+              "Bytes": 0,
+              "Milliseconds": 13.92419999999997
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/decode_bfp8",
+              "Count": 1584,
+              "Bytes": 0,
+              "Milliseconds": 13.66049999999997
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/xmx_storage_pack_a_linear_vec4_f32",
+              "Count": 1920,
+              "Bytes": 0,
+              "Milliseconds": 12.936599999999894
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/norm_packed_residual_input",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 11.83150000000001
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=1536 N=512 K=16384 TA=1 TB=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 10.188999999999998
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=1536 TA=0 TB=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 10.099999999999987
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "clip/reduce_sum",
+              "Count": 910,
+              "Bytes": 0,
+              "Milliseconds": 10.099058999999977
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/loss_total",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 9.712737999999888
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/norm_packed_residual_input",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 9.331699999999994
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=1536 K=512 offset=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 8.974499999999988
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/norm_dx_row_sg16_w64_candidate",
+              "Count": 1040,
+              "Bytes": 0,
+              "Milliseconds": 8.626700000000001
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/norm_row_sg16_w64_candidate",
+              "Count": 1040,
+              "Bytes": 0,
+              "Milliseconds": 8.222500000000016
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/dropout",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 7.710731
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/norm_residual_back_accumulate",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 7.6691000000000065
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/xmx_pack_tune_b_transpose",
+              "Count": 1280,
+              "Bytes": 0,
+              "Milliseconds": 7.643999999999982
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/xmx_storage_pack_a_linear_vec4_f32",
+              "Count": 1920,
+              "Bytes": 0,
+              "Milliseconds": 7.012062000000004
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "clip/reduce_sum",
+              "Count": 910,
+              "Bytes": 0,
+              "Milliseconds": 6.816899999999994
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/xmx_pack_tune_b_transpose",
+              "Count": 1280,
+              "Bytes": 0,
+              "Milliseconds": 6.6245489999999325
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "clip/resident_clip_apply",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 6.402921999999998
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/moments",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 6.159218999999996
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/embedding_back",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 6.018741999999999
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=1",
+              "Count": 800,
+              "Bytes": 0,
+              "Milliseconds": 5.8707999999999805
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/xmx_next_pack_b",
+              "Count": 640,
+              "Bytes": 0,
+              "Milliseconds": 5.652219000000013
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=0",
+              "Count": 160,
+              "Bytes": 0,
+              "Milliseconds": 5.571775999999996
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=1536 K=512 TA=0 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 5.286600000000006
+            },
+            {
+              "Kind": "D2H",
+              "Detail": "optimizer/4B",
+              "Count": 128,
+              "Bytes": 512,
+              "Milliseconds": 5.186700000000002
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 5.023399999999994
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=512 offset=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.986200000000002
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/transpose_scale",
+              "Count": 192,
+              "Bytes": 0,
+              "Milliseconds": 4.542408
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=1536 offset=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.528400000000003
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=512 N=1536 K=16384 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.466900000000004
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/reduce_sum",
+              "Count": 384,
+              "Bytes": 0,
+              "Milliseconds": 4.438447000000001
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/linear_relu_grad_packed",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.430100000000009
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/xmx_storage_pack_a_transpose_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.410800000000005
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.349000000000003
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=512 TA=0 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.264600000000001
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/attention_qk_pack_combined_candidate",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.2473
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.229299999999994
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=11500 N=512 K=512 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.190299999999998
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/attention_qk_pack_combined_candidate",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.130400000000003
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=512 N=512 K=16384 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.032599999999999
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_bfp8",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.013499999999996
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gradient_rows_packed_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3.9421999999999997
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "clip/reduce_sum",
+              "Count": 910,
+              "Bytes": 0,
+              "Milliseconds": 3.9084840000000423
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/ns_coefficient",
+              "Count": 640,
+              "Bytes": 0,
+              "Milliseconds": 3.8921999999999817
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/xmx_next_pack_b",
+              "Count": 640,
+              "Bytes": 0,
+              "Milliseconds": 3.826699999999981
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/cross_entropy_gradient",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3.669000000000004
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "zero-grad/resident_zero",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 3.638499999999987
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/cross_entropy_rows",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3.614400000000002
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=1536 TA=0 TB=1",
+              "Count": 480,
+              "Bytes": 0,
+              "Milliseconds": 3.6027999999999976
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/copy_range",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3.5289999999999937
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=1536 K=512 TA=0 TB=0",
+              "Count": 480,
+              "Bytes": 0,
+              "Milliseconds": 3.5055999999999927
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/cross_entropy_rows",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3.4486
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/confidence_blocks",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 3.415052000000001
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "zero-grad/resident_zero",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 3.356008000000004
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/round_bf16_values",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3.2453000000000016
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=0",
+              "Count": 160,
+              "Bytes": 0,
+              "Milliseconds": 3.2254799999999917
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_bfp8",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3.1677750000000144
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/resident_bfp8_quad4_32",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 3.1205789999999896
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/loss_total",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 2.9813999999999994
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/reduce_sum",
+              "Count": 384,
+              "Bytes": 0,
+              "Milliseconds": 2.9454999999999987
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/round_bf16_values",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 2.9433000000000056
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/dropout",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 2.8792639999999996
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/embedding",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 2.850722
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/resident_bfp8_quad4_32",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 2.765499999999998
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/adam",
+              "Count": 261,
+              "Bytes": 0,
+              "Milliseconds": 2.7487999999999992
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/copy_scale",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 2.5850949999999995
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/dropout_back",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 2.575932
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "clip/resident_clip_apply",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 2.572299999999999
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/reduce_sum",
+              "Count": 384,
+              "Bytes": 0,
+              "Milliseconds": 2.4986989999999967
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/ns_coefficient",
+              "Count": 640,
+              "Bytes": 0,
+              "Milliseconds": 2.154678999999993
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "clip/resident_clip_apply",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 2.149320000000001
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/axpby",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 1.8249479999999998
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/copy_range",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 1.6309860000000023
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/transpose_scale",
+              "Count": 192,
+              "Bytes": 0,
+              "Milliseconds": 1.5238000000000018
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/xmx_storage_pack_b_transpose_bfp8",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 1.3517640000000002
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/xmx_storage_pack_b_transpose_bfp8",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 1.2027
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/moments",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 1.1832
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=0",
+              "Count": 160,
+              "Bytes": 0,
+              "Milliseconds": 1.1699999999999995
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/xmx_storage_pack_b_transpose_bfp8",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 1.12917
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/resident_zero",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 1.093751
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/axpby",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 0.8838000000000004
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/adam",
+              "Count": 261,
+              "Bytes": 0,
+              "Milliseconds": 0.8560309999999912
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/confidence_finish",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 0.8129000000000003
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/confidence_blocks",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 0.7799000000000008
+            },
+            {
+              "Kind": "D2H",
+              "Detail": "clip/12B",
+              "Count": 1,
+              "Bytes": 12,
+              "Milliseconds": 0.7234
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/8388608B",
+              "Count": 2608,
+              "Bytes": 21877489664,
+              "Milliseconds": 0.6309999999999826
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "zero-grad/resident_zero",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 0.5522169999999975
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/50331648B",
+              "Count": 3072,
+              "Bytes": 154618822656,
+              "Milliseconds": 0.5110999999999849
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/16777216B",
+              "Count": 5632,
+              "Bytes": 94489280512,
+              "Milliseconds": 0.44859999999997424
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/33554432B",
+              "Count": 4688,
+              "Bytes": 157303177216,
+              "Milliseconds": 0.4436999999999764
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/2048B",
+              "Count": 3136,
+              "Bytes": 6422528,
+              "Milliseconds": 0.41119999999998624
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/1572864B",
+              "Count": 1536,
+              "Bytes": 2415919104,
+              "Milliseconds": 0.3986999999999947
+            },
+            {
+              "Kind": "synchronize",
+              "Detail": "optimizer/host-result",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 0.3963000000000001
+            },
+            {
+              "Kind": "partial-wait",
+              "Detail": "optimizer",
+              "Count": 7,
+              "Bytes": 0,
+              "Milliseconds": 0.3645999999999999
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/1048576B",
+              "Count": 2608,
+              "Bytes": 2734686208,
+              "Milliseconds": 0.3112999999999924
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/524288B",
+              "Count": 1536,
+              "Bytes": 805306368,
+              "Milliseconds": 0.2866999999999966
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/25165824B",
+              "Count": 1536,
+              "Bytes": 38654705664,
+              "Milliseconds": 0.27309999999999696
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/33554432B",
+              "Count": 3152,
+              "Bytes": 105763569664,
+              "Milliseconds": 0.25669999999999155
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/262144B",
+              "Count": 1040,
+              "Bytes": 272629760,
+              "Milliseconds": 0.24999999999999897
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/embedding",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.23540000000000003
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/25165824B",
+              "Count": 1024,
+              "Bytes": 25769803776,
+              "Milliseconds": 0.2183999999999995
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/2048B",
+              "Count": 1072,
+              "Bytes": 2195456,
+              "Milliseconds": 0.21719999999999917
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/393216B",
+              "Count": 1024,
+              "Bytes": 402653184,
+              "Milliseconds": 0.20689999999999947
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/524288B",
+              "Count": 1024,
+              "Bytes": 536870912,
+              "Milliseconds": 0.20659999999999898
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/16777216B",
+              "Count": 2560,
+              "Bytes": 42949672960,
+              "Milliseconds": 0.20599999999999574
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/131072B",
+              "Count": 1040,
+              "Bytes": 136314880,
+              "Milliseconds": 0.20159999999999936
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/3145728B",
+              "Count": 1024,
+              "Bytes": 3221225472,
+              "Milliseconds": 0.17419999999999994
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/2097152B",
+              "Count": 528,
+              "Bytes": 1107296256,
+              "Milliseconds": 0.16840000000000008
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/copy_scale",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.15630000000000002
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/6144B",
+              "Count": 1024,
+              "Bytes": 6291456,
+              "Milliseconds": 0.1534000000000004
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/embedding_back",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.15200000000000002
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/resident_zero",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.1498
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/100663296B",
+              "Count": 1536,
+              "Bytes": 154618822656,
+              "Milliseconds": 0.14690000000000056
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/dropout",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.14440000000000003
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/524288B",
+              "Count": 2400,
+              "Bytes": 1258291200,
+              "Milliseconds": 0.1407000000000009
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/dropout_back",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.13789999999999997
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/1572864B",
+              "Count": 1536,
+              "Bytes": 2415919104,
+              "Milliseconds": 0.13650000000000126
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/11780096B",
+              "Count": 1056,
+              "Bytes": 12439781376,
+              "Milliseconds": 0.1182000000000016
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/resident_validate_loss",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.1178
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/embedding",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.11427100000000001
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/50331648B",
+              "Count": 512,
+              "Bytes": 25769803776,
+              "Milliseconds": 0.10620000000000047
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/131072B",
+              "Count": 1024,
+              "Bytes": 134217728,
+              "Milliseconds": 0.10510000000000137
+            },
+            {
+              "Kind": "partial-wait",
+              "Detail": "clip",
+              "Count": 19,
+              "Bytes": 0,
+              "Milliseconds": 0.09359999999999999
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/1572864B",
+              "Count": 1440,
+              "Bytes": 2264924160,
+              "Milliseconds": 0.08890000000000146
+            },
+            {
+              "Kind": "synchronize",
+              "Detail": "forward/explicit",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.07459999999999999
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/100663296B",
+              "Count": 512,
+              "Bytes": 51539607552,
+              "Milliseconds": 0.07160000000000041
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/92000B",
+              "Count": 512,
+              "Bytes": 47104000,
+              "Milliseconds": 0.05230000000000025
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/8388608B",
+              "Count": 512,
+              "Bytes": 4294967296,
+              "Milliseconds": 0.05050000000000032
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/1048576B",
+              "Count": 512,
+              "Bytes": 536870912,
+              "Milliseconds": 0.03530000000000002
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/4B",
+              "Count": 391,
+              "Bytes": 1564,
+              "Milliseconds": 0.03129999999999986
+            },
+            {
+              "Kind": "synchronize",
+              "Detail": "optimizer/explicit",
+              "Count": 1,
+              "Bytes": 0,
+              "Milliseconds": 0.0308
+            },
+            {
+              "Kind": "partial-wait",
+              "Detail": "zero-grad",
+              "Count": 5,
+              "Bytes": 0,
+              "Milliseconds": 0.026799999999999997
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/3145728B",
+              "Count": 384,
+              "Bytes": 1207959552,
+              "Milliseconds": 0.023799999999999915
+            },
+            {
+              "Kind": "synchronize",
+              "Detail": "zero-grad/explicit",
+              "Count": 1,
+              "Bytes": 0,
+              "Milliseconds": 0.0217
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/resident_validate_loss",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.017804000000000004
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/23552000B",
+              "Count": 32,
+              "Bytes": 753664000,
+              "Milliseconds": 0.0177
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/resident_zero",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.014993000000000003
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/4B",
+              "Count": 128,
+              "Bytes": 512,
+              "Milliseconds": 0.013599999999999978
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/16B",
+              "Count": 160,
+              "Bytes": 2560,
+              "Milliseconds": 0.01279999999999998
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/49152B",
+              "Count": 96,
+              "Bytes": 4718592,
+              "Milliseconds": 0.012299999999999988
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/11780096B",
+              "Count": 16,
+              "Bytes": 188481536,
+              "Milliseconds": 0.0119
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/12288B",
+              "Count": 96,
+              "Bytes": 1179648,
+              "Milliseconds": 0.01139999999999999
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/8B",
+              "Count": 195,
+              "Bytes": 1560,
+              "Milliseconds": 0.010899999999999991
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "clip/resident_clip_total",
+              "Count": 1,
+              "Bytes": 0,
+              "Milliseconds": 0.0095
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/4B",
+              "Count": 16,
+              "Bytes": 64,
+              "Milliseconds": 0.009100000000000002
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/48B",
+              "Count": 96,
+              "Bytes": 4608,
+              "Milliseconds": 0.0086
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/46000B",
+              "Count": 16,
+              "Bytes": 736000,
+              "Milliseconds": 0.0077
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/65536B",
+              "Count": 32,
+              "Bytes": 2097152,
+              "Milliseconds": 0.0068
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/48B",
+              "Count": 96,
+              "Bytes": 4608,
+              "Milliseconds": 0.006500000000000004
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/12288B",
+              "Count": 96,
+              "Bytes": 1179648,
+              "Milliseconds": 0.006300000000000003
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/46000B",
+              "Count": 16,
+              "Bytes": 736000,
+              "Milliseconds": 0.005699999999999999
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/23552000B",
+              "Count": 32,
+              "Bytes": 753664000,
+              "Milliseconds": 0.0054
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/16384B",
+              "Count": 32,
+              "Bytes": 524288,
+              "Milliseconds": 0.005299999999999999
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/4096B",
+              "Count": 32,
+              "Bytes": 131072,
+              "Milliseconds": 0.0048000000000000004
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "clip/resident_clip_total",
+              "Count": 1,
+              "Bytes": 0,
+              "Milliseconds": 0.0044269999999999995
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/24B",
+              "Count": 64,
+              "Bytes": 1536,
+              "Milliseconds": 0.004299999999999998
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/4096B",
+              "Count": 32,
+              "Bytes": 131072,
+              "Milliseconds": 0.0039999999999999975
+            },
+            {
+              "Kind": "synchronize",
+              "Detail": "clip/explicit",
+              "Count": 1,
+              "Bytes": 0,
+              "Milliseconds": 0.0036
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/16B",
+              "Count": 32,
+              "Bytes": 512,
+              "Milliseconds": 0.0026
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/4096B",
+              "Count": 16,
+              "Bytes": 65536,
+              "Milliseconds": 0.0020000000000000005
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/1048576B",
+              "Count": 16,
+              "Bytes": 16777216,
+              "Milliseconds": 0.002
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/4096B",
+              "Count": 16,
+              "Bytes": 65536,
+              "Milliseconds": 0.0018000000000000002
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/92000B",
+              "Count": 1,
+              "Bytes": 92000,
+              "Milliseconds": 0.0016
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/1556B",
+              "Count": 1,
+              "Bytes": 1556,
+              "Milliseconds": 0.0014
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "clip/resident_clip_total",
+              "Count": 1,
+              "Bytes": 0,
+              "Milliseconds": 0.00125
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/8192B",
+              "Count": 1,
+              "Bytes": 8192,
+              "Milliseconds": 0.001
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/360B",
+              "Count": 1,
+              "Bytes": 360,
+              "Milliseconds": 0.0009
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/32B",
+              "Count": 1,
+              "Bytes": 32,
+              "Milliseconds": 0.0006
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/180B",
+              "Count": 1,
+              "Bytes": 180,
+              "Milliseconds": 0.0003
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/12B",
+              "Count": 1,
+              "Bytes": 12,
+              "Milliseconds": 0.0002
+            }
+          ],
+          "Timeline": null
+        },
+        {
+          "Step": 4,
+          "Loss": 9.279043,
+          "GradientNorm": 0.07850407,
+          "FiniteGradient": true,
+          "TotalMs": 24614.4224,
+          "ZeroGradMs": 6.7892,
+          "ForwardMs": 6543.4255,
+          "BackwardMs": 17847.962600000003,
+          "ClipMs": 20.8661,
+          "OptimizerMs": 194.7795,
+          "ManagedAllocatedBytes": 1360850712,
+          "ManagedBytes": 1202725312,
+          "WorkingSetBytes": 1375993856,
+          "GcCollections": [
+            81,
+            5,
+            0
+          ],
+          "LaneDelta": {
+            "AllocatedBytes": 0,
+            "AllocationCount": 0,
+            "KernelLaunchCount": 312387,
+            "H2DBytes": 2097152,
+            "D2HBytes": 2636,
+            "PeakAllocatedBytes": 0,
+            "RetainedMatrixPanelBytes": 0,
+            "KernelMilliseconds": 24338.080040104673,
+            "TransferMilliseconds": 375.1982000000021,
+            "AllocationMilliseconds": 7.2821000001739264,
+            "CachedBytes": 0,
+            "RetiredBytes": 0,
+            "PoolHits": 54561,
+            "RetiredReuseCount": 0,
+            "BufferReuseCount": null,
+            "RequestedBytes": 911326874160,
+            "NativeAllocatedBytes": 0,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0
+          },
+          "LaneSnapshot": {
+            "AllocatedBytes": 1549940944,
+            "AllocationCount": 2935,
+            "KernelLaunchCount": 1250719,
+            "H2DBytes": 1196299548,
+            "D2HBytes": 10556,
+            "PeakAllocatedBytes": 5626520740,
+            "RetainedMatrixPanelBytes": 0,
+            "KernelMilliseconds": 97366.43700607981,
+            "TransferMilliseconds": 2664.3319000000056,
+            "AllocationMilliseconds": 229.12630000065374,
+            "CachedBytes": 4076579796,
+            "RetiredBytes": 0,
+            "PoolHits": 217647,
+            "RetiredReuseCount": 0,
+            "BufferReuseCount": null,
+            "RequestedBytes": 3646857437596,
+            "NativeAllocatedBytes": 5626520740,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0
+          },
+          "KernelGpuMs": {
+            "decode_bfp8": 585.1961639998626,
+            "embedding": 2.848536000000003,
+            "resident_zero": 209.7808979999843,
+            "resident_bfp8_quad4_32": 278.7791669999938,
+            "dropout": 2.879161,
+            "xmx_storage_pack_b_transpose_bfp8": 25.121693999999863,
+            "xmx_storage_pack_a_linear_vec4_bfp8": 323.6622430000077,
+            "gemm_xmx_bfp8_epilogue_16x64": 1866.1253949999873,
+            "attention_qk_pack_combined_candidate": 440.97227600000065,
+            "attention_qk_direct_256x32_offset": 984.9497780002089,
+            "attention_probabilities_register_1024": 1618.0415350022013,
+            "attention_fp32_pv_d32_aligned": 1207.8010819999245,
+            "norm_packed_residual_input": 710.6990410000158,
+            "norm_row_sg16_w64_candidate": 292.66082999999514,
+            "gemm_xmx_direct_block_16x64_wg4": 266.47113600000193,
+            "round_bf16_values": 92.86041200000119,
+            "cross_entropy_rows": 102.06989799999843,
+            "loss_total": 9.712946999999414,
+            "resident_validate_loss": 0.016969999999999964,
+            "xmx_storage_pack_b_bfp8": 610.8403099999598,
+            "cross_entropy_gradient": 68.41249299999939,
+            "xmx_storage_pack_a_linear_vec4_f32": 521.910695000035,
+            "gemm_xmx_direct_block_8x32_wg16": 324.8351930000051,
+            "copy_range": 1.630572999999985,
+            "xmx_storage_pack_a_transpose_f32": 480.2118430000071,
+            "gemm_xmx_direct_block_16x64_wg16": 1859.2773809999799,
+            "gradient_rows": 532.6316409999827,
+            "gradient_rows_finish": 75.31917799999815,
+            "norm_dx_row_sg16_w64_candidate": 316.0022719999936,
+            "copy_scale": 2.5884319999999983,
+            "norm_residual_back_accumulate": 238.2250929999974,
+            "gemm_xmx_direct_block_32x32_wg16": 1959.2086289999997,
+            "gemm_split_finish": 133.0842430000008,
+            "linear_relu_grad_packed": 411.0661400000024,
+            "xmx_storage_pack_a_linear_vec4_bf16": 218.65165300000103,
+            "xmx_storage_pack_a_transpose_bf16": 195.4595809999986,
+            "gradient_rows_packed_bf16": 113.53541200000114,
+            "attention_fp32_dp_d32_aligned": 924.9566980004092,
+            "attention_derivatives": 1032.300345000605,
+            "attention_fp32_dq_d32_aligned": 1455.1108899989813,
+            "attention_dkv_d32_k32_q32_causal": 3710.4490109989674,
+            "dropout_back": 2.5764520000000015,
+            "embedding_back": 6.018014999999995,
+            "reduce_sum": 6.414992000000101,
+            "resident_clip_total": 0.0012500000000000002,
+            "resident_clip_apply": 2.1501600000000387,
+            "moments": 6.159324000000019,
+            "confidence_blocks": 3.4142119999999743,
+            "confidence_finish": 19.419632000000135,
+            "transpose_scale": 4.5376189999999905,
+            "xmx_pack_tune_b_transpose": 6.615999000000336,
+            "gemm_xmx_direct_block_16x32_wg16": 63.92420299999972,
+            "ns_coefficient": 2.158419999999939,
+            "xmx_next_pack_b": 5.653260999999855,
+            "axpby": 1.8278660000000047,
+            "adam": 0.8527029999999916,
+            "resident_finite": 1.6671170000000375
+          },
+          "Profile": [
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/attention_probabilities_register_1024",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 191187.82623600075
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/attention_qk_direct_256x32_offset",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 190904.68372100077
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/attention_derivatives",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 187785.93344000037
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/attention_fp32_dp_d32_aligned",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 187059.73530299915
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/attention_dkv_d32_k32_q32_causal",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 184998.995091001
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/attention_fp32_dq_d32_aligned",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 183768.52168400097
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/attention_qk_direct_256x32_offset",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 146945.4312630005
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/attention_probabilities_register_1024",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 145186.7816439989
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/attention_fp32_pv_d32_aligned",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 144109.8823929998
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/xmx_storage_pack_b_bfp8",
+              "Count": 4624,
+              "Bytes": 0,
+              "Milliseconds": 46486.53286300002
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/resident_zero",
+              "Count": 3632,
+              "Bytes": 0,
+              "Milliseconds": 44267.5559519999
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gradient_rows_finish",
+              "Count": 3600,
+              "Bytes": 0,
+              "Milliseconds": 41009.8492679999
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/decode_bfp8",
+              "Count": 4720,
+              "Bytes": 0,
+              "Milliseconds": 34352.933064000055
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gradient_rows",
+              "Count": 3088,
+              "Bytes": 0,
+              "Milliseconds": 33180.81984900003
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_8x32_wg16 M=512 N=512 K=11500 TA=0 TB=0",
+              "Count": 3072,
+              "Bytes": 0,
+              "Milliseconds": 26344.89780600003
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_split_finish",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 24456.207249999992
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/decode_bfp8",
+              "Count": 1584,
+              "Bytes": 0,
+              "Milliseconds": 19896.207701999985
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/xmx_storage_pack_a_transpose_f32",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 19485.814783000005
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_f32",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 17893.296613999977
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/xmx_storage_pack_a_linear_vec4_bfp8",
+              "Count": 2560,
+              "Bytes": 0,
+              "Milliseconds": 16785.741237999973
+            },
+            {
+              "Kind": "partial-wait",
+              "Detail": "backward",
+              "Count": 3664,
+              "Bytes": 0,
+              "Milliseconds": 14419.15190000001
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/xmx_storage_pack_b_transpose_bfp8",
+              "Count": 2064,
+              "Bytes": 0,
+              "Milliseconds": 13897.623345000018
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/norm_residual_back_accumulate",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 11627.179878999998
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/norm_dx_row_sg16_w64_candidate",
+              "Count": 1040,
+              "Bytes": 0,
+              "Milliseconds": 11352.711699000003
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/norm_packed_residual_input",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 10969.27427400001
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/resident_bfp8_quad4_32",
+              "Count": 1584,
+              "Bytes": 0,
+              "Milliseconds": 10692.583193000019
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=1536 N=512 K=16384 TA=1 TB=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 9597.505075000012
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/attention_qk_pack_combined_candidate",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 8676.565421999998
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=512 N=512 K=16384 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 8212.217829
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=1536 TA=0 TB=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 8001.420318000003
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=512 TA=0 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 7890.269025999997
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/norm_row_sg16_w64_candidate",
+              "Count": 1040,
+              "Bytes": 0,
+              "Milliseconds": 7402.453949999996
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gradient_rows_packed_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 7345.458779999997
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=1536 K=512 offset=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 7300.724003999998
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/norm_packed_residual_input",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 7247.32040800001
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/xmx_storage_pack_a_transpose_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 6517.157292000003
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 5808.579654999999
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/linear_relu_grad_packed",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 5438.146118999997
+            },
+            {
+              "Kind": "partial-wait",
+              "Detail": "forward",
+              "Count": 992,
+              "Bytes": 0,
+              "Milliseconds": 5315.608300000004
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/attention_qk_pack_combined_candidate",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4878.441009999995
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=512 N=1536 K=16384 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4839.775018999996
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/copy_range",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4372.152939
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=11500 N=512 K=512 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4322.345903000001
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/cross_entropy_rows",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4278.264239999999
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/round_bf16_values",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4235.463618999997
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/cross_entropy_gradient",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4229.2108069999995
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_bfp8",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4206.092735
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4202.728308000002
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=1536 K=512 TA=0 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4041.078822000004
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=1536 offset=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3749.015743999998
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/attention_dkv_d32_k32_q32_causal",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 3710.449010999835
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/loss_total",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3102.843774999999
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/cross_entropy_rows",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3054.8382859999992
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/round_bf16_values",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3011.808616
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=512 offset=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 2974.7747179999997
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 2882.294971000002
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/attention_fp32_dq_d32_aligned",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 1455.1108899999913
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/attention_fp32_pv_d32_aligned",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 1207.8010819999906
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=1536 K=512 offset=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 1193.2614380000005
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=1536 N=512 K=16384 TA=1 TB=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 1153.4934409999985
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=1536 TA=0 TB=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 1063.7161250000013
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/attention_derivatives",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 1032.3003450000094
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/attention_fp32_dp_d32_aligned",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 924.9566980000965
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/attention_probabilities_register_1024",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 897.5648899999112
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/attention_probabilities_register_1024",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 720.4766449999107
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/xmx_storage_pack_b_bfp8",
+              "Count": 4624,
+              "Bytes": 0,
+              "Milliseconds": 610.8403100000046
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=512 N=1536 K=16384 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 579.1011440000001
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gradient_rows",
+              "Count": 3088,
+              "Bytes": 0,
+              "Milliseconds": 532.631641
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_f32",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 514.8773709999999
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/attention_qk_direct_256x32_offset",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 497.72937599994503
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/attention_qk_direct_256x32_offset",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 487.2204019999926
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/xmx_storage_pack_a_transpose_f32",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 480.21184299999817
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=1536 K=512 TA=0 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 476.7087480000002
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=1536 offset=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 455.4692690000002
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/linear_relu_grad_packed",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 411.0661399999993
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/norm_packed_residual_input",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 361.1249829999988
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/norm_packed_residual_input",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 349.57405799999924
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_8x32_wg16 M=512 N=512 K=11500 TA=0 TB=0",
+              "Count": 3072,
+              "Bytes": 0,
+              "Milliseconds": 324.8351930000023
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/xmx_storage_pack_a_linear_vec4_bfp8",
+              "Count": 2560,
+              "Bytes": 0,
+              "Milliseconds": 320.5085399999997
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/xmx_storage_pack_a_linear_vec4_f32",
+              "Count": 1920,
+              "Bytes": 0,
+              "Milliseconds": 319.10708000000096
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/norm_dx_row_sg16_w64_candidate",
+              "Count": 1040,
+              "Bytes": 0,
+              "Milliseconds": 316.00227199999887
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/attention_fp32_dp_d32_aligned",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 301.51330000002304
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/attention_fp32_dq_d32_aligned",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 299.1345000000131
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/decode_bfp8",
+              "Count": 4720,
+              "Bytes": 0,
+              "Milliseconds": 296.11052300000375
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/norm_row_sg16_w64_candidate",
+              "Count": 1040,
+              "Bytes": 0,
+              "Milliseconds": 292.6608299999995
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/decode_bfp8",
+              "Count": 1584,
+              "Bytes": 0,
+              "Milliseconds": 289.0856410000006
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/resident_bfp8_quad4_32",
+              "Count": 1584,
+              "Bytes": 0,
+              "Milliseconds": 275.66598899999883
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/norm_residual_back_accumulate",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 238.22509299999973
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=512 N=512 K=16384 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 226.6140440000001
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/attention_qk_direct_256x32_offset",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 226.35060000004069
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/attention_dkv_d32_k32_q32_causal",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 223.1245000000633
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/attention_qk_pack_combined_candidate",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 221.6544739999999
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/attention_qk_pack_combined_candidate",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 219.3178019999995
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 218.651653
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=512 offset=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 217.39468800000026
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/attention_probabilities_register_1024",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 210.82259999999414
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/resident_zero",
+              "Count": 3632,
+              "Bytes": 0,
+              "Milliseconds": 209.21515100000687
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/xmx_pack_tune_b_transpose",
+              "Count": 1280,
+              "Bytes": 0,
+              "Milliseconds": 202.08883
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/attention_derivatives",
+              "Count": 32768,
+              "Bytes": 0,
+              "Milliseconds": 199.12099999994717
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/xmx_storage_pack_a_transpose_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 195.4595809999997
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=512 TA=0 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 181.8327100000003
+            },
+            {
+              "Kind": "H2D",
+              "Detail": "forward/65536B",
+              "Count": 32,
+              "Bytes": 2097152,
+              "Milliseconds": 150.88610000000006
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/attention_fp32_pv_d32_aligned",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 148.76060000000575
+            },
+            {
+              "Kind": "D2H",
+              "Detail": "forward/4B",
+              "Count": 16,
+              "Bytes": 64,
+              "Milliseconds": 146.7673
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/resident_validate_loss",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 140.60327999999998
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=11500 N=512 K=512 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 137.01979800000004
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 133.96229100000016
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gemm_split_finish",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 133.08424299999996
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 132.5088450000001
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/ns_coefficient",
+              "Count": 640,
+              "Bytes": 0,
+              "Milliseconds": 117.93988199999987
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/copy_scale",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 116.625523
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gradient_rows_packed_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 113.53541200000033
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=1",
+              "Count": 800,
+              "Bytes": 0,
+              "Milliseconds": 113.145716
+            },
+            {
+              "Kind": "synchronize",
+              "Detail": "backward/explicit",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 112.26789999999998
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/xmx_next_pack_b",
+              "Count": 640,
+              "Bytes": 0,
+              "Milliseconds": 112.14456299999992
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/attention_qk_direct_256x32_offset",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 110.52020000001106
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/attention_probabilities_register_1024",
+              "Count": 16384,
+              "Bytes": 0,
+              "Milliseconds": 109.23079999999649
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=1536 K=512 TA=0 TB=0",
+              "Count": 480,
+              "Bytes": 0,
+              "Milliseconds": 108.15133399999999
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/embedding_back",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 100.50625300000002
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/dropout_back",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 98.15333399999999
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=1536 TA=0 TB=1",
+              "Count": 480,
+              "Bytes": 0,
+              "Milliseconds": 86.27345200000005
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/gradient_rows_finish",
+              "Count": 3600,
+              "Bytes": 0,
+              "Milliseconds": 75.31917799999975
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/resident_bfp8_quad4_32",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 72.59674900000007
+            },
+            {
+              "Kind": "D2H",
+              "Detail": "optimizer/host-result/16B",
+              "Count": 128,
+              "Bytes": 2048,
+              "Milliseconds": 71.56109999999995
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/cross_entropy_gradient",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 68.41249300000005
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/cross_entropy_rows",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 51.16323100000027
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/confidence_finish",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 51.03578600000001
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/cross_entropy_rows",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 50.90666700000023
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/confidence_blocks",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 48.42542599999998
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/round_bf16_values",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 46.438443000000056
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/round_bf16_values",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 46.42196899999997
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/moments",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 43.135735
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/axpby",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 42.387506999999985
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/xmx_storage_pack_b_bfp8",
+              "Count": 4624,
+              "Bytes": 0,
+              "Milliseconds": 40.39599999999976
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/decode_bfp8",
+              "Count": 4720,
+              "Bytes": 0,
+              "Milliseconds": 36.87079999999987
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/adam",
+              "Count": 261,
+              "Bytes": 0,
+              "Milliseconds": 29.87767500000013
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/transpose_scale",
+              "Count": 192,
+              "Bytes": 0,
+              "Milliseconds": 27.666778999999995
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gradient_rows_finish",
+              "Count": 3600,
+              "Bytes": 0,
+              "Milliseconds": 27.5830000000001
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_8x32_wg16 M=512 N=512 K=11500 TA=0 TB=0",
+              "Count": 3072,
+              "Bytes": 0,
+              "Milliseconds": 25.99320000000027
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=1536 TA=0 TB=1",
+              "Count": 480,
+              "Bytes": 0,
+              "Milliseconds": 25.66008099999987
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/xmx_storage_pack_b_transpose_bfp8",
+              "Count": 2064,
+              "Bytes": 0,
+              "Milliseconds": 23.766179000000093
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gradient_rows",
+              "Count": 3088,
+              "Bytes": 0,
+              "Milliseconds": 23.374999999999883
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/resident_zero",
+              "Count": 3632,
+              "Bytes": 0,
+              "Milliseconds": 22.59040000000027
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/xmx_storage_pack_a_linear_vec4_bfp8",
+              "Count": 2560,
+              "Bytes": 0,
+              "Milliseconds": 19.956799999999983
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/xmx_storage_pack_b_transpose_bfp8",
+              "Count": 2064,
+              "Bytes": 0,
+              "Milliseconds": 19.66119999999993
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/confidence_finish",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 19.419632
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=1536 K=512 TA=0 TB=0",
+              "Count": 480,
+              "Bytes": 0,
+              "Milliseconds": 18.904898000000003
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_f32",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 17.862000000000016
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=1",
+              "Count": 800,
+              "Bytes": 0,
+              "Milliseconds": 16.135720000000035
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/xmx_storage_pack_a_transpose_f32",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 15.60830000000007
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_split_finish",
+              "Count": 2048,
+              "Bytes": 0,
+              "Milliseconds": 15.464
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/resident_bfp8_quad4_32",
+              "Count": 1584,
+              "Bytes": 0,
+              "Milliseconds": 13.955599999999983
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/decode_bfp8",
+              "Count": 1584,
+              "Bytes": 0,
+              "Milliseconds": 13.820499999999987
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/xmx_storage_pack_a_linear_vec4_f32",
+              "Count": 1920,
+              "Bytes": 0,
+              "Milliseconds": 13.088199999999894
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/norm_packed_residual_input",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 11.933799999999994
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=1536 TA=0 TB=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 10.7612
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=1536 N=512 K=16384 TA=1 TB=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 10.292700000000005
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "clip/resident_clip_apply",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 10.151165000000011
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "clip/reduce_sum",
+              "Count": 910,
+              "Bytes": 0,
+              "Milliseconds": 9.834564999999996
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/loss_total",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 9.71294699999989
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/norm_packed_residual_input",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 9.329100000000004
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=1536 K=512 offset=0",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 9.168700000000005
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/norm_dx_row_sg16_w64_candidate",
+              "Count": 1040,
+              "Bytes": 0,
+              "Milliseconds": 8.749099999999997
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/xmx_pack_tune_b_transpose",
+              "Count": 1280,
+              "Bytes": 0,
+              "Milliseconds": 8.333599999999986
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/norm_row_sg16_w64_candidate",
+              "Count": 1040,
+              "Bytes": 0,
+              "Milliseconds": 8.278700000000015
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/dropout",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 7.673386
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/norm_residual_back_accumulate",
+              "Count": 1024,
+              "Bytes": 0,
+              "Milliseconds": 7.645400000000002
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/xmx_storage_pack_a_linear_vec4_f32",
+              "Count": 1920,
+              "Bytes": 0,
+              "Milliseconds": 7.033324000000002
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/xmx_pack_tune_b_transpose",
+              "Count": 1280,
+              "Bytes": 0,
+              "Milliseconds": 6.61599899999994
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/moments",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 6.159323999999996
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=1",
+              "Count": 800,
+              "Bytes": 0,
+              "Milliseconds": 6.0842999999999865
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/embedding_back",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 6.018015
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "clip/reduce_sum",
+              "Count": 910,
+              "Bytes": 0,
+              "Milliseconds": 5.788700000000005
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/xmx_next_pack_b",
+              "Count": 640,
+              "Bytes": 0,
+              "Milliseconds": 5.653261000000013
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=512 N=1536 K=16384 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 5.567599999999997
+            },
+            {
+              "Kind": "D2H",
+              "Detail": "optimizer/4B",
+              "Count": 128,
+              "Bytes": 512,
+              "Milliseconds": 5.228900000000001
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=0",
+              "Count": 160,
+              "Bytes": 0,
+              "Milliseconds": 5.059855999999999
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 5.038099999999999
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=512 offset=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.985899999999999
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=1536 offset=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.684100000000007
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/transpose_scale",
+              "Count": 192,
+              "Bytes": 0,
+              "Milliseconds": 4.537618999999999
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/xmx_storage_pack_a_transpose_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.536900000000006
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/linear_relu_grad_packed",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.480600000000007
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=1536 K=512 TA=0 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.421499999999999
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.394999999999998
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/attention_qk_pack_combined_candidate",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.364599999999999
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.362800000000002
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "optimizer/reduce_sum",
+              "Count": 384,
+              "Bytes": 0,
+              "Milliseconds": 4.3401380000000005
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_bfp8",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.250299999999999
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=512 TA=0 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.205099999999998
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_16x64_wg16 M=11500 N=512 K=512 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.197299999999993
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gemm_xmx_direct_block_32x32_wg16 M=512 N=512 K=16384 TA=1 TB=0",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.092700000000004
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/attention_qk_pack_combined_candidate",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 4.073800000000002
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/gradient_rows_packed_bf16",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3.9951000000000034
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/ns_coefficient",
+              "Count": 640,
+              "Bytes": 0,
+              "Milliseconds": 3.94239999999998
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "clip/reduce_sum",
+              "Count": 910,
+              "Bytes": 0,
+              "Milliseconds": 3.9122330000000365
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/xmx_next_pack_b",
+              "Count": 640,
+              "Bytes": 0,
+              "Milliseconds": 3.8851999999999776
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/cross_entropy_gradient",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3.744300000000009
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/cross_entropy_rows",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3.686000000000007
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=1536 TA=0 TB=1",
+              "Count": 480,
+              "Bytes": 0,
+              "Milliseconds": 3.597499999999994
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=1536 K=512 TA=0 TB=0",
+              "Count": 480,
+              "Bytes": 0,
+              "Milliseconds": 3.5563999999999942
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/cross_entropy_rows",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3.536500000000001
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/copy_range",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3.5217999999999914
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/confidence_blocks",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 3.4142120000000022
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "zero-grad/resident_zero",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 3.3718999999999912
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/round_bf16_values",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3.313099999999999
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=0",
+              "Count": 160,
+              "Bytes": 0,
+              "Milliseconds": 3.2235039999999944
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/xmx_storage_pack_a_linear_vec4_bfp8",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3.153703000000016
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/reduce_sum",
+              "Count": 384,
+              "Bytes": 0,
+              "Milliseconds": 3.1300999999999988
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/resident_bfp8_quad4_32",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 3.1131779999999876
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/loss_total",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3.1113000000000026
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/round_bf16_values",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 3.016600000000003
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/dropout",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 2.879161
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/embedding",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 2.8485359999999997
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/resident_bfp8_quad4_32",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 2.772499999999997
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "clip/resident_clip_apply",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 2.7039000000000053
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/copy_scale",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 2.588432
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/dropout_back",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 2.576452
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/reduce_sum",
+              "Count": 384,
+              "Bytes": 0,
+              "Milliseconds": 2.5027589999999926
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/adam",
+              "Count": 261,
+              "Bytes": 0,
+              "Milliseconds": 2.2468999999999983
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/ns_coefficient",
+              "Count": 640,
+              "Bytes": 0,
+              "Milliseconds": 2.158419999999992
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "clip/resident_clip_apply",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 2.150160000000001
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "zero-grad/resident_zero",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 2.1425809999999967
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/axpby",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 1.8278660000000002
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/copy_range",
+              "Count": 512,
+              "Bytes": 0,
+              "Milliseconds": 1.6305730000000027
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/transpose_scale",
+              "Count": 192,
+              "Bytes": 0,
+              "Milliseconds": 1.4872000000000016
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "backward/xmx_storage_pack_b_transpose_bfp8",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 1.3555149999999998
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/moments",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 1.223699999999999
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=0",
+              "Count": 160,
+              "Bytes": 0,
+              "Milliseconds": 1.2116000000000005
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/resident_zero",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 1.0048460000000001
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/axpby",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 0.8957000000000002
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "optimizer/adam",
+              "Count": 261,
+              "Bytes": 0,
+              "Milliseconds": 0.852702999999991
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/confidence_finish",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 0.8139000000000003
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "optimizer/confidence_blocks",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 0.7941000000000014
+            },
+            {
+              "Kind": "D2H",
+              "Detail": "clip/12B",
+              "Count": 1,
+              "Bytes": 12,
+              "Milliseconds": 0.7548
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/xmx_storage_pack_b_transpose_bfp8",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.7446999999999999
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "backward/xmx_storage_pack_b_transpose_bfp8",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.674166
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/8388608B",
+              "Count": 2608,
+              "Bytes": 21877489664,
+              "Milliseconds": 0.6107999999999826
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "zero-grad/resident_zero",
+              "Count": 389,
+              "Bytes": 0,
+              "Milliseconds": 0.5511689999999982
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/50331648B",
+              "Count": 3072,
+              "Bytes": 154618822656,
+              "Milliseconds": 0.512499999999986
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/33554432B",
+              "Count": 4688,
+              "Bytes": 157303177216,
+              "Milliseconds": 0.44429999999997866
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/16777216B",
+              "Count": 5632,
+              "Bytes": 94489280512,
+              "Milliseconds": 0.4422999999999752
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/2048B",
+              "Count": 3136,
+              "Bytes": 6422528,
+              "Milliseconds": 0.4099999999999869
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/1572864B",
+              "Count": 1536,
+              "Bytes": 2415919104,
+              "Milliseconds": 0.4086999999999944
+            },
+            {
+              "Kind": "synchronize",
+              "Detail": "optimizer/host-result",
+              "Count": 128,
+              "Bytes": 0,
+              "Milliseconds": 0.40190000000000015
+            },
+            {
+              "Kind": "partial-wait",
+              "Detail": "optimizer",
+              "Count": 7,
+              "Bytes": 0,
+              "Milliseconds": 0.37139999999999995
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/1048576B",
+              "Count": 2608,
+              "Bytes": 2734686208,
+              "Milliseconds": 0.31069999999999215
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/524288B",
+              "Count": 1536,
+              "Bytes": 805306368,
+              "Milliseconds": 0.31029999999999697
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/embedding",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.2767
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/25165824B",
+              "Count": 1536,
+              "Bytes": 38654705664,
+              "Milliseconds": 0.2765999999999973
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/33554432B",
+              "Count": 3152,
+              "Bytes": 105763569664,
+              "Milliseconds": 0.26469999999998983
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/262144B",
+              "Count": 1040,
+              "Bytes": 272629760,
+              "Milliseconds": 0.24569999999999895
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/393216B",
+              "Count": 1024,
+              "Bytes": 402653184,
+              "Milliseconds": 0.2197999999999996
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/16777216B",
+              "Count": 2560,
+              "Bytes": 42949672960,
+              "Milliseconds": 0.21249999999999508
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/2048B",
+              "Count": 1072,
+              "Bytes": 2195456,
+              "Milliseconds": 0.21029999999999943
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/25165824B",
+              "Count": 1024,
+              "Bytes": 25769803776,
+              "Milliseconds": 0.20579999999999982
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/524288B",
+              "Count": 1024,
+              "Bytes": 536870912,
+              "Milliseconds": 0.20539999999999928
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/131072B",
+              "Count": 1040,
+              "Bytes": 136314880,
+              "Milliseconds": 0.2023
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/2097152B",
+              "Count": 528,
+              "Bytes": 1107296256,
+              "Milliseconds": 0.17510000000000028
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/3145728B",
+              "Count": 1024,
+              "Bytes": 3221225472,
+              "Milliseconds": 0.16920000000000013
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/embedding_back",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.1679
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/100663296B",
+              "Count": 1536,
+              "Bytes": 154618822656,
+              "Milliseconds": 0.15470000000000023
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/dropout",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.153
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/1572864B",
+              "Count": 1536,
+              "Bytes": 2415919104,
+              "Milliseconds": 0.15060000000000004
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/6144B",
+              "Count": 1024,
+              "Bytes": 6291456,
+              "Milliseconds": 0.14890000000000056
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/resident_zero",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.14150000000000001
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/dropout_back",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.1406
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/524288B",
+              "Count": 2400,
+              "Bytes": 1258291200,
+              "Milliseconds": 0.138700000000001
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "backward/copy_scale",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.13040000000000002
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "forward/resident_validate_loss",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.1232
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "forward/embedding",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.122083
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/11780096B",
+              "Count": 1056,
+              "Bytes": 12439781376,
+              "Milliseconds": 0.1143000000000016
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/50331648B",
+              "Count": 512,
+              "Bytes": 25769803776,
+              "Milliseconds": 0.10810000000000045
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/131072B",
+              "Count": 1024,
+              "Bytes": 134217728,
+              "Milliseconds": 0.10730000000000135
+            },
+            {
+              "Kind": "partial-wait",
+              "Detail": "clip",
+              "Count": 19,
+              "Bytes": 0,
+              "Milliseconds": 0.09419999999999999
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/1572864B",
+              "Count": 1440,
+              "Bytes": 2264924160,
+              "Milliseconds": 0.08530000000000132
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/100663296B",
+              "Count": 512,
+              "Bytes": 51539607552,
+              "Milliseconds": 0.07320000000000046
+            },
+            {
+              "Kind": "synchronize",
+              "Detail": "forward/explicit",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.06870000000000001
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/92000B",
+              "Count": 512,
+              "Bytes": 47104000,
+              "Milliseconds": 0.0524000000000003
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/8388608B",
+              "Count": 512,
+              "Bytes": 4294967296,
+              "Milliseconds": 0.047700000000000235
+            },
+            {
+              "Kind": "partial-wait",
+              "Detail": "zero-grad",
+              "Count": 5,
+              "Bytes": 0,
+              "Milliseconds": 0.028300000000000002
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/1048576B",
+              "Count": 512,
+              "Bytes": 536870912,
+              "Milliseconds": 0.028299999999999884
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/4B",
+              "Count": 391,
+              "Bytes": 1564,
+              "Milliseconds": 0.02829999999999988
+            },
+            {
+              "Kind": "synchronize",
+              "Detail": "optimizer/explicit",
+              "Count": 1,
+              "Bytes": 0,
+              "Milliseconds": 0.0266
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/3145728B",
+              "Count": 384,
+              "Bytes": 1207959552,
+              "Milliseconds": 0.02519999999999991
+            },
+            {
+              "Kind": "synchronize",
+              "Detail": "zero-grad/explicit",
+              "Count": 1,
+              "Bytes": 0,
+              "Milliseconds": 0.0228
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/23552000B",
+              "Count": 32,
+              "Bytes": 753664000,
+              "Milliseconds": 0.0209
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/resident_validate_loss",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.016970000000000002
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/4B",
+              "Count": 128,
+              "Bytes": 512,
+              "Milliseconds": 0.014799999999999973
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/16B",
+              "Count": 160,
+              "Bytes": 2560,
+              "Milliseconds": 0.01449999999999998
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "forward/resident_zero",
+              "Count": 16,
+              "Bytes": 0,
+              "Milliseconds": 0.013641000000000002
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/49152B",
+              "Count": 96,
+              "Bytes": 4718592,
+              "Milliseconds": 0.013299999999999987
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/8B",
+              "Count": 195,
+              "Bytes": 1560,
+              "Milliseconds": 0.011399999999999985
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/12288B",
+              "Count": 96,
+              "Bytes": 1179648,
+              "Milliseconds": 0.011199999999999988
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/48B",
+              "Count": 96,
+              "Bytes": 4608,
+              "Milliseconds": 0.009599999999999996
+            },
+            {
+              "Kind": "host-submit",
+              "Detail": "clip/resident_clip_total",
+              "Count": 1,
+              "Bytes": 0,
+              "Milliseconds": 0.0095
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/4B",
+              "Count": 16,
+              "Bytes": 64,
+              "Milliseconds": 0.008900000000000002
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/11780096B",
+              "Count": 16,
+              "Bytes": 188481536,
+              "Milliseconds": 0.0089
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/65536B",
+              "Count": 32,
+              "Bytes": 2097152,
+              "Milliseconds": 0.008199999999999999
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/46000B",
+              "Count": 16,
+              "Bytes": 736000,
+              "Milliseconds": 0.0075
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/12288B",
+              "Count": 96,
+              "Bytes": 1179648,
+              "Milliseconds": 0.006900000000000004
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/48B",
+              "Count": 96,
+              "Bytes": 4608,
+              "Milliseconds": 0.006600000000000004
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/16384B",
+              "Count": 32,
+              "Bytes": 524288,
+              "Milliseconds": 0.005300000000000001
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/23552000B",
+              "Count": 32,
+              "Bytes": 753664000,
+              "Milliseconds": 0.0051
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "optimizer/4096B",
+              "Count": 32,
+              "Bytes": 131072,
+              "Milliseconds": 0.004900000000000001
+            },
+            {
+              "Kind": "queue-delay-overlapping",
+              "Detail": "clip/resident_clip_total",
+              "Count": 1,
+              "Bytes": 0,
+              "Milliseconds": 0.0045839999999999995
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/46000B",
+              "Count": 16,
+              "Bytes": 736000,
+              "Milliseconds": 0.0045
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/24B",
+              "Count": 64,
+              "Bytes": 1536,
+              "Milliseconds": 0.0043999999999999985
+            },
+            {
+              "Kind": "synchronize",
+              "Detail": "clip/explicit",
+              "Count": 1,
+              "Bytes": 0,
+              "Milliseconds": 0.0037
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/16B",
+              "Count": 32,
+              "Bytes": 512,
+              "Milliseconds": 0.0026999999999999993
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "forward/4096B",
+              "Count": 16,
+              "Bytes": 65536,
+              "Milliseconds": 0.0023000000000000004
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/1048576B",
+              "Count": 16,
+              "Bytes": 16777216,
+              "Milliseconds": 0.0023000000000000004
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/4096B",
+              "Count": 32,
+              "Bytes": 131072,
+              "Milliseconds": 0.0022
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "backward/4096B",
+              "Count": 16,
+              "Bytes": 65536,
+              "Milliseconds": 0.0013000000000000002
+            },
+            {
+              "Kind": "gpu-kernel",
+              "Detail": "clip/resident_clip_total",
+              "Count": 1,
+              "Bytes": 0,
+              "Milliseconds": 0.00125
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/1556B",
+              "Count": 1,
+              "Bytes": 1556,
+              "Milliseconds": 0.0012
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/360B",
+              "Count": 1,
+              "Bytes": 360,
+              "Milliseconds": 0.001
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/92000B",
+              "Count": 1,
+              "Bytes": 92000,
+              "Milliseconds": 0.0009
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/8192B",
+              "Count": 1,
+              "Bytes": 8192,
+              "Milliseconds": 0.0006
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/12B",
+              "Count": 1,
+              "Bytes": 12,
+              "Milliseconds": 0.0003
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/32B",
+              "Count": 1,
+              "Bytes": 32,
+              "Milliseconds": 0.0002
+            },
+            {
+              "Kind": "pool-hit",
+              "Detail": "clip/180B",
+              "Count": 1,
+              "Bytes": 180,
+              "Milliseconds": 0.0002
+            }
+          ],
+          "Timeline": null
+        }
+      ],
+      "MemoryPlan": {
+        "CheckpointPrefixLayers": 0,
+        "CheckpointFfn": false,
+        "UncheckpointedActivationBytes": 3425959936,
+        "EstimatedActivationBytes": 3425959936,
+        "ActivationBudgetBytes": 7471504588,
+        "EstimatedPersistentBytes": 1549940940,
+        "WorkingGuardBytes": 1073741824
+      }
+    }
+  ]
+}

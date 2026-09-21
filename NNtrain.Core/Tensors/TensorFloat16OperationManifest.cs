@@ -178,6 +178,24 @@ internal static class TensorFloat16OperationManifest
     internal static IReadOnlyList<TensorFloat16OperationManifestEntry>
         InternalTensorReturningMembers { get; } =
         [
+            new(
+                "ArcCheckpoint(Func`2,IReadOnlyList`1)",
+                TensorFloat16ResultPolicy.BackendWithoutFloat16,
+                "TensorFloat16OperationManifestTests.ArcCheckpointCpuPassthroughPreservesDelegateContract",
+                "Arc checkpoint storage supports Float32, BFloat16 and Bfp8, not legacy Float16. Outside resident Arc it delegates unchanged to the supplied forward operation; that passthrough is not an Arc Float16 implementation."),
+            new(
+                "ArcLinearCrossEntropy(Tensor,Tensor,Int32[],Int32)",
+                TensorFloat16ResultPolicy.BackendWithoutFloat16,
+                "ArcTransformerTests.TiledStreamingAndChunkedLossMatchReferenceWithTails",
+                "Arc training supports float32, mix16_32 with BFloat16 storage, and mix8_32 with Bfp8 storage; this fused loss returns Float32 and does not implement legacy Float16 arithmetic/storage semantics."),
+            new(
+                "LinearLastDimFrozen(Tensor,Tensor,Boolean)",
+                TensorFloat16ResultPolicy.BackendWithoutFloat16,
+                "TensorFloat16OperationManifestTests.FrozenLinearRejectsLegacyFloat16",
+                "The frozen LoRA linear path explicitly rejects Float16 input and accepts only Float32, BFloat16 and Bfp8 storage."),
+            Reduction(
+                "DpoLoss(Tensor[],Int32[],Single[],Single)",
+                "TensorFloat16OperationManifestTests.DpoLossReadsFloat16ScoresAndReturnsFloat32LossAndGradients"),
             Preserve(
                 "ForgetMemoryV2Continue(Int32,Int32,Single,Single[])",
                 "ForgetMemoryV2Tests.GptSchedulesShortToLongMemoryAndTrains"),
@@ -280,7 +298,8 @@ internal static class TensorFloat16OperationManifest
 internal sealed record TensorFloat16OperationManifestEntry(
     string MemberId,
     TensorFloat16ResultPolicy ResultPolicy,
-    string Verification);
+    string Verification,
+    string? Float16Restriction = null);
 
 internal enum TensorFloat16ResultPolicy
 {
@@ -304,6 +323,13 @@ internal enum TensorFloat16ResultPolicy
     /// numerically sensitive fused consumer without an intermediate requantize.
     /// </summary>
     Bfp8ToBFloat16,
+
+    /// <summary>
+    /// An explicitly inventoried backend path without a legacy Float16
+    /// implementation. Its restriction and supported contract must be stated;
+    /// delegation outside that backend does not imply Float16 kernel support.
+    /// </summary>
+    BackendWithoutFloat16,
 
     /// <summary>Non-Tensor-returning public contract such as Backward.</summary>
     Auxiliary,

@@ -1,0 +1,93 @@
+{
+  "Timestamp": "2026-09-21T09:03:59.9854371+00:00",
+  "Sequence": 1024,
+  "HeadWidth": 32,
+  "Heads": 16,
+  "Count": 4,
+  "CausalMode": 2,
+  "Note": "Bounded SG16 register dP\u002BdS fusion. Original FP32 channel-FMA and 64-lane reduction order. Full-array bit comparison at T1/31/65/137/1024, causal0/1/2, first-head/batch offsets and two repeated dispatches. 3 warmup \u002B 10 measured. No packing or host transfers inside timings.",
+  "Results": [
+    {
+      "Fused": false,
+      "Kernel": "attention_fp32_dp_d32_aligned \u002B attention_derivatives",
+      "WallP50Ms": 0.08435000000000001,
+      "GpuP50Ms": 0.0528120000000003,
+      "WallSamples": [
+        0.1039,
+        0.1014,
+        0.0848,
+        0.085,
+        0.0838,
+        0.088,
+        0.0819,
+        0.0832,
+        0.0825,
+        0.0839
+      ],
+      "GpuSamples": [
+        0.05281199999999986,
+        0.052916000000000185,
+        0.05343700000000018,
+        0.0528120000000003,
+        0.05302000000000007,
+        0.0528120000000003,
+        0.05281199999999986,
+        0.05270799999999998,
+        0.05239500000000019,
+        0.05302000000000007
+      ],
+      "Resources": {
+        "Name": "attention_fp32_dp_d32_aligned",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 8512,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "ExactChecks": 16,
+      "GlobalScratchBytes": 0,
+      "Device": "Intel(R) Arc(TM) B580 Graphics",
+      "DriverVersion": "32.0.101.9030"
+    },
+    {
+      "Fused": true,
+      "Kernel": "attention_dp_ds_register_d32_candidate",
+      "WallP50Ms": 0.1177,
+      "GpuP50Ms": 0.09635400000000005,
+      "WallSamples": [
+        0.1188,
+        0.1167,
+        0.1177,
+        0.1181,
+        0.1177,
+        0.1174,
+        0.1139,
+        0.1178,
+        0.1119,
+        0.1203
+      ],
+      "GpuSamples": [
+        0.09562500000000007,
+        0.09291600000000022,
+        0.09635399999999983,
+        0.09718699999999991,
+        0.09666599999999992,
+        0.09687499999999982,
+        0.0950000000000002,
+        0.09666599999999992,
+        0.09270800000000001,
+        0.09635400000000027
+      ],
+      "Resources": {
+        "Name": "attention_dp_ds_register_d32_candidate",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 8320,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      },
+      "ExactChecks": 16,
+      "GlobalScratchBytes": 0,
+      "Device": "Intel(R) Arc(TM) B580 Graphics",
+      "DriverVersion": "32.0.101.9030"
+    }
+  ]
+}

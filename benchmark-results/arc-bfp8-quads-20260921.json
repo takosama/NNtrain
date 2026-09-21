@@ -1,0 +1,927 @@
+{
+  "Device": {
+    "Index": 0,
+    "Name": "Intel(R) Arc(TM) B580 Graphics",
+    "DriverVersion": "32.0.101.9030",
+    "GlobalMemoryBytes": 12452507648,
+    "MaximumAllocationBytes": 12452507648,
+    "Extensions": "cl_khr_byte_addressable_store cl_khr_device_uuid cl_khr_fp16 cl_khr_global_int32_base_atomics cl_khr_global_int32_extended_atomics cl_khr_icd cl_khr_icd_unloadable cl_khr_local_int32_base_atomics cl_khr_local_int32_extended_atomics cl_intel_command_queue_families cl_intel_subgroups cl_intel_required_subgroup_size cl_intel_subgroups_short cl_intel_accelerator cl_intel_driver_diagnostics cl_khr_priority_hints cl_khr_throttle_hints cl_khr_create_command_queue cl_intel_subgroups_char cl_intel_subgroups_long cl_khr_il_program cl_intel_mem_force_host_memory cl_khr_subgroup_extended_types cl_khr_subgroup_non_uniform_vote cl_khr_subgroup_ballot cl_khr_subgroup_non_uniform_arithmetic cl_khr_subgroup_shuffle cl_khr_subgroup_shuffle_relative cl_khr_subgroup_clustered_reduce cl_intel_device_attribute_query cl_khr_expect_assume cl_khr_extended_bit_ops cl_khr_suggested_local_work_size cl_intel_split_work_group_barrier cl_khr_int64_base_atomics cl_khr_int64_extended_atomics cl_khr_integer_dot_product cl_intel_spirv_subgroups cl_khr_spirv_linkonce_odr cl_khr_spirv_no_integer_wrap_decoration cl_khr_spirv_queries cl_intel_unified_shared_memory cl_ext_float_atomics cl_intel_kernel_allocations_info cl_khr_fp64 cl_khr_subgroups cl_khr_mipmap_image cl_khr_mipmap_image_writes cl_khr_external_memory cl_intel_planar_yuv cl_intel_packed_yuv cl_khr_image2d_from_buffer cl_khr_depth_images cl_khr_3d_image_writes cl_intel_bfloat16_conversions cl_intel_create_buffer_with_properties cl_intel_subgroup_local_block_io cl_intel_subgroup_matrix_multiply_accumulate cl_intel_subgroup_matrix_multiply_accumulate_tf32 cl_khr_subgroup_named_barrier cl_intel_subgroup_extended_block_read cl_intel_subgroup_2d_block_io cl_intel_subgroup_buffer_prefetch cl_khr_gl_sharing cl_khr_gl_depth_images cl_khr_gl_event cl_khr_gl_msaa_sharing cl_intel_dx9_media_sharing cl_khr_dx9_media_sharing cl_khr_d3d10_sharing cl_khr_d3d11_sharing cl_intel_d3d11_nv12_media_sharing cl_intel_sharing_format_query cl_khr_pci_bus_info cl_intel_simultaneous_sharing ",
+    "MinimumSubgroupSize": 16,
+    "SupportsXmx": true
+  },
+  "ValidationCases": 168,
+  "Results": [
+    {
+      "Count": 33554432,
+      "Block": 32,
+      "Kernel": "resident_bfp8",
+      "GpuP50Ms": 0.6866665000000003,
+      "WallP50Ms": 0.71105,
+      "Gpu": [
+        0.69177,
+        0.6831250000000004,
+        0.6838540000000002,
+        0.6935409999999997,
+        0.6894790000000004,
+        0.6767699999999994,
+        0.6830200000000008,
+        0.6898949999999999,
+        0.6896869999999993,
+        0.6759369999999993
+      ],
+      "Wall": [
+        0.7156,
+        0.7218,
+        0.7071,
+        0.7217,
+        0.7146,
+        0.7019,
+        0.7052,
+        0.7114,
+        0.7107,
+        0.7018
+      ],
+      "Resources": {
+        "Name": "resident_bfp8",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 33554432,
+      "Block": 32,
+      "Kernel": "resident_bfp8_sg16_32",
+      "GpuP50Ms": 0.9148955000000001,
+      "WallP50Ms": 0.9389,
+      "Gpu": [
+        0.9145830000000004,
+        0.9154160000000005,
+        0.9151039999999995,
+        0.9145830000000004,
+        0.9143749999999997,
+        0.9151039999999995,
+        0.9149999999999991,
+        0.914791000000001,
+        0.9152079999999998,
+        0.914479
+      ],
+      "Wall": [
+        0.9392,
+        0.935,
+        0.9409,
+        0.9397,
+        0.9377,
+        0.939,
+        0.936,
+        0.9388,
+        0.9414,
+        0.9378
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_sg16_32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 33554432,
+      "Block": 32,
+      "Kernel": "resident_bfp8_private32",
+      "GpuP50Ms": 0.66526,
+      "WallP50Ms": 0.6892,
+      "Gpu": [
+        0.6637500000000003,
+        0.6667699999999996,
+        0.6669790000000013,
+        0.6664579999999987,
+        0.6603120000000011,
+        0.6654160000000005,
+        0.6678120000000014,
+        0.6651039999999995,
+        0.6642699999999984,
+        0.6616659999999968
+      ],
+      "Wall": [
+        0.7083,
+        0.7066,
+        0.6899,
+        0.6877,
+        0.6864,
+        0.6875,
+        0.69,
+        0.6885,
+        0.6853,
+        0.6928
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_private32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 33554432,
+      "Block": 32,
+      "Kernel": "resident_bfp8_quad2_32",
+      "GpuP50Ms": 0.642707999999999,
+      "WallP50Ms": 0.6665,
+      "Gpu": [
+        0.6426039999999986,
+        0.6420829999999995,
+        0.6442699999999988,
+        0.6420829999999995,
+        0.6421869999999998,
+        0.6444789999999969,
+        0.6447909999999979,
+        0.6428119999999993,
+        0.643228999999998,
+        0.6413539999999998
+      ],
+      "Wall": [
+        0.6663,
+        0.6682,
+        0.6652,
+        0.6671,
+        0.6634,
+        0.6653,
+        0.6719,
+        0.6731,
+        0.6667,
+        0.6646
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_quad2_32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 33554432,
+      "Block": 32,
+      "Kernel": "resident_bfp8_quad4_32",
+      "GpuP50Ms": 0.6340620000000001,
+      "WallP50Ms": 0.65645,
+      "Gpu": [
+        0.6414580000000001,
+        0.6340620000000001,
+        0.6377079999999964,
+        0.6340620000000001,
+        0.6286449999999988,
+        0.6348950000000002,
+        0.627915999999999,
+        0.629686999999997,
+        0.640625,
+        0.6291659999999979
+      ],
+      "Wall": [
+        0.6721,
+        0.6578,
+        0.6595,
+        0.6558,
+        0.6499,
+        0.6571,
+        0.6503,
+        0.6491,
+        0.6694,
+        0.6528
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_quad4_32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 33554432,
+      "Block": 32,
+      "Kernel": "resident_bfp8_quad8_32",
+      "GpuP50Ms": 0.631822500000002,
+      "WallP50Ms": 0.6565,
+      "Gpu": [
+        0.6320830000000015,
+        0.6316660000000027,
+        0.6316660000000027,
+        0.6322910000000022,
+        0.6316660000000027,
+        0.6325000000000003,
+        0.6318750000000009,
+        0.631770000000003,
+        0.631770000000003,
+        0.6320830000000015
+      ],
+      "Wall": [
+        0.6595,
+        0.6566,
+        0.6534,
+        0.6564,
+        0.654,
+        0.657,
+        0.6535,
+        0.6533,
+        0.6598,
+        0.6602
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_quad8_32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 100663296,
+      "Block": 32,
+      "Kernel": "resident_bfp8",
+      "GpuP50Ms": 1.9498955000000038,
+      "WallP50Ms": 1.9789,
+      "Gpu": [
+        1.9415620000000047,
+        1.9525000000000006,
+        1.9500000000000028,
+        1.9819789999999955,
+        1.9475000000000051,
+        1.9449999999999932,
+        1.9586450000000042,
+        1.9511449999999968,
+        1.9382290000000069,
+        1.9497910000000047
+      ],
+      "Wall": [
+        1.9897,
+        1.9789,
+        1.9722,
+        2.0042,
+        1.9789,
+        1.972,
+        1.9876,
+        1.9837,
+        1.9774,
+        1.976
+      ],
+      "Resources": {
+        "Name": "resident_bfp8",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 100663296,
+      "Block": 32,
+      "Kernel": "resident_bfp8_sg16_32",
+      "GpuP50Ms": 2.739895000000004,
+      "WallP50Ms": 2.76865,
+      "Gpu": [
+        2.7396870000000035,
+        2.740415999999996,
+        2.7401040000000023,
+        2.739895000000004,
+        2.739895000000004,
+        2.7402079999999955,
+        2.7392700000000048,
+        2.740415999999996,
+        2.7396870000000035,
+        2.739582999999996
+      ],
+      "Wall": [
+        2.7652,
+        2.7697,
+        2.7753,
+        2.7607,
+        2.7627,
+        2.7686,
+        2.7687,
+        2.7714,
+        2.7786,
+        2.7638
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_sg16_32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 100663296,
+      "Block": 32,
+      "Kernel": "resident_bfp8_private32",
+      "GpuP50Ms": 1.9363015000000061,
+      "WallP50Ms": 1.96665,
+      "Gpu": [
+        1.9372910000000019,
+        1.9504160000000041,
+        1.9277079999999955,
+        1.9353120000000104,
+        1.929583000000008,
+        1.9532289999999932,
+        1.9294789999999864,
+        1.9448950000000025,
+        1.9290619999999876,
+        1.9495829999999899
+      ],
+      "Wall": [
+        1.9707,
+        1.9754,
+        1.9607,
+        1.9591,
+        1.9609,
+        1.9808,
+        1.9602,
+        1.9871,
+        1.9626,
+        1.9777
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_private32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 100663296,
+      "Block": 32,
+      "Kernel": "resident_bfp8_quad2_32",
+      "GpuP50Ms": 1.9163539999999983,
+      "WallP50Ms": 1.94115,
+      "Gpu": [
+        1.9205200000000104,
+        1.91916599999999,
+        1.916249999999991,
+        1.9167700000000139,
+        1.915208000000007,
+        1.9164580000000058,
+        1.917394999999999,
+        1.9161450000000002,
+        1.9155199999999866,
+        1.915728999999999
+      ],
+      "Wall": [
+        1.9438,
+        1.941,
+        1.9346,
+        2.0791,
+        1.9395,
+        1.9375,
+        1.9446,
+        1.9413,
+        1.9397,
+        1.9417
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_quad2_32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 100663296,
+      "Block": 32,
+      "Kernel": "resident_bfp8_quad4_32",
+      "GpuP50Ms": 1.846405500000003,
+      "WallP50Ms": 1.87175,
+      "Gpu": [
+        1.8425000000000011,
+        1.846145000000007,
+        1.8496869999999888,
+        1.851979,
+        1.8582289999999944,
+        1.8280200000000093,
+        1.846665999999999,
+        1.8422909999999888,
+        1.8411450000000116,
+        1.8483329999999967
+      ],
+      "Wall": [
+        1.8683,
+        1.8786,
+        1.881,
+        1.8745,
+        1.8825,
+        1.8575,
+        1.869,
+        1.867,
+        1.8659,
+        1.8812
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_quad4_32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 100663296,
+      "Block": 32,
+      "Kernel": "resident_bfp8_quad8_32",
+      "GpuP50Ms": 1.8927599999999956,
+      "WallP50Ms": 1.9201000000000001,
+      "Gpu": [
+        1.8925000000000125,
+        1.893020000000007,
+        1.892707999999999,
+        1.8926040000000057,
+        1.9106250000000102,
+        1.8928119999999922,
+        1.8928119999999922,
+        1.892187000000007,
+        1.8931249999999977,
+        1.8926040000000057
+      ],
+      "Wall": [
+        1.9181,
+        1.9249,
+        1.9178,
+        1.9162,
+        1.9354,
+        1.9235,
+        1.9193,
+        1.9166,
+        1.9209,
+        1.9305
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_quad8_32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 786432,
+      "Block": 32,
+      "Kernel": "resident_bfp8",
+      "GpuP50Ms": 0.029686999999995578,
+      "WallP50Ms": 0.048600000000000004,
+      "Gpu": [
+        0.0297909999999888,
+        0.029686999999995578,
+        0.029583000000002357,
+        0.029583000000002357,
+        0.029686999999995578,
+        0.029686999999995578,
+        0.029686999999995578,
+        0.0297909999999888,
+        0.029686999999995578,
+        0.030000000000001137
+      ],
+      "Wall": [
+        0.0521,
+        0.0524,
+        0.0512,
+        0.0485,
+        0.0485,
+        0.0484,
+        0.0495,
+        0.0487,
+        0.0485,
+        0.0485
+      ],
+      "Resources": {
+        "Name": "resident_bfp8",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 786432,
+      "Block": 32,
+      "Kernel": "resident_bfp8_sg16_32",
+      "GpuP50Ms": 0.017811999999992167,
+      "WallP50Ms": 0.038900000000000004,
+      "Gpu": [
+        0.01791600000001381,
+        0.017811999999992167,
+        0.017707999999998947,
+        0.017707999999998947,
+        0.017604000000005726,
+        0.017811999999992167,
+        0.017811999999992167,
+        0.017604000000005726,
+        0.01791600000001381,
+        0.01791600000001381
+      ],
+      "Wall": [
+        0.0429,
+        0.0397,
+        0.039,
+        0.0392,
+        0.0385,
+        0.0388,
+        0.0385,
+        0.039,
+        0.0356,
+        0.0352
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_sg16_32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 786432,
+      "Block": 32,
+      "Kernel": "resident_bfp8_private32",
+      "GpuP50Ms": 0.02317699999998979,
+      "WallP50Ms": 0.0436,
+      "Gpu": [
+        0.0232289999999864,
+        0.02312499999999318,
+        0.023333000000008042,
+        0.02312499999999318,
+        0.023333000000008042,
+        0.02312499999999318,
+        0.023333000000008042,
+        0.0232289999999864,
+        0.02281199999998762,
+        0.02312499999999318
+      ],
+      "Wall": [
+        0.0451,
+        0.0444,
+        0.044,
+        0.0415,
+        0.0405,
+        0.0411,
+        0.0409,
+        0.0439,
+        0.0435,
+        0.0437
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_private32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 786432,
+      "Block": 32,
+      "Kernel": "resident_bfp8_quad2_32",
+      "GpuP50Ms": 0.019739000000001283,
+      "WallP50Ms": 0.0395,
+      "Gpu": [
+        0.020000000000010232,
+        0.019790999999997894,
+        0.019687000000004673,
+        0.019687000000004673,
+        0.020728999999988673,
+        0.019583000000011452,
+        0.019687000000004673,
+        0.020207999999996673,
+        0.020937000000003536,
+        0.019583000000011452
+      ],
+      "Wall": [
+        0.0388,
+        0.0426,
+        0.0385,
+        0.0448,
+        0.0511,
+        0.0405,
+        0.0395,
+        0.0395,
+        0.0389,
+        0.0394
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_quad2_32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 786432,
+      "Block": 32,
+      "Kernel": "resident_bfp8_quad4_32",
+      "GpuP50Ms": 0.018281000000001768,
+      "WallP50Ms": 0.0392,
+      "Gpu": [
+        0.018228999999990947,
+        0.018124999999997726,
+        0.01833300000001259,
+        0.01833300000001259,
+        0.01833300000001259,
+        0.018228999999990947,
+        0.018124999999997726,
+        0.01833300000001259,
+        0.018228999999990947,
+        0.01854099999999903
+      ],
+      "Wall": [
+        0.039,
+        0.0348,
+        0.0474,
+        0.0533,
+        0.0448,
+        0.04,
+        0.039,
+        0.0389,
+        0.0385,
+        0.0394
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_quad4_32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 786432,
+      "Block": 32,
+      "Kernel": "resident_bfp8_quad8_32",
+      "GpuP50Ms": 0.013854000000009137,
+      "WallP50Ms": 0.043149999999999994,
+      "Gpu": [
+        0.013854000000009137,
+        0.013958000000002357,
+        0.013749999999987494,
+        0.013749999999987494,
+        0.013958000000002357,
+        0.013854000000009137,
+        0.013854000000009137,
+        0.013958000000002357,
+        0.013854000000009137,
+        0.013854000000009137
+      ],
+      "Wall": [
+        0.0458,
+        0.0472,
+        0.0423,
+        0.0444,
+        0.0386,
+        0.0402,
+        0.044,
+        0.0416,
+        0.0395,
+        0.0477
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_quad8_32",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 33554432,
+      "Block": 128,
+      "Kernel": "resident_bfp8",
+      "GpuP50Ms": 2.0497390000000024,
+      "WallP50Ms": 2.07775,
+      "Gpu": [
+        2.112811999999991,
+        2.050520000000006,
+        2.01947899999999,
+        2.0598950000000116,
+        2.0395829999999933,
+        2.048957999999999,
+        2.0160410000000013,
+        2.0726040000000125,
+        2.059269999999998,
+        2.0353120000000047
+      ],
+      "Wall": [
+        2.2218,
+        2.0764,
+        2.0423,
+        2.0814,
+        2.0641,
+        2.0791,
+        2.0417,
+        2.1032,
+        2.0951,
+        2.0614
+      ],
+      "Resources": {
+        "Name": "resident_bfp8",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 33554432,
+      "Block": 128,
+      "Kernel": "resident_bfp8_sg16_128",
+      "GpuP50Ms": 0.6235929999999996,
+      "WallP50Ms": 0.6458,
+      "Gpu": [
+        0.6232290000000091,
+        0.6256250000000136,
+        0.6219790000000103,
+        0.624479000000008,
+        0.6240620000000092,
+        0.6236450000000104,
+        0.6229160000000036,
+        0.6235409999999888,
+        0.6217699999999979,
+        0.6242699999999957
+      ],
+      "Wall": [
+        0.6463,
+        0.6487,
+        0.6458,
+        0.6459,
+        0.6452,
+        0.6473,
+        0.6438,
+        0.6456,
+        0.6407,
+        0.6458
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_sg16_128",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 100663296,
+      "Block": 128,
+      "Kernel": "resident_bfp8",
+      "GpuP50Ms": 5.888228499999997,
+      "WallP50Ms": 5.9338999999999995,
+      "Gpu": [
+        5.938333,
+        5.889165999999989,
+        5.881040999999982,
+        5.873749999999973,
+        5.971769999999992,
+        5.895208000000025,
+        5.884894999999972,
+        5.869894999999985,
+        5.947291000000007,
+        5.887291000000005
+      ],
+      "Wall": [
+        5.9677,
+        5.9257,
+        5.9097,
+        5.9008,
+        6.0188,
+        5.936,
+        5.9674,
+        5.9268,
+        5.9899,
+        5.9318
+      ],
+      "Resources": {
+        "Name": "resident_bfp8",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 100663296,
+      "Block": 128,
+      "Kernel": "resident_bfp8_sg16_128",
+      "GpuP50Ms": 1.7884889999999984,
+      "WallP50Ms": 1.8121,
+      "Gpu": [
+        1.7885410000000093,
+        1.7879159999999956,
+        1.7888540000000148,
+        1.7875000000000227,
+        1.788644999999974,
+        1.7885410000000093,
+        1.7884369999999876,
+        1.7882290000000012,
+        1.788644999999974,
+        1.7881249999999795
+      ],
+      "Wall": [
+        1.8108,
+        1.8171,
+        1.8258,
+        1.8203,
+        1.8132,
+        1.8091,
+        1.8159,
+        1.8092,
+        1.8107,
+        1.811
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_sg16_128",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 786432,
+      "Block": 128,
+      "Kernel": "resident_bfp8",
+      "GpuP50Ms": 0.06807249999999954,
+      "WallP50Ms": 0.0873,
+      "Gpu": [
+        0.0670830000000251,
+        0.06791600000002518,
+        0.06833299999999554,
+        0.06927000000001726,
+        0.06801999999998998,
+        0.0677079999999819,
+        0.06916599999999562,
+        0.06729100000001154,
+        0.0681250000000091,
+        0.0682289999999739
+      ],
+      "Wall": [
+        0.089,
+        0.0892,
+        0.0875,
+        0.0875,
+        0.0871,
+        0.0869,
+        0.0874,
+        0.0872,
+        0.0872,
+        0.0872
+      ],
+      "Resources": {
+        "Name": "resident_bfp8",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    },
+    {
+      "Count": 786432,
+      "Block": 128,
+      "Kernel": "resident_bfp8_sg16_128",
+      "GpuP50Ms": 0.012707999999975073,
+      "WallP50Ms": 0.033049999999999996,
+      "Gpu": [
+        0.012707999999975073,
+        0.012707999999975073,
+        0.012811999999996715,
+        0.012811999999996715,
+        0.012707999999975073,
+        0.012707999999975073,
+        0.012707999999975073,
+        0.012707999999975073,
+        0.012707999999975073,
+        0.012811999999996715
+      ],
+      "Wall": [
+        0.0331,
+        0.0314,
+        0.036,
+        0.0311,
+        0.0315,
+        0.0335,
+        0.0332,
+        0.0331,
+        0.033,
+        0.0324
+      ],
+      "Resources": {
+        "Name": "resident_bfp8_sg16_128",
+        "MaximumWorkGroupSize": 1024,
+        "LocalMemoryBytes": 0,
+        "PrivateMemoryBytes": 0,
+        "SpillMemoryBytes": 0
+      }
+    }
+  ]
+}

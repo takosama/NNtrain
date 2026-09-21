@@ -5,6 +5,7 @@ namespace NNtrain.Arc;
 internal static class OpenClNative
 {
     private const string Library = "OpenCL.dll";
+    [DllImport(Library)] internal static extern int clGetDeviceAndHostTimer(nint device, out ulong deviceTimestamp, out ulong hostTimestamp);
     [DllImport(Library)] internal static extern int clGetPlatformIDs(uint count, [Out] nint[]? platforms, out uint actual);
     [DllImport(Library)] internal static extern int clGetDeviceIDs(nint platform, ulong type, uint count, [Out] nint[]? devices, out uint actual);
     [DllImport(Library)] internal static extern int clGetDeviceInfo(nint device, uint name, nuint size, [Out] byte[]? value, out nuint actual);
@@ -24,6 +25,8 @@ internal static class OpenClNative
     [DllImport(Library)] internal static extern int clGetEventProfilingInfo(nint evt, uint name, nuint size, out ulong value, out nuint actual);
     [DllImport(Library)] internal static extern int clReleaseEvent(nint evt);
     [DllImport(Library)] internal static extern int clFinish(nint queue);
+    [DllImport(Library)] internal static extern int clFlush(nint queue);
+    [DllImport(Library)] internal static extern int clWaitForEvents(uint count, nint events);
     [DllImport(Library)] internal static extern int clReleaseMemObject(nint buffer);
     [DllImport(Library)] internal static extern int clReleaseKernel(nint kernel);
     [DllImport(Library)] internal static extern int clReleaseProgram(nint program);

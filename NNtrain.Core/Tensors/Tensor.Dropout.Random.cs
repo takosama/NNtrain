@@ -4,10 +4,14 @@ partial class Tensor
 {
     private static uint NextDropoutSeed(Random random)
     {
+        if (ArcCheckpointRandomScope.Current is { } replay && replay.TryReplay(out uint saved))
+            return saved;
         long value;
         lock (random)
             value = random.NextInt64();
-        return unchecked((uint)value ^ (uint)((ulong)value >> 32));
+        uint seed = unchecked((uint)value ^ (uint)((ulong)value >> 32));
+        ArcCheckpointRandomScope.Current?.Record(seed);
+        return seed;
     }
 
     private static Vector256<float> CreateDropoutMask256(
