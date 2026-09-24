@@ -1,10 +1,15 @@
+using System.Buffers.Binary;
+
 namespace NNtrain;
 
-/// <summary>Helpers for inspecting a Qwen2-family GGUF before model construction.</summary>
+/// <summary>Qwen2 GGUF inspection, dequantization and model loading.</summary>
 public static class Qwen2Gguf
 {
-    // llama.cpp ggml_type value for Q4_K.
+    public const uint F32Type = 0;
+    public const uint F16Type = 1;
     public const uint Q4KType = 12;
+    public const uint Q6KType = 14;
+    public const uint BF16Type = 30;
 
     public static Qwen2GgufDescriptor Inspect(string path)
     {
@@ -13,37 +18,197 @@ public static class Qwen2Gguf
         if (!string.Equals(architecture, "qwen2", StringComparison.Ordinal))
             throw new InvalidDataException($"Expected qwen2 GGUF, got '{architecture}'.");
 
+        int vocabulary = gguf.Metadata.TryGetValue("tokenizer.ggml.tokens", out object? tokens)
+            && tokens is object[] tokenArray
+                ? tokenArray.Length
+                : throw new InvalidDataException("GGUF tokenizer token table is missing.");
         int layers = RequiredInt(gguf, "qwen2.block_count");
         int embedding = RequiredInt(gguf, "qwen2.embedding_length");
         int heads = RequiredInt(gguf, "qwen2.attention.head_count");
         int kvHeads = RequiredInt(gguf, "qwen2.attention.head_count_kv");
         int context = RequiredInt(gguf, "qwen2.context_length");
         int feedForward = RequiredInt(gguf, "qwen2.feed_forward_length");
+        float rmsEpsilon = OptionalFloat(
+            gguf, "qwen2.attention.layer_norm_rms_epsilon", 1e-6f);
+        float ropeTheta = OptionalFloat(
+            gguf, "qwen2.rope.freq_base", 1_000_000f);
 
         return new Qwen2GgufDescriptor(
-            layers, embedding, heads, kvHeads, context, feedForward,
-            gguf.Tensors.ToArray());
+            vocabulary, layers, embedding, heads, kvHeads, context,
+            feedForward, rmsEpsilon, ropeTheta, gguf.Tensors.ToArray());
     }
 
-    public static float[] ReadQ4KTensor(string path, string tensorName)
+    public static Qwen2ForCausalLM LoadModel(
+        string path,
+        TensorDType dtype = TensorDType.Float32)
+    {
+        Qwen2GgufDescriptor d = Inspect(path);
+        var model = new Qwen2ForCausalLM(
+            d.VocabularySize,
+            d.ContextLength,
+            d.EmbeddingLength,
+            d.HeadCount,
+            d.KvHeadCount,
+            d.FeedForwardLength,
+            d.LayerCount,
+            d.RmsEpsilon,
+            d.RopeTheta,
+            dtype: dtype);
+        LoadWeights(path, model);
+        return model;
+    }
+
+    public static void LoadWeights(string path, Qwen2ForCausalLM model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        using var gguf = new GgufReader(path);
+
+        Copy(gguf, model.TokenEmbedding, "token_embd.weight");
+        for (int i = 0; i < model.Blocks.Count; ++i)
+        {
+            QwenBlock block = model.Blocks[i];
+            string p = $"blk.{i}.";
+            Copy(gguf, block.InputNorm.Weight, p + "attn_norm.weight");
+            Copy(gguf, block.Attention.QProj.W, p + "attn_q.weight");
+            CopyIfPresent(gguf, block.Attention.QProj.B, p + "attn_q.bias");
+            Copy(gguf, block.Attention.KProj.W, p + "attn_k.weight");
+            CopyIfPresent(gguf, block.Attention.KProj.B, p + "attn_k.bias");
+            Copy(gguf, block.Attention.VProj.W, p + "attn_v.weight");
+            CopyIfPresent(gguf, block.Attention.VProj.B, p + "attn_v.bias");
+            Copy(gguf, block.Attention.OProj.W, p + "attn_output.weight");
+            Zero(block.Attention.OProj.B);
+
+            Copy(gguf, block.PostAttentionNorm.Weight, p + "ffn_norm.weight");
+            Copy(gguf, block.Mlp.GateProj.W, p + "ffn_gate.weight");
+            Copy(gguf, block.Mlp.UpProj.W, p + "ffn_up.weight");
+            Copy(gguf, block.Mlp.DownProj.W, p + "ffn_down.weight");
+            Zero(block.Mlp.GateProj.B);
+            Zero(block.Mlp.UpProj.B);
+            Zero(block.Mlp.DownProj.B);
+        }
+
+        Copy(gguf, model.FinalNorm.Weight, "output_norm.weight");
+        if (gguf.Tensors.Any(t => t.Name == "output.weight"))
+            Copy(gguf, model.LmHead.W, "output.weight");
+        else
+            CopyValues(model.TokenEmbedding, model.LmHead.W);
+        Zero(model.LmHead.B);
+    }
+
+    public static float[] ReadTensor(string path, string tensorName)
     {
         using var gguf = new GgufReader(path);
-        GgufTensorInfo tensor = gguf.GetTensor(tensorName);
-        if (tensor.Type != Q4KType)
-            throw new NotSupportedException($"Tensor '{tensorName}' has GGML type {tensor.Type}, not Q4_K.");
+        return ReadTensor(gguf, gguf.GetTensor(tensorName));
+    }
 
-        long elements64 = 1;
-        foreach (ulong dimension in tensor.Shape)
-            elements64 = checked(elements64 * (long)dimension);
-        if (elements64 > int.MaxValue)
-            throw new NotSupportedException("A single tensor exceeds the current managed decoder limit.");
-        int elements = (int)elements64;
-        int blocks = checked((elements + GgufQ4K.BlockElements - 1) / GgufQ4K.BlockElements);
-        int bytes = checked(blocks * GgufQ4K.BlockBytes);
+    internal static float[] ReadTensor(GgufReader gguf, GgufTensorInfo tensor)
+    {
+        int elements = ElementCount(tensor);
+        int bytes = tensor.Type switch
+        {
+            F32Type => checked(elements * 4),
+            F16Type or BF16Type => checked(elements * 2),
+            Q4KType when elements % GgufQ4K.BlockElements == 0
+                => checked(elements / GgufQ4K.BlockElements * GgufQ4K.BlockBytes),
+            Q6KType when elements % GgufQ6K.BlockElements == 0
+                => checked(elements / GgufQ6K.BlockElements * GgufQ6K.BlockBytes),
+            Q4KType or Q6KType => throw new InvalidDataException(
+                $"Tensor '{tensor.Name}' has an incomplete K-quant block."),
+            _ => throw new NotSupportedException(
+                $"GGML tensor type {tensor.Type} is not implemented for '{tensor.Name}'.")
+        };
+
         byte[] payload = new byte[bytes];
-        Stream stream = gguf.OpenTensorData(tensor);
-        stream.ReadExactly(payload);
-        return GgufQ4K.Dequantize(payload, elements);
+        gguf.OpenTensorData(tensor).ReadExactly(payload);
+        if (tensor.Type == Q4KType) return GgufQ4K.Dequantize(payload, elements);
+        if (tensor.Type == Q6KType) return GgufQ6K.Dequantize(payload, elements);
+
+        var result = new float[elements];
+        if (tensor.Type == F32Type)
+        {
+            for (int i = 0; i < elements; ++i)
+            {
+                int bits = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(i * 4, 4));
+                result[i] = BitConverter.Int32BitsToSingle(bits);
+            }
+        }
+        else if (tensor.Type == F16Type)
+        {
+            for (int i = 0; i < elements; ++i)
+            {
+                ushort bits = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(i * 2, 2));
+                result[i] = (float)BitConverter.UInt16BitsToHalf(bits);
+            }
+        }
+        else
+        {
+            for (int i = 0; i < elements; ++i)
+            {
+                ushort bits = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(i * 2, 2));
+                result[i] = BitConverter.Int32BitsToSingle(bits << 16);
+            }
+        }
+        return result;
+    }
+
+    private static void Copy(GgufReader gguf, Parameter target, string tensorName)
+    {
+        GgufTensorInfo tensor = gguf.GetTensor(tensorName);
+        ValidateShape(target, tensor);
+        float[] values = ReadTensor(gguf, tensor);
+        using Tensor.DataMutation mutation = target.BeginUpdate();
+        values.AsSpan().CopyTo(mutation.Values);
+    }
+
+    private static void CopyIfPresent(
+        GgufReader gguf, Parameter target, string tensorName)
+    {
+        GgufTensorInfo? tensor = gguf.Tensors.FirstOrDefault(t => t.Name == tensorName);
+        if (tensor is null) { Zero(target); return; }
+        ValidateShape(target, tensor);
+        float[] values = ReadTensor(gguf, tensor);
+        using Tensor.DataMutation mutation = target.BeginUpdate();
+        values.AsSpan().CopyTo(mutation.Values);
+    }
+
+    private static void Zero(Parameter target)
+    {
+        using Tensor.DataMutation mutation = target.BeginUpdate();
+        mutation.Values.Clear();
+    }
+
+    private static void CopyValues(Parameter source, Parameter target)
+    {
+        if (!source.T.Shape.SequenceEqual(target.T.Shape))
+            throw new InvalidDataException("Tied output and token embedding shapes do not match.");
+        float[] values = source.T.CaptureData(preferMaster: true);
+        using Tensor.DataMutation mutation = target.BeginUpdate();
+        values.AsSpan().CopyTo(mutation.Values);
+    }
+
+    private static void ValidateShape(Parameter target, GgufTensorInfo tensor)
+    {
+        int[] expected = target.T.Shape.Reverse().ToArray();
+        ulong[] actual = tensor.Shape.ToArray();
+        if (expected.Length != actual.Length
+            || expected.Where((dimension, i) => (ulong)dimension != actual[i]).Any())
+        {
+            throw new InvalidDataException(
+                $"GGUF tensor '{tensor.Name}' shape [{string.Join(",", actual)}] " +
+                $"does not match NNtrain parameter '{target.Name}' shape " +
+                $"[{string.Join(",", target.T.Shape)}].");
+        }
+    }
+
+    private static int ElementCount(GgufTensorInfo tensor)
+    {
+        long count = 1;
+        foreach (ulong dimension in tensor.Shape)
+            count = checked(count * (long)dimension);
+        if (count > int.MaxValue)
+            throw new NotSupportedException(
+                $"Tensor '{tensor.Name}' exceeds the managed decoder limit.");
+        return (int)count;
     }
 
     private static string RequiredString(GgufReader gguf, string key)
@@ -56,13 +221,21 @@ public static class Qwen2Gguf
             throw new InvalidDataException($"Missing GGUF metadata '{key}'.");
         return checked((int)Convert.ToUInt64(value));
     }
+
+    private static float OptionalFloat(GgufReader gguf, string key, float fallback)
+        => gguf.Metadata.TryGetValue(key, out object? value)
+            ? Convert.ToSingle(value)
+            : fallback;
 }
 
 public sealed record Qwen2GgufDescriptor(
+    int VocabularySize,
     int LayerCount,
     int EmbeddingLength,
     int HeadCount,
     int KvHeadCount,
     int ContextLength,
     int FeedForwardLength,
+    float RmsEpsilon,
+    float RopeTheta,
     IReadOnlyList<GgufTensorInfo> Tensors);
