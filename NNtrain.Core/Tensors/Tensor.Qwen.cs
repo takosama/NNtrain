@@ -99,9 +99,13 @@ public partial class Tensor
             lane.Run("qwen_silu_mul", Numel, 0, gate, upValues, output, Numel);
             Tensor result = ArcDeviceResult(output, _shape, [this, up]);
             result.Node.BackwardAction = () =>
+            {
+                using var gateValues = ArcUploadValues();
+                using var upValuesBackward = up.ArcUploadValues();
                 lane.Run("qwen_silu_mul_back", Numel, 0,
-                    ArcUploadValues(), up.ArcUploadValues(), result.ArcGradient(),
+                    gateValues, upValuesBackward, result.ArcGradient(),
                     ArcGradient(), up.ArcGradient(), Numel);
+            };
             return result;
         }
 
