@@ -8,8 +8,10 @@ public static class GgufQ4K
 
     public static float[] Dequantize(ReadOnlySpan<byte> source, int elementCount)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(elementCount);
-        int blocks = checked((elementCount + BlockElements - 1) / BlockElements);
+        if (elementCount < 0 || elementCount % BlockElements != 0)
+            throw new ArgumentOutOfRangeException(nameof(elementCount),
+                "Q4_K element count must be a non-negative multiple of 256.");
+        int blocks = elementCount / BlockElements;
         if (source.Length < checked(blocks * BlockBytes))
             throw new ArgumentException("Q4_K payload is shorter than required.", nameof(source));
 
