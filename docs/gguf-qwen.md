@@ -40,3 +40,18 @@ cleanup. Q4_K CPU decoding reuses bounded stack scratch across blocks.
 Regression tests use synthetic GGUF vocabularies/tensors, CPU references and small
 models on Arc. They do not establish tokenizer/logit parity or performance for a
 downloaded pretrained Qwen checkpoint.
+
+### Merge validation (2026-09-25)
+
+The integrated source at `692a356` was tested on the local Arc B580 system:
+
+| Check | Result |
+| --- | --- |
+| Release solution build (`--no-restore`) | 0 warnings, 0 errors |
+| Qwen/GGUF and Float16 operation inventory | 48 passed |
+| Existing Arc generation, KV cache, tensor-parallel and precision checks | 94 passed |
+| Generation commands, configuration, training/resume and dual-GPU integration | 48 passed |
+
+All 190 selected tests passed with no skips. The integration run includes both
+single-GPU and two-GPU training and generation; the earlier Arc optimization
+benchmark records are preserved separately under `benchmark-results/`.
