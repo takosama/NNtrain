@@ -165,11 +165,26 @@ public sealed class Qwen2QuantizedForCausalLM : LanguageModel, IDisposable
         return result.ToArray();
     }
 
+    public string Generate(
+        string prompt, Qwen2GgufTokenizer tokenizer, int maxNewTokens,
+        float temperature = 0f, int topK = 1, Random? random = null)
+    {
+        ArgumentNullException.ThrowIfNull(prompt);
+        ArgumentNullException.ThrowIfNull(tokenizer);
+        if (tokenizer.VocabularySize != VocabularySize)
+            throw new ArgumentException("GGUF tokenizer vocabulary does not match the model.", nameof(tokenizer));
+        int[] promptIds = tokenizer.Encode(prompt);
+        int[] generated = GenerateTokenIds(
+            promptIds, maxNewTokens, temperature, topK,
+            tokenizer.EosTokenId, random);
+        return tokenizer.Decode(generated);
+    }
+
     internal override string Generate(
         string prompt, BpeTokenizer tokenizer, int maxNewTokens,
         float temperature, int topK, Random? random)
         => throw new NotSupportedException(
-            "Qwen GGUF tokenizer integration is the next inference milestone.");
+            "Use Generate(prompt, Qwen2GgufTokenizer, ...) for GGUF Qwen models.");
 
     public void Dispose()
     {
