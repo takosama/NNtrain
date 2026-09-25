@@ -76,6 +76,16 @@ public sealed class GgufReader : IDisposable
         return new NonOwningStream(_stream);
     }
 
+    public byte[] ReadTensorBytes(GgufTensorInfo tensor, int byteCount)
+    {
+        ArgumentNullException.ThrowIfNull(tensor);
+        ArgumentOutOfRangeException.ThrowIfNegative(byteCount);
+        _stream.Position = checked(_dataOffset + (long)tensor.Offset);
+        byte[] payload = _reader.ReadBytes(byteCount);
+        if (payload.Length != byteCount) throw new EndOfStreamException();
+        return payload;
+    }
+
     public GgufTensorInfo GetTensor(string name)
         => _tensors.FirstOrDefault(t => t.Name == name)
            ?? throw new KeyNotFoundException($"GGUF tensor '{name}' was not found.");
