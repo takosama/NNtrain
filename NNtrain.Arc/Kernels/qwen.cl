@@ -288,3 +288,112 @@ __kernel void qwen_gqa_dkv(
     dv[base + pair] += dv1;
     dv[base + pair + half] += dv2;
 }
+
+
+inline float qwen_half_to_float(ushort h) {
+    uint sign = ((uint)h & 0x8000u) << 16;
+    uint exponent = ((uint)h >> 10) & 0x1fu;
+    uint mantissa = (uint)h & 0x03ffu;
+    uint bits;
+    if (exponent == 0u) {
+        if (mantissa == 0u) bits = sign;
+        else {
+            int shift = 0;
+            while ((mantissa & 0x0400u) == 0u) { mantissa <<= 1; ++shift; }
+            mantissa &= 0x03ffu;
+            bits = sign | ((uint)(127 - 15 - shift) << 23) | (mantissa << 13);
+        }
+    } else if (exponent == 31u) {
+        bits = sign | 0x7f800000u | (mantissa << 13);
+    } else {
+        bits = sign | ((exponent + 112u) << 23) | (mantissa << 13);
+    }
+    return as_float(bits);
+}
+
+inline void qwen_q4_scale_min(
+    __global const uchar* packed, int j, uchar* scale, uchar* minimum) {
+    if (j < 4) {
+        *scale = packed[j] & 63;
+        *minimum = packed[j + 4] & 63;
+    } else {
+        *scale = (packed[j + 4] & 0x0f) | ((packed[j - 4] >> 6) << 4);
+        *minimum = (packed[j + 4] >> 4) | ((packed[j] >> 6) << 4);
+    }
+}
+
+inline float qwen_q4_k_value(__global const uchar* block, int index) {
+    float d = qwen_half_to_float((ushort)block[0] | ((ushort)block[1] << 8));
+    float dmin = qwen_half_to_float((ushort)block[2] | ((ushort)block[3] << 8));
+    __global const uchar* scales = block + 4;
+    __global const uchar* q = block + 16;
+    int group = index / 32;
+    int within = index & 31;
+    uchar scale, minimum;
+    qwen_q4_scale_min(scales, group, &scale, &minimum);
+    int chunk = group / 2;
+    uchar packed = q[chunk * 32 + within];
+    int quant = (group & 1) ? (packed >> 4) : (packed & 0x0f);
+    return d * (float)scale * (float)quant - dmin * (float)minimum;
+}
+
+inline float qwen_q6_k_value(__global const uchar* block, int index) {
+    __global const uchar* ql = block;
+    __global const uchar* qh = block + 128;
+    __global const char* scales = (__global const char*)(block + 192);
+    float d = qwen_half_to_float((ushort)block[208] | ((ushort)block[209] << 8));
+    int n = index >= 128 ? 128 : 0;
+    int l = index - n;
+    int lane = l & 31;
+    int quarter = l / 32;
+    int qlBase = n / 2;
+    int qhBase = n / 4;
+    int scBase = n / 16;
+    int quant;
+    if (quarter == 0)
+        quant = (ql[qlBase + lane] & 0x0f) | (((qh[qhBase + lane] >> 0) & 3) << 4);
+    else if (quarter == 1)
+        quant = (ql[qlBase + lane + 32] & 0x0f) | (((qh[qhBase + lane] >> 2) & 3) << 4);
+    else if (quarter == 2)
+        quant = (ql[qlBase + lane] >> 4) | (((qh[qhBase + lane] >> 4) & 3) << 4);
+    else
+        quant = (ql[qlBase + lane + 32] >> 4) | (((qh[qhBase + lane] >> 6) & 3) << 4);
+    int scaleIndex = scBase + (lane / 16) + quarter * 2;
+    return d * (float)scales[scaleIndex] * (float)(quant - 32);
+}
+
+// GGUF stores a matrix with ne[0]=input width.  Each output row therefore
+// consists of inputWidth/256 consecutive K-quant blocks.
+__kernel void qwen_linear_q4_k(
+    __global const float* x, __global const uchar* weight,
+    __global const float* bias, __global float* y,
+    int rows, int input_width, int output_width) {
+    int i = get_global_id(0);
+    if (i >= rows * output_width) return;
+    int row = i / output_width, out = i % output_width;
+    int blocks_per_row = input_width / 256;
+    __global const uchar* row_weight = weight + out * blocks_per_row * 144;
+    float sum = bias[out];
+    for (int k = 0; k < input_width; ++k) {
+        __global const uchar* block = row_weight + (k / 256) * 144;
+        sum = fma(x[row * input_width + k], qwen_q4_k_value(block, k & 255), sum);
+    }
+    y[i] = sum;
+}
+
+__kernel void qwen_linear_q6_k(
+    __global const float* x, __global const uchar* weight,
+    __global const float* bias, __global float* y,
+    int rows, int input_width, int output_width) {
+    int i = get_global_id(0);
+    if (i >= rows * output_width) return;
+    int row = i / output_width, out = i % output_width;
+    int blocks_per_row = input_width / 256;
+    __global const uchar* row_weight = weight + out * blocks_per_row * 210;
+    float sum = bias[out];
+    for (int k = 0; k < input_width; ++k) {
+        __global const uchar* block = row_weight + (k / 256) * 210;
+        sum = fma(x[row * input_width + k], qwen_q6_k_value(block, k & 255), sum);
+    }
+    y[i] = sum;
+}
