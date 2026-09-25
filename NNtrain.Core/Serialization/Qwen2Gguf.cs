@@ -38,6 +38,102 @@ public static class Qwen2Gguf
             feedForward, rmsEpsilon, ropeTheta, gguf.Tensors.ToArray());
     }
 
+    public static Qwen2QuantizedForCausalLM LoadQuantizedModel(
+        string path,
+        TensorDType activationDType = TensorDType.Float32)
+    {
+        Qwen2GgufDescriptor d = Inspect(path);
+        using var gguf = new GgufReader(path);
+
+        Parameter embedding = DenseParameter(
+            gguf, "token_embd.weight", "token_embd.weight", activationDType);
+        var blocks = new QwenQuantizedBlock[d.LayerCount];
+        for (int i = 0; i < blocks.Length; ++i)
+        {
+            string p = $"blk.{i}.";
+            var inputNorm = new QwenRmsNorm(d.EmbeddingLength, d.RmsEpsilon, activationDType);
+            Copy(gguf, inputNorm.Weight, p + "attn_norm.weight");
+            var postNorm = new QwenRmsNorm(d.EmbeddingLength, d.RmsEpsilon, activationDType);
+            Copy(gguf, postNorm.Weight, p + "ffn_norm.weight");
+
+            int headWidth = d.EmbeddingLength / d.HeadCount;
+            int kvWidth = checked(d.KvHeadCount * headWidth);
+            var attention = new QwenQuantizedAttention(
+                QuantizedLinear(gguf, p + "attn_q.weight", p + "attn_q.bias",
+                    d.EmbeddingLength, d.EmbeddingLength, activationDType),
+                QuantizedLinear(gguf, p + "attn_k.weight", p + "attn_k.bias",
+                    d.EmbeddingLength, kvWidth, activationDType),
+                QuantizedLinear(gguf, p + "attn_v.weight", p + "attn_v.bias",
+                    d.EmbeddingLength, kvWidth, activationDType),
+                QuantizedLinear(gguf, p + "attn_output.weight", null,
+                    d.EmbeddingLength, d.EmbeddingLength, activationDType),
+                d.HeadCount, d.KvHeadCount, d.RopeTheta, activationDType);
+            var mlp = new QwenQuantizedMlp(
+                QuantizedLinear(gguf, p + "ffn_gate.weight", null,
+                    d.EmbeddingLength, d.FeedForwardLength, activationDType),
+                QuantizedLinear(gguf, p + "ffn_up.weight", null,
+                    d.EmbeddingLength, d.FeedForwardLength, activationDType),
+                QuantizedLinear(gguf, p + "ffn_down.weight", null,
+                    d.FeedForwardLength, d.EmbeddingLength, activationDType),
+                activationDType);
+            blocks[i] = new QwenQuantizedBlock(
+                inputNorm, attention, postNorm, mlp, activationDType);
+        }
+
+        var finalNorm = new QwenRmsNorm(d.EmbeddingLength, d.RmsEpsilon, activationDType);
+        Copy(gguf, finalNorm.Weight, "output_norm.weight");
+
+        QwenQuantizedLinear head;
+        if (gguf.Tensors.Any(t => t.Name == "output.weight"))
+        {
+            head = QuantizedLinear(
+                gguf, "output.weight", null,
+                d.EmbeddingLength, d.VocabularySize, activationDType);
+        }
+        else
+        {
+            throw new NotSupportedException(
+                "Tied token-embedding output is dense in this first resident path. " +
+                "Use a GGUF containing output.weight until the quantized tied-head path is added.");
+        }
+
+        return new Qwen2QuantizedForCausalLM(
+            d.VocabularySize, d.ContextLength, d.EmbeddingLength,
+            d.HeadCount, d.KvHeadCount, embedding, blocks, finalNorm,
+            head, activationDType);
+    }
+
+    private static QwenQuantizedLinear QuantizedLinear(
+        GgufReader gguf, string weightName, string? biasName,
+        int inputWidth, int outputWidth, TensorDType dtype)
+    {
+        GgufTensorInfo weight = gguf.GetTensor(weightName);
+        if (weight.Type is not (Q4KType or Q6KType))
+            throw new NotSupportedException(
+                $"Resident inference requires Q4_K/Q6_K matrix '{weightName}', got type {weight.Type}.");
+        int blockBytes = weight.Type == Q4KType ? GgufQ4K.BlockBytes : GgufQ6K.BlockBytes;
+        int bytes = checked(outputWidth * (inputWidth / 256) * blockBytes);
+        byte[] payload = gguf.ReadTensorBytes(weight, bytes);
+        float[]? bias = null;
+        if (biasName is not null)
+        {
+            GgufTensorInfo? biasTensor = gguf.Tensors.FirstOrDefault(t => t.Name == biasName);
+            if (biasTensor is not null) bias = ReadTensor(gguf, biasTensor);
+        }
+        return new QwenQuantizedLinear(
+            payload, weight.Type, inputWidth, outputWidth, bias, dtype);
+    }
+
+    private static Parameter DenseParameter(
+        GgufReader gguf, string tensorName, string parameterName, TensorDType dtype)
+    {
+        GgufTensorInfo tensor = gguf.GetTensor(tensorName);
+        int[] shape = tensor.Shape.Reverse().Select(v => checked((int)v)).ToArray();
+        return new Parameter(
+            ReadTensor(gguf, tensor), shape, parameterName,
+            WeightDecayPolicy.Exclude, dtype);
+    }
+
     public static Qwen2ForCausalLM LoadModel(
         string path,
         TensorDType dtype = TensorDType.Float32)
