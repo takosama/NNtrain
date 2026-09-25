@@ -33,6 +33,8 @@ internal static partial class Program
         ArgumentNullException.ThrowIfNull(loadConfiguration);
         if (args.Length > 0 && string.Equals(args[0], "lora", StringComparison.OrdinalIgnoreCase))
             return LoraCommand.Run(args, output, error);
+        if (args.Length > 0 && string.Equals(args[0], "qwen-gguf", StringComparison.OrdinalIgnoreCase))
+            return QwenGgufCommand.Run(args, output, error);
 
         string configurationPath;
         string? generatePrompt = null;
