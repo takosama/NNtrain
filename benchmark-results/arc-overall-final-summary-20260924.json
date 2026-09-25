@@ -1,0 +1,1035 @@
+{
+  "ConfigurationSha256": "E876C55B7BFBE4F0BA5054D0A86070E525C776257E8C260A976A8F4305C1A50C",
+  "BinarySha256": {
+    "NNtrain.Core": "F1C732D8CE85ECBED6F8F1CDB7C666569097760671DF66573C0D8095A4B275F9",
+    "NNtrain.Arc": "C68906913DDE798DB9033DAD98336F30FBBA37665C0B6E724A5F550323BA944E",
+    "NNtrain.Benchmarks": "0C32DD369DC4FF3B062D0FC45D3B75B953A1149B33A61FB161D011B6CEE8DB3E"
+  },
+  "Shape": {
+    "BatchSize": 16,
+    "GradientAccumulationSteps": 8,
+    "ContextLength": 2048,
+    "ModelWidth": 512,
+    "Heads": 16,
+    "HiddenSize": 1536,
+    "Layers": 32,
+    "VocabularySize": 11500,
+    "Dropout": 0.1,
+    "TieWordEmbeddings": true
+  },
+  "Precision": {
+    "Mode": "mix8_16",
+    "Bfp8BlockSize": 32
+  },
+  "Runs": [
+    {
+      "Label": "a1",
+      "StepP50Ms": 15223.6293,
+      "TokensPerSecond": 17219.54698410845,
+      "Samples": [
+        15217.0308,
+        15224.5361,
+        15223.6293
+      ]
+    },
+    {
+      "Label": "b",
+      "StepP50Ms": 14602.8038,
+      "TokensPerSecond": 17951.621044172352,
+      "Samples": [
+        14587.8313,
+        14608.5782,
+        14602.8038
+      ]
+    },
+    {
+      "Label": "a2",
+      "StepP50Ms": 15219.1848,
+      "TokensPerSecond": 17224.575655326822,
+      "Samples": [
+        15199.0372,
+        15232.6034,
+        15219.1848
+      ]
+    }
+  ],
+  "ControlPooledP50Ms": 15221.407050000002,
+  "SelectedP50Ms": 14602.8038,
+  "ControlTokensPerSecond": 17222.060952637094,
+  "SelectedTokensPerSecond": 17951.621044172352,
+  "ThroughputGainPercent": 4.236195038106327,
+  "SavedMillisecondsPerUpdate": 618.6032500000019,
+  "Comparisons": [
+    {
+      "Step": 2,
+      "ControlLoss": 9.349764,
+      "SelectedLoss": 9.349768,
+      "LossDifference": 3.999999998782755E-06,
+      "ControlGradientNorm": 0.07547713,
+      "SelectedGradientNorm": 0.07544427,
+      "GradientNormRelativeDifference": -0.00043536366578869054
+    },
+    {
+      "Step": 3,
+      "ControlLoss": 9.312968,
+      "SelectedLoss": 9.31296,
+      "LossDifference": -7.999999999341867E-06,
+      "ControlGradientNorm": 0.07395657,
+      "SelectedGradientNorm": 0.07394024,
+      "GradientNormRelativeDifference": -0.00022080526449502674
+    },
+    {
+      "Step": 4,
+      "ControlLoss": 9.276879,
+      "SelectedLoss": 9.276876,
+      "LossDifference": -2.9999999995311555E-06,
+      "ControlGradientNorm": 0.08118565,
+      "SelectedGradientNorm": 0.0812139,
+      "GradientNormRelativeDifference": 0.00034796789826782733
+    }
+  ],
+  "AllGradientsFinite": true,
+  "LiveAllocationDeltaBytes": 0,
+  "TransferVolumesEqual": true,
+  "ProfileStepP50Ms": 14624.58725,
+  "Lanes": [
+    {
+      "DeviceIndex": "0",
+      "ControlPeakBackendMiB": 6091.077938079834,
+      "SelectedPeakBackendMiB": 6091.077938079834,
+      "H2DBytesPerUpdate": 183112152,
+      "D2HBytesPerUpdate": 102411320,
+      "BaselineAttentionKernelMs": 9197.296340000019,
+      "SelectedAttentionKernelMs": 8626.889211499993,
+      "BaselineNonAttentionKernelMs": 5495.827446,
+      "SelectedNonAttentionKernelMs": 5468.408935999998,
+      "Timeline": [
+        {
+          "WallMs": 14613.4917,
+          "CoverageFraction": 0.9999999999999999,
+          "DeviceEvents": 174782,
+          "MissingEvents": 0,
+          "OpaqueAllocationCopies": 0,
+          "TracePath": "C:\\Users\\takos\\source\\repos\\NNtrain\\benchmark-results\\arc-overall-final-profile-20260924.json.gpu-0.step-2.trace.json.gz"
+        },
+        {
+          "WallMs": 14635.5744,
+          "CoverageFraction": 0.9999999999999999,
+          "DeviceEvents": 174782,
+          "MissingEvents": 0,
+          "OpaqueAllocationCopies": 0,
+          "TracePath": "C:\\Users\\takos\\source\\repos\\NNtrain\\benchmark-results\\arc-overall-final-profile-20260924.json.gpu-0.step-3.trace.json.gz"
+        }
+      ],
+      "WallCategories": [
+        {
+          "Name": "GPU/attention",
+          "MeanMs": 8627.235891914199
+        },
+        {
+          "Name": "GPU/GEMM",
+          "MeanMs": 3247.39961764795
+        },
+        {
+          "Name": "GPU/pack-decode-publication",
+          "MeanMs": 1128.384274655839
+        },
+        {
+          "Name": "GPU/normalization-reduction",
+          "MeanMs": 835.2264377721842
+        },
+        {
+          "Name": "GPU/other-kernels",
+          "MeanMs": 163.21106957775046
+        },
+        {
+          "Name": "GPU-idle/profiler-event-collection",
+          "MeanMs": 101.89792409101332
+        },
+        {
+          "Name": "GPU-idle/queue-partial-wait",
+          "MeanMs": 93.45531299143491
+        },
+        {
+          "Name": "GPU/loss",
+          "MeanMs": 92.96519431334085
+        },
+        {
+          "Name": "GPU-idle/managed-forward-backward-reduce",
+          "MeanMs": 70.23523416104659
+        },
+        {
+          "Name": "GPU/transfer/H2D",
+          "MeanMs": 59.8303097614901
+        },
+        {
+          "Name": "GPU-idle/queue-submit",
+          "MeanMs": 51.32497368793033
+        },
+        {
+          "Name": "GPU/transfer/D2H",
+          "MeanMs": 41.91562037612039
+        },
+        {
+          "Name": "GPU-idle/blocking-transfer-wait",
+          "MeanMs": 40.508107295037426
+        },
+        {
+          "Name": "GPU-idle/managed-replica-sync",
+          "MeanMs": 32.851026309994694
+        },
+        {
+          "Name": "GPU-idle/native-allocation",
+          "MeanMs": 14.24175023924482
+        },
+        {
+          "Name": "GPU-idle/native-free",
+          "MeanMs": 7.44502725105381
+        },
+        {
+          "Name": "GPU-idle/queue-sync-wait",
+          "MeanMs": 4.663713864180684
+        },
+        {
+          "Name": "GPU-idle/allocation-pool",
+          "MeanMs": 3.824566107369569
+        },
+        {
+          "Name": "GPU-idle/managed-optimizer",
+          "MeanMs": 3.1978312897205354
+        },
+        {
+          "Name": "GPU-idle/release-pool",
+          "MeanMs": 1.286626982194813
+        },
+        {
+          "Name": "GPU/transfer/D2D",
+          "MeanMs": 1.244829526652515
+        },
+        {
+          "Name": "GPU-idle/managed-zero-grad",
+          "MeanMs": 1.0623
+        },
+        {
+          "Name": "GPU-idle/managed-clip",
+          "MeanMs": 0.8714101842527389
+        },
+        {
+          "Name": "GPU-idle/benchmark-boundary",
+          "MeanMs": 0.254
+        }
+      ],
+      "Kernels": [
+        {
+          "Name": "forward-backward-reduce/attention_mix8_16_bf16_dkv_packed_slm_uint_2048",
+          "MeanMs": 2096.164588999999,
+          "Calls": 16384.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_mix8_16_bf16_dpds_k32_d32_2048",
+          "MeanMs": 1342.4532130000437,
+          "Calls": 16384.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_mix8_16_bf16_dq_packed_bpair_2048",
+          "MeanMs": 1196.2179784999848,
+          "Calls": 16384.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_mix8_16_bf16_pv_bpair_d32_2048",
+          "MeanMs": 1174.133050499992,
+          "Calls": 16384.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_probabilities_native_exp_2048",
+          "MeanMs": 981.8973309999981,
+          "Calls": 16384.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_qk_direct_256x32_offset",
+          "MeanMs": 799.766850499974,
+          "Calls": 32768.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=1536 K=512 offset=0",
+          "MeanMs": 609.0066664999999,
+          "Calls": 512.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_probabilities_saved_native_exp_2048",
+          "MeanMs": 591.5248475000028,
+          "Calls": 16384.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=1536 N=512 K=16384 TA=1 TB=0",
+          "MeanMs": 573.5767639999996,
+          "Calls": 512.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=1536 TA=0 TB=0",
+          "MeanMs": 537.6158264999997,
+          "Calls": 512.0
+        },
+        {
+          "Name": "forward-backward-reduce/xmx_storage_pack_a_dual_f32",
+          "MeanMs": 324.3949375,
+          "Calls": 1024.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_bfp8_decode_bf16_qk_2048",
+          "MeanMs": 297.7818790000001,
+          "Calls": 512.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=512 N=1536 K=16384 TA=1 TB=0",
+          "MeanMs": 286.93926599999986,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/norm_packed_residual_input",
+          "MeanMs": 275.8894294999992,
+          "Calls": 1024.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=1536 K=512 TA=0 TB=0",
+          "MeanMs": 250.81890499999997,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/linear_relu_grad_pack_a_bias_dual",
+          "MeanMs": 234.5665619999999,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/norm_dx_row_sg16_w64_parallel_residual_parameter_bf16",
+          "MeanMs": 229.2714590000001,
+          "Calls": 512.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=1536 offset=0",
+          "MeanMs": 227.74046750000002,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_8x32_wg16 M=512 N=512 K=11500 TA=0 TB=0",
+          "MeanMs": 164.3656155000005,
+          "Calls": 1536.0
+        },
+        {
+          "Name": "forward-backward-reduce/xmx_storage_pack_b_bfp8",
+          "MeanMs": 158.51997450000016,
+          "Calls": 1288.0
+        },
+        {
+          "Name": "forward-backward-reduce/xmx_storage_pack_b_bf16",
+          "MeanMs": 117.52181850000048,
+          "Calls": 1024.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=512 N=512 K=16384 TA=1 TB=0",
+          "MeanMs": 115.58083149999999,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=512 offset=0",
+          "MeanMs": 110.97405849999998,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/resident_zero",
+          "MeanMs": 106.3845939999996,
+          "Calls": 2213.0
+        },
+        {
+          "Name": "forward-backward-reduce/norm_row_sg16_w64_parallel_bf16",
+          "MeanMs": 100.57900500000001,
+          "Calls": 520.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_mix8_16_row_delta_bf16_2048",
+          "MeanMs": 98.0453115,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=512 TA=0 TB=0",
+          "MeanMs": 93.34978950000003,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/xmx_storage_pack_a_linear_vec4_bf16",
+          "MeanMs": 92.36962250000016,
+          "Calls": 1024.0
+        },
+        {
+          "Name": "forward-backward-reduce/xmx_storage_pack_a_linear_vec4_bfp8",
+          "MeanMs": 88.30832599999997,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/gradient_rows_bias_bf16 rows=16384 width=1536 relu=0",
+          "MeanMs": 79.75197200000005,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=11500 N=512 K=512 TA=1 TB=0",
+          "MeanMs": 73.5008325,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+          "MeanMs": 71.43374850000001,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_split_finish",
+          "MeanMs": 65.7599394999998,
+          "Calls": 1024.0
+        },
+        {
+          "Name": "forward-backward-reduce/gradient_rows_bias_bf16 rows=16384 width=512 relu=0",
+          "MeanMs": 56.75191900000004,
+          "Calls": 512.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_mix8_16_store_raw_bf16_2048",
+          "MeanMs": 48.90416099999996,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/resident_bf16",
+          "MeanMs": 46.78071800000005,
+          "Calls": 272.0
+        },
+        {
+          "Name": "forward-backward-reduce/cross_entropy_gradient",
+          "MeanMs": 35.55541900000003,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/norm_parameter_4row_partials_256row",
+          "MeanMs": 33.41900599999998,
+          "Calls": 512.0
+        },
+        {
+          "Name": "forward-backward-reduce/cross_entropy_rows",
+          "MeanMs": 30.643796999999992,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/gradient_rows_finish",
+          "MeanMs": 30.30571700000001,
+          "Calls": 1800.0
+        },
+        {
+          "Name": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=1536 TA=0 TB=1",
+          "MeanMs": 26.327243500000016,
+          "Calls": 480.0
+        },
+        {
+          "Name": "forward-backward-reduce/gradient_rows_bias_bf16 rows=512 width=11500 relu=0",
+          "MeanMs": 25.212862000000023,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/loss_head_pack_bf16_at",
+          "MeanMs": 23.640148499999988,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/loss_head_unpack_bf16_at",
+          "MeanMs": 21.481929499999993,
+          "Calls": 256.0
+        },
+        {
+          "Name": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=1536 K=512 TA=0 TB=0",
+          "MeanMs": 19.838333499999997,
+          "Calls": 480.0
+        },
+        {
+          "Name": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=1",
+          "MeanMs": 17.035447000000097,
+          "Calls": 800.0
+        },
+        {
+          "Name": "forward-backward-reduce/pack_bf16_state",
+          "MeanMs": 15.464430999999589,
+          "Calls": 3501.0
+        },
+        {
+          "Name": "forward-backward-reduce/unpack_bf16_state",
+          "MeanMs": 12.596098500000103,
+          "Calls": 3112.0
+        },
+        {
+          "Name": "forward-backward-reduce/xmx_storage_pack_b_transpose_bfp8",
+          "MeanMs": 11.999624999999945,
+          "Calls": 1032.0
+        },
+        {
+          "Name": "optimizer/xmx_storage_pack_a_linear_vec4_f32",
+          "MeanMs": 6.780618000000007,
+          "Calls": 1920.0
+        },
+        {
+          "Name": "optimizer/xmx_pack_tune_b_transpose",
+          "MeanMs": 6.630271999999932,
+          "Calls": 1280.0
+        },
+        {
+          "Name": "optimizer/xmx_next_pack_b",
+          "MeanMs": 5.630197000000003,
+          "Calls": 640.0
+        },
+        {
+          "Name": "forward-backward-reduce/loss_total",
+          "MeanMs": 5.269116999999999,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/decode_bfp8",
+          "MeanMs": 5.074505000000084,
+          "Calls": 2608.0
+        },
+        {
+          "Name": "optimizer/transpose_scale",
+          "MeanMs": 4.237987000000001,
+          "Calls": 192.0
+        },
+        {
+          "Name": "optimizer/moments_bf16_packed",
+          "MeanMs": 3.4709855000000003,
+          "Calls": 128.0
+        },
+        {
+          "Name": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=0",
+          "MeanMs": 3.40538700000001,
+          "Calls": 160.0
+        },
+        {
+          "Name": "optimizer/resident_bfp8_from_bf16_quad4_32",
+          "MeanMs": 3.231771999999992,
+          "Calls": 389.0
+        },
+        {
+          "Name": "clip/reduce_sum_bf16",
+          "MeanMs": 3.2014034999999907,
+          "Calls": 389.0
+        },
+        {
+          "Name": "forward-backward-reduce/embedding_back",
+          "MeanMs": 3.052184,
+          "Calls": 8.0
+        },
+        {
+          "Name": "forward-backward-reduce/decode_bf16",
+          "MeanMs": 2.8898344999999996,
+          "Calls": 24.0
+        },
+        {
+          "Name": "optimizer/reduce_sum",
+          "MeanMs": 2.5277094999999985,
+          "Calls": 384.0
+        },
+        {
+          "Name": "forward-backward-reduce/norm_dx_row_sg16_w64_candidate",
+          "MeanMs": 2.4329145,
+          "Calls": 8.0
+        },
+        {
+          "Name": "optimizer/ns_coefficient",
+          "MeanMs": 2.2049220000000007,
+          "Calls": 640.0
+        },
+        {
+          "Name": "forward-backward-reduce/gradient_rows rows=16384 width=512 relu=0 norm=1",
+          "MeanMs": 1.5785905,
+          "Calls": 8.0
+        },
+        {
+          "Name": "forward-backward-reduce/embedding",
+          "MeanMs": 1.5373394999999999,
+          "Calls": 8.0
+        },
+        {
+          "Name": "replica-sync/resident_finite_bf16",
+          "MeanMs": 1.4395914999999981,
+          "Calls": 389.0
+        },
+        {
+          "Name": "forward-backward-reduce/dropout",
+          "MeanMs": 1.4313505000000002,
+          "Calls": 8.0
+        },
+        {
+          "Name": "forward-backward-reduce/copy_scale",
+          "MeanMs": 1.2945799999999998,
+          "Calls": 8.0
+        },
+        {
+          "Name": "optimizer/muon_weight_update_bf16_packed",
+          "MeanMs": 1.2868784999999996,
+          "Calls": 128.0
+        },
+        {
+          "Name": "forward-backward-reduce/dropout_back",
+          "MeanMs": 1.283538,
+          "Calls": 8.0
+        },
+        {
+          "Name": "forward-backward-reduce/copy_range",
+          "MeanMs": 0.8956235000000028,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/add_bf16_state_to_float",
+          "MeanMs": 0.894202499999997,
+          "Calls": 389.0
+        },
+        {
+          "Name": "optimizer/adam_bf16_packed",
+          "MeanMs": 0.8098705000000012,
+          "Calls": 261.0
+        },
+        {
+          "Name": "clip/reduce_sum",
+          "MeanMs": 0.6291469999999957,
+          "Calls": 521.0
+        },
+        {
+          "Name": "forward-backward-reduce/resident_validate_loss",
+          "MeanMs": 0.011195999999999998,
+          "Calls": 8.0
+        },
+        {
+          "Name": "replica-sync/resident_zero",
+          "MeanMs": 0.0024475,
+          "Calls": 1.0
+        },
+        {
+          "Name": "clip/resident_clip_total",
+          "MeanMs": 0.001666,
+          "Calls": 1.0
+        }
+      ]
+    },
+    {
+      "DeviceIndex": "1",
+      "ControlPeakBackendMiB": 5558.904048919678,
+      "SelectedPeakBackendMiB": 5558.904048919678,
+      "H2DBytesPerUpdate": 103459340,
+      "D2HBytesPerUpdate": 182063608,
+      "BaselineAttentionKernelMs": 9198.918540000031,
+      "SelectedAttentionKernelMs": 8639.138941500018,
+      "BaselineNonAttentionKernelMs": 5383.570397999994,
+      "SelectedNonAttentionKernelMs": 5354.457327499998,
+      "Timeline": [
+        {
+          "WallMs": 14613.5962,
+          "CoverageFraction": 0.9999999999999999,
+          "DeviceEvents": 164303,
+          "MissingEvents": 0,
+          "OpaqueAllocationCopies": 0,
+          "TracePath": "C:\\Users\\takos\\source\\repos\\NNtrain\\benchmark-results\\arc-overall-final-profile-20260924.json.gpu-1.step-2.trace.json.gz"
+        },
+        {
+          "WallMs": 14635.5759,
+          "CoverageFraction": 0.9999999999999999,
+          "DeviceEvents": 164303,
+          "MissingEvents": 0,
+          "OpaqueAllocationCopies": 0,
+          "TracePath": "C:\\Users\\takos\\source\\repos\\NNtrain\\benchmark-results\\arc-overall-final-profile-20260924.json.gpu-1.step-3.trace.json.gz"
+        }
+      ],
+      "WallCategories": [
+        {
+          "Name": "GPU/attention",
+          "MeanMs": 8639.030096742734
+        },
+        {
+          "Name": "GPU/GEMM",
+          "MeanMs": 3180.091784758457
+        },
+        {
+          "Name": "GPU/pack-decode-publication",
+          "MeanMs": 1104.8720079449042
+        },
+        {
+          "Name": "GPU/normalization-reduction",
+          "MeanMs": 834.395212260235
+        },
+        {
+          "Name": "GPU-idle/managed-optimizer",
+          "MeanMs": 168.72805
+        },
+        {
+          "Name": "GPU/other-kernels",
+          "MeanMs": 141.3264323935121
+        },
+        {
+          "Name": "GPU-idle/managed-forward-backward-reduce",
+          "MeanMs": 138.53932075167262
+        },
+        {
+          "Name": "GPU/loss",
+          "MeanMs": 93.70442890829581
+        },
+        {
+          "Name": "GPU-idle/queue-partial-wait",
+          "MeanMs": 86.4697002811453
+        },
+        {
+          "Name": "GPU-idle/managed-replica-sync",
+          "MeanMs": 69.08512035789872
+        },
+        {
+          "Name": "GPU-idle/blocking-transfer-wait",
+          "MeanMs": 31.555370698689963
+        },
+        {
+          "Name": "GPU-idle/profiler-event-collection",
+          "MeanMs": 29.557436864039914
+        },
+        {
+          "Name": "GPU-idle/queue-submit",
+          "MeanMs": 25.430154889241578
+        },
+        {
+          "Name": "GPU/transfer/D2H",
+          "MeanMs": 25.215993297890247
+        },
+        {
+          "Name": "GPU-idle/managed-clip",
+          "MeanMs": 18.11505
+        },
+        {
+          "Name": "GPU/transfer/H2D",
+          "MeanMs": 15.772359780392499
+        },
+        {
+          "Name": "GPU-idle/native-allocation",
+          "MeanMs": 8.378681738868117
+        },
+        {
+          "Name": "GPU-idle/queue-sync-wait",
+          "MeanMs": 5.345751013774752
+        },
+        {
+          "Name": "GPU-idle/native-free",
+          "MeanMs": 5.14675
+        },
+        {
+          "Name": "GPU-idle/managed-zero-grad",
+          "MeanMs": 1.2287
+        },
+        {
+          "Name": "GPU/transfer/D2D",
+          "MeanMs": 0.980036152480185
+        },
+        {
+          "Name": "GPU-idle/allocation-pool",
+          "MeanMs": 0.836496617856337
+        },
+        {
+          "Name": "GPU-idle/benchmark-boundary",
+          "MeanMs": 0.4336978635358811
+        },
+        {
+          "Name": "GPU-idle/release-pool",
+          "MeanMs": 0.347416684376318
+        }
+      ],
+      "Kernels": [
+        {
+          "Name": "forward-backward-reduce/attention_mix8_16_bf16_dkv_packed_slm_uint_2048",
+          "MeanMs": 2098.4455050000065,
+          "Calls": 16384.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_mix8_16_bf16_dpds_k32_d32_2048",
+          "MeanMs": 1342.457316000041,
+          "Calls": 16384.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_mix8_16_bf16_dq_packed_bpair_2048",
+          "MeanMs": 1198.1059659999844,
+          "Calls": 16384.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_mix8_16_bf16_pv_bpair_d32_2048",
+          "MeanMs": 1180.3997259999878,
+          "Calls": 16384.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_probabilities_native_exp_2048",
+          "MeanMs": 981.9537239999994,
+          "Calls": 16384.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_qk_direct_256x32_offset",
+          "MeanMs": 801.7924154999923,
+          "Calls": 32768.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=1536 K=512 offset=0",
+          "MeanMs": 608.3955184999998,
+          "Calls": 512.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_probabilities_saved_native_exp_2048",
+          "MeanMs": 591.413204500004,
+          "Calls": 16384.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=1536 N=512 K=16384 TA=1 TB=0",
+          "MeanMs": 574.2507239999999,
+          "Calls": 512.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=1536 TA=0 TB=0",
+          "MeanMs": 537.5053599999999,
+          "Calls": 512.0
+        },
+        {
+          "Name": "forward-backward-reduce/xmx_storage_pack_a_dual_f32",
+          "MeanMs": 323.8082099999997,
+          "Calls": 1024.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_bfp8_decode_bf16_qk_2048",
+          "MeanMs": 297.76811450000025,
+          "Calls": 512.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=512 N=1536 K=16384 TA=1 TB=0",
+          "MeanMs": 286.92390049999995,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/norm_packed_residual_input",
+          "MeanMs": 275.4007609999993,
+          "Calls": 1024.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=1536 K=512 TA=0 TB=0",
+          "MeanMs": 250.383642,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/linear_relu_grad_pack_a_bias_dual",
+          "MeanMs": 234.45051600000005,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/norm_dx_row_sg16_w64_parallel_residual_parameter_bf16",
+          "MeanMs": 229.32369350000005,
+          "Calls": 512.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=1536 offset=0",
+          "MeanMs": 228.42749900000013,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_8x32_wg16 M=512 N=512 K=11500 TA=0 TB=0",
+          "MeanMs": 164.07841600000046,
+          "Calls": 1536.0
+        },
+        {
+          "Name": "forward-backward-reduce/xmx_storage_pack_b_bfp8",
+          "MeanMs": 158.44196250000007,
+          "Calls": 1288.0
+        },
+        {
+          "Name": "forward-backward-reduce/xmx_storage_pack_b_bf16",
+          "MeanMs": 117.51098800000048,
+          "Calls": 1024.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=512 N=512 K=16384 TA=1 TB=0",
+          "MeanMs": 115.64223849999998,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=512 offset=0",
+          "MeanMs": 110.98280950000012,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/resident_zero",
+          "MeanMs": 106.33821749999952,
+          "Calls": 2213.0
+        },
+        {
+          "Name": "forward-backward-reduce/norm_row_sg16_w64_parallel_bf16",
+          "MeanMs": 100.182846,
+          "Calls": 520.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_mix8_16_row_delta_bf16_2048",
+          "MeanMs": 97.94010449999998,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=512 TA=0 TB=0",
+          "MeanMs": 93.45255300000001,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/xmx_storage_pack_a_linear_vec4_bf16",
+          "MeanMs": 92.45171300000018,
+          "Calls": 1024.0
+        },
+        {
+          "Name": "forward-backward-reduce/xmx_storage_pack_a_linear_vec4_bfp8",
+          "MeanMs": 88.24557050000001,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/gradient_rows_bias_bf16 rows=16384 width=1536 relu=0",
+          "MeanMs": 79.72984550000004,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=11500 N=512 K=512 TA=1 TB=0",
+          "MeanMs": 73.85067250000006,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+          "MeanMs": 70.49661249999997,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/gemm_split_finish",
+          "MeanMs": 65.74190549999972,
+          "Calls": 1024.0
+        },
+        {
+          "Name": "forward-backward-reduce/gradient_rows_bias_bf16 rows=16384 width=512 relu=0",
+          "MeanMs": 56.78754500000006,
+          "Calls": 512.0
+        },
+        {
+          "Name": "forward-backward-reduce/attention_mix8_16_store_raw_bf16_2048",
+          "MeanMs": 48.86286549999994,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/resident_bf16",
+          "MeanMs": 46.747645500000075,
+          "Calls": 272.0
+        },
+        {
+          "Name": "forward-backward-reduce/cross_entropy_gradient",
+          "MeanMs": 35.9609315,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/norm_parameter_4row_partials_256row",
+          "MeanMs": 33.433538999999996,
+          "Calls": 512.0
+        },
+        {
+          "Name": "forward-backward-reduce/cross_entropy_rows",
+          "MeanMs": 30.67629749999999,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/gradient_rows_finish",
+          "MeanMs": 30.285424500000055,
+          "Calls": 1800.0
+        },
+        {
+          "Name": "forward-backward-reduce/gradient_rows_bias_bf16 rows=512 width=11500 relu=0",
+          "MeanMs": 25.23931600000001,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/loss_head_pack_bf16_at",
+          "MeanMs": 23.366191999999995,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/loss_head_unpack_bf16_at",
+          "MeanMs": 21.748220000000003,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/pack_bf16_state",
+          "MeanMs": 14.3986644999997,
+          "Calls": 3112.0
+        },
+        {
+          "Name": "forward-backward-reduce/xmx_storage_pack_b_transpose_bfp8",
+          "MeanMs": 12.001189499999953,
+          "Calls": 1032.0
+        },
+        {
+          "Name": "forward-backward-reduce/unpack_bf16_state",
+          "MeanMs": 11.075144500000127,
+          "Calls": 2723.0
+        },
+        {
+          "Name": "forward-backward-reduce/loss_total",
+          "MeanMs": 5.308756500000004,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/decode_bfp8",
+          "MeanMs": 4.997264000000097,
+          "Calls": 2608.0
+        },
+        {
+          "Name": "forward-backward-reduce/embedding_back",
+          "MeanMs": 3.0574965,
+          "Calls": 8.0
+        },
+        {
+          "Name": "forward-backward-reduce/decode_bf16",
+          "MeanMs": 2.8646774999999995,
+          "Calls": 24.0
+        },
+        {
+          "Name": "forward-backward-reduce/norm_dx_row_sg16_w64_candidate",
+          "MeanMs": 2.4444764999999995,
+          "Calls": 8.0
+        },
+        {
+          "Name": "forward-backward-reduce/gradient_rows rows=16384 width=512 relu=0 norm=1",
+          "MeanMs": 1.578278,
+          "Calls": 8.0
+        },
+        {
+          "Name": "forward-backward-reduce/embedding",
+          "MeanMs": 1.554736,
+          "Calls": 8.0
+        },
+        {
+          "Name": "forward-backward-reduce/dropout",
+          "MeanMs": 1.433798,
+          "Calls": 8.0
+        },
+        {
+          "Name": "forward-backward-reduce/copy_scale",
+          "MeanMs": 1.294944,
+          "Calls": 8.0
+        },
+        {
+          "Name": "forward-backward-reduce/dropout_back",
+          "MeanMs": 1.28484,
+          "Calls": 8.0
+        },
+        {
+          "Name": "forward-backward-reduce/copy_range",
+          "MeanMs": 0.8903720000000028,
+          "Calls": 256.0
+        },
+        {
+          "Name": "forward-backward-reduce/resident_validate_loss",
+          "MeanMs": 0.011403999999999997,
+          "Calls": 8.0
+        }
+      ]
+    }
+  ]
+}

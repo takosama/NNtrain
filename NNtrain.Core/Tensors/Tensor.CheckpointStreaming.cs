@@ -12,10 +12,38 @@ public partial class Tensor
         => new(this);
 
     internal bool RequiresTwoPassBfp8CheckpointRestore
-        => DType == TensorDType.Bfp8 && _masterData is null;
+        => DType == TensorDType.Bfp8 && _masterData is null
+            && _bfloat16MasterData is null;
 
     internal Bfp8CheckpointRestoreWriter BeginBfp8CheckpointRestore()
         => new(this);
+
+    /// <summary>
+    /// Copies a mix8_16 master directly in its physical BF16 representation.
+    /// Checkpoint writers can persist it without an intermediate FP32 copy.
+    /// </summary>
+    internal bool HasBFloat16CheckpointMaster
+        => _arcReplica?.BFloat16Master is not null || _bfloat16MasterData is not null;
+
+    internal void CopyCheckpointBFloat16MasterRangeTo(int sourceOffset, ushort[] destination)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        ArgumentOutOfRangeException.ThrowIfNegative(sourceOffset);
+        if (sourceOffset > Numel - destination.Length)
+            throw new ArgumentOutOfRangeException(nameof(destination));
+        if (_arcReplica is { BFloat16Master: not null } arc)
+        {
+            arc.Lane.CheckNumericStatus();
+            arc.Lane.ReadBFloat16Range(arc.BFloat16Master, sourceOffset, destination);
+            return;
+        }
+        if (_bfloat16MasterData is { } packed)
+        {
+            packed.AsSpan(sourceOffset, destination.Length).CopyTo(destination);
+            return;
+        }
+        throw new InvalidOperationException("The tensor has no physical BF16 checkpoint master.");
+    }
 
     /// <summary>
     /// Copies one checkpoint range without materializing the complete tensor
@@ -37,7 +65,14 @@ public partial class Tensor
         if (_arcReplica is { } arc && (arc.DataDirty || arc.MasterDirty))
         {
             float[] chunk = new float[length];
-            if (preferMaster && arc.Master is not null) arc.Lane.ReadFloatRange(arc.Master, sourceOffset, chunk);
+            if (preferMaster && arc.BFloat16Master is not null)
+            {
+                ushort[] packed = new ushort[length];
+                arc.Lane.ReadBFloat16Range(arc.BFloat16Master, sourceOffset, packed);
+                for (int i = 0; i < length; i++)
+                    chunk[i] = TensorStorageCodec.DecodeBFloat16(packed[i]);
+            }
+            else if (preferMaster && arc.Master is not null) arc.Lane.ReadFloatRange(arc.Master, sourceOffset, chunk);
             else
             {
                 using var values = DecodeArcReplica(arc);
@@ -56,6 +91,12 @@ public partial class Tensor
                 {
                     _masterData.AsSpan(sourceOffset, length)
                         .CopyTo(destination);
+                }
+                else if (preferMaster && _bfloat16MasterData is not null)
+                {
+                    ReadOnlySpan<ushort> packed = _bfloat16MasterData.AsSpan(sourceOffset, length);
+                    for (int index = 0; index < packed.Length; index++)
+                        destination[index] = TensorStorageCodec.DecodeBFloat16(packed[index]);
                 }
                 else
                 {
@@ -309,10 +350,32 @@ public partial class Tensor
                 {
                     values.CopyTo(owner._masterData.AsSpan(_written));
                 }
+                else if (owner._bfloat16MasterData is not null)
+                {
+                    Span<ushort> packed = owner._bfloat16MasterData.AsSpan(_written, values.Length);
+                    for (int index = 0; index < values.Length; index++)
+                        packed[index] = TensorStorageCodec.EncodeBFloat16(values[index]);
+                }
                 else
                 {
                     owner._data.CopyRangeFromFloat32(values, _written);
                 }
+            }
+            _written += values.Length;
+        }
+
+        internal void WriteBFloat16Next(ReadOnlySpan<ushort> values)
+        {
+            Tensor owner = _owner
+                ?? throw new ObjectDisposedException(nameof(CheckpointRestoreWriter));
+            if (values.Length > owner.Numel - _written)
+                throw new InvalidDataException("Checkpoint tensor payload exceeds the parameter shape.");
+
+            lock (owner._deviceSync)
+            {
+                ushort[] packed = owner._bfloat16MasterData
+                    ?? throw new InvalidOperationException("The tensor has no physical BF16 checkpoint master.");
+                values.CopyTo(packed.AsSpan(_written));
             }
             _written += values.Length;
         }
@@ -333,6 +396,8 @@ public partial class Tensor
             {
                 if (owner._masterData is not null)
                     owner._data.CopyFrom(owner._masterData);
+                else if (owner._bfloat16MasterData is not null)
+                    owner.PublishBfp8FromHostBFloat16Master();
                 owner.MarkDataMutated();
             }
             _owner = null;
@@ -351,6 +416,8 @@ public partial class Tensor
             {
                 if (owner._masterData is not null)
                     owner._data.CopyFrom(owner._masterData);
+                else if (owner._bfloat16MasterData is not null)
+                    owner.PublishBfp8FromHostBFloat16Master();
                 owner.MarkDataMutated();
             }
         }

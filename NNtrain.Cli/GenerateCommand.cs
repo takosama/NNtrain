@@ -27,6 +27,13 @@ internal static class GenerateCommand
             Tensor.ExecutionDevice = modelConfiguration.GetExecutionDevice();
             Tensor.CudaDeviceIndices = modelConfiguration.DeviceIndices
                 ?? [modelConfiguration.DeviceIndex];
+            ArcInferenceSettings? arcSettings = Tensor.ExecutionDevice == TensorDevice.Arc
+                ? ArcInferenceRouting.Resolve(modelConfiguration, generation)
+                : null;
+            using IDisposable? arcExecution = arcSettings is null
+                ? null
+                : ArcInferenceRouting.BeginExecution(
+                    arcSettings, modelConfiguration.GetPrecisionMode());
 
             BpeTokenizer tokenizer = tokenizers.load_bpe(tokenizerPath);
             LanguageModel model = WikiLanguageModelCommand.CreateModel(
@@ -36,6 +43,12 @@ internal static class GenerateCommand
                 safetensors.torch.load_file(generation.SafeTensorsPath));
             if (Tensor.ExecutionDevice == TensorDevice.Cuda)
                 model.to(TensorDevice.Cuda);
+            if (arcSettings is not null)
+            {
+                ArcInferenceRouting.ConfigureModel(
+                    model, tokenizer, generation.Prompt,
+                    generation.MaxNewTokens, arcSettings, output);
+            }
 
             int topK = generation.IsGreedy ? 1 : generation.TopK;
             float temperature = generation.IsGreedy
@@ -59,6 +72,8 @@ internal static class GenerateCommand
                 new Random((generation.Seed ?? modelConfiguration.Seed) ^ 0x27D4EB2D),
                 output);
             output.WriteLine();
+            if (arcSettings is not null)
+                ArcInferenceRouting.WritePeakAllocations(output);
             return 0;
         }
         catch (Exception exception) when (
@@ -96,9 +111,8 @@ internal static class GenerateCommand
             output.Flush();
         }
 
-        // ForgetMemory models expose their recurrent token loop through the
-        // callback, preserving O(prompt + generated) inference while streaming.
-        if (model is ForgetMemoryV2Gpt)
+        // Keep the model's recurrent/KV-cache session alive while streaming.
+        if (model is ForgetMemoryV2Gpt or GptRinWikiJp)
         {
             model.generate_token_ids(
                 tokenIds,

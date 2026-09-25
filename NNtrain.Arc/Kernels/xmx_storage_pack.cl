@@ -95,4 +95,25 @@ XMX_STORAGE_PACK_BT(xmx_storage_pack_b_transpose_f32,xmx_storage_read_f32)
 XMX_STORAGE_PACK_BT(xmx_storage_pack_b_transpose_bf16,xmx_storage_read_bf16)
 XMX_STORAGE_PACK_BT(xmx_storage_pack_b_transpose_bfp8,xmx_storage_read_bfp8)
 #undef XMX_STORAGE_PACK_BT
+// FP32 dY consumed by both dX and dW. Read each value once and publish the
+// two distinct A-panel layouts after one BF16 RNE conversion. The padded SLM
+// tile makes both global writes contiguous within their own panel order.
+__attribute__((reqd_work_group_size(256,1,1)))
+__kernel void xmx_storage_pack_a_dual_f32(__global const float* source,
+ __global ushort* normalPanels,__global ushort* transposedPanels,int rows,int cols){
+ int tid=get_local_id(0),rowBase=get_group_id(1)*16,colBase=get_group_id(0)*16;
+ int rr=tid/16,cc=tid%16,row=rowBase+rr,col=colBase+cc;
+ int normalRowGroups=(rows+7)/8,transposedRowGroups=(cols+7)/8;
+ __local ushort values[16][17];
+ ushort value=(ushort)0;
+ if(row<rows&&col<cols)value=xmx_bf16(source[row*cols+col]);
+ values[rr][cc]=value;
+ if(row<normalRowGroups*8)
+  normalPanels[((col/16)*normalRowGroups+row/8)*128+(row%8)*16+col%16]=value;
+ barrier(CLK_LOCAL_MEM_FENCE);
+ int transposedCol=colBase+rr,transposedRow=rowBase+cc;
+ if(transposedCol<transposedRowGroups*8)
+  transposedPanels[((transposedRow/16)*transposedRowGroups+transposedCol/8)*128
+   +(transposedCol%8)*16+transposedRow%16]=values[cc][rr];
+}
 #endif

@@ -1,4 +1,5 @@
 using NNtrain;
+using NNtrain.Runtime.Execution;
 using Xunit;
 
 public sealed class TensorPrecisionModeTests
@@ -36,6 +37,7 @@ public sealed class TensorPrecisionModeTests
     [InlineData("mix16_32", TensorPrecisionMode.Mix16_32, TensorDType.BFloat16)]
     [InlineData("bfp8", TensorPrecisionMode.Bfp8, TensorDType.Bfp8)]
     [InlineData("mix8_32", TensorPrecisionMode.Mix8_32, TensorDType.Bfp8)]
+    [InlineData("mix8_16", TensorPrecisionMode.Mix8_16, TensorDType.Bfp8)]
     public void CanonicalNamesMapToOneStorageContract(
         string name,
         TensorPrecisionMode expectedMode,
@@ -185,6 +187,7 @@ public sealed class TensorPrecisionModeTests
     [InlineData("mix16_32", TensorPrecisionMode.Mix16_32)]
     [InlineData("bfloat16", TensorPrecisionMode.BFloat16)]
     [InlineData("mix8_32", TensorPrecisionMode.Mix8_32)]
+    [InlineData("mix8_16", TensorPrecisionMode.Mix8_16)]
     public void ModuleToAcceptsCanonicalPrecisionStringsAndFpAlias(
         string target,
         TensorPrecisionMode expected)
@@ -213,6 +216,7 @@ public sealed class TensorPrecisionModeTests
     [Theory]
     [InlineData(TensorPrecisionMode.Bfp8)]
     [InlineData(TensorPrecisionMode.Mix8_32)]
+    [InlineData(TensorPrecisionMode.Mix8_16)]
     public void ModuleStateRoundTripsBfp8WithoutChangingItsNumericContract(
         TensorPrecisionMode mode)
     {
@@ -243,6 +247,62 @@ public sealed class TensorPrecisionModeTests
                 mode == TensorPrecisionMode.Bfp8,
                 actual[index].RequiresTwoPassBfp8CheckpointRestore);
         }
+    }
+
+    [Fact]
+    public void Mix8_16HasBlockStorageAndBFloat16RetainedStateContract()
+    {
+        PrecisionPolicy policy = PrecisionPolicy.Parse("mix8_16");
+        Assert.Equal(PrecisionMode.Mix8_16, policy.Mode);
+        Assert.Equal("mix8_16", policy.ToString());
+        Assert.Same(policy, PrecisionPolicy.For(PrecisionMode.Mix8_16));
+        Assert.Equal(NumericFormat.Bfp8, policy.ParameterStorage);
+        Assert.Equal(NumericFormat.Bfp8, policy.ActivationStorage);
+        Assert.Equal(NumericFormat.Bfp8, policy.ElementwiseCompute);
+        Assert.Equal(NumericFormat.Bfp8, policy.MatrixOperand);
+        Assert.Equal(
+            GemmExecutionFormat.Int8 | GemmExecutionFormat.BFloat16,
+            policy.GemmExecutionFormats);
+        Assert.True(policy.PreferInt8WeightGemm);
+        Assert.Equal(
+            NumericFormatSet.Bfp8 | NumericFormatSet.BFloat16,
+            policy.AllowedActivationStorageFormats);
+        Assert.Equal(
+            NumericFormatSet.Bfp8 | NumericFormatSet.BFloat16
+                | NumericFormatSet.Float32,
+            policy.AllowedNonWeightComputeFormats);
+        Assert.Equal(NonWeightSelectionPolicy.FastestAvailable,
+            policy.NonWeightSelection);
+        Assert.True(policy.AllowNonWeightReassociation);
+        Assert.Equal(NumericFormat.Float32, policy.Accumulation);
+        Assert.Equal(NumericFormat.Float32, policy.Reduction);
+        Assert.Equal(NumericFormat.Float32, policy.Normalization);
+        Assert.Equal(NumericFormat.Float32, policy.Loss);
+        Assert.Equal(NumericFormat.BFloat16, policy.Gradient);
+        Assert.Equal(NumericFormat.BFloat16, policy.OptimizerState);
+        Assert.Equal(NumericFormat.BFloat16, policy.MasterWeight);
+
+        PrecisionPolicy mix8_32 = PrecisionPolicy.Mix8_32;
+        Assert.Equal(GemmExecutionFormat.BFloat16,
+            mix8_32.GemmExecutionFormats);
+        Assert.Equal(NumericFormatSet.Bfp8,
+            mix8_32.AllowedActivationStorageFormats);
+        Assert.Equal(NonWeightSelectionPolicy.Fixed,
+            mix8_32.NonWeightSelection);
+        Assert.False(mix8_32.AllowNonWeightReassociation);
+
+        var model = new Linear(16, 4, new Random(47));
+        model.to(TensorPrecisionMode.Mix8_16, bfp8_block_size: 32);
+        Assert.Equal(TensorPrecisionMode.Mix8_16, model.PrecisionMode);
+        Assert.Equal(TensorDType.Bfp8, model.DType);
+        Assert.All(model.parameters(), parameter =>
+        {
+            Assert.Equal(Bfp8ScaleGranularity.Block,
+                parameter.T.Bfp8Quantization!.Granularity);
+            Assert.Equal(32, parameter.T.Bfp8Quantization.BlockSize);
+            Assert.True(parameter.T.HasBFloat16HostMaster);
+            Assert.False(parameter.T.HasFloat32HostMaster);
+        });
     }
 
     private sealed class BFloat16ToleranceComparer : IEqualityComparer<float>

@@ -786,6 +786,7 @@ public sealed class WikiTrainingConfigurationTests
     [InlineData("float32", TensorDType.Float32)]
     [InlineData("bfp8", TensorDType.Bfp8)]
     [InlineData("mix8_32", TensorDType.Bfp8)]
+    [InlineData("mix8_16", TensorDType.Bfp8)]
     public void AllowsTransformerPrecisionModes(
         string configuredMode,
         TensorDType expectedDType)
@@ -795,11 +796,34 @@ public sealed class WikiTrainingConfigurationTests
             ModelArchitecture =
                 WikiTrainingConfiguration.TransformerArchitecture,
             PrecisionMode = configuredMode,
+            Device = configuredMode == "mix8_16"
+                ? WikiTrainingConfiguration.ArcDevice
+                : WikiTrainingConfiguration.CpuDevice,
         };
 
         configuration.Validate();
 
         Assert.Equal(expectedDType, configuration.GetModelDType());
+    }
+
+    [Theory]
+    [InlineData("cpu", "transformer")]
+    [InlineData("cuda", "transformer")]
+    [InlineData("arc", "forgetmemorydrn")]
+    public void Mix8_16RequiresArcTransformer(string device, string architecture)
+    {
+        var configuration = new WikiTrainingConfiguration
+        {
+            Device = device,
+            ModelArchitecture = architecture,
+            PrecisionMode = WikiTrainingConfiguration.Mix8_16PrecisionMode,
+        };
+
+        NotSupportedException failure = Assert.Throws<NotSupportedException>(
+            configuration.Validate);
+        Assert.Contains("mix8_16", failure.Message);
+        Assert.Contains("arc", failure.Message);
+        Assert.Contains("transformer", failure.Message);
     }
 
     [Theory]

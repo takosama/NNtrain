@@ -10,7 +10,11 @@ internal static class AutogradEngine
     [ThreadStatic]
     private static int _releaseGraphDepth;
 
+    [ThreadStatic]
+    private static int _arcBackwardDepth;
+
     internal static bool IsReleasingGraph => _releaseGraphDepth > 0;
+    internal static bool IsArcBackwardTraversal => _arcBackwardDepth > 0;
     // Data-parallel backward runs on thread-pool workers. Thread-static
     // traversal caches permanently stranded one large graph workspace on
     // every worker that happened to execute a shard, so long runs could grow
@@ -65,12 +69,17 @@ internal static class AutogradEngine
         Dictionary<Tensor, int>? remainingLeafConsumers = null;
         bool notifyReducerLeavesAtLastConsumer =
             CudaGradientReductionContext.HasActivePlan;
+        bool packArcLeavesAtLastConsumer = Tensor.ArcPackedBackwardGradients;
+        bool trackLeafConsumers = notifyReducerLeavesAtLastConsumer
+            || packArcLeavesAtLastConsumer;
         Exception? backwardFailure = null;
         List<Exception>? cleanupFailures = releaseGraph ? [] : null;
         CudaBfp8GradientPublicationScope? bfp8PublicationScope = null;
         try
         {
-            if (notifyReducerLeavesAtLastConsumer)
+            if (packArcLeavesAtLastConsumer)
+                _arcBackwardDepth++;
+            if (trackLeafConsumers)
             {
                 remainingLeafConsumers = LeafConsumerPool.Rent(static () =>
                     new Dictionary<Tensor, int>(
@@ -89,17 +98,21 @@ internal static class AutogradEngine
             else output.AccumulateArcCheckpointSeed(arcSeed);
             if (notifyReducerLeavesAtLastConsumer && output.Node.IsLeaf)
                 CudaGradientReductionContext.NotifyLeaf(output);
+            if (packArcLeavesAtLastConsumer && output.Node.IsLeaf)
+                output.PackArcLeafGradientAfterBackward();
 
             for (int index = topologicalOrder.Count - 1; index >= 0; index--)
             {
                 Tensor tensor = topologicalOrder[index];
                 if (Tensor.ExecutionDevice == TensorDevice.Arc) tensor.PrepareArcBackward();
                 tensor.Node.RunBackward();
-                if (notifyReducerLeavesAtLastConsumer)
+                if (trackLeafConsumers)
                 {
                     NotifyLeafParentsAtLastConsumer(
                         tensor.Node.Parents,
-                        remainingLeafConsumers!);
+                        remainingLeafConsumers!,
+                        notifyReducerLeavesAtLastConsumer,
+                        packArcLeavesAtLastConsumer);
                 }
                 else if (tensor.Node.IsLeaf)
                 {
@@ -178,6 +191,8 @@ internal static class AutogradEngine
             }
             if (releaseGraph)
                 _releaseGraphDepth--;
+            if (packArcLeavesAtLastConsumer)
+                _arcBackwardDepth--;
         }
 
         ThrowAfterCleanup(backwardFailure, cleanupFailures);
@@ -276,7 +291,9 @@ internal static class AutogradEngine
 
     private static void NotifyLeafParentsAtLastConsumer(
         IReadOnlyList<Tensor> parents,
-        Dictionary<Tensor, int> remainingLeafConsumers)
+        Dictionary<Tensor, int> remainingLeafConsumers,
+        bool notifyCudaReducer,
+        bool packArcGradient)
     {
         foreach (Tensor parent in parents)
         {
@@ -293,7 +310,10 @@ internal static class AutogradEngine
             if (consumers == 1)
             {
                 remainingLeafConsumers.Remove(parent);
-                CudaGradientReductionContext.NotifyLeaf(parent);
+                if (notifyCudaReducer)
+                    CudaGradientReductionContext.NotifyLeaf(parent);
+                if (packArcGradient)
+                    parent.PackArcLeafGradientAfterBackward();
             }
             else
             {

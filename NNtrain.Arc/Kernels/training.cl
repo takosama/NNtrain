@@ -23,6 +23,9 @@ __kernel void dropout(__global const float* x,__global const float* residual,__g
     int n,uint seed,uint threshold,float scale,int add){int i=get_global_id(0);if(i<n)y[i]=x[i]*mask(seed,i,threshold,scale)+(add?residual[i]:0);}
 __kernel void dropout_back(__global const float* dy,__global float* dx,int n,uint seed,uint threshold,float scale){int i=get_global_id(0);if(i<n)dx[i]+=dy[i]*mask(seed,i,threshold,scale);}
 __kernel void add(__global const float* a,__global const float* b,__global float* y,int n){int i=get_global_id(0);if(i<n)y[i]=a[i]+b[i];}
+__kernel void add_row_bias(__global const float* sums,__global const float* bias,__global float* y,int n,int cols){
+    int i=get_global_id(0);if(i<n)y[i]=sums[i]+bias[i%cols];
+}
 __kernel void norm(__global const float* x,__global const float* gamma,__global const float* beta,
     __global float* y,__global float* stats,int rows,int width,float eps){int r=get_global_id(0);if(r>=rows)return;
     float mean=0;for(int c=0;c<width;c++)mean+=x[r*width+c];mean/=width;
@@ -77,6 +80,25 @@ __kernel void reduce_sum(__global const float* x,__global float* out,int n,int s
     if(l==0)out[get_group_id(0)]=scratch[0];
 }
 float round_bf16(float x){uint bits=as_uint(x);if((bits&0x7f800000u)==0x7f800000u)return x;return as_float((bits+0x7fffu+((bits>>16)&1u))&0xffff0000u);}
+// mix8_16 keeps state as BF16 values in FP32 device buffers. Arithmetic and
+// reductions use FP32, then recurrent state is rounded at its publication edge.
+__kernel void moments_bf16_state(__global const float* g,__global float* fast,__global float* slow,__global float* fh,__global float* sh,int n,float bf,float bs,float fc,float sc,int nesterov){
+    int i=get_global_id(0);if(i>=n)return;
+    float gradient=round_bf16(g[i]);
+    float f=round_bf16(bf*fast[i]+(1-bf)*gradient);
+    float s=round_bf16(bs*slow[i]+(1-bs)*gradient);
+    fast[i]=f;slow[i]=s;
+    fh[i]=round_bf16(f/fc);sh[i]=round_bf16(s/sc);
+    if(nesterov){float direction=round_bf16(bf*f+(1-bf)*gradient);fh[i]=direction;sh[i]=direction;slow[i]=direction;}
+}
+__kernel void adam_bf16_state(__global const float* g,__global float* m,__global float* v,__global float* w,int n,float b1,float b2,float scale,float eps,float decay){
+    int i=get_global_id(0);if(i>=n)return;
+    float gradient=round_bf16(g[i]);
+    float first=round_bf16(b1*m[i]+(1-b1)*gradient);
+    float second=round_bf16(b2*v[i]+(1-b2)*gradient*gradient);
+    m[i]=first;v[i]=second;
+    w[i]=round_bf16(w[i]*decay-scale*first/(sqrt(second)+eps));
+}
 __kernel void gemm_precision(__global const float* a,__global const float* b,__global float* c,int m,int n,int k,int ta,int tb,int bf16){
     int i=get_global_id(0);if(i>=m*n)return;int r=i/n,col=i%n;float s=0;
     for(int j=0;j<k;j++){float av=a[ta?j*m+r:r*k+j],bv=b[tb?col*k+j:j*n+col];s=fma(bf16?round_bf16(av):av,bf16?round_bf16(bv):bv,s);}c[i]=s;

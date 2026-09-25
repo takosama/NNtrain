@@ -116,7 +116,21 @@ internal sealed partial class ArcXmxStorageOperand
         bool longReduction = k >= 4096 && !ta;
         string kernel = longReduction ? "gemm_xmx_streamed_block_8x32_wg16" : "gemm_xmx_streamed_block_16x32_wg16";
         int tileRows = longReduction ? 128 : 256;
-        long gx = ((n + 31L) / 32) * 16, gy = ((m + tileRows - 1L) / tileRows) * 16;
+        int tileColumns = 32;
+        if (lane.Options.ExpandedStreamedXmxTiles && m >= 512 && n >= 512 && k >= 512)
+        {
+            if (ta && !tb && (accumulate || parallel) && bias is null && !relu)
+            {
+                kernel = "gemm_xmx_streamed_block_32x32_wg16";
+                tileRows = 512;
+            }
+            else if (!ta && !longReduction && accumulate && bias is null && !relu && m >= 4096)
+            {
+                kernel = "gemm_xmx_streamed_block_16x64_wg16";
+                tileColumns = 64;
+            }
+        }
+        long gx = ((n + tileColumns - 1L) / tileColumns) * 16, gy = ((m + tileRows - 1L) / tileRows) * 16;
         if (parallel)
         {
             lane.Run3D(kernel, gx, gy, (k + 2047L) / 2048, 16, 16, 1, packedA, packedB, output, packedA,

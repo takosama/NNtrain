@@ -95,7 +95,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
         var status = new int[1]; ReadRaw(_numericStatus, status);
         if (status[0] != 0) throw new ArithmeticException("Arc BFP8 publication encountered non-finite values. The optimizer must not commit this step.");
     }
-    public bool Supports(string feature) => feature is "transformer" or "float32" or "mix16_32" or "mix8_32";
+    public bool Supports(string feature) => feature is "transformer" or "float32" or "mix16_32" or "mix8_32" or "mix8_16";
 
     public ArcExecutionLane(int deviceIndex = 0, ArcExecutionOptions? options = null)
     {
@@ -112,6 +112,8 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
             throw new ArgumentOutOfRangeException(nameof(options), "Streamed weight-gradient workspace must be between 0 and 256 MiB.");
         if (Options.QueuedKernelLimit is < 16 or > 4096) throw new ArgumentOutOfRangeException(nameof(Options.QueuedKernelLimit));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(Options.LossChunkRows);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(Options.LossLogitsWorkspaceMiB);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(Options.LossPanelWorkspaceMiB);
         if (!Enum.IsDefined(Options.XmxGemmMode)) throw new ArgumentOutOfRangeException(nameof(options));
         if (Options.AttentionWorkspaceMiB is < 8 or > 256)
             throw new ArgumentOutOfRangeException(nameof(options), "Attention workspace must be between 8 and 256 MiB.");
@@ -142,6 +144,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
             OpenClNative.Check(error, "create program");
             string buildOptions = "-cl-std=CL1.2 -cl-fp32-correctly-rounded-divide-sqrt";
             if (Options.ExperimentalOptimizationKernels) buildOptions += " -DARC_OPTIMIZATION_PROBES=1";
+            if (Options.Mix8_16Int8Linear) buildOptions += " -DARC_INT8_LINEAR=1";
             if (Device.SupportsXmx && Options.XmxMatrices)
                 buildOptions += $" -DARC_XMX=1 -DARC_SG={Device.MinimumSubgroupSize}";
             if (Device.Extensions.Split(' ').Contains("cl_intel_subgroup_local_block_io"))
@@ -199,9 +202,19 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
         lock (_sync) Transfer(buffer, values, read: true);
     }
 
+    public void WriteRaw(ArcBuffer buffer, Array values)
+    {
+        lock (_sync) Transfer(buffer, values, read: false);
+    }
+
     public void ReadFloatRange(ArcBuffer buffer, int elementOffset, float[] values)
     {
         lock (_sync) Transfer(buffer, values, read: true, checked(elementOffset * 4L));
+    }
+
+    public void ReadBFloat16Range(ArcBuffer buffer, int elementOffset, ushort[] values)
+    {
+        lock (_sync) Transfer(buffer, values, read: true, checked(elementOffset * 2L));
     }
 
     public unsafe void CopyBytes(ArcBuffer source, ArcBuffer target, int sourceOffset, int targetOffset, int bytes)
@@ -717,6 +730,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
         internal ArcExecutionLane Owner { get; }
         internal nint Handle { get => _borrowedFrom is null ? _handle : _borrowDisposed ? 0 : _borrowedFrom.Handle; set => _handle = value; }
         internal long Bytes { get; }
+        public long ByteLength => Bytes;
         public bool IsAlive => Handle != 0;
         internal ArcBuffer(ArcExecutionLane owner, nint handle, long bytes) => (Owner, Handle, Bytes) = (owner, handle, bytes);
         private ArcBuffer(ArcBuffer source) { _borrowedFrom = source; Owner = source.Owner; Bytes = source.Bytes; }

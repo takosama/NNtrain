@@ -4,7 +4,8 @@ public sealed partial class NekoMuon
 {
     private static NekoMuonState CreateInitialState(
         IReadOnlyList<Parameter> parameters,
-        NekoMuonOptions options)
+        NekoMuonOptions options,
+        bool packedArcState)
     {
         NekoMuonParameterState[] parameterStates = parameters
             .Select((parameter, index) =>
@@ -12,8 +13,8 @@ public sealed partial class NekoMuon
                     index,
                     parameter.Name,
                     parameter.T.Shape.ToArray(),
-                    new float[parameter.T.Numel],
-                    new float[parameter.T.Numel],
+                    packedArcState ? [] : new float[parameter.T.Numel],
+                    packedArcState ? [] : new float[parameter.T.Numel],
                     0f))
             .ToArray();
 

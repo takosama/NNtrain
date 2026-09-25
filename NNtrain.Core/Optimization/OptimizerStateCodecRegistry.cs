@@ -10,14 +10,14 @@ internal sealed class OptimizerStateCodec<TOptimizer>
     where TOptimizer : class, IOptimizer
 {
     private readonly Action<TOptimizer, Stream> _loadJson;
-    private readonly Action<TOptimizer, BinaryReader, Stream> _loadBinary;
+    private readonly Action<TOptimizer, BinaryReader, Stream, int> _loadBinary;
     private readonly Action<TOptimizer, Stream> _saveJson;
     private readonly Action<TOptimizer, BinaryWriter, Stream> _saveBinary;
 
     internal OptimizerStateCodec(
         string stateType,
         Action<TOptimizer, Stream> loadJson,
-        Action<TOptimizer, BinaryReader, Stream> loadBinary,
+        Action<TOptimizer, BinaryReader, Stream, int> loadBinary,
         Action<TOptimizer, Stream> saveJson,
         Action<TOptimizer, BinaryWriter, Stream> saveBinary)
     {
@@ -43,8 +43,9 @@ internal sealed class OptimizerStateCodec<TOptimizer>
     public void LoadBinary(
         IOptimizer optimizer,
         BinaryReader reader,
-        Stream stream)
-        => _loadBinary(RequireOptimizer(optimizer), reader, stream);
+        Stream stream,
+        int formatVersion)
+        => _loadBinary(RequireOptimizer(optimizer), reader, stream, formatVersion);
 
     public void SaveJson(IOptimizer optimizer, Stream stream)
         => _saveJson(RequireOptimizer(optimizer), stream);
@@ -74,7 +75,8 @@ internal interface IOptimizerStateCodec
     void LoadBinary(
         IOptimizer optimizer,
         BinaryReader reader,
-        Stream stream);
+        Stream stream,
+        int formatVersion);
 
     void SaveJson(IOptimizer optimizer, Stream stream);
 

@@ -1,3 +1,5 @@
+using NNtrain.Runtime.Execution;
+
 namespace NNtrain;
 
 /// <summary>
@@ -18,8 +20,14 @@ internal readonly record struct ArcTransformerMemoryPlan(
 
     internal static ArcTransformerMemoryPlan Create(
         int batch, int sequence, int width, int heads, int hidden, int layers,
-        TensorDType dtype, int bfp8BlockSize, long parameterElements,
-        long parameterStorageBytes, ulong globalMemoryBytes)
+        TensorDType dtype, PrecisionMode precisionMode, int bfp8BlockSize, long parameterElements,
+        long parameterStorageBytes, long largestParameterElements,
+        long largestBackwardProducerLeafElements,
+        long largestMuonScratchBytes, ulong globalMemoryBytes,
+        bool retainAttentionOutputBFloat16 = false,
+        bool publishBFloat16Activations = false,
+        int fusedBfp8LinearOutputWidthPerLayer = 0,
+        bool fusedBfp8FfnIntermediate = false)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batch);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sequence);
@@ -30,9 +38,27 @@ internal readonly record struct ArcTransformerMemoryPlan(
         ArgumentOutOfRangeException.ThrowIfNegative(bfp8BlockSize);
         ArgumentOutOfRangeException.ThrowIfNegative(parameterElements);
         ArgumentOutOfRangeException.ThrowIfNegative(parameterStorageBytes);
+        ArgumentOutOfRangeException.ThrowIfNegative(largestParameterElements);
+        ArgumentOutOfRangeException.ThrowIfNegative(largestBackwardProducerLeafElements);
+        ArgumentOutOfRangeException.ThrowIfNegative(largestMuonScratchBytes);
+        ArgumentOutOfRangeException.ThrowIfNegative(fusedBfp8LinearOutputWidthPerLayer);
+        if (publishBFloat16Activations && precisionMode != PrecisionMode.Mix8_16)
+            throw new ArgumentException("BF16 activation selection requires mix8_16 precision.",
+                nameof(publishBFloat16Activations));
+        if (fusedBfp8LinearOutputWidthPerLayer > 5L * width + hidden)
+            throw new ArgumentOutOfRangeException(nameof(fusedBfp8LinearOutputWidthPerLayer));
+        if (largestParameterElements > parameterElements)
+            throw new ArgumentException("The largest parameter cannot exceed the total parameter count.",
+                nameof(largestParameterElements));
+        if (largestBackwardProducerLeafElements < largestParameterElements
+            || largestBackwardProducerLeafElements > parameterElements)
+            throw new ArgumentException("The backward producer leaf count must cover the largest parameter and stay within the model.",
+                nameof(largestBackwardProducerLeafElements));
         if (width % heads != 0) throw new ArgumentException("Head count must divide the model width.");
         if (dtype is not (TensorDType.Float32 or TensorDType.BFloat16 or TensorDType.Bfp8))
             throw new NotSupportedException($"Arc checkpoint planning does not support {dtype}.");
+        if (precisionMode == PrecisionMode.Mix8_16 && dtype != TensorDType.Bfp8)
+            throw new ArgumentException("mix8_16 requires BFP8 parameter storage.", nameof(dtype));
 
         checked
         {
@@ -47,11 +73,36 @@ internal readonly record struct ArcTransformerMemoryPlan(
             // QKV(3D), attention(D), projection(D), LN1(D), FFN(H),
             // FC2(D), LN2(D), plus FP32 attention/LN saved statistics.
             long perLayer = activation * 8 + expanded + rows * heads * 8 + rows * 16;
-            long outsideBlocks = activation * 3 + rows * 16; // embeddings/final norm, stats and token/target ids
+            long retainedFfn = expanded, blockBoundary = activation;
+            if (publishBFloat16Activations)
+            {
+                // The direct fused GEMM epilogue still publishes BFP8. Count
+                // its eligible output widths separately; all remaining Arc
+                // operation results use physical two-byte BF16 publication.
+                long totalWidth = 8L * width + hidden;
+                long fusedElements = rows * fusedBfp8LinearOutputWidthPerLayer;
+                perLayer = (rows * totalWidth - fusedElements) * 2
+                    + (fusedElements == 0 ? 0 : Packed(fusedElements))
+                    + rows * heads * 8 + rows * 16;
+                retainedFfn = fusedBfp8FfnIntermediate ? expanded : rows * hidden * 2;
+                blockBoundary = rows * width * 2;
+            }
+            if (retainAttentionOutputBFloat16 && precisionMode == PrecisionMode.Mix8_16
+                && sequence == 2048 && width / heads == 32)
+                perLayer += rows * width * 2;
+            long outsideBlocks = (publishBFloat16Activations ? rows * width * 2 : activation) * 3
+                + rows * 16; // embeddings/final norm, stats and token/target ids
             long uncheckpointed = perLayer * layers + outsideBlocks;
-            // Master, gradient, and two moments are FP32 even with packed
-            // weights. This is stable across warmup and accumulation steps.
-            long persistent = parameterStorageBytes + parameterElements * 16;
+            // mix8_16 retains BF16 master/gradient/two moments (8 B/element).
+            // Backward packs leaves after each producer, which can write
+            // two leaf gradients together. Muon keeps four FP32 direction
+            // buffers and three Gram matrices for its current parameter.
+            // Reserve the larger peak, not one FP32 gradient for every leaf.
+            // Other Arc modes retain four FP32 buffers (16 B/element).
+            long persistent = precisionMode == PrecisionMode.Mix8_16
+                ? parameterStorageBytes + parameterElements * 8
+                    + Math.Max(largestBackwardProducerLeafElements * 4, largestMuonScratchBytes)
+                : parameterStorageBytes + parameterElements * 16;
             // Two wide FP32 work buffers and two width-sized gradients, plus
             // bounded attention/GEMM workspace and driver/allocator headroom.
             long working = 768L * 1024 * 1024 + rows * (Math.Max(3L * width, hidden) + width) * 8;
@@ -64,8 +115,8 @@ internal readonly record struct ArcTransformerMemoryPlan(
             // FFN recomputation removes the largest individual activation at
             // much lower compute cost than replaying attention. Add only the
             // minimum prefix of full blocks needed after that first saving.
-            long ffnOnly = uncheckpointed - expanded * layers;
-            long additionalSavingPerFullBlock = perLayer - expanded - activation;
+            long ffnOnly = uncheckpointed - retainedFfn * layers;
+            long additionalSavingPerFullBlock = perLayer - retainedFfn - blockBoundary;
             long shortage = Math.Max(0, ffnOnly - budget);
             int prefix = (int)Math.Min(layers,
                 (shortage + additionalSavingPerFullBlock - 1) / additionalSavingPerFullBlock);

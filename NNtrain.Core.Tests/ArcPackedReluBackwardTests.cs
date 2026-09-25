@@ -21,7 +21,13 @@ public sealed class ArcPackedReluBackwardTests
         const int ni = 65, no = 129;
         float[][] Run(bool enabled)
         {
-            using var execution = Tensor.BeginArcExecution(precision: precision, options: new() { PackedReluBackward = enabled, ParallelReductions = parallel, XmxMatrices = xmx });
+            // Keep this legacy-path comparison independent of the separately
+            // tested fused panel/bias implementation, which replaces the
+            // linear_relu_grad_packed kernel selected below.
+            using var execution = Tensor.BeginArcExecution(precision: precision, options: new() {
+                PackedReluBackward = enabled, FusedPackedReluBackward = false,
+                FusedReluPackBias = false, ParallelReductions = parallel,
+                XmxMatrices = xmx });
             Tensor Make(int[] shape, int seed)
             {
                 var t = new Tensor(Enumerable.Range(0, shape.Aggregate(1, (a, b) => a * b)).Select(i => MathF.Sin(i * .031f + seed) * .037f).ToArray(), shape);

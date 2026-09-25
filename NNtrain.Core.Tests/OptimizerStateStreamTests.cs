@@ -2,10 +2,114 @@ using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json.Nodes;
 using NNtrain;
+using NNtrain.Runtime.Execution;
 using Xunit;
 
 public sealed class OptimizerStateStreamTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Mix8_16BinaryMomentsUseTwoBytesAndRestore(bool muon)
+    {
+        const int length = 64;
+        var first = Enumerable.Range(0, length).Select(i => (i - 31) * 0.125f).ToArray();
+        var second = Enumerable.Range(0, length).Select(i => (i + 1) * 0.0625f).ToArray();
+        using var precision = TensorExecutionContext.PushPrecisionPolicy(PrecisionPolicy.Mix8_16);
+        IOptimizer source;
+        IOptimizer target;
+        if (muon)
+        {
+            var optimizer = new NekoMuon([CreateParameter("packed", [8, 8])]);
+            NekoMuonState state = optimizer.CaptureState();
+            first.CopyTo(state.ParameterStates[0].FastMoment, 0);
+            second.CopyTo(state.ParameterStates[0].SlowMoment, 0);
+            optimizer.RestoreState(state);
+            source = optimizer;
+            target = new NekoMuon([CreateParameter("packed", [8, 8])]);
+        }
+        else
+        {
+            var optimizer = new AdamW([CreateParameter("packed", [length])]);
+            AdamWState state = optimizer.CaptureState();
+            first.CopyTo(state.ParameterStates[0].FirstMoment, 0);
+            second.CopyTo(state.ParameterStates[0].SecondMoment, 0);
+            optimizer.RestoreState(state);
+            source = optimizer;
+            target = new AdamW([CreateParameter("packed", [length])]);
+        }
+
+        using var binary = new MemoryStream();
+        if (muon)
+        {
+            var packed = (NekoMuon)source;
+            Assert.Empty(packed.GetPackedStreamingState().ParameterStates[0].FastMoment);
+            Assert.Equal(length, packed.GetStreamingPackedMoments(0).Fast.Length);
+        }
+        else
+        {
+            var packed = (AdamW)source;
+            Assert.Empty(packed.GetStreamingParameterState(0).FirstMoment);
+            Assert.Equal(length, packed.GetStreamingPackedMoments(0).First.Length);
+        }
+        OptimizerStateStream.SaveStateBinary(source, binary);
+        byte[] payload = binary.ToArray();
+        Assert.Equal(2, BitConverter.ToInt32(payload, 8));
+        binary.Position = 0;
+        OptimizerStateStream.LoadStateBinary(target, binary);
+        Assert.Equal(source.state_dict().StateJsonText, target.state_dict().StateJsonText);
+
+        // The version-1 file has identical metadata and two FP32 moments.
+        // Version 2 physically removes two bytes per moment element.
+        using var ordinary = TensorExecutionContext.PushPrecisionPolicy(PrecisionPolicy.Mix8_32);
+        IOptimizer floatOptimizer = muon
+            ? new NekoMuon([CreateParameter("packed", [8, 8])])
+            : new AdamW([CreateParameter("packed", [length])]);
+        if (muon)
+            ((NekoMuon)floatOptimizer).RestoreState(((NekoMuon)source).CaptureState());
+        else
+            ((AdamW)floatOptimizer).RestoreState(((AdamW)source).CaptureState());
+        using var floatBinary = new MemoryStream();
+        OptimizerStateStream.SaveStateBinary(floatOptimizer, floatBinary);
+        Assert.Equal(1, BitConverter.ToInt32(floatBinary.ToArray(), 8));
+        Assert.Equal(length * 2 * sizeof(ushort), floatBinary.Length - binary.Length);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Mix8_16ReadsVersionOneOptimizerMoments(bool muon)
+    {
+        IOptimizer legacy = muon
+            ? new NekoMuon([CreateParameter("legacy", [2, 2])])
+            : new AdamW([CreateParameter("legacy", [4])]);
+        if (muon)
+        {
+            NekoMuonState state = ((NekoMuon)legacy).CaptureState();
+            state.ParameterStates[0].FastMoment[0] = 0.125f;
+            state.ParameterStates[0].SlowMoment[0] = 0.25f;
+            ((NekoMuon)legacy).RestoreState(state);
+        }
+        else
+        {
+            AdamWState state = ((AdamW)legacy).CaptureState();
+            state.ParameterStates[0].FirstMoment[0] = 0.125f;
+            state.ParameterStates[0].SecondMoment[0] = 0.25f;
+            ((AdamW)legacy).RestoreState(state);
+        }
+        using var oldBinary = new MemoryStream();
+        OptimizerStateStream.SaveStateBinary(legacy, oldBinary);
+        Assert.Equal(1, BitConverter.ToInt32(oldBinary.ToArray(), 8));
+
+        using var precision = TensorExecutionContext.PushPrecisionPolicy(PrecisionPolicy.Mix8_16);
+        IOptimizer restored = muon
+            ? new NekoMuon([CreateParameter("legacy", [2, 2])])
+            : new AdamW([CreateParameter("legacy", [4])]);
+        oldBinary.Position = 0;
+        OptimizerStateStream.LoadStateBinary(restored, oldBinary);
+        Assert.Equal(legacy.state_dict().StateJsonText, restored.state_dict().StateJsonText);
+    }
+
     [Fact]
     public void BinaryRoundTripPreservesEverySupportedOptimizerExactly()
     {

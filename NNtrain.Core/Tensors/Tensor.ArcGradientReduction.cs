@@ -6,7 +6,9 @@ partial class Tensor
 {
     private static bool ArcUsesMixedMatrixOperands => ArcLane.Options.MixedBackwardMatrixOperands
         && TensorExecutionContext.ActivePrecisionPolicy?.Mode is
-            NNtrain.Runtime.Execution.PrecisionMode.Mix16_32 or NNtrain.Runtime.Execution.PrecisionMode.Mix8_32;
+            NNtrain.Runtime.Execution.PrecisionMode.Mix16_32
+                or NNtrain.Runtime.Execution.PrecisionMode.Mix8_32
+                or NNtrain.Runtime.Execution.PrecisionMode.Mix8_16;
 
     private static ArcBuffer ArcEncodeMatrixGradient(ArcBuffer source, ArcBuffer? gate, int length, bool mixed)
     {
@@ -27,8 +29,16 @@ partial class Tensor
         }
         int groups = (rows + 255) / 256;
         using var partials = lane.Allocate(checked(groups * width));
-        lane.Run2D("gradient_rows", ((width + 31L) / 32) * 32, groups * 8L, 32, 8,
-            dy, gate ?? dy, dy, partials, rows, width, gate is null ? 0 : 1, roundBf16 ? 2 : 0);
+        bool biasOnlyBf16 = roundBf16 && lane.Options.Mix8_16BiasOnlyGradientReduction
+            && TensorExecutionContext.ActivePrecisionPolicy?.Mode ==
+                NNtrain.Runtime.Execution.PrecisionMode.Mix8_16;
+        if (biasOnlyBf16)
+            lane.Run2D("gradient_rows_bias_bf16", ((width + 31L) / 32) * 32,
+                groups * 8L, 32, 8, dy, gate ?? dy, partials, rows, width,
+                gate is null ? 0 : 1);
+        else
+            lane.Run2D("gradient_rows", ((width + 31L) / 32) * 32, groups * 8L, 32, 8,
+                dy, gate ?? dy, dy, partials, rows, width, gate is null ? 0 : 1, roundBf16 ? 2 : 0);
         lane.Run("gradient_rows_finish", width, 0, partials, db, db, groups, width, 0);
     }
 

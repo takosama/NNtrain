@@ -84,6 +84,11 @@ public partial class Tensor
         get => _value.Storage.MasterData;
         set => _value.Storage.MasterData = value;
     }
+    private ushort[]? _bfloat16MasterData
+    {
+        get => _value.Storage.BFloat16MasterData;
+        set => _value.Storage.BFloat16MasterData = value;
+    }
     private float[]? _physicalFloat32Cache
     {
         get => _value.Storage.PhysicalFloat32Cache;
@@ -224,6 +229,7 @@ public partial class Tensor
             {
                 return _grad.Length != 0
                     || _arcReplica?.Gradient is not null
+                    || _arcReplica?.BFloat16Gradient is not null
                     || _cudaGradientBuffers.Count != 0
                     || _cudaBFloat16GradientBuffers.Count != 0
                     || _cudaBfp8GradientBuffers.Count != 0;
@@ -557,7 +563,9 @@ public partial class Tensor
             SynchronizeHostGradientFromCudaLocked();
             float[] authoritative = _masterData is not null
                 ? (float[])_masterData.Clone()
-                : _data.ToFloat32Array();
+                : _bfloat16MasterData is not null
+                    ? DecodeHostBFloat16Master()
+                    : _data.ToFloat32Array();
 
             // Monitor locks are reentrant. Keeping invalidation inside the
             // same critical section closes the race with a concurrent Ensure
@@ -570,6 +578,7 @@ public partial class Tensor
             _masterData = dtype != TensorDType.Float32 && retainMaster
                 ? authoritative
                 : null;
+            _bfloat16MasterData = null;
             _physicalFloat32Cache = null;
             _physicalFloat32CacheDataVersion = -1;
             _transposedDataCache = null;
@@ -610,6 +619,7 @@ public partial class Tensor
             _masterData = preserveFloat32Master
                 ? values.ToArray()
                 : null;
+            _bfloat16MasterData = null;
             CudaResidentArrayCache.Invalidate(_physicalFloat32Cache);
             _physicalFloat32Cache = null;
             _physicalFloat32CacheDataVersion = -1;
@@ -695,9 +705,16 @@ public partial class Tensor
 
     internal float[] DataBuffer
     {
-        get { SynchronizeArcHostData(); return DType == TensorDType.Float32
-            ? _data.GetMutableFloat32Buffer()
-            : _masterData ??= _data.ToFloat32Array(); }
+        get
+        {
+            SynchronizeArcHostData();
+            if (DType == TensorDType.Float32) return _data.GetMutableFloat32Buffer();
+            if (_bfloat16MasterData is not null)
+                throw new InvalidOperationException(
+                    "A mix8_16 BF16 master cannot be exposed as a persistent FP32 data buffer. " +
+                    "Use CaptureData for read-only access.");
+            return _masterData ??= _data.ToFloat32Array();
+        }
     }
 
     internal int StorageByteLength => _data.ByteLength;
@@ -707,7 +724,8 @@ public partial class Tensor
         get
         {
             lock (_deviceSync)
-                return _masterData is not null || _cudaMasterBuffers.Count != 0;
+                return _masterData is not null || _bfloat16MasterData is not null
+                    || _cudaMasterBuffers.Count != 0;
         }
     }
 
@@ -719,15 +737,19 @@ public partial class Tensor
         bool pureBfp8 = DType == TensorDType.Bfp8
             && Bfp8Quantization?.Granularity == Bfp8ScaleGranularity.Tensor;
         if (DType != TensorDType.Float32 && !pureBfp8)
-            _masterData ??= _data.ToFloat32Array();
+            if (_bfloat16MasterData is null)
+                _masterData ??= _data.ToFloat32Array();
     }
 
     internal float[] CaptureData(bool preferMaster)
     {
         EnsureHostDataCurrent();
-        return preferMaster && _masterData is not null
-            ? (float[])_masterData.Clone()
-            : _data.ToFloat32Array();
+        if (preferMaster)
+        {
+            if (_masterData is not null) return (float[])_masterData.Clone();
+            if (_bfloat16MasterData is not null) return DecodeHostBFloat16Master();
+        }
+        return _data.ToFloat32Array();
     }
 
     /// <summary>
@@ -768,7 +790,12 @@ public partial class Tensor
     internal void SynchronizeStorageFromMaster()
     {
         if (_masterData is not null)
+        {
             _data.CopyFrom(_masterData);
+            _bfloat16MasterData = null;
+        }
+        else if (_bfloat16MasterData is not null)
+            _data.CopyFrom(DecodeHostBFloat16Master());
         MarkDataMutated();
     }
 

@@ -135,7 +135,7 @@ internal sealed partial class ArcXmxStorageOperand : IDisposable
     /// </summary>
     internal static void GemmPanels(ArcExecutionLane lane, ArcBuffer packedA, ArcBuffer packedB,
         ArcBuffer output, int m, int n, int k, bool ta = false, bool tb = false, bool accumulate = false,
-        ArcBuffer? bias = null, bool relu = false)
+        ArcBuffer? bias = null, bool relu = false, bool roundBf16Output = false)
     {
         if (!CanRun(lane, m, n, k)) throw new ArgumentException("Packed GEMM shape or backend is unsupported.");
         var (kernel, tileRows, tileColumns, localRows) = SelectPanelTile(lane.Options.ExpandedXmxTiles, m, n, k, ta, tb, accumulate);
@@ -153,7 +153,8 @@ internal sealed partial class ArcXmxStorageOperand : IDisposable
         for (int start = 0; start < k; start += 2048)
             lane.Run2D(kernel, gx, gy, 16, localRows, packedA, packedB, output, bias ?? packedA, packedA,
                 m, n, k, ta ? 1 : 0, tb ? 1 : 0, 3, accumulate || start != 0 ? 1 : 0,
-                bias is not null && start == 0 ? 1 : 0, relu && start + 2048 >= k ? 1 : 0,
+                bias is not null && start == 0 ? 1 : 0,
+                start + 2048 >= k ? (roundBf16Output ? 2 : relu ? 1 : 0) : 0,
                 0, start, Math.Min(2048, k - start));
     }
 

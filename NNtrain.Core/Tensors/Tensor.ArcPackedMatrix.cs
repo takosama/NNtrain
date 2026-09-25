@@ -1,4 +1,5 @@
 using static NNtrain.Arc.ArcExecutionLane;
+using NNtrain.Runtime.Execution;
 
 namespace NNtrain;
 
@@ -29,7 +30,8 @@ partial class Tensor
         return ArcXmxStorageOperand.TryGemm(ArcLane, a, b, output, m, n, k, tb: true, bias: bias, relu: relu);
     }
 
-    private bool TryArcPackedLinearBackward(Tensor weight, ArcBuffer dy, ArcBuffer dx, ArcBuffer dw, ArcBuffer? gate)
+    private bool TryArcPackedLinearBackward(Tensor weight, ArcBuffer dy, ArcBuffer dx, ArcBuffer dw,
+        ArcBuffer? gate, bool relu)
     {
         int k = _shape[^1], m = Numel / k, n = weight._shape[0];
         var lane = ArcLane;
@@ -38,6 +40,22 @@ partial class Tensor
         using var gradient = new ArcXmxStorageOperand(lane, dy, null, TensorDType.Float32, checked(m * n));
         using var a = ArcMatrixOperand();
         using var b = weight.ArcMatrixOperand(cacheWeightPanels: true);
+        if (!relu && gate is null && lane.Options.Mix8_16LinearDualGradientPack
+            && TensorExecutionContext.ActivePrecisionPolicy?.Mode == PrecisionMode.Mix8_16
+            && ArcXmxStorageOperand.CanRun(lane, m, k, n)
+            && ArcXmxStorageOperand.CanRun(lane, n, k, m))
+        {
+            var dual = ArcXmxStorageOperand.PackDualGradientA(lane, dy, m, n);
+            using var normalGradient = dual.Normal;
+            using var transposedGradient = dual.Transposed;
+            using (var packedWeight = b.PackB(k, n, false))
+                ArcXmxStorageOperand.GemmPanels(lane, normalGradient, packedWeight,
+                    dx, m, k, n, accumulate: true);
+            using (var packedInput = a.PackB(k, m, false))
+                ArcXmxStorageOperand.GemmPanels(lane, transposedGradient, packedInput,
+                    dw, n, k, m, ta: true, accumulate: true);
+            return true;
+        }
         ArcXmxStorageOperand.TryGemm(lane, gradient, b, dx, m, k, n, accumulate: true, gate: gate, gateOperand: gate is null ? 0 : 1);
         ArcXmxStorageOperand.TryGemm(lane, gradient, a, dw, n, k, m, ta: true, accumulate: true, gate: gate, gateOperand: gate is null ? 0 : 1);
         return true;

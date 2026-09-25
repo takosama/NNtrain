@@ -1,0 +1,4758 @@
+{
+  "Source": "C:\\Users\\takos\\source\\repos\\NNtrain\\benchmark-results\\arc-nonattention-final-profile-20260923.json",
+  "ConfigurationSha256": "E876C55B7BFBE4F0BA5054D0A86070E525C776257E8C260A976A8F4305C1A50C",
+  "BinarySha256": {
+    "NNtrain.Core": "1FD30181B8AF9CD4F02291307D043DC8FFC3EF3661D8978FF993FDA2918E2CD2",
+    "NNtrain.Arc": "57FA09500E459DD01A1C9CDD75CA941E2769B1039282130BB523D2FEC9928C93",
+    "NNtrain.Benchmarks": "B800309DA61B6D5F2AA2F82CAE6709B1B1C67190C3161843BDA9986DA430F4BB"
+  },
+  "Shape": {
+    "BatchSize": 16,
+    "GradientAccumulationSteps": 8,
+    "ContextLength": 2048,
+    "ModelWidth": 512,
+    "Heads": 16,
+    "HiddenSize": 1536,
+    "Layers": 32,
+    "VocabularySize": 11500,
+    "Dropout": 0.1,
+    "TieWordEmbeddings": true
+  },
+  "Precision": {
+    "Mode": "mix8_16",
+    "Bfp8BlockSize": 32
+  },
+  "Samples": 2,
+  "StepP50Ms": 15231.2304,
+  "TokensPerSecond": 17210.953620660875,
+  "Lanes": [
+    {
+      "DeviceIndex": 0,
+      "MeanWallMs": 15231.2304,
+      "AttentionKernelMs": 9199.262073000007,
+      "NonAttentionKernelMs": 5495.814353499999,
+      "ExclusiveWallCategories": [
+        {
+          "Name": "GPU/attention",
+          "MeanMs": 9199.637036043408
+        },
+        {
+          "Name": "GPU/GEMM",
+          "MeanMs": 3244.62675800724
+        },
+        {
+          "Name": "GPU/pack-decode-publication",
+          "MeanMs": 1128.1996561915753
+        },
+        {
+          "Name": "GPU/normalization-reduction",
+          "MeanMs": 865.6390680380171
+        },
+        {
+          "Name": "GPU/other-kernels",
+          "MeanMs": 163.86758788752888
+        },
+        {
+          "Name": "GPU-idle/profiler-event-collection",
+          "MeanMs": 100.24307908246212
+        },
+        {
+          "Name": "GPU-idle/queue-partial-wait",
+          "MeanMs": 97.43416296205879
+        },
+        {
+          "Name": "GPU/loss",
+          "MeanMs": 92.25105832223844
+        },
+        {
+          "Name": "GPU-idle/managed-forward-backward-reduce",
+          "MeanMs": 72.76975705280705
+        },
+        {
+          "Name": "GPU/transfer/H2D",
+          "MeanMs": 59.854163027301254
+        },
+        {
+          "Name": "GPU-idle/queue-submit",
+          "MeanMs": 50.543971860754354
+        },
+        {
+          "Name": "GPU/transfer/D2H",
+          "MeanMs": 41.450173935937826
+        },
+        {
+          "Name": "GPU-idle/blocking-transfer-wait",
+          "MeanMs": 40.79908079055642
+        },
+        {
+          "Name": "GPU-idle/managed-replica-sync",
+          "MeanMs": 33.845373101814275
+        },
+        {
+          "Name": "GPU-idle/native-allocation",
+          "MeanMs": 14.32932356143561
+        },
+        {
+          "Name": "GPU-idle/native-free",
+          "MeanMs": 7.4208
+        },
+        {
+          "Name": "GPU-idle/queue-sync-wait",
+          "MeanMs": 5.2663622327487465
+        },
+        {
+          "Name": "GPU-idle/managed-optimizer",
+          "MeanMs": 4.843817970814705
+        },
+        {
+          "Name": "GPU-idle/allocation-pool",
+          "MeanMs": 3.910974044463562
+        },
+        {
+          "Name": "GPU/transfer/D2D",
+          "MeanMs": 1.2488919033966064
+        },
+        {
+          "Name": "GPU-idle/managed-zero-grad",
+          "MeanMs": 0.9978500000000001
+        },
+        {
+          "Name": "GPU-idle/release-pool",
+          "MeanMs": 0.8864814256798681
+        },
+        {
+          "Name": "GPU-idle/managed-clip",
+          "MeanMs": 0.835472557762146
+        },
+        {
+          "Name": "GPU-idle/benchmark-boundary",
+          "MeanMs": 0.2817
+        }
+      ],
+      "NonAttentionKernels": [
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=1536 K=512 offset=0",
+          "MeanMs": 608.6684280000002,
+          "MeanCalls": 512.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=1536 N=512 K=16384 TA=1 TB=0",
+          "MeanMs": 573.3400495000005,
+          "MeanCalls": 512.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=1536 TA=0 TB=0",
+          "MeanMs": 537.620409,
+          "MeanCalls": 512.0
+        },
+        {
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_dual_f32",
+          "MeanMs": 324.47748500000006,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=512 N=1536 K=16384 TA=1 TB=0",
+          "MeanMs": 286.92160399999995,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/norm_packed_residual_input",
+          "MeanMs": 275.78983949999946,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=1536 K=512 TA=0 TB=0",
+          "MeanMs": 251.08687599999993,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/linear_relu_grad_pack_a_bias_dual",
+          "MeanMs": 234.54863899999998,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=1536 offset=0",
+          "MeanMs": 228.01093550000016,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/norm_dx_row_sg16_w64_parallel_residual_bf16",
+          "MeanMs": 179.0840564999998,
+          "MeanCalls": 512.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_8x32_wg16 M=512 N=512 K=11500 TA=0 TB=0",
+          "MeanMs": 163.28389900000053,
+          "MeanCalls": 1536.0
+        },
+        {
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_bfp8",
+          "MeanMs": 158.48152850000002,
+          "MeanCalls": 1288.0
+        },
+        {
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_bf16",
+          "MeanMs": 117.54807150000036,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=512 N=512 K=16384 TA=1 TB=0",
+          "MeanMs": 115.49625149999997,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=512 offset=0",
+          "MeanMs": 111.01884950000003,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gradient_rows rows=16384 width=512 relu=0 norm=1",
+          "MeanMs": 106.79311200000006,
+          "MeanCalls": 520.0
+        },
+        {
+          "Detail": "forward-backward-reduce/resident_zero",
+          "MeanMs": 106.39677099999943,
+          "MeanCalls": 2213.0
+        },
+        {
+          "Detail": "forward-backward-reduce/norm_row_sg16_w64_parallel_bf16",
+          "MeanMs": 100.55660450000006,
+          "MeanCalls": 520.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=512 TA=0 TB=0",
+          "MeanMs": 93.38911799999998,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_linear_vec4_bf16",
+          "MeanMs": 92.39988250000013,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_linear_vec4_bfp8",
+          "MeanMs": 88.29530949999995,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=16384 width=1536 relu=0",
+          "MeanMs": 79.73999800000007,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=11500 N=512 K=512 TA=1 TB=0",
+          "MeanMs": 74.0791615,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+          "MeanMs": 69.20983849999999,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_split_finish",
+          "MeanMs": 65.72306049999978,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=16384 width=512 relu=0",
+          "MeanMs": 56.75922100000006,
+          "MeanCalls": 512.0
+        },
+        {
+          "Detail": "forward-backward-reduce/resident_bf16",
+          "MeanMs": 46.872590500000044,
+          "MeanCalls": 272.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gradient_rows_finish",
+          "MeanMs": 39.27038800000027,
+          "MeanCalls": 1800.0
+        },
+        {
+          "Detail": "forward-backward-reduce/cross_entropy_gradient",
+          "MeanMs": 35.429580999999985,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/cross_entropy_rows",
+          "MeanMs": 29.834529999999994,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=1536 TA=0 TB=1",
+          "MeanMs": 26.32145650000004,
+          "MeanCalls": 480.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=512 width=11500 relu=0",
+          "MeanMs": 25.168486500000036,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/loss_head_pack_bf16_at",
+          "MeanMs": 23.39739149999999,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/loss_head_unpack_bf16_at",
+          "MeanMs": 21.680305999999995,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=1536 K=512 TA=0 TB=0",
+          "MeanMs": 19.875410999999982,
+          "MeanCalls": 480.0
+        },
+        {
+          "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=1",
+          "MeanMs": 17.04294600000009,
+          "MeanCalls": 800.0
+        },
+        {
+          "Detail": "forward-backward-reduce/pack_bf16_state",
+          "MeanMs": 16.10930049999954,
+          "MeanCalls": 3501.0
+        },
+        {
+          "Detail": "forward-backward-reduce/unpack_bf16_state",
+          "MeanMs": 12.612800000000085,
+          "MeanCalls": 3112.0
+        },
+        {
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_transpose_bfp8",
+          "MeanMs": 11.998836999999947,
+          "MeanCalls": 1032.0
+        },
+        {
+          "Detail": "optimizer/xmx_storage_pack_a_linear_vec4_f32",
+          "MeanMs": 6.762063500000006,
+          "MeanCalls": 1920.0
+        },
+        {
+          "Detail": "optimizer/xmx_pack_tune_b_transpose",
+          "MeanMs": 6.634594999999933,
+          "MeanCalls": 1280.0
+        },
+        {
+          "Detail": "optimizer/xmx_next_pack_b",
+          "MeanMs": 5.628060000000001,
+          "MeanCalls": 640.0
+        },
+        {
+          "Detail": "forward-backward-reduce/loss_total",
+          "MeanMs": 5.2914254999999955,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/decode_bfp8",
+          "MeanMs": 5.011416000000093,
+          "MeanCalls": 2608.0
+        },
+        {
+          "Detail": "optimizer/transpose_scale",
+          "MeanMs": 4.24746,
+          "MeanCalls": 192.0
+        },
+        {
+          "Detail": "optimizer/moments_bf16_packed",
+          "MeanMs": 3.4670795000000005,
+          "MeanCalls": 128.0
+        },
+        {
+          "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=0",
+          "MeanMs": 3.4062205000000096,
+          "MeanCalls": 160.0
+        },
+        {
+          "Detail": "optimizer/resident_bfp8_from_bf16_quad4_32",
+          "MeanMs": 3.2344274999999936,
+          "MeanCalls": 389.0
+        },
+        {
+          "Detail": "clip/reduce_sum_bf16",
+          "MeanMs": 3.2016084999999928,
+          "MeanCalls": 389.0
+        },
+        {
+          "Detail": "forward-backward-reduce/embedding_back",
+          "MeanMs": 3.063122,
+          "MeanCalls": 8.0
+        },
+        {
+          "Detail": "forward-backward-reduce/decode_bf16",
+          "MeanMs": 2.8633764999999993,
+          "MeanCalls": 24.0
+        },
+        {
+          "Detail": "optimizer/reduce_sum",
+          "MeanMs": 2.503596,
+          "MeanCalls": 384.0
+        },
+        {
+          "Detail": "forward-backward-reduce/norm_dx_row_sg16_w64_candidate",
+          "MeanMs": 2.4420804999999994,
+          "MeanCalls": 8.0
+        },
+        {
+          "Detail": "optimizer/ns_coefficient",
+          "MeanMs": 2.1988300000000027,
+          "MeanCalls": 640.0
+        },
+        {
+          "Detail": "forward-backward-reduce/embedding",
+          "MeanMs": 1.553538,
+          "MeanCalls": 8.0
+        },
+        {
+          "Detail": "replica-sync/resident_finite_bf16",
+          "MeanMs": 1.4515674999999986,
+          "MeanCalls": 389.0
+        },
+        {
+          "Detail": "forward-backward-reduce/dropout",
+          "MeanMs": 1.428277,
+          "MeanCalls": 8.0
+        },
+        {
+          "Detail": "forward-backward-reduce/copy_scale",
+          "MeanMs": 1.293175,
+          "MeanCalls": 8.0
+        },
+        {
+          "Detail": "forward-backward-reduce/dropout_back",
+          "MeanMs": 1.281924,
+          "MeanCalls": 8.0
+        },
+        {
+          "Detail": "optimizer/muon_weight_update_bf16_packed",
+          "MeanMs": 1.2815099999999995,
+          "MeanCalls": 128.0
+        },
+        {
+          "Detail": "forward-backward-reduce/add_bf16_state_to_float",
+          "MeanMs": 0.897950999999997,
+          "MeanCalls": 389.0
+        },
+        {
+          "Detail": "forward-backward-reduce/copy_range",
+          "MeanMs": 0.8819270000000028,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "optimizer/adam_bf16_packed",
+          "MeanMs": 0.811284000000001,
+          "MeanCalls": 261.0
+        },
+        {
+          "Detail": "clip/reduce_sum",
+          "MeanMs": 0.6287244999999952,
+          "MeanCalls": 521.0
+        },
+        {
+          "Detail": "forward-backward-reduce/resident_validate_loss",
+          "MeanMs": 0.011455999999999997,
+          "MeanCalls": 8.0
+        },
+        {
+          "Detail": "replica-sync/resident_zero",
+          "MeanMs": 0.002604,
+          "MeanCalls": 1.0
+        },
+        {
+          "Detail": "clip/resident_clip_total",
+          "MeanMs": 0.002031,
+          "MeanCalls": 1.0
+        }
+      ],
+      "NonKernelProfile": [
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_qk_direct_256x32_offset",
+          "MeanMs": 243347.91908999917,
+          "MeanCalls": 32768.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_probabilities_saved_direct_2048",
+          "MeanMs": 127876.81394500035,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_mix8_16_bf16_dpds_d32_2048",
+          "MeanMs": 127025.85367449948,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_mix8_16_bf16_dq_packed_2048",
+          "MeanMs": 126887.0404875002,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_mix8_16_bf16_dkv_packed_2048",
+          "MeanMs": 126592.8760240004,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_probabilities",
+          "MeanMs": 113351.81814749981,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_mix8_16_bf16_pv_d32_2048",
+          "MeanMs": 113154.29227700015,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/pack_bf16_state",
+          "MeanMs": 35627.789756500046,
+          "MeanCalls": 3501.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/unpack_bf16_state",
+          "MeanMs": 27460.26661799993,
+          "MeanCalls": 3112.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/resident_zero",
+          "MeanMs": 23755.622018500027,
+          "MeanCalls": 2213.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gradient_rows_finish",
+          "MeanMs": 20044.946390499998,
+          "MeanCalls": 1800.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/decode_bfp8",
+          "MeanMs": 18867.548817500017,
+          "MeanCalls": 2608.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_8x32_wg16 M=512 N=512 K=11500 TA=0 TB=0",
+          "MeanMs": 13090.554730999993,
+          "MeanCalls": 1536.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_bfp8",
+          "MeanMs": 12899.540255999995,
+          "MeanCalls": 1288.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_split_finish",
+          "MeanMs": 12173.171283999993,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "partial-wait",
+          "Detail": "forward-backward-reduce",
+          "MeanMs": 11955.509999999987,
+          "MeanCalls": 2448.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_bf16",
+          "MeanMs": 10629.727371500005,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_dual_f32",
+          "MeanMs": 9126.440909500003,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/norm_packed_residual_input",
+          "MeanMs": 8696.615424500002,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_linear_vec4_bf16",
+          "MeanMs": 6848.075138499993,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_transpose_bfp8",
+          "MeanMs": 6271.693527500001,
+          "MeanCalls": 1032.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=16384 width=512 relu=0",
+          "MeanMs": 6261.980546500001,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gradient_rows rows=16384 width=512 relu=0 norm=1",
+          "MeanMs": 5555.105827500003,
+          "MeanCalls": 520.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_bfp8_decode_bf16_qk_2048",
+          "MeanMs": 5493.665674500004,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/norm_dx_row_sg16_w64_parallel_residual_bf16",
+          "MeanMs": 5429.158906500003,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=1536 N=512 K=16384 TA=1 TB=0",
+          "MeanMs": 5328.070825000001,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=1536 TA=0 TB=0",
+          "MeanMs": 4757.038957499996,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/norm_row_sg16_w64_parallel_bf16",
+          "MeanMs": 3422.6749144999994,
+          "MeanCalls": 520.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_mix8_16_row_delta_bf16_2048",
+          "MeanMs": 3413.4604065,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=1536 K=512 offset=0",
+          "MeanMs": 3339.2775249999995,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=512 N=512 K=16384 TA=1 TB=0",
+          "MeanMs": 3219.4534735000007,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=512 TA=0 TB=0",
+          "MeanMs": 3125.2575670000015,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/linear_relu_grad_pack_a_bias_dual",
+          "MeanMs": 2817.542800500002,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=512 N=1536 K=16384 TA=1 TB=0",
+          "MeanMs": 2688.816439999999,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/loss_total",
+          "MeanMs": 2424.3389429999997,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/loss_head_pack_bf16_at",
+          "MeanMs": 2403.0123645000003,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/cross_entropy_rows",
+          "MeanMs": 2347.3259205000018,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=1536 K=512 TA=0 TB=0",
+          "MeanMs": 2337.108189999999,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=16384 width=1536 relu=0",
+          "MeanMs": 2309.2225340000014,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+          "MeanMs": 2280.0228259999994,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/copy_range",
+          "MeanMs": 2203.9812880000004,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=512 width=11500 relu=0",
+          "MeanMs": 2172.8461370000005,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=11500 N=512 K=512 TA=1 TB=0",
+          "MeanMs": 2155.7810585000007,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/cross_entropy_gradient",
+          "MeanMs": 2121.2290555,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/loss_head_unpack_bf16_at",
+          "MeanMs": 2102.3254104999987,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=1536 offset=0",
+          "MeanMs": 1736.8823605,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_linear_vec4_bfp8",
+          "MeanMs": 1651.9482409999996,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/resident_bf16",
+          "MeanMs": 1294.2762545,
+          "MeanCalls": 272.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=512 offset=0",
+          "MeanMs": 1286.2963360000003,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_mix8_16_store_raw_bf16_2048",
+          "MeanMs": 1247.8221485,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "synchronize",
+          "Detail": "forward-backward-reduce/pool-lru-eviction",
+          "MeanMs": 548.84515,
+          "MeanCalls": 48.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "optimizer/xmx_storage_pack_a_linear_vec4_f32",
+          "MeanMs": 329.4553974999998,
+          "MeanCalls": 1920.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_qk_direct_256x32_offset",
+          "MeanMs": 221.7420000000564,
+          "MeanCalls": 32768.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "optimizer/xmx_pack_tune_b_transpose",
+          "MeanMs": 208.62263199999984,
+          "MeanCalls": 1280.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "optimizer/reduce_sum",
+          "MeanMs": 142.33241149999995,
+          "MeanCalls": 384.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "optimizer/ns_coefficient",
+          "MeanMs": 121.8115400000001,
+          "MeanCalls": 640.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=1",
+          "MeanMs": 116.92651599999994,
+          "MeanCalls": 800.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "optimizer/xmx_next_pack_b",
+          "MeanMs": 115.94417349999995,
+          "MeanCalls": 640.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/decode_bf16",
+          "MeanMs": 111.47260449999999,
+          "MeanCalls": 24.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_probabilities",
+          "MeanMs": 111.33254999999807,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=1536 K=512 TA=0 TB=0",
+          "MeanMs": 111.16390199999995,
+          "MeanCalls": 480.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_mix8_16_bf16_dkv_packed_2048",
+          "MeanMs": 110.43930000001659,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_mix8_16_bf16_dpds_d32_2048",
+          "MeanMs": 108.63235000001526,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_mix8_16_bf16_pv_d32_2048",
+          "MeanMs": 108.52939999999664,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_mix8_16_bf16_dq_packed_2048",
+          "MeanMs": 107.82884999999942,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_probabilities_saved_direct_2048",
+          "MeanMs": 107.74410000000327,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "optimizer/4B",
+          "MeanMs": 97.82080000000002,
+          "MeanCalls": 128.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=1536 TA=0 TB=1",
+          "MeanMs": 88.91822000000002,
+          "MeanCalls": 480.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "forward-backward-reduce/4B",
+          "MeanMs": 80.1911,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/embedding_back",
+          "MeanMs": 77.787552,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/dropout_back",
+          "MeanMs": 77.2153645,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/resident_validate_loss",
+          "MeanMs": 74.871173,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "optimizer/resident_bfp8_from_bf16_quad4_32",
+          "MeanMs": 67.35254349999995,
+          "MeanCalls": 389.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "forward-backward-reduce/65536B",
+          "MeanMs": 62.00410000000001,
+          "MeanCalls": 16.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/copy_scale",
+          "MeanMs": 57.814037,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "forward-backward-reduce/1572864B",
+          "MeanMs": 56.96254999999999,
+          "MeanCalls": 96.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/norm_dx_row_sg16_w64_candidate",
+          "MeanMs": 53.5683335,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "optimizer/moments_bf16_packed",
+          "MeanMs": 44.165917,
+          "MeanCalls": 128.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "optimizer/muon_weight_update_bf16_packed",
+          "MeanMs": 43.806232500000014,
+          "MeanCalls": 128.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "replica-sync/786432B",
+          "MeanMs": 40.03025000000001,
+          "MeanCalls": 96.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "clip/reduce_sum",
+          "MeanMs": 30.032831000000005,
+          "MeanCalls": 521.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "optimizer/transpose_scale",
+          "MeanMs": 28.563647499999995,
+          "MeanCalls": 192.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "replica-sync/resident_finite_bf16",
+          "MeanMs": 26.742021000000012,
+          "MeanCalls": 389.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/16777216B",
+          "MeanMs": 24.763899999999996,
+          "MeanCalls": 174.5
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "optimizer/adam_bf16_packed",
+          "MeanMs": 23.707186500000073,
+          "MeanCalls": 261.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/unpack_bf16_state",
+          "MeanMs": 23.035399999999925,
+          "MeanCalls": 3112.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/pack_bf16_state",
+          "MeanMs": 22.74170000000055,
+          "MeanCalls": 3501.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/decode_bfp8",
+          "MeanMs": 20.945449999999965,
+          "MeanCalls": 2608.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "clip/reduce_sum_bf16",
+          "MeanMs": 19.462127499999994,
+          "MeanCalls": 389.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/1048576B",
+          "MeanMs": 18.242899999999995,
+          "MeanCalls": 99.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/25165824B",
+          "MeanMs": 15.07805,
+          "MeanCalls": 90.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/resident_zero",
+          "MeanMs": 14.335249999999977,
+          "MeanCalls": 2213.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/131072B",
+          "MeanMs": 14.187099999999997,
+          "MeanCalls": 114.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "optimizer/xmx_storage_pack_a_linear_vec4_f32",
+          "MeanMs": 13.360800000000186,
+          "MeanCalls": 1920.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gradient_rows_finish",
+          "MeanMs": 12.441999999999986,
+          "MeanCalls": 1800.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_transpose_bfp8",
+          "MeanMs": 11.93689999999999,
+          "MeanCalls": 1032.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_8x32_wg16 M=512 N=512 K=11500 TA=0 TB=0",
+          "MeanMs": 11.870949999999947,
+          "MeanCalls": 1536.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/norm_packed_residual_input",
+          "MeanMs": 11.488949999999996,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_bfp8",
+          "MeanMs": 11.115649999999974,
+          "MeanCalls": 1288.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/8388608B",
+          "MeanMs": 9.811050000000002,
+          "MeanCalls": 98.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_linear_vec4_bf16",
+          "MeanMs": 9.022449999999992,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_bf16",
+          "MeanMs": 8.410750000000002,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_dual_f32",
+          "MeanMs": 8.330500000000015,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "forward-backward-reduce/1024B",
+          "MeanMs": 8.117149999999999,
+          "MeanCalls": 194.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/3145728B",
+          "MeanMs": 8.01885,
+          "MeanCalls": 90.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "optimizer/xmx_pack_tune_b_transpose",
+          "MeanMs": 7.973849999999949,
+          "MeanCalls": 1280.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "forward-backward-reduce/524288B",
+          "MeanMs": 7.108899999999999,
+          "MeanCalls": 32.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_split_finish",
+          "MeanMs": 6.850299999999993,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "replica-sync/98304B",
+          "MeanMs": 6.7669999999999995,
+          "MeanCalls": 96.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=1",
+          "MeanMs": 5.918849999999985,
+          "MeanCalls": 800.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_bfp8_decode_bf16_qk_2048",
+          "MeanMs": 5.843100000000005,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=0",
+          "MeanMs": 5.634593,
+          "MeanCalls": 160.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/norm_row_sg16_w64_parallel_bf16",
+          "MeanMs": 5.403949999999997,
+          "MeanCalls": 520.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/2097152B",
+          "MeanMs": 5.23095,
+          "MeanCalls": 43.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=1536 K=512 offset=0",
+          "MeanMs": 5.0549500000000025,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=1536 TA=0 TB=0",
+          "MeanMs": 4.780549999999998,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "replica-sync/262144B",
+          "MeanMs": 4.7767,
+          "MeanCalls": 32.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/norm_dx_row_sg16_w64_parallel_residual_bf16",
+          "MeanMs": 4.607300000000006,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=1536 N=512 K=16384 TA=1 TB=0",
+          "MeanMs": 4.545200000000003,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/376832000B",
+          "MeanMs": 4.4607,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gradient_rows rows=16384 width=512 relu=0 norm=1",
+          "MeanMs": 4.189049999999999,
+          "MeanCalls": 520.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "forward-backward-reduce/11776000B",
+          "MeanMs": 4.1594,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "optimizer/ns_coefficient",
+          "MeanMs": 4.059600000000005,
+          "MeanCalls": 640.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "optimizer/xmx_next_pack_b",
+          "MeanMs": 3.996599999999994,
+          "MeanCalls": 640.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "replica-sync/512B",
+          "MeanMs": 3.7409500000000007,
+          "MeanCalls": 194.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=1536 offset=0",
+          "MeanMs": 3.7259499999999974,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=16384 width=512 relu=0",
+          "MeanMs": 3.6593500000000025,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=1536 TA=0 TB=1",
+          "MeanMs": 3.6261499999999964,
+          "MeanCalls": 480.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=1536 K=512 TA=0 TB=0",
+          "MeanMs": 3.5735999999999986,
+          "MeanCalls": 480.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "replica-sync/64B",
+          "MeanMs": 3.5703999999999976,
+          "MeanCalls": 194.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/dropout",
+          "MeanMs": 3.4500539999999997,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/add_bf16_state_to_float",
+          "MeanMs": 3.183450000000002,
+          "MeanCalls": 389.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "clip/reduce_sum",
+          "MeanMs": 2.995650000000005,
+          "MeanCalls": 521.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/resident_bf16",
+          "MeanMs": 2.935550000000001,
+          "MeanCalls": 272.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=512 offset=0",
+          "MeanMs": 2.930450000000001,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "replica-sync/5888000B",
+          "MeanMs": 2.78705,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "clip/12B",
+          "MeanMs": 2.7733999999999996,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "optimizer/resident_bfp8_from_bf16_quad4_32",
+          "MeanMs": 2.7373499999999984,
+          "MeanCalls": 389.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "forward-backward-reduce/3072B",
+          "MeanMs": 2.7266000000000004,
+          "MeanCalls": 64.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/linear_relu_grad_pack_a_bias_dual",
+          "MeanMs": 2.6109499999999994,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "clip/reduce_sum_bf16",
+          "MeanMs": 2.485149999999998,
+          "MeanCalls": 389.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_linear_vec4_bfp8",
+          "MeanMs": 2.4804000000000004,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=512 N=1536 K=16384 TA=1 TB=0",
+          "MeanMs": 2.373100000000001,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "replica-sync/resident_finite_bf16",
+          "MeanMs": 2.351650000000002,
+          "MeanCalls": 389.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "optimizer/reduce_sum",
+          "MeanMs": 2.3253000000000013,
+          "MeanCalls": 384.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/add_bf16_state_to_float",
+          "MeanMs": 2.286666499999999,
+          "MeanCalls": 389.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_mix8_16_row_delta_bf16_2048",
+          "MeanMs": 2.2421499999999983,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=1536 K=512 TA=0 TB=0",
+          "MeanMs": 2.2204500000000005,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+          "MeanMs": 2.209050000000002,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=512 N=512 K=16384 TA=1 TB=0",
+          "MeanMs": 2.1671500000000012,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "optimizer/adam_bf16_packed",
+          "MeanMs": 2.1617499999999996,
+          "MeanCalls": 261.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=16384 width=1536 relu=0",
+          "MeanMs": 2.1538500000000016,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/11780096B",
+          "MeanMs": 2.15215,
+          "MeanCalls": 24.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=512 TA=0 TB=0",
+          "MeanMs": 2.1398000000000015,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=11500 N=512 K=512 TA=1 TB=0",
+          "MeanMs": 2.0682500000000035,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/cross_entropy_gradient",
+          "MeanMs": 2.029799999999997,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_mix8_16_store_raw_bf16_2048",
+          "MeanMs": 2.0113,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=512 width=11500 relu=0",
+          "MeanMs": 1.951949999999996,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/cross_entropy_rows",
+          "MeanMs": 1.8693999999999966,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "optimizer/transpose_scale",
+          "MeanMs": 1.8332999999999977,
+          "MeanCalls": 192.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/loss_head_unpack_bf16_at",
+          "MeanMs": 1.7847499999999996,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/loss_head_pack_bf16_at",
+          "MeanMs": 1.7339500000000019,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/copy_range",
+          "MeanMs": 1.6945499999999982,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/loss_total",
+          "MeanMs": 1.6620500000000018,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/23552000B",
+          "MeanMs": 1.63635,
+          "MeanCalls": 16.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "forward-backward-reduce/2097152B",
+          "MeanMs": 1.4503499999999998,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/92000B",
+          "MeanMs": 1.4097,
+          "MeanCalls": 7.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "replica-sync/1536B",
+          "MeanMs": 1.2477999999999998,
+          "MeanCalls": 64.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "replica-sync/192B",
+          "MeanMs": 1.2018500000000003,
+          "MeanCalls": 64.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "optimizer/gemm_xmx_direct_block_16x32_wg16 M=512 N=512 K=512 TA=0 TB=0",
+          "MeanMs": 1.1784000000000008,
+          "MeanCalls": 160.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "optimizer/moments_bf16_packed",
+          "MeanMs": 1.1744999999999999,
+          "MeanCalls": 128.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/1572864B",
+          "MeanMs": 1.15755,
+          "MeanCalls": 29.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "replica-sync/32768B",
+          "MeanMs": 1.15135,
+          "MeanCalls": 32.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/524288B",
+          "MeanMs": 0.9400499999999999,
+          "MeanCalls": 15.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/11776000B",
+          "MeanMs": 0.9128,
+          "MeanCalls": 9.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "optimizer/muon_weight_update_bf16_packed",
+          "MeanMs": 0.9040500000000001,
+          "MeanCalls": 128.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/decode_bf16",
+          "MeanMs": 0.8848499999999999,
+          "MeanCalls": 24.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/65536B",
+          "MeanMs": 0.63835,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "replica-sync/4B",
+          "MeanMs": 0.5789,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "replica-sync/1048576B",
+          "MeanMs": 0.5621,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/4194304B",
+          "MeanMs": 0.5352,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/46000B",
+          "MeanMs": 0.4743,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/2048B",
+          "MeanMs": 0.472749999999981,
+          "MeanCalls": 3842.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/16777216B",
+          "MeanMs": 0.44584999999997943,
+          "MeanCalls": 4457.5
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "clip/resident_clip_total",
+          "MeanMs": 0.434219,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "replica-sync/736000B",
+          "MeanMs": 0.40275,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "replica-sync/resident_zero",
+          "MeanMs": 0.36239599999999994,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "forward-backward-reduce/23000B",
+          "MeanMs": 0.3557,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/4096B",
+          "MeanMs": 0.35345,
+          "MeanCalls": 7.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/1024B",
+          "MeanMs": 0.3476,
+          "MeanCalls": 43.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/33554432B",
+          "MeanMs": 0.30899999999998856,
+          "MeanCalls": 3144.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "replica-sync/resident_zero",
+          "MeanMs": 0.3078,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/1572864B",
+          "MeanMs": 0.2584999999999924,
+          "MeanCalls": 2464.0
+        },
+        {
+          "Kind": "synchronize",
+          "Detail": "forward-backward-reduce/explicit",
+          "MeanMs": 0.2233,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/50331648B",
+          "MeanMs": 0.2148999999999966,
+          "MeanCalls": 2048.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "clip/4B",
+          "MeanMs": 0.20955000000000001,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/6144B",
+          "MeanMs": 0.20424999999999888,
+          "MeanCalls": 1088.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/25165824B",
+          "MeanMs": 0.20374999999999913,
+          "MeanCalls": 1190.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/3145728B",
+          "MeanMs": 0.20189999999999914,
+          "MeanCalls": 1286.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/524288B",
+          "MeanMs": 0.19029999999999825,
+          "MeanCalls": 1328.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/4B",
+          "MeanMs": 0.17165000000000002,
+          "MeanCalls": 7.0
+        },
+        {
+          "Kind": "partial-wait",
+          "Detail": "optimizer",
+          "MeanMs": 0.16499999999999998,
+          "MeanCalls": 7.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/131072B",
+          "MeanMs": 0.1630000000000002,
+          "MeanCalls": 926.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/1024B",
+          "MeanMs": 0.16259999999999908,
+          "MeanCalls": 1894.0
+        },
+        {
+          "Kind": "synchronize",
+          "Detail": "replica-sync/explicit",
+          "MeanMs": 0.15775,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/8388608B",
+          "MeanMs": 0.14800000000000024,
+          "MeanCalls": 670.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "optimizer/524288B",
+          "MeanMs": 0.14500000000000035,
+          "MeanCalls": 2399.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/embedding",
+          "MeanMs": 0.14204999999999998,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/1048576B",
+          "MeanMs": 0.13950000000000118,
+          "MeanCalls": 965.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "clip/16B",
+          "MeanMs": 0.13505,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "clip/24B",
+          "MeanMs": 0.13190000000000002,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "clip/8B",
+          "MeanMs": 0.12955,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "clip/16384B",
+          "MeanMs": 0.1271,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "clip/92000B",
+          "MeanMs": 0.12455,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "clip/12B",
+          "MeanMs": 0.12085000000000001,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "clip/48B",
+          "MeanMs": 0.10575,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "clip/4096B",
+          "MeanMs": 0.1022,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/embedding_back",
+          "MeanMs": 0.10075,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/3072B",
+          "MeanMs": 0.0952,
+          "MeanCalls": 15.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "optimizer/1572864B",
+          "MeanMs": 0.09395000000000137,
+          "MeanCalls": 1439.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/393216B",
+          "MeanMs": 0.09215000000000055,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "clip/12288B",
+          "MeanMs": 0.0917,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "replica-sync/131072B",
+          "MeanMs": 0.08465,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "clip/360B",
+          "MeanMs": 0.08225,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/norm_dx_row_sg16_w64_candidate",
+          "MeanMs": 0.0812,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/dropout",
+          "MeanMs": 0.07725000000000001,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/2097152B",
+          "MeanMs": 0.07664999999999997,
+          "MeanCalls": 223.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/dropout_back",
+          "MeanMs": 0.07355,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/3072B",
+          "MeanMs": 0.0721000000000008,
+          "MeanCalls": 624.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/embedding",
+          "MeanMs": 0.06963649999999999,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "synchronize",
+          "Detail": "zero-grad/explicit",
+          "MeanMs": 0.06939999999999999,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/100663296B",
+          "MeanMs": 0.06845000000000044,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/copy_scale",
+          "MeanMs": 0.06765,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "clip/180B",
+          "MeanMs": 0.0661,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/23000B",
+          "MeanMs": 0.0655,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/resident_validate_loss",
+          "MeanMs": 0.06284999999999999,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "optimizer/524288B",
+          "MeanMs": 0.06245,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "partial-wait",
+          "Detail": "clip",
+          "MeanMs": 0.058750000000000004,
+          "MeanCalls": 13.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "clip/1556B",
+          "MeanMs": 0.0541,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "optimizer/1572864B",
+          "MeanMs": 0.05365,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/11780096B",
+          "MeanMs": 0.04560000000000014,
+          "MeanCalls": 504.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "clip/64B",
+          "MeanMs": 0.0451,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/262144B",
+          "MeanMs": 0.036600000000000014,
+          "MeanCalls": 520.0
+        },
+        {
+          "Kind": "synchronize",
+          "Detail": "optimizer/explicit",
+          "MeanMs": 0.03295,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "optimizer/1048576B",
+          "MeanMs": 0.03084999999999991,
+          "MeanCalls": 480.0
+        },
+        {
+          "Kind": "partial-wait",
+          "Detail": "replica-sync",
+          "MeanMs": 0.0264,
+          "MeanCalls": 5.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "replica-sync/11500B",
+          "MeanMs": 0.024300000000000002,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "optimizer/3145728B",
+          "MeanMs": 0.02284999999999994,
+          "MeanCalls": 288.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "clip/4B",
+          "MeanMs": 0.021349999999999928,
+          "MeanCalls": 389.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/92000B",
+          "MeanMs": 0.019099999999999954,
+          "MeanCalls": 249.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "replica-sync/1440B",
+          "MeanMs": 0.0182,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "optimizer/12288B",
+          "MeanMs": 0.01439999999999999,
+          "MeanCalls": 96.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "clip/resident_clip_total",
+          "MeanMs": 0.0134,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "optimizer/4B",
+          "MeanMs": 0.012899999999999986,
+          "MeanCalls": 128.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "optimizer/48B",
+          "MeanMs": 0.00935,
+          "MeanCalls": 96.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "clip/8B",
+          "MeanMs": 0.007350000000000006,
+          "MeanCalls": 194.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "clip/48B",
+          "MeanMs": 0.0070000000000000045,
+          "MeanCalls": 95.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "clip/12288B",
+          "MeanMs": 0.005750000000000002,
+          "MeanCalls": 95.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/23552000B",
+          "MeanMs": 0.0056,
+          "MeanCalls": 25.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "optimizer/4096B",
+          "MeanMs": 0.0052499999999999995,
+          "MeanCalls": 32.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "clip/24B",
+          "MeanMs": 0.004449999999999999,
+          "MeanCalls": 63.0
+        },
+        {
+          "Kind": "synchronize",
+          "Detail": "clip/explicit",
+          "MeanMs": 0.00385,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "clip/4096B",
+          "MeanMs": 0.0026999999999999993,
+          "MeanCalls": 31.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "optimizer/16B",
+          "MeanMs": 0.0026999999999999993,
+          "MeanCalls": 32.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "clip/16B",
+          "MeanMs": 0.0022500000000000003,
+          "MeanCalls": 31.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/46000B",
+          "MeanMs": 0.0018500000000000005,
+          "MeanCalls": 9.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/23000B",
+          "MeanMs": 0.0015500000000000004,
+          "MeanCalls": 9.0
+        },
+        {
+          "Kind": "retired-reuse",
+          "Detail": "forward-backward-reduce/1572864B",
+          "MeanMs": 0.0015500000000000002,
+          "MeanCalls": 3.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "replica-sync/4B",
+          "MeanMs": 0.0013,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/4194304B",
+          "MeanMs": 0.0011000000000000003,
+          "MeanCalls": 9.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/65536B",
+          "MeanMs": 0.0008500000000000001,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/4096B",
+          "MeanMs": 0.0007000000000000001,
+          "MeanCalls": 9.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/4B",
+          "MeanMs": 0.0005,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "retired-reuse",
+          "Detail": "forward-backward-reduce/1024B",
+          "MeanMs": 0.0004,
+          "MeanCalls": 3.0
+        },
+        {
+          "Kind": "retired-reuse",
+          "Detail": "forward-backward-reduce/524288B",
+          "MeanMs": 0.0002,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "retired-reuse",
+          "Detail": "forward-backward-reduce/3072B",
+          "MeanMs": 0.00015000000000000001,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/11776000B",
+          "MeanMs": 5E-05,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/376832000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/4096B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/4194304B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/46000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/48B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/4B",
+          "MeanMs": 0.0,
+          "MeanCalls": 9.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/524288B",
+          "MeanMs": 0.0,
+          "MeanCalls": 17.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/8B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/65536B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/8388608B",
+          "MeanMs": 0.0,
+          "MeanCalls": 96.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/92000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "zero-grad/1048576B",
+          "MeanMs": 0.0,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "zero-grad/131072B",
+          "MeanMs": 0.0,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "zero-grad/16777216B",
+          "MeanMs": 0.0,
+          "MeanCalls": 5.5
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "zero-grad/2097152B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.5
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "zero-grad/25165824B",
+          "MeanMs": 0.0,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/64B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/360B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/24B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/3072B",
+          "MeanMs": 0.0,
+          "MeanCalls": 15.5
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/1024B",
+          "MeanMs": 0.0,
+          "MeanCalls": 45.5
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/1048576B",
+          "MeanMs": 0.0,
+          "MeanCalls": 97.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/11776000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.5
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/11780096B",
+          "MeanMs": 0.0,
+          "MeanCalls": 24.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/12288B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/12B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/131072B",
+          "MeanMs": 0.0,
+          "MeanCalls": 112.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/1556B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/1572864B",
+          "MeanMs": 0.0,
+          "MeanCalls": 32.5
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/16384B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/16777216B",
+          "MeanMs": 0.0,
+          "MeanCalls": 169.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/16B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/180B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/2097152B",
+          "MeanMs": 0.0,
+          "MeanCalls": 40.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/23000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 0.5
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/23552000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 16.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/25165824B",
+          "MeanMs": 0.0,
+          "MeanCalls": 88.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/3145728B",
+          "MeanMs": 0.0,
+          "MeanCalls": 88.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/1024B",
+          "MeanMs": 0.0,
+          "MeanCalls": 45.5
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/24B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "zero-grad/3145728B",
+          "MeanMs": 0.0,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/4096B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/4194304B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/46000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/48B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/4B",
+          "MeanMs": 0.0,
+          "MeanCalls": 9.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/524288B",
+          "MeanMs": 0.0,
+          "MeanCalls": 17.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/64B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/376832000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/65536B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/8B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/92000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "zero-grad/1048576B",
+          "MeanMs": 0.0,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "zero-grad/131072B",
+          "MeanMs": 0.0,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "zero-grad/16777216B",
+          "MeanMs": 0.0,
+          "MeanCalls": 5.5
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "zero-grad/2097152B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.5
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "zero-grad/25165824B",
+          "MeanMs": 0.0,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/8388608B",
+          "MeanMs": 0.0,
+          "MeanCalls": 96.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/360B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/3145728B",
+          "MeanMs": 0.0,
+          "MeanCalls": 88.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/3072B",
+          "MeanMs": 0.0,
+          "MeanCalls": 15.5
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/1048576B",
+          "MeanMs": 0.0,
+          "MeanCalls": 97.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/11776000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.5
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/11780096B",
+          "MeanMs": 0.0,
+          "MeanCalls": 24.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/12288B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/12B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/131072B",
+          "MeanMs": 0.0,
+          "MeanCalls": 112.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/1556B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/1572864B",
+          "MeanMs": 0.0,
+          "MeanCalls": 32.5
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/16384B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/16777216B",
+          "MeanMs": 0.0,
+          "MeanCalls": 169.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/16B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/180B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/2097152B",
+          "MeanMs": 0.0,
+          "MeanCalls": 40.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/23000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 0.5
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/23552000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 16.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/24B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/25165824B",
+          "MeanMs": 0.0,
+          "MeanCalls": 88.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "zero-grad/3145728B",
+          "MeanMs": 0.0,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "zero-grad/8388608B",
+          "MeanMs": 0.0,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "zero-grad/8388608B",
+          "MeanMs": 0.0,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/1024B",
+          "MeanMs": 0.0,
+          "MeanCalls": 42.5
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/4096B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/4194304B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/46000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/48B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/4B",
+          "MeanMs": 0.0,
+          "MeanCalls": 9.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/524288B",
+          "MeanMs": 0.0,
+          "MeanCalls": 16.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/64B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/376832000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/65536B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/8B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/92000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "zero-grad/1048576B",
+          "MeanMs": 0.0,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "zero-grad/131072B",
+          "MeanMs": 0.0,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "zero-grad/16777216B",
+          "MeanMs": 0.0,
+          "MeanCalls": 5.5
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "zero-grad/2097152B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.5
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "zero-grad/25165824B",
+          "MeanMs": 0.0,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/8388608B",
+          "MeanMs": 0.0,
+          "MeanCalls": 96.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/360B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/3145728B",
+          "MeanMs": 0.0,
+          "MeanCalls": 88.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/3072B",
+          "MeanMs": 0.0,
+          "MeanCalls": 14.5
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/1048576B",
+          "MeanMs": 0.0,
+          "MeanCalls": 97.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/11776000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.5
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/11780096B",
+          "MeanMs": 0.0,
+          "MeanCalls": 24.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/12288B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/12B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/131072B",
+          "MeanMs": 0.0,
+          "MeanCalls": 112.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/1556B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/1572864B",
+          "MeanMs": 0.0,
+          "MeanCalls": 29.5
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/16384B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/16777216B",
+          "MeanMs": 0.0,
+          "MeanCalls": 169.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/16B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/180B",
+          "MeanMs": 0.0,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/2097152B",
+          "MeanMs": 0.0,
+          "MeanCalls": 40.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/23000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 0.5
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/23552000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 16.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "zero-grad/3145728B",
+          "MeanMs": 0.0,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/25165824B",
+          "MeanMs": 0.0,
+          "MeanCalls": 88.0
+        },
+        {
+          "Kind": "deferred-release",
+          "Detail": "forward-backward-reduce",
+          "MeanMs": 0.0,
+          "MeanCalls": 842.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "zero-grad/8388608B",
+          "MeanMs": 0.0,
+          "MeanCalls": 2.0
+        }
+      ]
+    },
+    {
+      "DeviceIndex": 1,
+      "MeanWallMs": 15231.2304,
+      "AttentionKernelMs": 9202.873962000025,
+      "NonAttentionKernelMs": 5384.7880775,
+      "ExclusiveWallCategories": [
+        {
+          "Name": "GPU/attention",
+          "MeanMs": 9202.76351957755
+        },
+        {
+          "Name": "GPU/GEMM",
+          "MeanMs": 3179.76760485443
+        },
+        {
+          "Name": "GPU/pack-decode-publication",
+          "MeanMs": 1104.710856701071
+        },
+        {
+          "Name": "GPU/normalization-reduction",
+          "MeanMs": 864.6903174302971
+        },
+        {
+          "Name": "GPU-idle/managed-optimizer",
+          "MeanMs": 168.99509999999998
+        },
+        {
+          "Name": "GPU-idle/managed-forward-backward-reduce",
+          "MeanMs": 145.76903446587937
+        },
+        {
+          "Name": "GPU/other-kernels",
+          "MeanMs": 141.93127160203022
+        },
+        {
+          "Name": "GPU/loss",
+          "MeanMs": 93.6234020396976
+        },
+        {
+          "Name": "GPU-idle/queue-partial-wait",
+          "MeanMs": 90.18881721912763
+        },
+        {
+          "Name": "GPU-idle/managed-replica-sync",
+          "MeanMs": 68.3726826795168
+        },
+        {
+          "Name": "GPU-idle/blocking-transfer-wait",
+          "MeanMs": 33.42503461776488
+        },
+        {
+          "Name": "GPU-idle/profiler-event-collection",
+          "MeanMs": 28.815093221842112
+        },
+        {
+          "Name": "GPU/transfer/D2H",
+          "MeanMs": 25.52435766803086
+        },
+        {
+          "Name": "GPU-idle/queue-submit",
+          "MeanMs": 25.08181538762313
+        },
+        {
+          "Name": "GPU-idle/managed-clip",
+          "MeanMs": 18.668950000000002
+        },
+        {
+          "Name": "GPU/transfer/H2D",
+          "MeanMs": 15.798281898544573
+        },
+        {
+          "Name": "GPU-idle/native-allocation",
+          "MeanMs": 8.08649354965812
+        },
+        {
+          "Name": "GPU-idle/native-free",
+          "MeanMs": 5.768800000000001
+        },
+        {
+          "Name": "GPU-idle/queue-sync-wait",
+          "MeanMs": 5.37431544628644
+        },
+        {
+          "Name": "GPU-idle/managed-zero-grad",
+          "MeanMs": 1.2319
+        },
+        {
+          "Name": "GPU/transfer/D2D",
+          "MeanMs": 0.9730523261346221
+        },
+        {
+          "Name": "GPU-idle/allocation-pool",
+          "MeanMs": 0.8841002607123571
+        },
+        {
+          "Name": "GPU-idle/benchmark-boundary",
+          "MeanMs": 0.4393
+        },
+        {
+          "Name": "GPU-idle/release-pool",
+          "MeanMs": 0.34519905380480737
+        }
+      ],
+      "NonAttentionKernels": [
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=1536 K=512 offset=0",
+          "MeanMs": 608.3623929999999,
+          "MeanCalls": 512.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=1536 N=512 K=16384 TA=1 TB=0",
+          "MeanMs": 574.0162480000001,
+          "MeanCalls": 512.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=1536 TA=0 TB=0",
+          "MeanMs": 537.4454655,
+          "MeanCalls": 512.0
+        },
+        {
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_dual_f32",
+          "MeanMs": 323.85191199999997,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=512 N=1536 K=16384 TA=1 TB=0",
+          "MeanMs": 286.9618224999999,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/norm_packed_residual_input",
+          "MeanMs": 275.341237499999,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=1536 K=512 TA=0 TB=0",
+          "MeanMs": 250.40718449999997,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/linear_relu_grad_pack_a_bias_dual",
+          "MeanMs": 234.459222,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=1536 offset=0",
+          "MeanMs": 228.4553624999999,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/norm_dx_row_sg16_w64_parallel_residual_bf16",
+          "MeanMs": 179.04998849999987,
+          "MeanCalls": 512.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_8x32_wg16 M=512 N=512 K=11500 TA=0 TB=0",
+          "MeanMs": 164.0355415000003,
+          "MeanCalls": 1536.0
+        },
+        {
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_bfp8",
+          "MeanMs": 158.41290700000025,
+          "MeanCalls": 1288.0
+        },
+        {
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_bf16",
+          "MeanMs": 117.49796150000056,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=512 N=512 K=16384 TA=1 TB=0",
+          "MeanMs": 115.59994749999996,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=512 offset=0",
+          "MeanMs": 110.97025950000007,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gradient_rows rows=16384 width=512 relu=0 norm=1",
+          "MeanMs": 106.7800465000001,
+          "MeanCalls": 520.0
+        },
+        {
+          "Detail": "forward-backward-reduce/resident_zero",
+          "MeanMs": 106.32977799999938,
+          "MeanCalls": 2213.0
+        },
+        {
+          "Detail": "forward-backward-reduce/norm_row_sg16_w64_parallel_bf16",
+          "MeanMs": 100.145723,
+          "MeanCalls": 520.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=512 TA=0 TB=0",
+          "MeanMs": 93.581042,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_linear_vec4_bf16",
+          "MeanMs": 92.46446950000016,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_linear_vec4_bfp8",
+          "MeanMs": 88.27588099999997,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=16384 width=1536 relu=0",
+          "MeanMs": 79.69385200000005,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=11500 N=512 K=512 TA=1 TB=0",
+          "MeanMs": 73.8264565,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+          "MeanMs": 70.44239300000001,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gemm_split_finish",
+          "MeanMs": 65.70165099999977,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=16384 width=512 relu=0",
+          "MeanMs": 56.7729015000001,
+          "MeanCalls": 512.0
+        },
+        {
+          "Detail": "forward-backward-reduce/resident_bf16",
+          "MeanMs": 46.57536250000004,
+          "MeanCalls": 272.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gradient_rows_finish",
+          "MeanMs": 39.23638200000023,
+          "MeanCalls": 1800.0
+        },
+        {
+          "Detail": "forward-backward-reduce/cross_entropy_gradient",
+          "MeanMs": 35.931504000000004,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/cross_entropy_rows",
+          "MeanMs": 30.611295000000002,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=512 width=11500 relu=0",
+          "MeanMs": 25.23645300000001,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/loss_head_pack_bf16_at",
+          "MeanMs": 23.359270000000002,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/loss_head_unpack_bf16_at",
+          "MeanMs": 21.771301,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/pack_bf16_state",
+          "MeanMs": 15.055086499999664,
+          "MeanCalls": 3112.0
+        },
+        {
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_transpose_bfp8",
+          "MeanMs": 11.971186499999952,
+          "MeanCalls": 1032.0
+        },
+        {
+          "Detail": "forward-backward-reduce/unpack_bf16_state",
+          "MeanMs": 11.055766500000114,
+          "MeanCalls": 2723.0
+        },
+        {
+          "Detail": "forward-backward-reduce/loss_total",
+          "MeanMs": 5.298657500000006,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/decode_bfp8",
+          "MeanMs": 4.987566500000089,
+          "MeanCalls": 2608.0
+        },
+        {
+          "Detail": "forward-backward-reduce/embedding_back",
+          "MeanMs": 3.0582255,
+          "MeanCalls": 8.0
+        },
+        {
+          "Detail": "forward-backward-reduce/decode_bf16",
+          "MeanMs": 2.8683765,
+          "MeanCalls": 24.0
+        },
+        {
+          "Detail": "forward-backward-reduce/norm_dx_row_sg16_w64_candidate",
+          "MeanMs": 2.444111,
+          "MeanCalls": 8.0
+        },
+        {
+          "Detail": "forward-backward-reduce/embedding",
+          "MeanMs": 1.553435,
+          "MeanCalls": 8.0
+        },
+        {
+          "Detail": "forward-backward-reduce/dropout",
+          "MeanMs": 1.431508,
+          "MeanCalls": 8.0
+        },
+        {
+          "Detail": "forward-backward-reduce/copy_scale",
+          "MeanMs": 1.2916634999999999,
+          "MeanCalls": 8.0
+        },
+        {
+          "Detail": "forward-backward-reduce/dropout_back",
+          "MeanMs": 1.2844765,
+          "MeanCalls": 8.0
+        },
+        {
+          "Detail": "forward-backward-reduce/copy_range",
+          "MeanMs": 0.8730355000000032,
+          "MeanCalls": 256.0
+        },
+        {
+          "Detail": "forward-backward-reduce/resident_validate_loss",
+          "MeanMs": 0.011767999999999997,
+          "MeanCalls": 8.0
+        }
+      ],
+      "NonKernelProfile": [
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_qk_direct_256x32_offset",
+          "MeanMs": 245049.56959549926,
+          "MeanCalls": 32768.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_probabilities_saved_direct_2048",
+          "MeanMs": 128605.58022699921,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_mix8_16_bf16_dpds_d32_2048",
+          "MeanMs": 127752.65265599982,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_mix8_16_bf16_dq_packed_2048",
+          "MeanMs": 127610.7504529997,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_mix8_16_bf16_dkv_packed_2048",
+          "MeanMs": 127315.24384149979,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_probabilities",
+          "MeanMs": 114326.16078449966,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_mix8_16_bf16_pv_d32_2048",
+          "MeanMs": 114125.36453349999,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/pack_bf16_state",
+          "MeanMs": 35737.48463649998,
+          "MeanCalls": 3112.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/unpack_bf16_state",
+          "MeanMs": 27562.9088645,
+          "MeanCalls": 2723.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/resident_zero",
+          "MeanMs": 23827.426456999976,
+          "MeanCalls": 2213.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gradient_rows_finish",
+          "MeanMs": 20122.173204000006,
+          "MeanCalls": 1800.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/decode_bfp8",
+          "MeanMs": 19080.60897849997,
+          "MeanCalls": 2608.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_8x32_wg16 M=512 N=512 K=11500 TA=0 TB=0",
+          "MeanMs": 13190.80912749999,
+          "MeanCalls": 1536.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_bfp8",
+          "MeanMs": 12949.290310500004,
+          "MeanCalls": 1288.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_split_finish",
+          "MeanMs": 12212.879902000017,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "partial-wait",
+          "Detail": "forward-backward-reduce",
+          "MeanMs": 12085.481400000015,
+          "MeanCalls": 2448.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_bf16",
+          "MeanMs": 10674.1008745,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_dual_f32",
+          "MeanMs": 9175.355178000002,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/norm_packed_residual_input",
+          "MeanMs": 8765.8673285,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_linear_vec4_bf16",
+          "MeanMs": 6903.77708699999,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_transpose_bfp8",
+          "MeanMs": 6369.562410500001,
+          "MeanCalls": 1032.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=16384 width=512 relu=0",
+          "MeanMs": 6278.402150500001,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gradient_rows rows=16384 width=512 relu=0 norm=1",
+          "MeanMs": 5574.518275999997,
+          "MeanCalls": 520.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_bfp8_decode_bf16_qk_2048",
+          "MeanMs": 5537.515163999995,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/norm_dx_row_sg16_w64_parallel_residual_bf16",
+          "MeanMs": 5449.784195499996,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=1536 N=512 K=16384 TA=1 TB=0",
+          "MeanMs": 5349.814362999998,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=1536 TA=0 TB=0",
+          "MeanMs": 4778.933450999996,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/norm_row_sg16_w64_parallel_bf16",
+          "MeanMs": 3488.5098460000004,
+          "MeanCalls": 520.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_mix8_16_row_delta_bf16_2048",
+          "MeanMs": 3419.7527375,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=1536 K=512 offset=0",
+          "MeanMs": 3389.2148374999997,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=512 N=512 K=16384 TA=1 TB=0",
+          "MeanMs": 3225.145913000001,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=512 TA=0 TB=0",
+          "MeanMs": 3130.8802170000017,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/linear_relu_grad_pack_a_bias_dual",
+          "MeanMs": 2826.5234514999993,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=512 N=1536 K=16384 TA=1 TB=0",
+          "MeanMs": 2700.2351465000006,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/loss_total",
+          "MeanMs": 2409.2240975000004,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/loss_head_pack_bf16_at",
+          "MeanMs": 2388.7188975000017,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=1536 K=512 TA=0 TB=0",
+          "MeanMs": 2348.7336815,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/cross_entropy_rows",
+          "MeanMs": 2332.6200330000006,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=16384 width=1536 relu=0",
+          "MeanMs": 2323.3039985000005,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+          "MeanMs": 2264.061237500001,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/copy_range",
+          "MeanMs": 2221.2776355000005,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=512 width=11500 relu=0",
+          "MeanMs": 2190.810587499999,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=11500 N=512 K=512 TA=1 TB=0",
+          "MeanMs": 2172.7852725000002,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/cross_entropy_gradient",
+          "MeanMs": 2138.5365429999993,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/loss_head_unpack_bf16_at",
+          "MeanMs": 2120.0577945,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=1536 offset=0",
+          "MeanMs": 1764.4790970000004,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_linear_vec4_bfp8",
+          "MeanMs": 1678.367537,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=512 offset=0",
+          "MeanMs": 1306.9132425000003,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/resident_bf16",
+          "MeanMs": 1306.4353499999993,
+          "MeanCalls": 272.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/attention_mix8_16_store_raw_bf16_2048",
+          "MeanMs": 1258.9180075,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "synchronize",
+          "Detail": "forward-backward-reduce/pool-lru-eviction",
+          "MeanMs": 551.2185000000001,
+          "MeanCalls": 48.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_qk_direct_256x32_offset",
+          "MeanMs": 226.8044500000311,
+          "MeanCalls": 32768.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/decode_bf16",
+          "MeanMs": 116.730313,
+          "MeanCalls": 24.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_mix8_16_bf16_dkv_packed_2048",
+          "MeanMs": 116.1437500000116,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_mix8_16_bf16_dpds_d32_2048",
+          "MeanMs": 113.54550000001205,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_probabilities",
+          "MeanMs": 110.31520000000316,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_probabilities_saved_direct_2048",
+          "MeanMs": 110.2460000000055,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_mix8_16_bf16_pv_d32_2048",
+          "MeanMs": 109.69955000000414,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_mix8_16_bf16_dq_packed_2048",
+          "MeanMs": 108.78615000000339,
+          "MeanCalls": 16384.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "forward-backward-reduce/4B",
+          "MeanMs": 80.87015,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/embedding_back",
+          "MeanMs": 77.80237149999999,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/dropout_back",
+          "MeanMs": 77.51671999999999,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/resident_validate_loss",
+          "MeanMs": 76.825418,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "forward-backward-reduce/65536B",
+          "MeanMs": 64.12205,
+          "MeanCalls": 16.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/copy_scale",
+          "MeanMs": 58.339297,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/norm_dx_row_sg16_w64_candidate",
+          "MeanMs": 54.10843599999999,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "forward-backward-reduce/1572864B",
+          "MeanMs": 31.642000000000003,
+          "MeanCalls": 96.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/decode_bfp8",
+          "MeanMs": 21.75725000000008,
+          "MeanCalls": 2608.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/pack_bf16_state",
+          "MeanMs": 20.491500000000084,
+          "MeanCalls": 3112.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/unpack_bf16_state",
+          "MeanMs": 20.04224999999994,
+          "MeanCalls": 2723.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/16777216B",
+          "MeanMs": 19.257550000000002,
+          "MeanCalls": 175.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "replica-sync/786432B",
+          "MeanMs": 14.681699999999996,
+          "MeanCalls": 96.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/resident_zero",
+          "MeanMs": 14.602600000000031,
+          "MeanCalls": 2213.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/25165824B",
+          "MeanMs": 13.7432,
+          "MeanCalls": 90.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gradient_rows_finish",
+          "MeanMs": 13.041300000000023,
+          "MeanCalls": 1800.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_8x32_wg16 M=512 N=512 K=11500 TA=0 TB=0",
+          "MeanMs": 12.66119999999998,
+          "MeanCalls": 1536.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/norm_packed_residual_input",
+          "MeanMs": 12.184300000000004,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_transpose_bfp8",
+          "MeanMs": 11.834399999999999,
+          "MeanCalls": 1032.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_bfp8",
+          "MeanMs": 11.459299999999985,
+          "MeanCalls": 1288.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_linear_vec4_bf16",
+          "MeanMs": 9.231899999999985,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/3145728B",
+          "MeanMs": 9.10195,
+          "MeanCalls": 90.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/8388608B",
+          "MeanMs": 8.895750000000003,
+          "MeanCalls": 98.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_b_bf16",
+          "MeanMs": 8.756549999999992,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_dual_f32",
+          "MeanMs": 8.154850000000007,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_split_finish",
+          "MeanMs": 7.076350000000014,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=1536 K=512 offset=0",
+          "MeanMs": 6.218900000000005,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_bfp8_decode_bf16_qk_2048",
+          "MeanMs": 5.984850000000002,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=1536 TA=0 TB=0",
+          "MeanMs": 4.8214500000000005,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=1536 N=512 K=16384 TA=1 TB=0",
+          "MeanMs": 4.622050000000003,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/norm_dx_row_sg16_w64_parallel_residual_bf16",
+          "MeanMs": 4.594149999999998,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/376832000B",
+          "MeanMs": 4.5485500000000005,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gradient_rows rows=16384 width=512 relu=0 norm=1",
+          "MeanMs": 4.4178000000000015,
+          "MeanCalls": 520.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/norm_row_sg16_w64_parallel_bf16",
+          "MeanMs": 4.322999999999999,
+          "MeanCalls": 520.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "forward-backward-reduce/524288B",
+          "MeanMs": 3.8308500000000008,
+          "MeanCalls": 32.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=16384 width=512 relu=0",
+          "MeanMs": 3.795349999999999,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/dropout",
+          "MeanMs": 3.460235,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "forward-backward-reduce/1024B",
+          "MeanMs": 3.3804499999999997,
+          "MeanCalls": 194.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/resident_bf16",
+          "MeanMs": 3.3214000000000006,
+          "MeanCalls": 272.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "replica-sync/98304B",
+          "MeanMs": 3.176850000000001,
+          "MeanCalls": 96.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=512 offset=0",
+          "MeanMs": 2.8693500000000007,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "replica-sync/512B",
+          "MeanMs": 2.7289000000000003,
+          "MeanCalls": 194.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/linear_relu_grad_pack_a_bias_dual",
+          "MeanMs": 2.7256499999999995,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "replica-sync/64B",
+          "MeanMs": 2.649350000000001,
+          "MeanCalls": 194.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/xmx_storage_pack_a_linear_vec4_bfp8",
+          "MeanMs": 2.5191500000000007,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=512 N=1536 K=16384 TA=1 TB=0",
+          "MeanMs": 2.49055,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_bfp8_epilogue_16x64 M=16384 N=512 K=1536 offset=0",
+          "MeanMs": 2.4816000000000007,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_mix8_16_row_delta_bf16_2048",
+          "MeanMs": 2.3488499999999988,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=1536 K=512 TA=0 TB=0",
+          "MeanMs": 2.264849999999999,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_32x32_wg16 M=512 N=512 K=16384 TA=1 TB=0",
+          "MeanMs": 2.2411499999999993,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg4 M=512 N=11500 K=512 TA=0 TB=1",
+          "MeanMs": 2.226650000000002,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=16384 N=512 K=512 TA=0 TB=0",
+          "MeanMs": 2.1735500000000005,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=16384 width=1536 relu=0",
+          "MeanMs": 2.1610500000000004,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gemm_xmx_direct_block_16x64_wg16 M=11500 N=512 K=512 TA=1 TB=0",
+          "MeanMs": 2.144000000000003,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "forward-backward-reduce/11776000B",
+          "MeanMs": 2.1328500000000004,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/attention_mix8_16_store_raw_bf16_2048",
+          "MeanMs": 2.0613000000000015,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/cross_entropy_gradient",
+          "MeanMs": 1.9465000000000006,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "replica-sync/262144B",
+          "MeanMs": 1.9376000000000002,
+          "MeanCalls": 32.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/gradient_rows_bias_bf16 rows=512 width=11500 relu=0",
+          "MeanMs": 1.9018499999999978,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/1048576B",
+          "MeanMs": 1.89605,
+          "MeanCalls": 99.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/cross_entropy_rows",
+          "MeanMs": 1.8692499999999967,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/loss_head_unpack_bf16_at",
+          "MeanMs": 1.7764499999999965,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/loss_head_pack_bf16_at",
+          "MeanMs": 1.7585999999999995,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/copy_range",
+          "MeanMs": 1.7516999999999965,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/loss_total",
+          "MeanMs": 1.6889999999999985,
+          "MeanCalls": 256.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/23552000B",
+          "MeanMs": 1.67475,
+          "MeanCalls": 16.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/11780096B",
+          "MeanMs": 1.6562,
+          "MeanCalls": 24.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "replica-sync/5888000B",
+          "MeanMs": 1.2928,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "forward-backward-reduce/3072B",
+          "MeanMs": 1.2702500000000003,
+          "MeanCalls": 64.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "replica-sync/1536B",
+          "MeanMs": 0.9213500000000001,
+          "MeanCalls": 64.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "replica-sync/192B",
+          "MeanMs": 0.8858999999999999,
+          "MeanCalls": 64.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/4194304B",
+          "MeanMs": 0.80265,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "replica-sync/32768B",
+          "MeanMs": 0.6700499999999998,
+          "MeanCalls": 32.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/2097152B",
+          "MeanMs": 0.6695999999999999,
+          "MeanCalls": 41.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "forward-backward-reduce/2097152B",
+          "MeanMs": 0.6427,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/11776000B",
+          "MeanMs": 0.6300000000000001,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/131072B",
+          "MeanMs": 0.5478000000000001,
+          "MeanCalls": 114.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/16777216B",
+          "MeanMs": 0.4610999999999784,
+          "MeanCalls": 4457.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/2048B",
+          "MeanMs": 0.44239999999998264,
+          "MeanCalls": 3648.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/524288B",
+          "MeanMs": 0.36685,
+          "MeanCalls": 14.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/33554432B",
+          "MeanMs": 0.3274999999999879,
+          "MeanCalls": 3144.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/decode_bf16",
+          "MeanMs": 0.26135,
+          "MeanCalls": 24.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "replica-sync/1048576B",
+          "MeanMs": 0.22920000000000001,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/1572864B",
+          "MeanMs": 0.21944999999999448,
+          "MeanCalls": 2274.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/50331648B",
+          "MeanMs": 0.21479999999999672,
+          "MeanCalls": 2048.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/25165824B",
+          "MeanMs": 0.21044999999999897,
+          "MeanCalls": 1190.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/6144B",
+          "MeanMs": 0.1954999999999992,
+          "MeanCalls": 1024.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/3145728B",
+          "MeanMs": 0.19279999999999864,
+          "MeanCalls": 1190.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/524288B",
+          "MeanMs": 0.18024999999999886,
+          "MeanCalls": 1265.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "replica-sync/736000B",
+          "MeanMs": 0.17354999999999998,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/1024B",
+          "MeanMs": 0.16584999999999994,
+          "MeanCalls": 42.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/131072B",
+          "MeanMs": 0.15910000000000005,
+          "MeanCalls": 926.0
+        },
+        {
+          "Kind": "synchronize",
+          "Detail": "optimizer/explicit",
+          "MeanMs": 0.1535,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/1572864B",
+          "MeanMs": 0.15335,
+          "MeanCalls": 28.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/8388608B",
+          "MeanMs": 0.1508,
+          "MeanCalls": 670.0
+        },
+        {
+          "Kind": "synchronize",
+          "Detail": "replica-sync/explicit",
+          "MeanMs": 0.15015,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/embedding",
+          "MeanMs": 0.14625,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "synchronize",
+          "Detail": "clip/explicit",
+          "MeanMs": 0.14379999999999998,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "synchronize",
+          "Detail": "zero-grad/explicit",
+          "MeanMs": 0.1427,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/1024B",
+          "MeanMs": 0.12795000000000195,
+          "MeanCalls": 1507.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/1048576B",
+          "MeanMs": 0.12210000000000121,
+          "MeanCalls": 933.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/embedding_back",
+          "MeanMs": 0.11165,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/3072B",
+          "MeanMs": 0.11079999999999998,
+          "MeanCalls": 14.0
+        },
+        {
+          "Kind": "retired-reuse",
+          "Detail": "forward-backward-reduce/1572864B",
+          "MeanMs": 0.09635,
+          "MeanCalls": 2.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/393216B",
+          "MeanMs": 0.09295000000000055,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/92000B",
+          "MeanMs": 0.0843,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/norm_dx_row_sg16_w64_candidate",
+          "MeanMs": 0.08305000000000001,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/dropout",
+          "MeanMs": 0.07865000000000001,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "queue-delay-overlapping",
+          "Detail": "forward-backward-reduce/embedding",
+          "MeanMs": 0.0762515,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/2097152B",
+          "MeanMs": 0.07624999999999998,
+          "MeanCalls": 223.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/dropout_back",
+          "MeanMs": 0.07045,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/resident_validate_loss",
+          "MeanMs": 0.06540000000000001,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "host-submit",
+          "Detail": "forward-backward-reduce/copy_scale",
+          "MeanMs": 0.0643,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/100663296B",
+          "MeanMs": 0.06180000000000031,
+          "MeanCalls": 512.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/11780096B",
+          "MeanMs": 0.05955000000000014,
+          "MeanCalls": 504.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/3072B",
+          "MeanMs": 0.04795000000000023,
+          "MeanCalls": 497.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/46000B",
+          "MeanMs": 0.045649999999999996,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/262144B",
+          "MeanMs": 0.04205000000000007,
+          "MeanCalls": 520.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "replica-sync/131072B",
+          "MeanMs": 0.0419,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/65536B",
+          "MeanMs": 0.0351,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/4096B",
+          "MeanMs": 0.028449999999999996,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-allocation",
+          "Detail": "forward-backward-reduce/4B",
+          "MeanMs": 0.02115,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "D2H",
+          "Detail": "forward-backward-reduce/23000B",
+          "MeanMs": 0.0208,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/92000B",
+          "MeanMs": 0.01989999999999996,
+          "MeanCalls": 248.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "replica-sync/11500B",
+          "MeanMs": 0.016,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "H2D",
+          "Detail": "replica-sync/1440B",
+          "MeanMs": 0.01455,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/23552000B",
+          "MeanMs": 0.007049999999999999,
+          "MeanCalls": 24.0
+        },
+        {
+          "Kind": "synchronize",
+          "Detail": "forward-backward-reduce/explicit",
+          "MeanMs": 0.0037,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/23000B",
+          "MeanMs": 0.0014000000000000002,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/46000B",
+          "MeanMs": 0.0012000000000000001,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/65536B",
+          "MeanMs": 0.0011000000000000003,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/4194304B",
+          "MeanMs": 0.0009500000000000002,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "retired-reuse",
+          "Detail": "forward-backward-reduce/1024B",
+          "MeanMs": 0.0009000000000000001,
+          "MeanCalls": 3.0
+        },
+        {
+          "Kind": "pool-hit",
+          "Detail": "forward-backward-reduce/4096B",
+          "MeanMs": 0.00045,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "retired-reuse",
+          "Detail": "forward-backward-reduce/524288B",
+          "MeanMs": 0.0002,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "retired-reuse",
+          "Detail": "forward-backward-reduce/3072B",
+          "MeanMs": 0.0001,
+          "MeanCalls": 1.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/1048576B",
+          "MeanMs": 0.0,
+          "MeanCalls": 99.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/65536B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/524288B",
+          "MeanMs": 0.0,
+          "MeanCalls": 15.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/4B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/46000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/4194304B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/4096B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/376832000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/3145728B",
+          "MeanMs": 0.0,
+          "MeanCalls": 90.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/3072B",
+          "MeanMs": 0.0,
+          "MeanCalls": 15.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/25165824B",
+          "MeanMs": 0.0,
+          "MeanCalls": 90.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/23552000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 16.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/2097152B",
+          "MeanMs": 0.0,
+          "MeanCalls": 41.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/16777216B",
+          "MeanMs": 0.0,
+          "MeanCalls": 175.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/1572864B",
+          "MeanMs": 0.0,
+          "MeanCalls": 30.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/131072B",
+          "MeanMs": 0.0,
+          "MeanCalls": 114.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/11780096B",
+          "MeanMs": 0.0,
+          "MeanCalls": 24.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/11776000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/1024B",
+          "MeanMs": 0.0,
+          "MeanCalls": 45.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/1024B",
+          "MeanMs": 0.0,
+          "MeanCalls": 45.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/16777216B",
+          "MeanMs": 0.0,
+          "MeanCalls": 175.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/8388608B",
+          "MeanMs": 0.0,
+          "MeanCalls": 98.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/65536B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/524288B",
+          "MeanMs": 0.0,
+          "MeanCalls": 15.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/4B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/46000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/4194304B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/4096B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/376832000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/3145728B",
+          "MeanMs": 0.0,
+          "MeanCalls": 90.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/8388608B",
+          "MeanMs": 0.0,
+          "MeanCalls": 98.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/3072B",
+          "MeanMs": 0.0,
+          "MeanCalls": 15.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/23552000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 16.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/2097152B",
+          "MeanMs": 0.0,
+          "MeanCalls": 41.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/16777216B",
+          "MeanMs": 0.0,
+          "MeanCalls": 175.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/1572864B",
+          "MeanMs": 0.0,
+          "MeanCalls": 30.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/131072B",
+          "MeanMs": 0.0,
+          "MeanCalls": 114.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/11780096B",
+          "MeanMs": 0.0,
+          "MeanCalls": 24.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/11776000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/1048576B",
+          "MeanMs": 0.0,
+          "MeanCalls": 99.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/25165824B",
+          "MeanMs": 0.0,
+          "MeanCalls": 90.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/92000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "cache-eviction",
+          "Detail": "forward-backward-reduce/92000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/1024B",
+          "MeanMs": 0.0,
+          "MeanCalls": 42.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/65536B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/524288B",
+          "MeanMs": 0.0,
+          "MeanCalls": 14.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/4B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/46000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/4194304B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/4096B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/376832000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/3145728B",
+          "MeanMs": 0.0,
+          "MeanCalls": 90.0
+        },
+        {
+          "Kind": "deferred-release",
+          "Detail": "forward-backward-reduce",
+          "MeanMs": 0.0,
+          "MeanCalls": 822.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/3072B",
+          "MeanMs": 0.0,
+          "MeanCalls": 14.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/23552000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 16.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/2097152B",
+          "MeanMs": 0.0,
+          "MeanCalls": 41.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/8388608B",
+          "MeanMs": 0.0,
+          "MeanCalls": 98.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/1572864B",
+          "MeanMs": 0.0,
+          "MeanCalls": 28.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/131072B",
+          "MeanMs": 0.0,
+          "MeanCalls": 114.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/11780096B",
+          "MeanMs": 0.0,
+          "MeanCalls": 24.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/11776000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/1048576B",
+          "MeanMs": 0.0,
+          "MeanCalls": 99.0
+        },
+        {
+          "Kind": "native-release",
+          "Detail": "forward-backward-reduce/25165824B",
+          "MeanMs": 0.0,
+          "MeanCalls": 90.0
+        },
+        {
+          "Kind": "uncached-release",
+          "Detail": "forward-backward-reduce/92000B",
+          "MeanMs": 0.0,
+          "MeanCalls": 8.0
+        }
+      ]
+    }
+  ]
+}

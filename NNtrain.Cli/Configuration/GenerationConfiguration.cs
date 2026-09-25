@@ -26,6 +26,8 @@ internal sealed record GenerationConfiguration
     public float? Templator { get; init; }
     public int TopK { get; init; } = 40;
     public int? Seed { get; init; }
+    public int[]? InferenceDeviceIndices { get; init; }
+    public string? ArcInferenceMode { get; init; }
 
     public float EffectiveTemperature => Temperature ?? Templator ?? 0.8f;
     public bool IsGreedy => string.Equals(
@@ -87,5 +89,6 @@ internal sealed record GenerationConfiguration
         }
         if (TopK <= 0)
             throw new ArgumentOutOfRangeException(nameof(TopK));
+        ArcInferenceRouting.ValidateOptions(InferenceDeviceIndices, ArcInferenceMode);
     }
 }

@@ -12,6 +12,7 @@ internal static partial class WikiLanguageModelCommand
         private readonly IOptimizer _optimizer;
         private readonly Parameter[] _trainingParameters;
         private readonly CudaDataParallelEngine? _dataParallelEngine;
+        private readonly ArcDataParallelEngine? _arcDataParallelEngine;
         private IReadOnlyList<WikiTrainingBatch> _microBatches = [];
         private LanguageBatch _batch;
         private Tensor? _loss;
@@ -22,6 +23,7 @@ internal static partial class WikiLanguageModelCommand
             IOptimizer optimizer,
             Parameter[] trainingParameters,
             CudaDataParallelEngine? dataParallelEngine,
+            ArcDataParallelEngine? arcDataParallelEngine,
             int preparedBatchSize,
             int preparedSequenceLength,
             long globalStep)
@@ -30,6 +32,7 @@ internal static partial class WikiLanguageModelCommand
             _optimizer = optimizer;
             _trainingParameters = trainingParameters;
             _dataParallelEngine = dataParallelEngine;
+            _arcDataParallelEngine = arcDataParallelEngine;
             if (preparedBatchSize <= 0)
             {
                 throw new ArgumentOutOfRangeException(
@@ -70,7 +73,8 @@ internal static partial class WikiLanguageModelCommand
             = [];
 
         internal IReadOnlyList<int> LastShardBatchSizes
-            => _dataParallelEngine?.LastShardBatchSizes ?? [];
+            => _dataParallelEngine?.LastShardBatchSizes
+                ?? _arcDataParallelEngine?.LastShardBatchSizes ?? [];
 
         protected LanguageBatch Batch => _batch;
 
@@ -207,6 +211,23 @@ internal static partial class WikiLanguageModelCommand
 
         public void ForwardBackwardReduced()
         {
+            if (_arcDataParallelEngine is { } arcEngine)
+            {
+                var arcBatches = new ArcLanguageModelMicroBatch[_microBatches.Count];
+                for (int index = 0; index < _microBatches.Count; index++)
+                {
+                    WikiTrainingBatch microBatch = _microBatches[index];
+                    arcBatches[index] = new ArcLanguageModelMicroBatch(
+                        microBatch.Values.Input,
+                        microBatch.Values.Target,
+                        microBatch.BatchSize,
+                        microBatch.SequenceLength);
+                }
+                LossValue = arcEngine.ForwardBackwardAccumulated(
+                    arcBatches, Tensor.DefaultCrossEntropyIgnoreIndex,
+                    checked(GlobalStep + 1));
+                return;
+            }
             if (_dataParallelEngine is { } engine)
             {
                 var cudaBatches = new CudaLanguageModelMicroBatch[
@@ -314,7 +335,11 @@ internal static partial class WikiLanguageModelCommand
 
         public abstract void ApplySchedule();
 
-        public void CommitOptimizer() => _optimizer.step();
+        public void CommitOptimizer()
+        {
+            _optimizer.step();
+            _arcDataParallelEngine?.SynchronizeSecondaryForwardReplica();
+        }
 
         public abstract void CommitMetrics();
 
@@ -335,6 +360,7 @@ internal static partial class WikiLanguageModelCommand
             IOptimizer optimizer,
             Parameter[] trainingParameters,
             CudaDataParallelEngine? dataParallelEngine,
+            ArcDataParallelEngine? arcDataParallelEngine,
             WarmupCosineProgressLRScheduler scheduler,
             TrainingMetricReporter metricReporter,
             int graphUpdateSteps,
@@ -347,6 +373,7 @@ internal static partial class WikiLanguageModelCommand
                 optimizer,
                 trainingParameters,
                 dataParallelEngine,
+                arcDataParallelEngine,
                 preparedBatchSize,
                 preparedSequenceLength,
                 globalStep)
@@ -441,6 +468,7 @@ internal static partial class WikiLanguageModelCommand
             IOptimizer optimizer,
             Parameter[] trainingParameters,
             CudaDataParallelEngine? dataParallelEngine,
+            ArcDataParallelEngine? arcDataParallelEngine,
             WarmupCosineProgressLRScheduler scheduler,
             TrainingMetricReporter metricReporter,
             long documentsPerEpoch,
@@ -456,6 +484,7 @@ internal static partial class WikiLanguageModelCommand
                 optimizer,
                 trainingParameters,
                 dataParallelEngine,
+                arcDataParallelEngine,
                 preparedBatchSize,
                 preparedSequenceLength,
                 globalStep)

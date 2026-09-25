@@ -47,6 +47,7 @@ internal static partial class WikiLanguageModelCommand
                 nameof(storageDType));
         }
         bool bfp8Mode = precisionMode is TensorPrecisionMode.Bfp8
+            or TensorPrecisionMode.Mix8_16
             or TensorPrecisionMode.Mix8_32;
         LanguageModel model = CreateModel(
             config,
@@ -268,6 +269,7 @@ internal static partial class WikiLanguageModelCommand
         TensorPrecisionMode precisionMode =
             GetCheckpointPrecisionMode(checkpoint);
         bool bfp8Mode = precisionMode is TensorPrecisionMode.Bfp8
+            or TensorPrecisionMode.Mix8_16
             or TensorPrecisionMode.Mix8_32;
         LanguageModel model = CreateModelStorage(
             checkpoint,

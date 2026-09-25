@@ -3,7 +3,7 @@ namespace NNtrain;
 /// <summary>
 /// A compact decoder-only Transformer for Japanese Wikipedia text.
 /// </summary>
-public sealed class GptRinWikiJp : LanguageModel
+public sealed partial class GptRinWikiJp : LanguageModel
 {
     private readonly Parameter _tokenEmbedding;
     private readonly Parameter _positionEmbedding;
@@ -114,6 +114,19 @@ public sealed class GptRinWikiJp : LanguageModel
 
     internal ArcTransformerMemoryPlan? LastArcMemoryPlan { get; private set; }
 
+    /// <summary>Use the two Arc lanes in the current inference session.</summary>
+    internal bool ArcTensorParallelEnabled
+    {
+        get => _arcTensorParallelEnabled;
+        set
+        {
+            if (_arcTensorParallelEnabled == value) return;
+            if (!value) ReleaseArcTensorParallelShards();
+            _arcTensorParallelFullWeightsReleased = false;
+            _arcTensorParallelEnabled = value;
+        }
+    }
+
     /// <summary>
     /// Transformer matrix weights updated by NekoMuon.
     /// </summary>
@@ -136,7 +149,14 @@ public sealed class GptRinWikiJp : LanguageModel
         int batchSize,
         int sequenceLength)
     {
-        Tensor hidden = ForwardHidden(tokenIds, batchSize, sequenceLength);
+        using IDisposable? arcPrimaryScope = ArcTensorParallelEnabled
+            ? PushArcTensorParallelPrimary()
+            : null;
+        if (ArcTensorParallelEnabled && batchSize != 1)
+            throw new NotSupportedException("Arc tensor-parallel inference requires batch size 1.");
+        Tensor hidden = ArcTensorParallelEnabled
+            ? ForwardHiddenArcTensorParallel(tokenIds, sequenceLength)
+            : ForwardHidden(tokenIds, batchSize, sequenceLength);
         return _languageModelHead.ForwardBatch(
             hidden.Reshape(batchSize * sequenceLength, ModelWidth));
     }
@@ -215,13 +235,64 @@ public sealed class GptRinWikiJp : LanguageModel
                 && !options.TransformerCheckpointing && !options.TransformerFfnCheckpointing)
             {
                 Parameter[] parameters = Parameters().ToArray();
+                var policy = TensorExecutionContext.ActivePrecisionPolicy
+                    ?? throw new InvalidOperationException("Arc memory planning requires an active precision policy.");
+                bool bf16Activations = options.Mix8_16Bf16Activations
+                    && policy.Mode == NNtrain.Runtime.Execution.PrecisionMode.Mix8_16
+                    && policy.NonWeightSelection == NNtrain.Runtime.Execution.NonWeightSelectionPolicy.FastestAvailable
+                    && (policy.AllowedActivationStorageFormats & NNtrain.Runtime.Execution.NumericFormatSet.BFloat16) != 0;
+                int fusedBfp8LinearWidth = 0;
+                bool fusedBfp8Ffn = false;
+                if (bf16Activations)
+                {
+                    int rows = checked(batchSize * sequenceLength);
+                    var lane = Tensor.ArcLane;
+                    bool FusedOutput(Linear linear, bool relu)
+                    {
+                        Tensor weight = linear.W.T, bias = linear.B.T;
+                        int n = weight.Shape[0], k = weight.Shape[1];
+                        var descriptor = weight.Bfp8Quantization;
+                        return options.FusedBfp8Linear && options.PackedMatrixStorage
+                            && rows >= 4096 && n % 32 == 0 && k <= 2048
+                            && weight.DType == TensorDType.Bfp8 && bias.DType == TensorDType.Bfp8
+                            && descriptor is not null && descriptor == bias.Bfp8Quantization
+                            && descriptor == _tokenEmbedding.T.Bfp8Quantization
+                            && descriptor.GetEffectiveBlockSize(checked(rows * n)) == 32
+                            && ArcXmxStorageOperand.CanRunAny(lane, rows, n, k,
+                                tb: true, hasBias: true, relu: relu);
+                    }
+                    TransformerBlock block = _blocks[0];
+                    if (FusedOutput(block.Attn.Qkv, false)) fusedBfp8LinearWidth += 3 * ModelWidth;
+                    if (FusedOutput(block.Attn.Wo, false)) fusedBfp8LinearWidth += ModelWidth;
+                    fusedBfp8Ffn = FusedOutput(block.Ffn.Fc1, true);
+                    if (fusedBfp8Ffn) fusedBfp8LinearWidth += block.Ffn.Fc1.W.T.Shape[0];
+                    if (FusedOutput(block.Ffn.Fc2, false)) fusedBfp8LinearWidth += ModelWidth;
+                }
                 ArcTransformerMemoryPlan plan = ArcTransformerMemoryPlan.Create(
                     batchSize, sequenceLength, ModelWidth, _blocks[0].Attn.NumHeads,
                     _blocks[0].Ffn.Fc1.W.T.Shape[0], _blocks.Length,
-                    _tokenEmbedding.T.DType, _tokenEmbedding.T.Bfp8Quantization?.BlockSize ?? 0,
+                    _tokenEmbedding.T.DType,
+                    policy.Mode,
+                    _tokenEmbedding.T.Bfp8Quantization?.BlockSize ?? 0,
                     parameters.Sum(parameter => (long)parameter.T.Numel),
                     parameters.Sum(parameter => (long)parameter.T.StorageByteLength),
-                    Tensor.ArcLane.Device.GlobalMemoryBytes);
+                    parameters.Max(parameter => (long)parameter.T.Numel),
+                    parameters.Select(parameter => (long)parameter.T.Numel)
+                        .OrderByDescending(elements => elements).Take(2).Sum(),
+                    HiddenWeightParameters.Select(parameter =>
+                    {
+                        long elements = parameter.T.Numel;
+                        long rows = parameter.T.Rank >= 2 ? parameter.T.Shape[0] : 1;
+                        long columns = elements / rows;
+                        long gram = Math.Min(rows, columns);
+                        return checked(16 * elements + 12 * gram * gram);
+                    }).DefaultIfEmpty(0).Max(),
+                    Tensor.ArcLane.Device.GlobalMemoryBytes,
+                    retainAttentionOutputBFloat16: Tensor.ArcUseAttentionRowDelta(
+                        sequenceLength, ModelWidth / _blocks[0].Attn.NumHeads, causal: true),
+                    publishBFloat16Activations: bf16Activations,
+                    fusedBfp8LinearOutputWidthPerLayer: fusedBfp8LinearWidth,
+                    fusedBfp8FfnIntermediate: fusedBfp8Ffn);
                 LastArcMemoryPlan = plan;
                 checkpointPrefix = plan.CheckpointPrefixLayers;
                 checkpointFfn = plan.CheckpointFfn;
@@ -290,6 +361,17 @@ public sealed class GptRinWikiJp : LanguageModel
         int topK = 40,
         int? stopTokenId = BpeTokenizer.EosTokenId,
         Random? random = null)
+        => GenerateTokenIds(promptTokenIds, maxNewTokens, temperature, topK,
+            stopTokenId, random, null);
+
+    internal override int[] GenerateTokenIds(
+        IEnumerable<int> promptTokenIds,
+        int maxNewTokens,
+        float temperature,
+        int topK,
+        int? stopTokenId,
+        Random? random,
+        Action<int>? onToken)
     {
         ArgumentNullException.ThrowIfNull(promptTokenIds);
         if (maxNewTokens < 0)
@@ -312,6 +394,9 @@ public sealed class GptRinWikiJp : LanguageModel
         if (result.Any(token => (uint)token >= (uint)VocabularySize))
             throw new ArgumentOutOfRangeException(nameof(promptTokenIds));
 
+        using IDisposable? arcPrimaryScope = ArcTensorParallelEnabled
+            ? PushArcTensorParallelPrimary()
+            : null;
         random ??= new Random();
         bool wasTraining = IsTraining;
         Eval();
@@ -327,6 +412,10 @@ public sealed class GptRinWikiJp : LanguageModel
             {
                 int generated = 0;
                 bool stopped = false;
+                if (CanUseArcKvCache()
+                    && result.Count <= ContextLength && maxNewTokens > 0)
+                    (generated, stopped) = GenerateArcCached(result, maxNewTokens,
+                        temperature, topK, stopTokenId, random, onToken);
                 if (Tensor.ExecutionDevice == TensorDevice.Cuda
                     && DType is TensorDType.BFloat16 or TensorDType.Bfp8
                     && result.Count <= ContextLength
@@ -358,6 +447,7 @@ public sealed class GptRinWikiJp : LanguageModel
                                 topK,
                                 random);
                             result.Add(nextToken);
+                            onToken?.Invoke(nextToken);
                             ++generated;
                             if (stopTokenId.HasValue
                                 && nextToken == stopTokenId.Value)
@@ -384,6 +474,7 @@ public sealed class GptRinWikiJp : LanguageModel
                                 topK,
                                 random);
                             result.Add(nextToken);
+                            onToken?.Invoke(nextToken);
                             ++generated;
                             ++position;
                             if (stopTokenId.HasValue
@@ -413,7 +504,9 @@ public sealed class GptRinWikiJp : LanguageModel
                     int[] context = result
                         .Skip(result.Count - sequenceLength)
                         .ToArray();
-                    Tensor hidden = ForwardHidden(context, 1, sequenceLength);
+                    Tensor hidden = ArcTensorParallelEnabled
+                        ? ForwardHiddenArcTensorParallel(context, sequenceLength)
+                        : ForwardHidden(context, 1, sequenceLength);
                     Tensor logits = _languageModelHead.ForwardBatch(
                         hidden.SelectLastSequenceToken());
                     const int offset = 0;
@@ -425,6 +518,7 @@ public sealed class GptRinWikiJp : LanguageModel
                         topK,
                         random);
                     result.Add(nextToken);
+                    onToken?.Invoke(nextToken);
                     if (stopTokenId.HasValue && nextToken == stopTokenId.Value)
                         break;
                 }

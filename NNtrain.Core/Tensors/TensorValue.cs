@@ -55,6 +55,9 @@ internal sealed class TensorStorageOwner
 
     internal float[]? MasterData { get; set; }
 
+    /// <summary>Physical BF16 host authority for mix8_16 master weights.</summary>
+    internal ushort[]? BFloat16MasterData { get; set; }
+
     internal float[]? PhysicalFloat32Cache { get; set; }
 
     internal long PhysicalFloat32CacheDataVersion { get; set; } = -1;

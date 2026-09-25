@@ -14,7 +14,8 @@ public static class OptimizerStateStream
 {
     private static readonly byte[] BinaryMagic =
         "NNOPT\0\r\n"u8.ToArray();
-    private const int BinaryFormatVersion = 1;
+    private const int LegacyBinaryFormatVersion = 1;
+    private const int PackedBFloat16BinaryFormatVersion = 2;
     private const int MaximumMetadataBytes = 1024 * 1024;
     internal const int BFloat16ConversionChunkElements = 64 * 1024;
 
@@ -75,7 +76,7 @@ public static class OptimizerStateStream
             Encoding.UTF8,
             leaveOpen: true);
         int formatVersion = reader.ReadInt32();
-        if (formatVersion != BinaryFormatVersion)
+        if (formatVersion is not (LegacyBinaryFormatVersion or PackedBFloat16BinaryFormatVersion))
         {
             throw new InvalidDataException(
                 $"Unsupported optimizer binary format version " +
@@ -98,7 +99,7 @@ public static class OptimizerStateStream
                 "restoring a composite optimizer.",
                 nameof(optimizer));
         }
-        ResolveCodec(optimizer).LoadBinary(optimizer, reader, stream);
+        ResolveCodec(optimizer).LoadBinary(optimizer, reader, stream, formatVersion);
 
         if (stream.CanSeek && stream.Position != stream.Length)
         {
@@ -122,9 +123,9 @@ public static class OptimizerStateStream
     }
 
     /// <summary>
-    /// Writes an optimizer in a compact little-endian binary format. Existing
-    /// moment arrays are copied straight to the output stream as raw IEEE-754
-    /// bytes, keeping peak memory independent of total optimizer-state size.
+    /// Writes an optimizer in a compact little-endian binary format. Arc
+    /// mix8_16 moments are written as physical BF16 bytes; other modes retain
+    /// the version 1 FP32 representation. Writes are bounded by one chunk.
     /// </summary>
     public static void SaveStateBinary(IOptimizer optimizer, Stream stream)
     {
@@ -138,7 +139,15 @@ public static class OptimizerStateStream
             stream,
             Encoding.UTF8,
             leaveOpen: true);
-        writer.Write(BinaryFormatVersion);
+        bool packedBFloat16 = optimizer switch
+        {
+            AdamW adam => adam.UsesPackedBFloat16Checkpoint,
+            NekoMuon muon => muon.UsesPackedBFloat16Checkpoint,
+            _ => false,
+        };
+        writer.Write(packedBFloat16
+            ? PackedBFloat16BinaryFormatVersion
+            : LegacyBinaryFormatVersion);
         WriteString(writer, GetStateType(optimizer));
 
         if (optimizer is IOptimizerContainer)
@@ -160,23 +169,21 @@ public static class OptimizerStateStream
                 "NekoMuon",
                 (optimizer, stream) => optimizer.RestoreStateOwned(
                     Deserialize<NekoMuonState>(stream)),
-                (optimizer, reader, stream) => optimizer.RestoreStateOwned(
-                    ReadNekoMuonState(reader, stream)),
+                (optimizer, reader, stream, binaryVersion) => optimizer.RestoreStateOwned(
+                    ReadNekoMuonState(reader, stream, binaryVersion)),
                 (optimizer, stream) => JsonSerializer.Serialize(
                     stream,
                     optimizer.CaptureStateForStreaming(),
                     JsonOptions),
                 (optimizer, writer, stream) => WriteNekoMuonState(
-                    writer,
-                    stream,
-                    optimizer.CaptureStateForStreaming())));
+                    writer, stream, optimizer)));
         registry.Register(
             new OptimizerStateCodec<AdamW>(
                 "AdamW",
                 (optimizer, stream) => optimizer.RestoreStateOwned(
                     Deserialize<AdamWState>(stream)),
-                (optimizer, reader, stream) => optimizer.RestoreStateOwned(
-                    ReadAdamWState(reader, stream)),
+                (optimizer, reader, stream, binaryVersion) => optimizer.RestoreStateOwned(
+                    ReadAdamWState(reader, stream, binaryVersion)),
                 (optimizer, stream) => JsonSerializer.Serialize(
                     stream,
                     optimizer.CaptureStateForStreaming(),
@@ -190,7 +197,7 @@ public static class OptimizerStateStream
                 "Lion",
                 (optimizer, stream) => optimizer.RestoreStateOwned(
                     Deserialize<LionState>(stream)),
-                (optimizer, reader, stream) => optimizer.RestoreStateOwned(
+                (optimizer, reader, stream, binaryVersion) => optimizer.RestoreStateOwned(
                     ReadLionState(reader, stream)),
                 (optimizer, stream) => JsonSerializer.Serialize(
                     stream,
@@ -205,7 +212,7 @@ public static class OptimizerStateStream
                 "GainShareAdamW",
                 (optimizer, stream) => optimizer.RestoreStateOwned(
                     Deserialize<GainShareAdamWState>(stream)),
-                (optimizer, reader, stream) => optimizer.RestoreStateOwned(
+                (optimizer, reader, stream, binaryVersion) => optimizer.RestoreStateOwned(
                     ReadGainShareAdamWState(reader, stream)),
                 (optimizer, stream) => JsonSerializer.Serialize(
                     stream,
@@ -248,16 +255,19 @@ public static class OptimizerStateStream
                 parameter.Index,
                 parameter.Name,
                 parameter.Shape);
-            WriteAdamWMoment(
-                writer,
-                stream,
-                parameter.FirstMoment,
-                parameter.FirstMomentBFloat16);
-            WriteAdamWMoment(
-                writer,
-                stream,
-                parameter.SecondMoment,
-                parameter.SecondMomentBFloat16);
+            if (optimizer.UsesPackedBFloat16Checkpoint)
+            {
+                (ushort[] first, ushort[] second) = optimizer.GetStreamingPackedMoments(index);
+                WritePackedBFloat16Array(writer, stream, first);
+                WritePackedBFloat16Array(writer, stream, second);
+            }
+            else
+            {
+                WriteAdamWMoment(writer, stream, parameter.FirstMoment,
+                    parameter.FirstMomentBFloat16);
+                WriteAdamWMoment(writer, stream, parameter.SecondMoment,
+                    parameter.SecondMomentBFloat16);
+            }
         }
     }
 
@@ -305,7 +315,8 @@ public static class OptimizerStateStream
 
     private static AdamWState ReadAdamWState(
         BinaryReader reader,
-        Stream stream)
+        Stream stream,
+        int binaryVersion)
     {
         (int formatVersion, int step, AdamWOptions options, int count) =
             ReadStateHeader<AdamWOptions>(reader, stream);
@@ -318,8 +329,8 @@ public static class OptimizerStateStream
                 slot,
                 name,
                 shape,
-                ReadFloatArray(reader, stream),
-                ReadFloatArray(reader, stream));
+                ReadOptimizerMoment(reader, stream, binaryVersion),
+                ReadOptimizerMoment(reader, stream, binaryVersion));
         }
         return new AdamWState(formatVersion, step, options, states);
     }
@@ -327,8 +338,11 @@ public static class OptimizerStateStream
     private static void WriteNekoMuonState(
         BinaryWriter writer,
         Stream stream,
-        NekoMuonState state)
+        NekoMuon optimizer)
     {
+        NekoMuonState state = optimizer.UsesPackedBFloat16Checkpoint
+            ? optimizer.GetPackedStreamingState()
+            : optimizer.CaptureStateForStreaming();
         WriteStateHeader(
             writer,
             state.FormatVersion,
@@ -344,22 +358,33 @@ public static class OptimizerStateStream
                 ?? throw new InvalidDataException(
                     "NekoMuon slow decay product is missing."));
         }
-        foreach (NekoMuonParameterState parameter in state.ParameterStates)
+        for (int index = 0; index < state.ParameterStates.Length; index++)
         {
+            NekoMuonParameterState parameter = state.ParameterStates[index];
             WriteParameterMetadata(
                 writer,
                 parameter.Index,
                 parameter.Name,
                 parameter.Shape);
-            WriteFloatArray(writer, stream, parameter.FastMoment);
-            WriteFloatArray(writer, stream, parameter.SlowMoment);
+            if (optimizer.UsesPackedBFloat16Checkpoint)
+            {
+                (ushort[] fast, ushort[] slow) = optimizer.GetStreamingPackedMoments(index);
+                WritePackedBFloat16Array(writer, stream, fast);
+                WritePackedBFloat16Array(writer, stream, slow);
+            }
+            else
+            {
+                WriteFloatArray(writer, stream, parameter.FastMoment);
+                WriteFloatArray(writer, stream, parameter.SlowMoment);
+            }
             writer.Write(parameter.Confidence);
         }
     }
 
     private static NekoMuonState ReadNekoMuonState(
         BinaryReader reader,
-        Stream stream)
+        Stream stream,
+        int binaryVersion)
     {
         (int formatVersion, int step, NekoMuonOptions options, int count) =
             ReadStateHeader<NekoMuonOptions>(reader, stream);
@@ -378,8 +403,8 @@ public static class OptimizerStateStream
                 slot,
                 name,
                 shape,
-                ReadFloatArray(reader, stream),
-                ReadFloatArray(reader, stream),
+                ReadOptimizerMoment(reader, stream, binaryVersion),
+                ReadOptimizerMoment(reader, stream, binaryVersion),
                 reader.ReadSingle());
         }
         return new NekoMuonState(formatVersion, step, options, states)
@@ -573,6 +598,80 @@ public static class OptimizerStateStream
         writer.Write(values.Length);
         writer.Flush();
         stream.Write(MemoryMarshal.AsBytes(values.AsSpan()));
+    }
+
+    private static void WritePackedBFloat16Array(
+        BinaryWriter writer,
+        Stream stream,
+        float[] values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        // Negative length marks a physical BF16 moment. Version 1 lengths
+        // are always non-negative and continue to decode as raw FP32.
+        writer.Write(~values.Length);
+        writer.Flush();
+        ushort[] chunk = ArrayPool<ushort>.Shared.Rent(
+            Math.Min(BFloat16ConversionChunkElements, Math.Max(1, values.Length)));
+        try
+        {
+            for (int offset = 0; offset < values.Length;)
+            {
+                int count = Math.Min(chunk.Length, values.Length - offset);
+                for (int i = 0; i < count; i++)
+                    chunk[i] = TensorStorageCodec.EncodeBFloat16(values[offset + i]);
+                stream.Write(MemoryMarshal.AsBytes(chunk.AsSpan(0, count)));
+                offset += count;
+            }
+        }
+        finally { ArrayPool<ushort>.Shared.Return(chunk); }
+    }
+
+    private static void WritePackedBFloat16Array(
+        BinaryWriter writer,
+        Stream stream,
+        ushort[] values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        writer.Write(~values.Length);
+        writer.Flush();
+        for (int offset = 0; offset < values.Length;)
+        {
+            int count = Math.Min(BFloat16ConversionChunkElements,
+                values.Length - offset);
+            stream.Write(MemoryMarshal.AsBytes(values.AsSpan(offset, count)));
+            offset += count;
+        }
+    }
+
+    private static float[] ReadOptimizerMoment(
+        BinaryReader reader,
+        Stream stream,
+        int binaryVersion)
+    {
+        if (binaryVersion == LegacyBinaryFormatVersion)
+            return ReadFloatArray(reader, stream);
+        int marker = reader.ReadInt32();
+        if (marker >= 0)
+            throw new InvalidDataException("Version 2 optimizer moments must use physical BF16 storage.");
+        int count = ~marker;
+        if (stream.CanSeek && (long)count * sizeof(ushort) > stream.Length - stream.Position)
+            throw new InvalidDataException("BF16 optimizer moment exceeds the remaining payload.");
+        var values = new float[count];
+        ushort[] chunk = ArrayPool<ushort>.Shared.Rent(
+            Math.Min(BFloat16ConversionChunkElements, Math.Max(1, count)));
+        try
+        {
+            for (int offset = 0; offset < count;)
+            {
+                int length = Math.Min(chunk.Length, count - offset);
+                stream.ReadExactly(MemoryMarshal.AsBytes(chunk.AsSpan(0, length)));
+                for (int i = 0; i < length; i++)
+                    values[offset + i] = TensorStorageCodec.DecodeBFloat16(chunk[i]);
+                offset += length;
+            }
+        }
+        finally { ArrayPool<ushort>.Shared.Return(chunk); }
+        return values;
     }
 
     private static float[] ReadFloatArray(

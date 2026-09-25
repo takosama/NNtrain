@@ -99,14 +99,29 @@ internal static class ArcMuonMath
     }
 
     internal static float Confidence(ArcExecutionLane lane, ArcBuffer fast, ArcBuffer slow, int length, float epsilon)
+        => Confidence(lane, fast, slow, length, epsilon, out _);
+
+    internal static float Confidence(ArcExecutionLane lane, ArcBuffer fast, ArcBuffer slow,
+        int length, float epsilon, out float fastSumSquares)
     {
         int groups = (length + 255) / 256;
         using var partials = lane.Allocate(groups * 4);
         float[] statistics = new float[4];
         lane.Run("confidence_blocks", groups * 256L, 256, fast, slow, partials, length, new LocalMemory(4096));
         lane.Run("confidence_finish", 4, 0, partials, Out(statistics), groups);
+        fastSumSquares = statistics[1];
         double alignment = Math.Max(0, statistics[0] / (Math.Sqrt(statistics[1]) * Math.Sqrt(statistics[2]) + epsilon));
         double persistence = statistics[2] / ((double)statistics[2] + statistics[3] + epsilon);
+        return (float)Math.Clamp(alignment * persistence, 0, 1);
+    }
+
+    internal static float ConfidenceForIdenticalDirections(float sumSquares, float epsilon)
+    {
+        // Nesterov publishes the same vector to both hats, so dot, fast^2,
+        // and slow^2 are equal and the residual is zero.
+        double alignment = Math.Max(0, sumSquares /
+            (Math.Sqrt(sumSquares) * Math.Sqrt(sumSquares) + epsilon));
+        double persistence = sumSquares / ((double)sumSquares + epsilon);
         return (float)Math.Clamp(alignment * persistence, 0, 1);
     }
 

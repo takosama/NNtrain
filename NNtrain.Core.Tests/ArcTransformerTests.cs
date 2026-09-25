@@ -8,29 +8,87 @@ public sealed class ArcTransformerTests
     [InlineData(TensorPrecisionMode.Float32)]
     [InlineData(TensorPrecisionMode.Mix16_32)]
     [InlineData(TensorPrecisionMode.Mix8_32)]
+    [InlineData(TensorPrecisionMode.Mix8_16)]
     public void TiledStreamingAndChunkedLossMatchReferenceWithTails(TensorPrecisionMode precision)
     {
         Assert.SkipWhen(!Tensor.IsArcAvailable(), "Intel Arc OpenCL GPU is unavailable.");
-        (float Loss, float[][] Grad) Run(bool optimized)
-        {
-            using var scope = Tensor.BeginArcExecution(precision: precision,
-                options: optimized ? new ArcExecutionOptions() : ArcExecutionOptions.Reference);
-            var model = new GptRinWikiJp(37, 137, 8, 2, 13, 1, new Random(57), dropout: .1f, tieWordEmbeddings: true);
-            model.to(precision, 32);
-            int[] tokens = Enumerable.Range(0, 137).Select(i => i % 37).ToArray();
-            int[] labels = Enumerable.Range(0, 137).Select(i => i % 11 == 0 ? -1 : (i + 1) % 37).ToArray();
-            Tensor loss = model.forward_loss(tokens, labels, 1, 137);
-            float value = loss.item();
-            loss.BackwardAndRelease();
-            Assert.Equal(optimized ? 4 + model.parameters().Sum(p => (long)p.T.StorageByteLength + p.T.Numel * 4L) : 0,
-                Tensor.ArcLane.AllocatedBytes);
-            return (value, model.parameters().Select(p => p.T.Grad.ToArray()).ToArray());
-        }
-        var reference = Run(false); var optimized = Run(true);
+        // The reference options predate BF16 activation publication. Keep
+        // storage policy equal while comparing the matrix/loss implementations.
+        var optimizedOptions = precision == TensorPrecisionMode.Mix8_16
+            ? new ArcExecutionOptions { Mix8_16Bf16Activations = false }
+            : new ArcExecutionOptions();
+        var reference = RunTailTransformer(precision, ArcExecutionOptions.Reference, false);
+        var optimized = RunTailTransformer(precision, optimizedOptions, true);
         Assert.InRange(MathF.Abs(reference.Loss - optimized.Loss), 0, 1e-4f);
+        float maximumError = 0;
+        int maximumParameter = -1, maximumIndex = -1;
         for (int p = 0; p < reference.Grad.Length; p++)
             for (int i = 0; i < reference.Grad[p].Length; i++)
-                Assert.InRange(MathF.Abs(reference.Grad[p][i] - optimized.Grad[p][i]), 0, 1e-4f);
+            {
+                float expectedGradient = precision == TensorPrecisionMode.Mix8_16
+                    ? TensorStorageCodec.RoundToBFloat16(reference.Grad[p][i])
+                    : reference.Grad[p][i];
+                float error = MathF.Abs(expectedGradient - optimized.Grad[p][i]);
+                if (error > maximumError)
+                {
+                    maximumError = error;
+                    maximumParameter = p;
+                    maximumIndex = i;
+                }
+            }
+        if (maximumError > 1e-4f)
+            Assert.Fail($"maximum gradient error {maximumError:G9} at parameter {maximumParameter}, index {maximumIndex}; "
+                + $"reference {reference.Grad[maximumParameter][maximumIndex]:G9}, "
+                + $"optimized {optimized.Grad[maximumParameter][maximumIndex]:G9}");
+    }
+
+    [Fact]
+    public void NewMix8_16NonAttentionDefaultsLeaveSmallUnsupportedShapeBitwiseUnchanged()
+    {
+        Assert.SkipWhen(!Tensor.IsArcAvailable(), "Intel Arc OpenCL GPU is unavailable.");
+        // Both runs retain the earlier BF16 activation policy. This shape has
+        // width 8/hidden 13/vocabulary 37, below the new GEMM and norm gates.
+        var previous = RunTailTransformer(TensorPrecisionMode.Mix8_16,
+            new ArcExecutionOptions
+            {
+                Mix8_16LinearDualGradientPack = false,
+                Mix8_16ReluDualGradientPack = false,
+                Mix8_16FusedNormResidualBackward = false,
+                Mix8_16DirectBf16NormOutput = false,
+                Mix8_16ParallelNormReduction = false,
+                Mix8_16CachedLossLogits = false,
+                Mix8_16BiasOnlyGradientReduction = false,
+            }, true);
+        var current = RunTailTransformer(TensorPrecisionMode.Mix8_16,
+            new ArcExecutionOptions(), true);
+        Assert.Equal(BitConverter.SingleToInt32Bits(previous.Loss),
+            BitConverter.SingleToInt32Bits(current.Loss));
+        Assert.Equal(previous.Grad.Length, current.Grad.Length);
+        for (int p = 0; p < previous.Grad.Length; p++)
+            Assert.Equal(previous.Grad[p].Select(BitConverter.SingleToInt32Bits),
+                current.Grad[p].Select(BitConverter.SingleToInt32Bits));
+    }
+
+    private static (float Loss, float[][] Grad) RunTailTransformer(
+        TensorPrecisionMode precision, ArcExecutionOptions options, bool optimized)
+    {
+        using var scope = Tensor.BeginArcExecution(precision: precision, options: options);
+        var model = new GptRinWikiJp(37, 137, 8, 2, 13, 1, new Random(57),
+            dropout: .1f, tieWordEmbeddings: true);
+        model.to(precision, 32);
+        int[] tokens = Enumerable.Range(0, 137).Select(i => i % 37).ToArray();
+        int[] labels = Enumerable.Range(0, 137)
+            .Select(i => i % 11 == 0 ? -1 : (i + 1) % 37).ToArray();
+        Tensor loss = model.forward_loss(tokens, labels, 1, 137);
+        float value = loss.item();
+        loss.BackwardAndRelease();
+        int gradientBytes = precision == TensorPrecisionMode.Mix8_16
+            ? sizeof(ushort) : sizeof(float);
+        Assert.Equal(optimized
+                ? 4 + model.parameters().Sum(p => (long)p.T.StorageByteLength + p.T.Numel * gradientBytes)
+                : 0,
+            Tensor.ArcLane.AllocatedBytes);
+        return (value, model.parameters().Select(p => p.T.Grad.ToArray()).ToArray());
     }
 
     [Theory]
@@ -93,6 +151,7 @@ public sealed class ArcTransformerTests
     [InlineData(TensorPrecisionMode.Float32)]
     [InlineData(TensorPrecisionMode.Mix16_32)]
     [InlineData(TensorPrecisionMode.Mix8_32)]
+    [InlineData(TensorPrecisionMode.Mix8_16)]
     public void TrainingAccumulationAndGenerationKeepPrecisionAndReleaseMemory(TensorPrecisionMode precision)
     {
         Assert.SkipWhen(!Tensor.IsArcAvailable(), "Intel Arc OpenCL GPU is unavailable.");
@@ -115,7 +174,8 @@ public sealed class ArcTransformerTests
             }
             Assert.True(float.IsFinite(nn.utils.clip_grad_norm_(parameters, 1)));
             optimizer.step();
-            long expected = 4 + parameters.Sum(p => (long)p.T.StorageByteLength + p.T.Numel * 16L);
+            long optimizerBytesPerElement = precision == TensorPrecisionMode.Mix8_16 ? 8L : 16L;
+            long expected = 4 + parameters.Sum(p => (long)p.T.StorageByteLength + p.T.Numel * optimizerBytesPerElement);
             Assert.Equal(expected, Tensor.ArcLane.AllocatedBytes);
             retainedBytes = expected;
         }

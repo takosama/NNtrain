@@ -18,13 +18,13 @@
 
   "maxTrainingDocuments": 0,
   "maxTrainingTokens": 0,
-  "maxDocumentTokens": 1024,
+  "maxDocumentTokens": 2048,
   "validationFraction": 0.0,
   "epochs": 1,
   "batchSize": 16,
-  "gradientAccumulationSteps": 16,
+  "gradientAccumulationSteps": 8,
 
-  "contextLength": 1024,
+  "contextLength": 2048,
   "modelWidth": 512,
   "heads":16,
   "hiddenSize": 1536,
@@ -32,12 +32,14 @@
   "modelArchitecture": "transformer",
   "device": "arc",
   "deviceIndex": 0,
-  "deviceIndices": [0],
+  "deviceIndices": [0, 1],
+  "inferenceDeviceIndices": [0, 1],
+  "arcInferenceMode": "auto",
   "adaptiveCudaSharding": true,
   "cudaShardEmaAlpha": 0.2,
   "cudaMinimumRelativeShardSize": 0.5,
   "cudaMaximumBatchAdjustmentPerStep": 1,
-  "precisionMode": "mix8_32",
+  "precisionMode": "mix8_16",
   "bfp8_block_size": 32,
   "tieWordEmbeddings": true,
   "forgetMemoryKeyWidth": 16,
@@ -72,6 +74,6 @@
   "maxDegreeOfParallelism": 0,
 
   "maxNewTokens": 200,
-  "temperature": 1,
-  "topK": 1
+  "temperature": 0.9,
+  "topK": 40
 }

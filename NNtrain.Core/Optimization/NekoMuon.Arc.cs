@@ -13,15 +13,41 @@ public sealed partial class NekoMuon
         var lane = Tensor.ArcLane;
         int n = parameter.T.Numel;
         bool resident = Tensor.ArcResident;
+        bool bf16State = TensorExecutionContext.ActivePrecisionPolicy?.Mode
+            == NNtrain.Runtime.Execution.PrecisionMode.Mix8_16;
+        if (bf16State && !resident)
+            throw new NotSupportedException("Arc mix8_16 NekoMuon requires resident tensors and physical BF16 optimizer state.");
         float[] gradient = resident ? [] : parameter.T.GradientBuffer;
-        using var g = resident ? parameter.T.ArcGradient().Borrow() : lane.Upload(gradient.Length == 0 ? new float[n] : gradient);
-        using var fast = resident ? _arcState.Get(state.FastMoment).Borrow() : lane.Upload(state.FastMoment);
-        using var slow = resident ? _arcState.Get(state.SlowMoment).Borrow() : lane.Upload(state.SlowMoment);
+        using var g = resident
+            ? (bf16State ? parameter.T.ArcBFloat16Gradient() : parameter.T.ArcGradient()).Borrow()
+            : lane.Upload(gradient.Length == 0 ? new float[n] : gradient);
+        using var fast = resident
+            ? (bf16State ? _arcState.GetBFloat16(_arcPackedFastMoments[index]) : _arcState.Get(state.FastMoment)).Borrow()
+            : lane.Upload(state.FastMoment);
+        using var slow = resident
+            ? (bf16State ? _arcState.GetBFloat16(_arcPackedSlowMoments[index]) : _arcState.Get(state.SlowMoment)).Borrow()
+            : lane.Upload(state.SlowMoment);
         using var fh = lane.Allocate(n);
-        using var sh = lane.Allocate(n);
-        lane.Run("moments", n, 0, g, fast, slow, fh, sh, n, options.BetaFast, options.BetaSlow,
+        // Nesterov emits the same direction into both hats. They can share
+        // one scratch buffer; after normalization it can hold the transpose.
+        using var sh = ArcOptimizerFastPath.ShareNesterovHat && options.Nesterov
+            ? fh.Borrow() : lane.Allocate(n);
+        lane.Run(bf16State ? "moments_bf16_packed" : "moments", n, 0,
+            g, fast, slow, fh, sh, n, options.BetaFast, options.BetaSlow,
             fastCorrection, slowCorrection, options.Nesterov ? 1 : 0);
-        float confidenceRaw = ArcMuonMath.Confidence(lane, fh, sh, n, options.Epsilon);
+        bool singleReduction = bf16State && options.Nesterov
+            && ArcOptimizerFastPath.NesterovSingleReduction;
+        float fastSumSquares;
+        float confidenceRaw;
+        if (singleReduction)
+        {
+            fastSumSquares = ArcMuonMath.SumSquares(lane, fh, n);
+            confidenceRaw = ArcMuonMath.ConfidenceForIdenticalDirections(
+                fastSumSquares, options.Epsilon);
+        }
+        else
+            confidenceRaw = ArcMuonMath.Confidence(lane, fh, sh, n, options.Epsilon,
+                out fastSumSquares);
         float confidence = Math.Clamp(options.Rho * state.Confidence + (1f - options.Rho) * confidenceRaw, 0, 1);
         bool runNs = _state.Step % options.NewtonSchulzInterval == 0;
         float depth = ForceFullNewtonSchulz && runNs ? options.MaxNewtonSchulzSteps
@@ -31,7 +57,8 @@ public sealed partial class NekoMuon
         GetMatrixShape(parameter, out int originalRows, out int originalColumns);
         int rows = Math.Min(originalRows, originalColumns), columns = Math.Max(originalRows, originalColumns);
         bool transpose = originalRows > originalColumns;
-        float inverseNorm = 1f / (MathF.Sqrt(ArcMuonMath.SumSquares(lane, fh, n)) + options.Epsilon);
+        float inverseNorm = 1f / (MathF.Sqrt(singleReduction || (bf16State && ArcOptimizerFastPath.ReuseMuonNorm)
+            ? fastSumSquares : ArcMuonMath.SumSquares(lane, fh, n)) + options.Epsilon);
         using var first = lane.Allocate(n);
         using var second = lane.Allocate(n);
         using var gram = lane.Allocate(rows * rows);
@@ -56,11 +83,17 @@ public sealed partial class NekoMuon
             update = sh;
         }
         float[] master = resident ? [] : parameter.DataBuffer;
-        using var weights = resident ? parameter.T.ArcMaster().Borrow() : lane.Upload(master);
+        using var weights = resident
+            ? (bf16State ? parameter.T.ArcBFloat16Master() : parameter.T.ArcMaster()).Borrow()
+            : lane.Upload(master);
         bool decay = parameter.WeightDecay == WeightDecayPolicy.Apply || (options.Decay1D && parameter.T.Rank == 1);
         float scale = MathF.Sqrt(MathF.Max(1, (float)originalRows / originalColumns));
-        lane.Run("axpby", n, 0, weights, update, weights, n,
-            decay ? 1f - options.LearningRate * options.WeightDecay : 1f, -options.LearningRate * scale);
+        if (resident && bf16State)
+            lane.Run("muon_weight_update_bf16_packed", n, 0, weights, update, n,
+                decay ? 1f - options.LearningRate * options.WeightDecay : 1f, -options.LearningRate * scale);
+        else
+            lane.Run("axpby", n, 0, weights, update, weights, n,
+                decay ? 1f - options.LearningRate * options.WeightDecay : 1f, -options.LearningRate * scale);
         // CPU state is the portable checkpoint authority. No intermediate directions or Gram matrices cross PCIe.
         if (resident) parameter.T.CompleteArcUpdate();
         else

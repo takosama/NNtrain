@@ -598,7 +598,11 @@ sealed record TrainingConfiguration
         }
 
         Model.Validate();
-        _ = GetPrecisionMode();
+        if (GetPrecisionMode() == TensorPrecisionMode.Mix8_16)
+        {
+            throw new NotSupportedException(
+                "mix8_16 currently supports only Arc Transformer training and inference.");
+        }
         if (RootBfp8BlockSize is <= 0)
         {
             throw new ArgumentOutOfRangeException(

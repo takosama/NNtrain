@@ -6,33 +6,53 @@ optimizers, dataset boundaries, and training orchestration in C#/.NET 10.
 
 ## Intel Arc (Windows OpenCL)
 
-`device: "arc"`, `deviceIndex: 0`, `deviceIndices: [0]` select the Intel Arc
-backend independently of CPU/CUDA. `training.transformer.json` uses this route.
+`device: "arc"` selects the Intel Arc backend independently of CPU/CUDA.
+Set `deviceIndices: [0]` for one GPU or `[0, 1]` for two; the latter is the
+current `training.transformer.json` setting.
 Install the Intel graphics driver (including OpenCL); no CUDA toolkit or oneAPI
-installation is needed for Arc. The current scope is a single Arc GPU running
-Transformer training/generation with `float32`, `mix16_32`, or `mix8_32`, and
-Muon/NekoMuon/AdamW. Unsupported architectures or pure low-precision modes fail
-explicitly. DRN, multi-Arc data parallelism and LoRA/DPO are not implemented here.
+installation is needed for Arc. Transformer training uses one or two Arc GPUs
+with Muon, NekoMuon, or AdamW. Transformer inference can also use two Arc GPUs.
+Both support `float32`, `mix16_32`, `mix8_32`, and `mix8_16`. Unsupported architectures or
+pure low-precision modes fail explicitly. DRN and LoRA/DPO
+are not implemented here.
 
 ```powershell
 dotnet run --configuration Release --project .\NNtrain.Cli -- `
   --config .\training.transformer.json
 ```
 
-The default training route keeps packed weights/activations and FP32 gradients,
-masters and optimizer state **resident on Arc** across operators and updates.
+The single-GPU training route keeps packed weights/activations and optimizer
+state **resident on Arc** across operators and updates. `mix8_32` retains FP32
+gradients, master weights, and optimizer state. `mix8_16` stores the master
+weights and optimizer moments in physical BF16 buffers. Backward temporarily
+accumulates gradients in FP32, then packs the completed gradients into BF16.
 After initialization, training transfers only token/target IDs and small loss,
 norm and Muon statistics. Explicit inspection, checkpoint and session closure
 perform the necessary readback. BF16 matrix operands use **Intel XMX** when the
 driver advertises the matrix extension and a supported minimum subgroup size.
-Float32 mode keeps FP32 tiled arithmetic. In mixed modes, Linear/loss-head
-backward uses BF16-rounded GEMM operands, matching the CUDA precision contract,
-while gradient storage and accumulation remain FP32. Attention backward keeps
-FP32 arithmetic. Bounded allocation reuse, deferred frees, head-tiled attention
-and chunked loss heads control temporary storage. Mixed-precision operands
-retain their rounding contract with FP32 accumulation.
+Float32 mode keeps FP32 tiled arithmetic. `mix16_32` and `mix8_32`
+Linear/loss-head backward use BF16-rounded GEMM operands with FP32 accumulation.
+`mix8_16` prefers INT8 weight arithmetic and permits BF16 weight GEMM when
+measured faster. Its non-weight kernels select formats and summation order for
+speed. On the measured T2048/D32 Arc path, decoded QKV and a saved raw attention
+output use physical BF16. Backward forms `delta = dY dot O`, fuses dP/dS, and
+stores paired BF16 probabilities/derivatives without a separate FP32 derivative
+matrix. These kernels currently use FP32 FMA scratch because the tested BF16
+XMX alternative was slower. This is a measured implementation choice.
+Bounded allocation reuse, deferred frees, head-tiled attention
+and chunked loss heads control temporary storage.
 The byte counters in the Arc benchmark are native backend allocations, not the
 driver's total VRAM reservation.
+
+With two training GPUs, each receives half of every microbatch and keeps a
+separate Transformer replica. Gradients from GPU 1 are staged through host
+memory and added to the GPU 0 gradients before clipping. `mix8_16` transfers
+these gradients in physical BF16 (two bytes per value); GPU 0 clips the packed
+gradients directly. GPU 0 owns the
+optimizer and checkpoint; updated weights are copied to GPU 1 after each
+optimizer step. `batchSize` must be at least 2. The configured batch and
+gradient accumulation counts remain global, so `[0, 1]` does not double the
+effective batch size. Training and inference device lists are independent.
 
 Direct API usage owns the device lifetime explicitly:
 
@@ -50,6 +70,47 @@ dotnet run --configuration Release --project .\NNtrain.Benchmarks -- `
   --probe-arc-transformer .\training.transformer.json .\benchmark-results\arc-run.json `
   --batch 4 --sequence 512 --layers 2 --accumulation 1 --warmup 3 --steps 10
 ```
+
+The probe honors Arc `deviceIndices` and reports both lanes for two-GPU
+training. At the full `training.transformer.json` shape on two B580s, the
+initial data-parallel implementation reached 13,584 tokens/s (19.30 s/update),
+versus 6,965 tokens/s (37.64 s/update) with `[0]`. The updated replica sync
+copies the published forward weights instead of the FP32 optimizer master.
+A same-binary full/packed/full comparison measured 19.33/18.61/19.33 s/update;
+the packed path reached 14,084 tokens/s. These short synthetic runs use one
+warmup and two measured updates and exclude corpus and checkpoint I/O. The
+initial results are in `benchmark-results/arc-train-dual-b580-20260923.json`
+and `arc-train-single-b580-20260923.json`; the synchronization comparison is
+documented in `docs/arc-dual-training-speed-2026-09-23.md`. The probe accepts
+`--replica-sync full|packed` for a matched comparison.
+
+For the current `mix8_16` configuration, a same-binary B580 comparison with
+one warmup and four measured updates gave **14,555 → 16,613 tokens/s** with
+row-delta attention fusion and BF16 activation publication: **14.1% higher
+throughput**, or 18.01 → 15.78 s/update. The effective batch remains 262,144
+tokens. Saved BF16 attention outputs and wider activation publication increase
+peak backend allocation by about 1.15 GiB per GPU; the selected peaks are
+5,726.9/5,194.7 MiB. Native INT8 Linear, BF16 XMX
+attention, BF16 activation publication, and larger microbatches were also
+implemented or compared. See the [speed policy and measurements](docs/arc-mix8-16-speed-policy-2026-09-23.md)
+and `benchmark-results/arc-mix8-16-speed-policy-final-{baseline,bf16-activations}-20260923.json`.
+Earlier physical-BF16 tuning is recorded in [the previous report](docs/arc-mix8-16-tuning-2026-09-23.md).
+
+The next same-binary A/B/A comparison on two B580s measured the seven selected
+non-Attention `mix8_16` optimizations at **16,621 → 17,225 tokens/s** (+3.6%),
+or 15.77 → 15.22 s/update. The comparison used the full 262,144-token synthetic
+batch and three measured updates per run. Peak backend allocation rose by
+364.2 MiB per GPU. The [non-Attention tuning report](docs/arc-nonattention-tuning-2026-09-23.md)
+records the selected paths, accuracy, memory, and trace results.
+
+The subsequent Attention and normalization pass measured **17,222 → 17,952
+tokens/s** (+4.24%) in a same-binary two-B580 A/B/A comparison, or 15.22 →
+14.60 s/update. The effective batch remains 262,144 tokens. Six measured paths
+are enabled by default: native softmax exponential, K32 fused dP/dS, packed
+shared-memory operands for PV/dQ/dK+dV, and fused normalization parameter
+partials. The [overall tuning report](docs/arc-overall-tuning-2026-09-24.md)
+includes the profiles, rejected candidates, numerical checks and reproduction
+commands.
 
 Use `--arc-mode reference` for the untiled/staged reference, `staged` for the
 previous optimized but host-staged route, and `optimized`
@@ -116,12 +177,23 @@ available VRAM when other applications consume GPU memory.
 
 ## Precision modes and native F16C dense kernels
 
-Training configurations expose five precision modes through
-`precisionMode`: `float32`, `bfloat16`, `mix16_32`, `bfp8`, and `mix8_32`. Both 16-bit modes keep
+Training configurations expose six precision modes through
+`precisionMode`: `float32`, `bfloat16`, `mix16_32`, `bfp8`, `mix8_32`, and
+`mix8_16`. Both BF16 storage modes keep
 parameters and activations in physical BF16 storage. `bfloat16` also keeps the
 AdamW moments in BF16. `mix16_32` keeps GEMM accumulation, reductions,
 normalization statistics, losses, gradients, optimizer state, and master
-weights in Float32. `ForgetMemoryV2Gpt` and `ForgetMemoryV3Gpt` use this mixed
+weights in Float32. `mix8_16` keeps block BFP8 weights and prefers native
+8-bit weight computations, while allowing 16-bit weight computations when
+they are faster. Activations may use BFP8 or BF16, and other operations choose
+their format and reduction order for speed. The policy does not require
+reproducing an FP32 operation sequence. Retained gradients, master weights,
+and optimizer moments use physical BF16 on Arc. Native INT32/FP32 accumulator
+and reduction scratch formats are implementation choices. Host master
+weights and optimizer moments stay packed BF16. New
+`mix8_16` checkpoints store both as two-byte BF16 values and can read older
+Float32 checkpoint artifacts. This mode is supported for Arc Transformer
+training and inference. `ForgetMemoryV2Gpt` and `ForgetMemoryV3Gpt` use this mixed
 contract by default. The lower-level `TensorDType.Float16` remains available
 for legacy/raw IEEE binary16 tensor operations, but is not a configuration
 mode.
@@ -131,8 +203,10 @@ An explicit `float32`, `mix16_32`, or `mix8_32` can migrate a checkpoint from
 another of these three modes, loading its saved weights and FP32 optimizer
 state while preserving scheduler, global step and data cursor. The numerical
 trajectory changes; this is not a bit-exact continuation. Pure `bfloat16` and
-`bfp8` optimizer-state migration is not supported. To test whether 8-bit
-quantization limits convergence, use `mix16_32` (BF16 storage with FP32
+`bfp8` optimizer-state migration is not supported. `mix8_16` resumes from a
+`mix8_16` checkpoint; migration to or from another precision mode is rejected.
+To test whether 8-bit quantization limits convergence, use `mix16_32` (BF16
+storage with FP32
 gradients/master weights), keeping effective batch and learning rates fixed.
 
 On Windows x64 CPUs with AVX2 and F16C, the optional native dense-kernel
@@ -685,6 +759,27 @@ available:
 dotnet run --configuration Release --project NNtrain.Cli -- `
   --generate-config generate.json
 ```
+
+For Arc Transformer inference, set `inferenceDeviceIndices: [0, 1]` and
+`arcInferenceMode: "tensorParallel"` to use both GPUs for one generated sequence.
+`"single"` uses the first listed GPU. `"auto"` warms and times both routes
+three times each, measuring prompt prefill and incremental decode separately.
+It estimates the requested generation time, including any full-window suffix,
+and uses both GPUs only when that estimate is at least 5% faster. The CLI prints
+the timings and selected route. These settings are independent of training `deviceIndices`.
+They can be set in the training configuration for `--config ... --generate`, or
+overridden in `generate.json` for `--generate-config`.
+
+Arc Transformer generation can retain per-layer K/V on each participating GPU
+and compute only the next token. Both commands keep one generation session
+alive. Once the context window slides, generation recomputes the window because
+absolute positional embeddings change. Unsupported cache shapes use the full
+prefix path. One-token projections can read packed weights directly; the
+inference options in `ArcExecutionOptions` allow comparison with the older paths.
+The [Arc generation tuning report](docs/arc-generation-tuning-2026-09-24.md)
+records the measured speedups, memory counters, numerical differences and
+reproducible benchmark commands. Low-precision reduction changes can change a
+seeded topK continuation even when greedy choices agree.
 
 Set `sampling` to `"topK"` and provide `topK`/`temperature`, or set it to
 `"greedy"`. `templator` is accepted as a backwards-compatible alias for

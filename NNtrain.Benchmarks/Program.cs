@@ -29,6 +29,14 @@ else if (args.Length > 0 && args[0] == "--probe-arc-transformer")
 {
     ArcTransformerProbe.Run(args[1..]);
 }
+else if (args.Length > 0 && args[0] is "--arc-generation-probe" or "--probe-arc-generation")
+{
+    ArcGenerationProbe.Run(args[1..]);
+}
+else if (args.Length > 0 && args[0] == "--arc-generation-logit-probe")
+{
+    ArcGenerationLogitProbe.Run(args[1..]);
+}
 else if (args.Length == 2 && args[0] == "--probe-arc-attention-fp32-tiles")
 {
     ArcAttentionFp32TileProbe.Run(args[1]);
@@ -44,6 +52,10 @@ else if (args.Length == 2 && args[0] == "--probe-arc-storage-pack-linear")
 else if (args.Length == 2 && args[0] == "--probe-arc-serial-gemm")
 {
     ArcSerialGemmProbe.Run(args[1]);
+}
+else if (args.Length == 2 && args[0] == "--probe-arc-streamed-expanded")
+{
+    ArcSerialGemmProbe.RunExpanded(args[1]);
 }
 else if (args.Length == 2 && args[0] == "--probe-arc-bfp8-coalesced")
 {
@@ -73,6 +85,18 @@ else if (args.Length == 2 && args[0] == "--probe-arc-attention-row-register")
 {
     ArcAttentionRowRegisterProbe.Run(args[1]);
 }
+else if (args.Length is 2 or 3 && args[0] == "--probe-arc-overall-attention")
+{
+    ArcOverallAttentionProbe.Run(args[1], args.Length == 3 ? int.Parse(args[2]) : 2);
+}
+else if (args.Length is 2 or 3 && args[0] == "--probe-arc-attention-2048")
+{
+    ArcAttention2048Probe.Run(args[1], args.Length == 3 ? int.Parse(args[2]) : 2);
+}
+else if (args.Length == 2 && args[0] == "--probe-arc-derivative-diagnostic")
+{
+    ArcAttentionDerivativeDiagnosticProbe.Run(args[1]);
+}
 else if (args.Length == 2 && args[0] == "--probe-arc-norm-coalesced")
 {
     ArcNormCoalescedProbe.Run(args[1]);
@@ -88,6 +112,10 @@ else if (args.Length == 2 && args[0] == "--probe-arc-dp-ds")
 else if (args.Length == 2 && args[0] == "--probe-arc-gemm")
 {
     ArcGemmProbe.Run(args[1]);
+}
+else if (args.Length == 2 && args[0] == "--probe-arc-weight-gradient-tune")
+{
+    ArcWeightGradientTuneProbe.Run(args[1]);
 }
 else if (args.Length == 2 && args[0] == "--probe-arc-xmx-tune")
 {

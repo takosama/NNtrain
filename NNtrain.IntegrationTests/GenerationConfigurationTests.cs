@@ -16,6 +16,8 @@ public sealed class GenerationConfigurationTests
               "tokenizerPath": "tokenizer.json",
               "prompt": "hello",
               "sampling": "topK",
+              "inferenceDeviceIndices": [0, 1],
+              "arcInferenceMode": "tensorParallel",
               "maxNewTokens": 12,
               "templator": 0.6,
               "topK": 7
@@ -30,6 +32,8 @@ public sealed class GenerationConfigurationTests
         Assert.Equal(Path.Combine(directory.Root, "tokenizer.json"), configuration.TokenizerPath);
         Assert.Equal(0.6f, configuration.EffectiveTemperature);
         Assert.False(configuration.IsGreedy);
+        Assert.Equal([0, 1], Assert.IsType<int[]>(configuration.InferenceDeviceIndices));
+        Assert.Equal("tensorParallel", configuration.ArcInferenceMode);
     }
 
     [Fact]

@@ -115,9 +115,9 @@ internal static partial class SafeTensorFile
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        if (artifactDTypeOverride is { } artifactDType)
+        if (artifactDTypeOverride is { } validatedArtifactDType)
             TensorDTypeContract.ValidateImplemented(
-                artifactDType,
+                validatedArtifactDType,
                 nameof(artifactDTypeOverride));
 
         Parameter[] parameters = model.Parameters().ToArray();
@@ -151,6 +151,7 @@ internal static partial class SafeTensorFile
                 foreach (Parameter parameter in parameters)
                 {
                     Tensor tensor = parameter.T;
+                    TensorDType artifactDType = artifactDTypeOverride ?? tensor.DType;
                     int maximumChunkElements = tensor.DType == TensorDType.Bfp8
                         ? CheckpointFloatStagingBuffer.MaximumElementCount / 2
                         : CheckpointFloatStagingBuffer.MaximumElementCount;
@@ -159,6 +160,17 @@ internal static partial class SafeTensorFile
                         int count = Math.Min(
                             maximumChunkElements,
                             tensor.Numel - offset);
+                        if (artifactDType == TensorDType.BFloat16
+                            && tensor.HasBFloat16CheckpointMaster
+                            && BitConverter.IsLittleEndian)
+                        {
+                            var packed = new ushort[count];
+                            tensor.CopyCheckpointBFloat16MasterRangeTo(offset, packed);
+                            stagingChunkObserved?.Invoke(checked(count * sizeof(ushort)));
+                            stream.Write(MemoryMarshal.AsBytes(packed.AsSpan()));
+                            offset += count;
+                            continue;
+                        }
                         ReadOnlySpan<float> values =
                             tensor.CopyCheckpointRangeTo(
                                 offset,
@@ -170,7 +182,7 @@ internal static partial class SafeTensorFile
                         WriteStreamedValues(
                             stream,
                             values,
-                            artifactDTypeOverride ?? tensor.DType);
+                            artifactDType);
                         offset += count;
                     }
                 }
@@ -218,6 +230,7 @@ internal static partial class SafeTensorFile
             keys);
 
         using var staging = new CheckpointFloatStagingBuffer();
+        ushort[]? packedStaging = null;
         for (int parameterIndex = 0;
             parameterIndex < parameters.Length;
             parameterIndex++)
@@ -241,6 +254,26 @@ internal static partial class SafeTensorFile
             int remaining = parameter.T.Numel;
             while (remaining > 0)
             {
+                if (descriptor.DType == TensorDType.BFloat16
+                    && parameter.T.HasBFloat16HostMaster
+                    && BitConverter.IsLittleEndian)
+                {
+                    packedStaging ??= new ushort[
+                        CheckpointFloatStagingBuffer.MaximumByteLength / sizeof(ushort)];
+                    int packedCount = Math.Min(packedStaging.Length, remaining);
+                    Span<ushort> packedValues = packedStaging.AsSpan(0, packedCount);
+                    stream.ReadExactly(MemoryMarshal.AsBytes(packedValues));
+                    foreach (ushort bits in packedValues)
+                    {
+                        if ((bits & 0x7F80) == 0x7F80)
+                            throw new InvalidDataException(
+                                $"SafeTensors parameter '{descriptor.Key}' contains a non-finite value.");
+                    }
+                    stagingChunkObserved?.Invoke(checked(packedCount * sizeof(ushort)));
+                    destination.WriteBFloat16Next(packedValues);
+                    remaining -= packedCount;
+                    continue;
+                }
                 int count = Math.Min(
                     CheckpointFloatStagingBuffer.MaximumElementCount,
                     remaining);

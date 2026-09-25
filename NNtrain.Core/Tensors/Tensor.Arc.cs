@@ -36,16 +36,77 @@ partial class Tensor
         catch { session.Dispose(); throw; }
     }
 
-    internal static void ValidateArcPrecision(TensorPrecisionMode precision)
+    /// <summary>
+    /// Owns two Arc lanes for model-parallel inference. Training sessions
+    /// attach their own lanes through the production session factory.
+    /// </summary>
+    public static IDisposable BeginArcInferenceExecution(
+        IReadOnlyList<int> deviceIndices,
+        TensorPrecisionMode precision = TensorPrecisionMode.Float32,
+        ArcExecutionOptions? options = null)
     {
-        if (precision is not (TensorPrecisionMode.Float32 or TensorPrecisionMode.Mix16_32 or TensorPrecisionMode.Mix8_32))
-            throw new NotSupportedException("Arc currently supports float32, mix16_32 and mix8_32; pure low-precision arithmetic is not implemented.");
+        ArgumentNullException.ThrowIfNull(deviceIndices);
+        ValidateArcPrecision(precision);
+        DeviceSet devices = new(deviceIndices);
+        if (devices.Count != 2)
+            throw new ArgumentException("Arc inference requires exactly two GPUs.", nameof(deviceIndices));
+
+        IReadOnlyList<ArcDeviceInfo> available = ArcDevices.Enumerate();
+        foreach (int index in devices)
+        {
+            if (index >= available.Count)
+            {
+                throw new InvalidOperationException(
+                    $"Intel Arc device {index} is unavailable. Found {available.Count} Arc OpenCL GPUs.");
+            }
+        }
+
+        var session = new ExecutionSession(new ExecutionOptions
+        {
+            Device = ExecutionDeviceKind.Arc,
+            ArcDeviceIndex = devices[0],
+            ArcDevices = devices,
+            Precision = PrecisionPolicy.Parse(TensorPrecisionModeNames.Format(precision)),
+            RequireDeviceResidency = false,
+        });
+        IDisposable? sessionScope = null;
+        try
+        {
+            foreach (int index in devices)
+            {
+                var lane = new ArcExecutionLane(index, options);
+                try { session.AttachLane(lane); }
+                catch { lane.Dispose(); throw; }
+            }
+            sessionScope = session.Enter();
+            IDisposable deviceScope = TensorExecutionContext.Push(
+                new TorchDevice(TensorDevice.Arc, devices[0]));
+            return new ArcScope(session, sessionScope, deviceScope);
+        }
+        catch
+        {
+            try { sessionScope?.Dispose(); }
+            finally { session.Dispose(); }
+            throw;
+        }
     }
 
-    private sealed class ArcScope(ExecutionSession session, IDisposable scope) : IDisposable
+    internal static void ValidateArcPrecision(TensorPrecisionMode precision)
+    {
+        if (precision is not (TensorPrecisionMode.Float32 or TensorPrecisionMode.Mix16_32 or TensorPrecisionMode.Mix8_32 or TensorPrecisionMode.Mix8_16))
+            throw new NotSupportedException("Arc currently supports float32, mix16_32, mix8_32 and mix8_16; pure low-precision arithmetic is not implemented.");
+    }
+
+    private sealed class ArcScope(ExecutionSession session, IDisposable scope, IDisposable? deviceScope = null) : IDisposable
     {
         private bool _disposed;
-        public void Dispose() { if (_disposed) return; _disposed = true; try { scope.Dispose(); } finally { session.Dispose(); } }
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            try { deviceScope?.Dispose(); }
+            finally { try { scope.Dispose(); } finally { session.Dispose(); } }
+        }
     }
 
     internal static ArcExecutionLane ArcLane => ExecutionSession.Current?.GetRequiredLane(

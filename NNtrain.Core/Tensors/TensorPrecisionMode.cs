@@ -27,6 +27,14 @@ public enum TensorPrecisionMode
     /// normalization, loss, gradients, master weights, and optimizer state.
     /// </summary>
     Mix8_32 = 4,
+
+    /// <summary>
+    /// Signed Int8 block parameter storage with Int8 or BFloat16 weight
+    /// matrix execution selected for speed. Activations may use block BFP8
+    /// or BFloat16, while retained gradients, master weights, and optimizer
+    /// state use physical BFloat16. Float32 scratch accumulation is allowed.
+    /// </summary>
+    Mix8_16 = 5,
 }
 
 /// <summary>Canonical configuration names for precision modes.</summary>
@@ -38,9 +46,10 @@ public static class TensorPrecisionModeNames
     public const string Fp16_32Alias = "fp16_32";
     public const string Bfp8 = "bfp8";
     public const string Mix8_32 = "mix8_32";
+    public const string Mix8_16 = "mix8_16";
     public const string SupportedValuesDescription =
         $"'{Float32}', '{BFloat16}', '{Mix16_32}' (alias " +
-        $"'{Fp16_32Alias}'), '{Bfp8}', and '{Mix8_32}'";
+        $"'{Fp16_32Alias}'), '{Bfp8}', '{Mix8_32}', and '{Mix8_16}'";
 
     public static TensorPrecisionMode Parse(string value)
     {
@@ -59,6 +68,8 @@ public static class TensorPrecisionModeNames
             return TensorPrecisionMode.Bfp8;
         if (string.Equals(value, Mix8_32, StringComparison.OrdinalIgnoreCase))
             return TensorPrecisionMode.Mix8_32;
+        if (string.Equals(value, Mix8_16, StringComparison.OrdinalIgnoreCase))
+            return TensorPrecisionMode.Mix8_16;
         throw new ArgumentException(
             $"Unsupported precision mode '{value}'. Supported values are " +
             $"{SupportedValuesDescription}.",
@@ -73,6 +84,7 @@ public static class TensorPrecisionModeNames
             TensorPrecisionMode.Mix16_32 => Mix16_32,
             TensorPrecisionMode.Bfp8 => Bfp8,
             TensorPrecisionMode.Mix8_32 => Mix8_32,
+            TensorPrecisionMode.Mix8_16 => Mix8_16,
             _ => throw new ArgumentOutOfRangeException(nameof(mode)),
         };
 }
@@ -87,6 +99,7 @@ public static class TensorPrecisionModeExtensions
             TensorPrecisionMode.Mix16_32 => TensorDType.BFloat16,
             TensorPrecisionMode.Bfp8 => TensorDType.Bfp8,
             TensorPrecisionMode.Mix8_32 => TensorDType.Bfp8,
+            TensorPrecisionMode.Mix8_16 => TensorDType.Bfp8,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(mode), mode, "Unknown tensor precision mode."),
         };

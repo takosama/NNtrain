@@ -64,7 +64,8 @@ public sealed class WikiDTypeCheckpointTests
     [Theory]
     [InlineData(TensorPrecisionMode.Bfp8, 128)]
     [InlineData(TensorPrecisionMode.Mix8_32, 4)]
-    public void V8Bfp8CheckpointUsesFloat32ArtifactsAndResumes(
+    [InlineData(TensorPrecisionMode.Mix8_16, 4)]
+    public void V8Bfp8CheckpointUsesPrecisionArtifactsAndResumes(
         TensorPrecisionMode mode,
         int blockSize)
     {
@@ -80,6 +81,12 @@ public sealed class WikiDTypeCheckpointTests
                 Precision = TensorPrecisionModeNames.Format(mode),
                 Bfp8BlockSize = blockSize,
                 Optimizer = WikiTrainingConfiguration.AdamWOptimizer,
+                Device = mode == TensorPrecisionMode.Mix8_16
+                    ? WikiTrainingConfiguration.ArcDevice
+                    : WikiTrainingConfiguration.CpuDevice,
+                ModelArchitecture = mode == TensorPrecisionMode.Mix8_16
+                    ? WikiTrainingConfiguration.TransformerArchitecture
+                    : WikiTrainingConfiguration.ForgetMemoryV2Architecture,
             };
             LanguageModel source = WikiLanguageModelCommand.CreateModel(
                 sourceConfig,
@@ -96,7 +103,8 @@ public sealed class WikiDTypeCheckpointTests
                             ? Bfp8ScaleGranularity.Tensor
                             : Bfp8ScaleGranularity.Block,
                         descriptor.Granularity);
-                    if (mode == TensorPrecisionMode.Mix8_32)
+                    if (mode is TensorPrecisionMode.Mix8_32
+                        or TensorPrecisionMode.Mix8_16)
                         Assert.Equal(blockSize, descriptor.BlockSize);
                 });
             ModuleState expected = source.state_dict();
@@ -124,6 +132,8 @@ public sealed class WikiDTypeCheckpointTests
                     checkpointPath);
             Assert.Equal(TensorDType.Bfp8, serialized.ModelDType);
             Assert.Equal(mode, serialized.PrecisionMode);
+            if (mode == TensorPrecisionMode.Mix8_16)
+                Assert.Equal(blockSize, serialized.Bfp8BlockSize);
             ModuleState currentArtifact = safetensors.torch.load_file(
                 WikiLanguageModelCommand.GetCurrentModelArtifactPath(
                     checkpointPath,
@@ -131,7 +141,8 @@ public sealed class WikiDTypeCheckpointTests
             Assert.All(
                 currentArtifact.Parameters,
                 parameter => Assert.Equal(
-                    TensorDType.Float32,
+                    mode == TensorPrecisionMode.Mix8_16
+                        ? TensorDType.BFloat16 : TensorDType.Float32,
                     parameter.DType));
 
             WikiTrainingConfiguration resumeConfig = sourceConfig with
@@ -171,6 +182,24 @@ public sealed class WikiDTypeCheckpointTests
             AssertStatesBitwiseEqual(expected, restored.state_dict());
             Assert.Equal(7, globalStep);
 
+            if (mode == TensorPrecisionMode.Mix8_16)
+            {
+                foreach (TensorPrecisionMode destination in new[]
+                {
+                    TensorPrecisionMode.Float32,
+                    TensorPrecisionMode.Mix16_32,
+                    TensorPrecisionMode.Mix8_32,
+                })
+                {
+                    WikiTrainingConfiguration migrationConfig = resumeConfig
+                        with { Precision = TensorPrecisionModeNames.Format(destination) };
+                    InvalidDataException failure = Assert.Throws<InvalidDataException>(
+                        () => WikiLanguageModelCommand.ResolvePrecisionForTraining(
+                            migrationConfig));
+                    Assert.Contains("mix8_16", failure.Message);
+                }
+            }
+
             LanguageModel generation = WikiLanguageModelCommand.CreateModel(
                 serialized,
                 sourceConfig.Seed,
@@ -180,6 +209,16 @@ public sealed class WikiDTypeCheckpointTests
                 checkpointPath,
                 generation);
             AssertStatesBitwiseEqual(expected, generation.state_dict());
+
+            if (mode == TensorPrecisionMode.Mix8_16)
+            {
+                torch.save(serialized with { Bfp8BlockSize = null },
+                    checkpointPath);
+                InvalidDataException failure = Assert.Throws<InvalidDataException>(
+                    () => WikiLanguageModelCommand.ResolvePrecisionForTraining(
+                        resumeConfig));
+                Assert.Contains("block-size metadata", failure.Message);
+            }
         }
         finally
         {

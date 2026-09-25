@@ -103,12 +103,18 @@ internal static partial class WikiLanguageModelCommand
             TensorPrecisionMode precisionMode =
                 GetCheckpointPrecisionMode(checkpoint);
             bool bfp8Artifact = precisionMode is TensorPrecisionMode.Bfp8
+                or TensorPrecisionMode.Mix8_16
                 or TensorPrecisionMode.Mix8_32;
-            bool float32CurrentArtifact = bfp8Artifact
-                || precisionMode == TensorPrecisionMode.Mix16_32;
+            TensorDType? currentArtifactDType = precisionMode switch
+            {
+                TensorPrecisionMode.Mix8_16 => TensorDType.BFloat16,
+                TensorPrecisionMode.Bfp8 or TensorPrecisionMode.Mix8_32
+                    or TensorPrecisionMode.Mix16_32 => TensorDType.Float32,
+                _ => null,
+            };
             ModuleState? currentArtifact = currentState is not null
-                && float32CurrentArtifact
-                    ? RelabelStateDType(currentState, TensorDType.Float32)
+                && currentArtifactDType is not null
+                    ? RelabelStateDType(currentState, currentArtifactDType.Value)
                     : currentState;
             ModuleState? bestArtifact = writeBestArtifact
                 ? checkpoint.Model
@@ -117,7 +123,8 @@ internal static partial class WikiLanguageModelCommand
             {
                 bestArtifact = RelabelStateDType(
                     bestArtifact,
-                    TensorDType.Float32);
+                    precisionMode == TensorPrecisionMode.Mix8_16
+                        ? TensorDType.BFloat16 : TensorDType.Float32);
             }
             IReadOnlyList<IOptimizer> leaves =
                 OptimizerBundle.GetCheckpointLeafOptimizers(optimizer);
@@ -141,12 +148,13 @@ internal static partial class WikiLanguageModelCommand
                 fullPath,
                 currentArtifact,
                 currentModelSource,
-                float32CurrentArtifact
-                    ? TensorDType.Float32
-                    : null,
+                currentArtifactDType,
                 bestArtifact,
                 bestModelSource,
-                bfp8Artifact ? TensorDType.Float32 : null,
+                bfp8Artifact
+                    ? precisionMode == TensorPrecisionMode.Mix8_16
+                        ? TensorDType.BFloat16 : TensorDType.Float32
+                    : null,
                 artifactSlot,
                 bestArtifactSlot,
                 leaves,

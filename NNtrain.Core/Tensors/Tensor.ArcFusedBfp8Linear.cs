@@ -14,9 +14,18 @@ partial class Tensor
             || m < 4096 || n % 32 != 0 || k > 2048
             || !ArcXmxStorageOperand.CanRunAny(lane, m, n, k, tb: true, hasBias: true, relu: relu)) return null;
         Tensor[] parents = [this, weight, bias];
-        if ((dtype ?? TensorDTypeContract.Promote(parents)) != TensorDType.Bfp8
+        // A BF16 activation paired with BFP8 parameters otherwise promotes to
+        // FP32 before reaching this direct BFP8 epilogue. The opt-in activation
+        // policy keeps this existing packed GEMM output when it is eligible.
+        bool bf16ActivationWithBfp8Parameters = dtype is null
+            && DType == TensorDType.BFloat16
+            && weight.DType == TensorDType.Bfp8
+            && bias.DType == TensorDType.Bfp8
+            && ArcMayPublishBFloat16Activation(parents);
+        if ((!bf16ActivationWithBfp8Parameters
+                && (dtype ?? TensorDTypeContract.Promote(parents)) != TensorDType.Bfp8)
             || !parents.Any(p => p.DType == TensorDType.Bfp8)) return null;
-        var descriptor = SelectBfp8ResultDescriptor(parents);
+        var descriptor = SelectBfp8ResultDescriptor(parents.Where(p => p.DType == TensorDType.Bfp8).ToArray());
         int length = checked(m * n);
         if (descriptor.GetEffectiveBlockSize(length) != 32) return null;
         int rows = ArcXmxStorageOperand.CanRun(lane, m, n, k) ? m

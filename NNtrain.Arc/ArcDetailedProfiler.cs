@@ -33,6 +33,10 @@ public sealed class ArcDetailedProfiler
             ? $" M={args[5]} N={args[6]} K={args[7]} TA={args[8]} TB={args[9]}"
             : (name.StartsWith("attention_gemm", StringComparison.Ordinal) || name.StartsWith("attention_xmx", StringComparison.Ordinal)) && args.Length >= 6
                 ? $" M={args[3]} N={args[4]} K={args[5]}"
+                : name == "gradient_rows" && args.Length >= 8
+                    ? $" rows={args[4]} width={args[5]} relu={args[6]} norm={args[7]}"
+                : name == "gradient_rows_bias_bf16" && args.Length >= 6
+                    ? $" rows={args[3]} width={args[4]} relu={args[5]}"
                 : "";
         return Phase + "/" + name + shape;
     }

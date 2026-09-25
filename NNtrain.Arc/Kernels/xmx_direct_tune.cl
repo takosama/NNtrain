@@ -2,6 +2,7 @@
 // subgroup count per workgroup can be tuned independently from the register
 // tile. Packed operands use the xmx_next_pack_a/b layouts and BF16 RNE.
 #if defined(ARC_XMX) && ARC_SG == 16
+float round_bf16(float x);
 #ifdef cl_intel_subgroups_short
 #pragma OPENCL EXTENSION cl_intel_subgroups_short : enable
 #endif
@@ -54,7 +55,7 @@ __kernel void NAME(__global const ushort* a,__global const uint* b,__global floa
   _Pragma("unroll") \
   for(int tile=0;tile<BN/16;tile++){int col=colBase+tile*16+lane; \
    _Pragma("unroll") \
-   for(int r=0;r<8;r++)if(row+rb*8+r<m&&col<n)c[(row+rb*8+r)*n+col]=relu?fmax(0.0f,sums[rb][tile][r]):sums[rb][tile][r]; \
+   for(int r=0;r<8;r++)if(row+rb*8+r<m&&col<n){float value=sums[rb][tile][r];c[(row+rb*8+r)*n+col]=relu==2?round_bf16(value):(relu?fmax(0.0f,value):value);} \
   } \
  } \
 }

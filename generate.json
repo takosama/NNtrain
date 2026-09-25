@@ -1,6 +1,8 @@
 {
   "trainingConfigPath": "training.transformer.json",
   "safeTensorsPath": "checkpoints/training.transformer.tied.model.best.safetensors",
+  "inferenceDeviceIndices": [0, 1],
+  "arcInferenceMode": "auto",
   "prompt": "日本の首都は",
   "sampling": "topk",
   "maxNewTokens": 200,

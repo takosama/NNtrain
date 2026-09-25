@@ -27,6 +27,7 @@ sealed record WikiTrainingConfiguration
     internal const string BFloat16PrecisionMode = TensorPrecisionModeNames.BFloat16;
     internal const string Mix16_32PrecisionMode = TensorPrecisionModeNames.Mix16_32;
     internal const string Bfp8PrecisionMode = TensorPrecisionModeNames.Bfp8;
+    internal const string Mix8_16PrecisionMode = TensorPrecisionModeNames.Mix8_16;
     internal const string Mix8_32PrecisionMode = TensorPrecisionModeNames.Mix8_32;
     internal const string LegacyFloat16ModelDType = "float16";
     internal const string CpuDevice = "cpu";
@@ -129,7 +130,7 @@ sealed record WikiTrainingConfiguration
 
     /// <summary>
     /// Numeric execution contract: float32, bfloat16, mix16_32 (fp16_32
-    /// alias), bfp8, or mix8_32.
+    /// alias), bfp8, mix8_16, or mix8_32.
     /// </summary>
     public string? PrecisionMode { get; init; }
 
@@ -163,6 +164,12 @@ sealed record WikiTrainingConfiguration
     public int DeviceIndex { get; init; }
 
     public int[]? DeviceIndices { get; init; }
+
+    /// <summary>Arc devices used only by generation; training keeps DeviceIndices.</summary>
+    public int[]? InferenceDeviceIndices { get; init; }
+
+    /// <summary>Arc generation route: auto, single, or tensorParallel.</summary>
+    public string ArcInferenceMode { get; init; } = "auto";
 
     public bool AdaptiveCudaSharding { get; init; } = true;
 
@@ -708,6 +715,14 @@ sealed record WikiTrainingConfiguration
                 "BFP8 block size must be positive.");
         }
         TensorDType? explicitModelDType = GetExplicitModelDType();
+        if (GetPrecisionMode() == TensorPrecisionMode.Mix8_16
+            && (GetExecutionDevice() != TensorDevice.Arc
+                || !IsArchitecture(TransformerArchitecture)))
+        {
+            throw new NotSupportedException(
+                "mix8_16 currently requires device 'arc' and " +
+                "modelArchitecture 'transformer'.");
+        }
         if (explicitModelDType is TensorDType.Float16
                 or TensorDType.BFloat16
                 or TensorDType.Bfp8
@@ -721,11 +736,14 @@ sealed record WikiTrainingConfiguration
         }
         if (GetExecutionDevice() == TensorDevice.Arc)
         {
+            ArcInferenceRouting.ValidateOptions(InferenceDeviceIndices, ArcInferenceMode);
             if (!IsArchitecture(TransformerArchitecture))
                 throw new NotSupportedException("Arc currently supports only modelArchitecture 'transformer'. DRN and other architectures are not implemented.");
             Tensor.ValidateArcPrecision(GetPrecisionMode());
-            if ((DeviceIndices ?? [DeviceIndex]).Length != 1)
-                throw new NotSupportedException("Arc currently supports a single GPU; set deviceIndices to [0].");
+            if ((DeviceIndices ?? [DeviceIndex]).Length is < 1 or > 2)
+                throw new NotSupportedException("Arc training supports one or two GPUs; set deviceIndices to [0] or [0, 1].");
+            if ((DeviceIndices ?? [DeviceIndex]).Length == 2 && BatchSize < 2)
+                throw new NotSupportedException("Arc two-GPU training requires batchSize of at least 2.");
             if (!IsOptimizer(MuonOptimizer) && !IsOptimizer(NekoMuonOptimizer) && !IsOptimizer(AdamWOptimizer))
                 throw new NotSupportedException("Arc currently supports Muon, NekoMuon and AdamW.");
         }

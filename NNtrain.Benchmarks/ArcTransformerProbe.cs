@@ -29,13 +29,22 @@ internal static class ArcTransformerProbe
     {
         if (args.Length < 2)
             throw new ArgumentException("Expected config and NEW result.json, followed by optional "
-                + "--batch N --sequence N --layers N --accumulation N --warmup N --steps N --device arc|cpu "
+                + "--batch N --sequence N --layers N --accumulation N --warmup N --steps N --device arc|cpu --replica-sync full|packed "
                 + "--arc-mode pre-xmx|optimized (or historical reference modes) --xmx-mode auto|legacy|narrow|wide "
                 + "--attention-mode legacy|unrolled|panel|optimized --next-features none|" + NextFeatureNames + " "
                 + "--attention-workspace MiB --event-limit N --pool-mib MiB --deferred-mib MiB --profile --compare-cpu "
-                + "--streamed-xmx on|off --direct-qk on|off --cached-prob on|off --ordered-norm on|off --packed-norm on|off "
+                + "--streamed-xmx on|off --expanded-streamed-xmx on|off --direct-qk on|off --cached-prob on|off --ordered-norm on|off --packed-norm on|off "
                 + "--auto-memory on|off --checkpoint-blocks on|off --checkpoint-layers N --checkpoint-ffn on|off. "
                 + "--cache-backward on|off --weight-workspace MiB --packed-relu on|off --coalesced-codec on|off. "
+                + "--fused-relu-backward on|off --fused-relu-pack-bias on|off --fused-qkv-decode-pack on|off --fused-packed-residual-norm on|off --fused-dual-gradient-pack on|off --fused-loss-logit-round on|off. "
+                + "--prob-register-2048 on|off --saved-prob-direct-2048 on|off --deriv-register-2048 on|off --deriv-prefix4-2048 on|off --deriv-prefix8-2048 on|off --deriv-prefix16-2048 on|off "
+                + "--mix8-fused-gradient on|off --mix8-direct-reduction on|off --mix8-pipelined-reduction on|off --mix8-16-packed-attention-backward on|off --mix8-16-bf16-qkv on|off --mix8-16-xmx-attention on|off --mix8-16-int8-linear on|off "
+                + "--mix8-16-xmx-slm on|off --mix8-16-row-delta on|off --mix8-16-fused-dpds on|off --mix8-16-fused-dpds-xmx on|off --mix8-16-bf16-activations on|off "
+                + "--mix8-16-linear-dual-pack on|off --mix8-16-relu-dual-pack on|off --mix8-16-norm-backward on|off --mix8-16-norm-output on|off --mix8-16-cached-loss on|off "
+                + "--loss-chunk-rows N --loss-logits-mib N --loss-panels-mib N "
+                + "--mix8-16-bias-only-reduction on|off "
+                + "--mix8-16-parallel-norm on|off "
+                + "--dpds-2048 on|off --dq-m32-2048 on|off --dkv-qmajor-2048 0|32|33. "
                 + "--flash on|off --flash-xmx on|off --flash-async on|off. "
                 + "--timeline --pipeline-events on|off --pow2-pack on|off --bulk-qk on|off --fused-bfp8-linear on|off --expanded-xmx on|off --dkv-rows 2|4|8|16 "
                 + "--block-io-attention on|off --panel-cache-mib 0..1024. "
@@ -67,7 +76,23 @@ internal static class ArcTransformerProbe
                 if (++i >= args.Length || !flags.TryAdd("--pow2-pack", args[i])) throw new ArgumentException("Invalid --pow2-pack.");
                 continue;
             }
-            if (args[i] is "--fused-bfp8-linear" or "--expanded-xmx" or "--block-io-attention" or "--panel-cache-mib")
+            if (args[i] is "--fused-bfp8-linear" or "--expanded-xmx" or "--expanded-streamed-xmx" or "--block-io-attention" or "--panel-cache-mib"
+                or "--prob-register-2048" or "--saved-prob-direct-2048" or "--deriv-register-2048" or "--deriv-prefix4-2048" or "--deriv-prefix8-2048" or "--deriv-prefix16-2048"
+                or "--dpds-2048" or "--dq-m32-2048" or "--dkv-qmajor-2048"
+                or "--mix8-fused-gradient" or "--mix8-direct-reduction" or "--mix8-pipelined-reduction" or "--mix8-16-packed-attention-backward" or "--mix8-16-bf16-qkv"
+                or "--mix8-16-xmx-attention" or "--mix8-16-int8-linear" or "--mix8-16-xmx-slm"
+                or "--mix8-16-row-delta" or "--mix8-16-fused-dpds" or "--mix8-16-fused-dpds-xmx" or "--mix8-16-bf16-activations"
+                or "--mix8-16-linear-dual-pack" or "--mix8-16-norm-backward" or "--mix8-16-norm-output" or "--mix8-16-cached-loss"
+                or "--mix8-16-relu-dual-pack"
+                or "--mix8-16-bias-only-reduction"
+                or "--mix8-16-parallel-norm"
+                or "--mix8-16-native-exp" or "--mix8-16-dkv-packed-slm" or "--mix8-16-dpds-k32"
+                or "--mix8-16-pv-m128" or "--mix8-16-dq-m128" or "--mix8-16-norm-parameter-gradients"
+                or "--mix8-16-pv-packed-slm" or "--mix8-16-dq-packed-slm"
+                or "--mix8-16-dq-packed-slm-both"
+                or "--loss-chunk-rows" or "--loss-logits-mib" or "--loss-panels-mib"
+                or "--fused-relu-backward" or "--fused-relu-pack-bias" or "--fused-qkv-decode-pack" or "--fused-packed-residual-norm"
+                or "--fused-dual-gradient-pack" or "--fused-loss-logit-round")
             {
                 string flag = args[i];
                 if (++i >= args.Length || !flags.TryAdd(flag, args[i])) throw new ArgumentException($"Invalid {flag}.");
@@ -78,7 +103,7 @@ internal static class ArcTransformerProbe
                 if (++i >= args.Length || !flags.TryAdd("--bulk-qk", args[i])) throw new ArgumentException("Invalid --bulk-qk.");
                 continue;
             }
-            if (args[i] is not ("--batch" or "--sequence" or "--layers" or "--accumulation" or "--warmup" or "--steps" or "--device" or "--arc-mode" or "--xmx-mode" or "--attention-mode" or "--next-features" or "--attention-workspace" or "--event-limit" or "--pool-mib" or "--deferred-mib" or "--streamed-xmx" or "--direct-qk" or "--cached-prob" or "--auto-memory" or "--checkpoint-blocks" or "--checkpoint-layers" or "--checkpoint-ffn" or "--ordered-norm" or "--packed-norm" or "--weight-workspace" or "--cache-backward" or "--packed-relu" or "--coalesced-codec" or "--flash" or "--flash-xmx" or "--flash-async"))
+            if (args[i] is not ("--batch" or "--sequence" or "--layers" or "--accumulation" or "--warmup" or "--steps" or "--device" or "--replica-sync" or "--arc-mode" or "--xmx-mode" or "--attention-mode" or "--next-features" or "--attention-workspace" or "--event-limit" or "--pool-mib" or "--deferred-mib" or "--streamed-xmx" or "--direct-qk" or "--cached-prob" or "--auto-memory" or "--checkpoint-blocks" or "--checkpoint-layers" or "--checkpoint-ffn" or "--ordered-norm" or "--packed-norm" or "--weight-workspace" or "--cache-backward" or "--packed-relu" or "--coalesced-codec" or "--flash" or "--flash-xmx" or "--flash-async"))
                 throw new ArgumentException($"Unknown probe argument: {args[i]}");
             if (++i >= args.Length) throw new ArgumentException("Missing probe argument value.");
             if (!flags.TryAdd(args[i - 1], args[i])) throw new ArgumentException($"Repeated argument: {args[i - 1]}");
@@ -96,6 +121,9 @@ internal static class ArcTransformerProbe
         int steps = Number("--steps", 3);
         if (warmup > 100 || steps > 210) throw new ArgumentException("Probe is bounded to 100 warmup and 210 measured updates.");
         string deviceText = flags.GetValueOrDefault("--device", "arc");
+        string replicaSyncMode = flags.GetValueOrDefault("--replica-sync", "packed");
+        if (replicaSyncMode is not ("full" or "packed"))
+            throw new ArgumentException("--replica-sync must be full or packed.");
         string arcMode = flags.GetValueOrDefault("--arc-mode", "optimized");
         ArcExecutionOptions arcOptions = arcMode switch {
             "reference" => ArcExecutionOptions.Reference,
@@ -183,6 +211,9 @@ internal static class ArcTransformerProbe
         arcOptions = arcOptions with { AttentionWorkspaceMiB = Number("--attention-workspace", arcOptions.AttentionWorkspaceMiB, 8) };
         arcOptions = arcOptions with {
             QueuedKernelLimit = Number("--event-limit", arcOptions.QueuedKernelLimit, 16),
+            LossChunkRows = Number("--loss-chunk-rows", arcOptions.LossChunkRows),
+            LossLogitsWorkspaceMiB = Number("--loss-logits-mib", arcOptions.LossLogitsWorkspaceMiB),
+            LossPanelWorkspaceMiB = Number("--loss-panels-mib", arcOptions.LossPanelWorkspaceMiB),
             BufferPoolBytes = Number("--pool-mib", checked((int)(arcOptions.BufferPoolBytes / 1048576)), 0) * 1048576L,
             DeferredReleaseBytes = Number("--deferred-mib", checked((int)(arcOptions.DeferredReleaseBytes / 1048576)), 0) * 1048576L };
         bool Switch(string key, bool fallback) => flags.TryGetValue(key, out string? value)
@@ -195,24 +226,73 @@ internal static class ArcTransformerProbe
             BulkAttentionQkPanels = Switch("--bulk-qk", arcOptions.BulkAttentionQkPanels),
             FusedBfp8Linear = Switch("--fused-bfp8-linear", arcOptions.FusedBfp8Linear),
             ExpandedXmxTiles = Switch("--expanded-xmx", arcOptions.ExpandedXmxTiles),
+            ExpandedStreamedXmxTiles = Switch("--expanded-streamed-xmx", arcOptions.ExpandedStreamedXmxTiles),
             BlockIoAttention = Switch("--block-io-attention", arcOptions.BlockIoAttention),
             MatrixPanelCacheMiB = Number("--panel-cache-mib", arcOptions.MatrixPanelCacheMiB, 0),
             StreamedXmxMatrices = Switch("--streamed-xmx", arcOptions.StreamedXmxMatrices),
             StreamedWeightGradientWorkspaceMiB = Number("--weight-workspace", arcOptions.StreamedWeightGradientWorkspaceMiB, 0),
             CacheSizedAttentionBackward = Switch("--cache-backward", arcOptions.CacheSizedAttentionBackward),
             PackedReluBackward = Switch("--packed-relu", arcOptions.PackedReluBackward),
+            FusedPackedReluBackward = Switch("--fused-relu-backward", arcOptions.FusedPackedReluBackward),
+            FusedReluPackBias = Switch("--fused-relu-pack-bias", arcOptions.FusedReluPackBias),
+            FusedAttentionQkvDecodePack2048 = Switch("--fused-qkv-decode-pack", arcOptions.FusedAttentionQkvDecodePack2048),
+            FusedPackedResidualNorm = Switch("--fused-packed-residual-norm", arcOptions.FusedPackedResidualNorm),
+            FusedDualGradientPack = Switch("--fused-dual-gradient-pack", arcOptions.FusedDualGradientPack),
+            FusedLossHeadLogitRound = Switch("--fused-loss-logit-round", arcOptions.FusedLossHeadLogitRound),
+            Mix8_16FusedGradientAccumulation = Switch("--mix8-fused-gradient", arcOptions.Mix8_16FusedGradientAccumulation),
+            Mix8_16DirectGradientReduction = Switch("--mix8-direct-reduction", arcOptions.Mix8_16DirectGradientReduction),
+            Mix8_16PipelinedGradientReduction = Switch("--mix8-pipelined-reduction", arcOptions.Mix8_16PipelinedGradientReduction),
+            Mix8_16PackedAttentionBackward = Switch("--mix8-16-packed-attention-backward", arcOptions.Mix8_16PackedAttentionBackward),
+            Mix8_16Bf16QkvActivations = Switch("--mix8-16-bf16-qkv", arcOptions.Mix8_16Bf16QkvActivations),
+            Mix8_16XmxAttentionProducts = Switch("--mix8-16-xmx-attention", arcOptions.Mix8_16XmxAttentionProducts),
+            Mix8_16XmxAttentionSlm = Switch("--mix8-16-xmx-slm", arcOptions.Mix8_16XmxAttentionSlm),
+            Mix8_16AttentionRowDelta = Switch("--mix8-16-row-delta", arcOptions.Mix8_16AttentionRowDelta),
+            Mix8_16FusedAttentionDpDs = Switch("--mix8-16-fused-dpds", arcOptions.Mix8_16FusedAttentionDpDs),
+            Mix8_16FusedAttentionDpDsXmx = Switch("--mix8-16-fused-dpds-xmx", arcOptions.Mix8_16FusedAttentionDpDsXmx),
+            Mix8_16NativeExpAttention = Switch("--mix8-16-native-exp", arcOptions.Mix8_16NativeExpAttention),
+            Mix8_16DkvPackedSlm = Switch("--mix8-16-dkv-packed-slm", arcOptions.Mix8_16DkvPackedSlm),
+            Mix8_16DpDsK32 = Switch("--mix8-16-dpds-k32", arcOptions.Mix8_16DpDsK32),
+            Mix8_16PvM128 = Switch("--mix8-16-pv-m128", arcOptions.Mix8_16PvM128),
+            Mix8_16DqM128 = Switch("--mix8-16-dq-m128", arcOptions.Mix8_16DqM128),
+            Mix8_16PvPackedSlm = Switch("--mix8-16-pv-packed-slm", arcOptions.Mix8_16PvPackedSlm),
+            Mix8_16DqPackedSlm = Switch("--mix8-16-dq-packed-slm", arcOptions.Mix8_16DqPackedSlm),
+            Mix8_16DqPackedSlmBoth = Switch("--mix8-16-dq-packed-slm-both", arcOptions.Mix8_16DqPackedSlmBoth),
+            Mix8_16FusedNormParameterGradients = Switch("--mix8-16-norm-parameter-gradients", arcOptions.Mix8_16FusedNormParameterGradients),
+            Mix8_16Bf16Activations = Switch("--mix8-16-bf16-activations", arcOptions.Mix8_16Bf16Activations),
+            Mix8_16LinearDualGradientPack = Switch("--mix8-16-linear-dual-pack", arcOptions.Mix8_16LinearDualGradientPack),
+            Mix8_16ReluDualGradientPack = Switch("--mix8-16-relu-dual-pack", arcOptions.Mix8_16ReluDualGradientPack),
+            Mix8_16FusedNormResidualBackward = Switch("--mix8-16-norm-backward", arcOptions.Mix8_16FusedNormResidualBackward),
+            Mix8_16DirectBf16NormOutput = Switch("--mix8-16-norm-output", arcOptions.Mix8_16DirectBf16NormOutput),
+            Mix8_16ParallelNormReduction = Switch("--mix8-16-parallel-norm", arcOptions.Mix8_16ParallelNormReduction),
+            Mix8_16CachedLossLogits = Switch("--mix8-16-cached-loss", arcOptions.Mix8_16CachedLossLogits),
+            Mix8_16BiasOnlyGradientReduction = Switch("--mix8-16-bias-only-reduction", arcOptions.Mix8_16BiasOnlyGradientReduction),
+            Mix8_16Int8Linear = Switch("--mix8-16-int8-linear", arcOptions.Mix8_16Int8Linear),
             CoalescedBfp8Publication = Switch("--coalesced-codec", arcOptions.CoalescedBfp8Publication),
             FlashAttention = Switch("--flash", arcOptions.FlashAttention),
             FlashAttentionXmxProducts = Switch("--flash-xmx", arcOptions.FlashAttentionXmxProducts),
             FlashAttentionAsyncCopy = Switch("--flash-async", arcOptions.FlashAttentionAsyncCopy),
             DirectAttentionQk = Switch("--direct-qk", arcOptions.DirectAttentionQk),
             CachedAttentionProbabilities = Switch("--cached-prob", arcOptions.CachedAttentionProbabilities),
+            CachedAttentionProbabilities2048 = Switch("--prob-register-2048", arcOptions.CachedAttentionProbabilities2048),
+            SavedAttentionProbabilitiesDirect2048 = Switch("--saved-prob-direct-2048", arcOptions.SavedAttentionProbabilitiesDirect2048),
+            CachedAttentionDerivatives2048 = Switch("--deriv-register-2048", arcOptions.CachedAttentionDerivatives2048),
+            AttentionDerivativePrefix4T2048 = Switch("--deriv-prefix4-2048", arcOptions.AttentionDerivativePrefix4T2048),
+            AttentionDerivativePrefix8T2048 = Switch("--deriv-prefix8-2048", arcOptions.AttentionDerivativePrefix8T2048),
+            AttentionDerivativePrefix16T2048 = Switch("--deriv-prefix16-2048", arcOptions.AttentionDerivativePrefix16T2048),
+            FusedAttentionDpDs2048 = Switch("--dpds-2048", arcOptions.FusedAttentionDpDs2048),
+            AttentionDqM32T2048 = Switch("--dq-m32-2048", arcOptions.AttentionDqM32T2048),
+            DkvQueryMajorPitch2048 = Number("--dkv-qmajor-2048", arcOptions.DkvQueryMajorPitch2048, 0),
+            ExperimentalOptimizationKernels = flags.ContainsKey("--dkv-qmajor-2048")
+                ? Number("--dkv-qmajor-2048", 0, 0) != 0
+                : arcOptions.ExperimentalOptimizationKernels,
             AutomaticTransformerMemoryPlan = Switch("--auto-memory", arcOptions.AutomaticTransformerMemoryPlan),
             TransformerCheckpointing = Switch("--checkpoint-blocks", arcOptions.TransformerCheckpointing),
             TransformerCheckpointLayers = Number("--checkpoint-layers", arcOptions.TransformerCheckpointLayers, 0),
             TransformerFfnCheckpointing = Switch("--checkpoint-ffn", arcOptions.TransformerFfnCheckpointing),
             OrderedTiledNorm = Switch("--ordered-norm", arcOptions.OrderedTiledNorm),
             PackedNormInput = Switch("--packed-norm", arcOptions.PackedNormInput) };
+        if (arcOptions.DkvQueryMajorPitch2048 is not (0 or 32 or 33))
+            throw new ArgumentOutOfRangeException("--dkv-qmajor-2048", "Expected 0, 32 or 33.");
         WikiTrainingConfiguration config = original with
         {
             BatchSize = Number("--batch", original.BatchSize),
@@ -220,7 +300,9 @@ internal static class ArcTransformerProbe
             Layers = Number("--layers", original.Layers),
             GradientAccumulationSteps = Number("--accumulation", original.GradientAccumulationSteps),
             Device = deviceText,
-            DeviceIndices = [original.DeviceIndex],
+            DeviceIndices = deviceText == "arc"
+                ? original.DeviceIndices ?? [original.DeviceIndex]
+                : [original.DeviceIndex],
         };
         if (!IsShapeOverrideWithinBudget(
             (original.BatchSize, original.GradientAccumulationSteps, original.ContextLength, original.Layers),
@@ -236,19 +318,31 @@ internal static class ArcTransformerProbe
         }).ToArray();
         Console.WriteLine($"Arc Transformer probe: batch={config.BatchSize}, accumulation={config.GradientAccumulationSteps}, sequence={config.ContextLength}, layers={config.Layers}, width={config.ModelWidth}, hidden={config.HiddenSize}, heads={config.Heads}, vocabulary={config.VocabularySize}, precision={config.GetPrecisionMode()}, block={config.Bfp8BlockSize}, optimizer={config.Optimizer}, warmup={warmup}, measured={steps}");
         Console.WriteLine("Synthetic fixed-seed tokens, fresh model, fixed configured learning rates; no tokenizer/corpus/checkpoint/metrics I/O. Phase timing is synchronous wall time; finite-gradient scan is excluded.");
-        if (device == TensorDevice.Arc)
+        if (device == TensorDevice.Arc && config.DeviceIndices!.Length == 2)
+        {
+            foreach (int index in config.DeviceIndices)
+            {
+                ArcDeviceInfo info = ArcDevices.Enumerate().FirstOrDefault(item => item.Index == index)
+                    ?? throw new InvalidOperationException($"Arc device {index} is unavailable.");
+                Console.WriteLine($"Arc [{index}] capability: minimum subgroup={info.MinimumSubgroupSize}, XMX matrix extension={info.SupportsXmx}");
+            }
+        }
+        else if (device == TensorDevice.Arc)
         {
             ArcDeviceInfo info = ArcDevices.Enumerate()[original.DeviceIndex];
             Console.WriteLine($"Arc capability: minimum subgroup={info.MinimumSubgroupSize}, XMX matrix extension={info.SupportsXmx}");
         }
         bool previousSimd = Tensor.SimdEnabled;
         int previousWorkers = Tensor.MaxDegreeOfParallelism;
-        var results = new List<RunResult>();
+        var results = new List<object>();
         try
         {
             Tensor.SimdEnabled = config.UseSimd;
             Tensor.MaxDegreeOfParallelism = config.MaxDegreeOfParallelism;
-            results.Add(Measure(config, device, batches, warmup, steps, arcOptions, timelineEnabled ? resultPath : null));
+            results.Add(device == TensorDevice.Arc && config.DeviceIndices!.Length == 2
+                ? MeasureDual(config, batches, warmup, steps, arcOptions, timelineEnabled ? resultPath : null,
+                    replicaSyncMode)
+                : Measure(config, device, batches, warmup, steps, arcOptions, timelineEnabled ? resultPath : null));
             if (compareCpu && device != TensorDevice.Cpu)
                 results.Add(Measure(config with { Device = "cpu" }, TensorDevice.Cpu, batches, warmup, steps, arcOptions));
         }
@@ -275,12 +369,181 @@ internal static class ArcTransformerProbe
             ArcOptions = arcOptions,
             Notes = "Fixed synthetic full-length tokens. Fresh seeded model; no LR scheduling, evaluation, checkpoint or corpus I/O. Gradient clipping max_norm=1 matches WikiLanguageModelCommand.TrainingStep. Host process working set is not dedicated VRAM. Lane byte counters describe backend allocations/transfers, not driver-reported VRAM. Legacy allocation, transfer and kernel duration counters overlap: do not add them. Timeline.Partition.WallCategories is the disjoint wall-time partition; GPU-idle means no measured command executing on this lane, not system-wide GPU idleness. HostExclusive and queued-command idle are alternative views, not extra wall time. Phase fences, progress output and event collection are inside wall time; trace export and gradient validation are outside. Managed allocation/GC snapshots exclude trace export. Amdahl fractions use sums of measured synchronous phase wall durations.",
             Overrides = flags,
+            ReplicaSyncMode = replicaSyncMode,
             Results = results,
         };
         Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
         using (var output = new FileStream(resultPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
             JsonSerializer.Serialize(output, report, new JsonSerializerOptions { WriteIndented = true });
         Console.WriteLine($"Arc probe saved: {resultPath}");
+    }
+
+    private static DualRunResult MeasureDual(WikiTrainingConfiguration config,
+        (int[] Input, int[] Target)[] batches, int warmup, int steps, ArcExecutionOptions arcOptions,
+        string? timelinePath, string replicaSyncMode)
+    {
+        int[] deviceIndices = config.DeviceIndices
+            ?? throw new InvalidOperationException("Arc data parallel probe requires deviceIndices.");
+        if (deviceIndices.Length != 2 || config.BatchSize < 2)
+            throw new ArgumentException("Arc data parallel probe requires two GPUs and batch size at least two.");
+
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+        using ExecutionSession session = ProductionTrainingSessionFactory.CreateExecutionSession(
+            config.GetPrecisionMode(), TensorDevice.Arc, deviceIndices, arcOptions: arcOptions);
+        using IDisposable scope = session.Enter();
+        var lanes = deviceIndices.ToDictionary(index => index,
+            index => (ArcExecutionLane)session.GetRequiredLane(ExecutionDeviceKind.Arc, index));
+        LanguageModel primary = WikiLanguageModelCommand.CreateModel(config, config.VocabularySize);
+        primary.to(new TorchDevice(TensorDevice.Arc, deviceIndices[0]));
+        LanguageModel secondary;
+        using (TensorExecutionContext.Push(new TorchDevice(TensorDevice.Arc, deviceIndices[1])))
+        {
+            secondary = WikiLanguageModelCommand.CreateModel(config, config.VocabularySize);
+            secondary.to(new TorchDevice(TensorDevice.Arc, deviceIndices[1]));
+        }
+        using var engine = new ArcDataParallelEngine(primary, secondary, deviceIndices);
+        OptimizerBundle bundle = WikiLanguageModelCommand.CreateOptimizerBundle(primary, config);
+        IOptimizer optimizer = bundle.RootOptimizer;
+        Parameter[] parameters = primary.Parameters().ToArray();
+        optimizer.prepare();
+        long parameterCount = parameters.Sum(parameter => (long)parameter.T.numel());
+        Console.WriteLine($"device=Arc [{string.Join(',', deviceIndices)}], "
+            + string.Join(", ", deviceIndices.Select(index => $"[{index}]={lanes[index].Device.Name}"))
+            + $", parameters={parameterCount:N0}");
+        var microBatches = batches.Select(batch => new ArcLanguageModelMicroBatch(
+            batch.Input, batch.Target, config.BatchSize, config.ContextLength)).ToArray();
+        var samples = new List<DualStepSample>();
+        try
+        {
+            for (int step = 0; step < warmup + steps; step++)
+            {
+                bool warming = step < warmup;
+                foreach (ArcExecutionLane lane in lanes.Values) lane.ResetDetailedProfile();
+                var before = lanes.ToDictionary(pair => pair.Key, pair => CaptureLane(pair.Value));
+                var kernelsBefore = lanes.ToDictionary(pair => pair.Key,
+                    pair => pair.Value.KernelTimings.ToDictionary(timing => timing.Key, timing => timing.Value));
+                long allocatedBefore = GC.GetTotalAllocatedBytes(false);
+                int[] gcBefore = [GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2)];
+                var timelines = timelinePath is not null && !warming
+                    ? lanes.ToDictionary(pair => pair.Key, pair => pair.Value.BeginTimeline())
+                    : new Dictionary<int, ArcTimeline>();
+                var total = Stopwatch.StartNew();
+                foreach (ArcTimeline timeline in timelines.Values) timeline.MarkStart();
+                void SynchronizeLanes()
+                {
+                    foreach (ArcExecutionLane lane in lanes.Values) lane.Synchronize();
+                }
+                double Time(string phase, Action action)
+                {
+                    foreach (ArcExecutionLane lane in lanes.Values)
+                        if (lane.DetailedProfiler is { } profiler) profiler.Phase = phase;
+                    var spans = timelines.Values.Select(timeline => timeline.Host("managed-" + phase, phase)).ToArray();
+                    long start = Stopwatch.GetTimestamp();
+                    try { action(); SynchronizeLanes(); }
+                    finally { foreach (ArcTimeline.HostScope span in spans) span.Dispose(); }
+                    return Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+                }
+                double zero = Time("zero-grad", optimizer.zero_grad);
+                float meanLoss = 0f;
+                double forwardBackward = Time("forward-backward-reduce", () =>
+                    meanLoss = engine.ForwardBackwardAccumulated(
+                        microBatches, Tensor.DefaultCrossEntropyIgnoreIndex, step + 1));
+                float norm = 0f;
+                double clip = Time("clip", () => norm = nn.utils.clip_grad_norm_(parameters, 1f));
+                double update = Time("optimizer", optimizer.step);
+                double replicaSync = Time("replica-sync", replicaSyncMode == "full"
+                    ? engine.SynchronizeSecondaryModel
+                    : engine.SynchronizeSecondaryForwardReplica);
+                foreach (ArcTimeline timeline in timelines.Values) timeline.MarkEnd();
+                total.Stop();
+
+                var timelineReports = new Dictionary<int, ArcTimelineReport>();
+                foreach ((int index, ArcTimeline timeline) in timelines)
+                {
+                    lanes[index].EndTimeline();
+                    ArcTimelineReport report = timeline.Export(
+                        timelinePath + $".gpu-{index}.step-{step + 1}.trace.json.gz");
+                    timelineReports.Add(index, report);
+                    Console.WriteLine($"Arc [{index}] timeline: wall={report.WallMs:F2} ms, "
+                        + $"coverage={report.Partition.CoverageFraction:P6}, events={report.DeviceEvents}, "
+                        + $"missing={report.MissingEvents}, opaque uploads={report.OpaqueAllocationCopies}");
+                    if (report.MissingEvents != 0 || report.OpaqueAllocationCopies != 0
+                        || Math.Abs(report.Partition.CoverageFraction - 1) > 1e-9
+                        || report.Partition.GpuOverlapMs > .001)
+                        throw new InvalidOperationException(
+                            $"Arc [{index}] timeline quality gate failed; inspect the exported trace.");
+                }
+                var after = lanes.ToDictionary(pair => pair.Key, pair => CaptureLane(pair.Value));
+                bool finite = float.IsFinite(meanLoss) && float.IsFinite(norm)
+                    && ArcTrainingMath.GradientsFinite(parameters);
+                if (!finite)
+                    throw new InvalidOperationException($"Non-finite loss/gradient at probe step {step + 1}.");
+                using var process = Process.GetCurrentProcess();
+                var sample = new DualStepSample(step + 1, meanLoss, norm, finite,
+                    total.Elapsed.TotalMilliseconds, zero, forwardBackward, clip, update, replicaSync,
+                    GC.GetTotalAllocatedBytes(false) - allocatedBefore, GC.GetTotalMemory(false),
+                    process.WorkingSet64,
+                    [GC.CollectionCount(0) - gcBefore[0], GC.CollectionCount(1) - gcBefore[1],
+                        GC.CollectionCount(2) - gcBefore[2]],
+                    after.ToDictionary(pair => pair.Key,
+                        pair => SubtractLane(pair.Value, before[pair.Key])),
+                    after,
+                    lanes.ToDictionary(pair => pair.Key,
+                        pair => pair.Value.KernelTimings.ToDictionary(timing => timing.Key,
+                            timing => timing.Value - kernelsBefore[pair.Key].GetValueOrDefault(timing.Key))),
+                    lanes.ToDictionary(pair => pair.Key,
+                        pair => pair.Value.DetailedProfiler?.Snapshot()),
+                    timelineReports);
+                if (!warming) samples.Add(sample);
+                Console.WriteLine($"Arc [{string.Join(',', deviceIndices)}] {(warming ? "warmup" : "measure")} "
+                    + $"{step + 1}/{warmup + steps}: step={sample.TotalMs:F2} ms, "
+                    + $"forward/backward/reduce={forwardBackward:F2}, clip={clip:F2}, "
+                    + $"optimizer={update:F2}, replica sync={replicaSync:F2}, "
+                    + $"loss={meanLoss:F6}, norm={norm:G6}, "
+                    + $"managed={sample.ManagedBytes / 1048576d:F1} MiB");
+            }
+
+            double sum = samples.Sum(sample => sample.TotalMs);
+            var phases = new Dictionary<string, double>
+            {
+                ["zeroGrad"] = samples.Sum(sample => sample.ZeroGradMs),
+                ["forwardBackwardReduce"] = samples.Sum(sample => sample.ForwardBackwardReduceMs),
+                ["clip"] = samples.Sum(sample => sample.ClipMs),
+                ["optimizer"] = samples.Sum(sample => sample.OptimizerMs),
+                ["replicaSync"] = samples.Sum(sample => sample.ReplicaSyncMs),
+            };
+            var amdahl = phases.OrderByDescending(phase => phase.Value)
+                .Select(phase => new PhaseShare(phase.Key, phase.Value / samples.Count,
+                    phase.Value / sum, 1d / (1d - phase.Value / sum),
+                    1d / (1d - phase.Value / sum + phase.Value / sum / 2d))).ToArray();
+            double median = Median(samples.Select(sample => sample.TotalMs));
+            double tokensPerSecond = 1000d * config.BatchSize * config.ContextLength
+                * config.GradientAccumulationSteps / median;
+            Console.WriteLine($"Arc [{string.Join(',', deviceIndices)}] p50={median:F2} ms/update, "
+                + $"{tokensPerSecond:F1} tokens/s; largest={amdahl[0].Phase} "
+                + $"({amdahl[0].Fraction:P1})");
+            foreach (int index in deviceIndices)
+            {
+                var counters = samples[^1].LaneSnapshot[index];
+                Console.WriteLine($"Arc [{index}] peak backend allocated="
+                    + $"{counters["PeakAllocatedBytes"] / 1048576d:F1} MiB, "
+                    + $"H2D={counters["H2DBytes"] / 1048576d:F1} MiB, "
+                    + $"D2H={counters["D2HBytes"] / 1048576d:F1} MiB");
+            }
+            return new DualRunResult("Arc", string.Join(" + ", deviceIndices.Select(
+                    index => lanes[index].Device.Name)),
+                deviceIndices.ToArray(),
+                deviceIndices.ToDictionary(index => index, index => lanes[index].Device.Name),
+                deviceIndices.ToDictionary(index => index, index => lanes[index].Device.DriverVersion),
+                parameterCount, median, samples.Average(sample => sample.TotalMs),
+                tokensPerSecond, amdahl, samples,
+                (primary as GptRinWikiJp)?.LastArcMemoryPlan);
+        }
+        finally
+        {
+            foreach (IOptimizer leaf in bundle.Optimizers)
+                if (leaf is IDisposable disposable) disposable.Dispose();
+        }
     }
 
     private static RunResult Measure(WikiTrainingConfiguration config, TensorDevice device,
@@ -430,4 +693,17 @@ internal static class ArcTransformerProbe
     private sealed record RunResult(string Device, string DeviceName, string? DriverVersion, long ParameterCount,
         double StepP50Ms, double StepMeanMs, double TokensPerSecond, PhaseShare[] Amdahl, List<StepSample> Samples,
         ArcTransformerMemoryPlan? MemoryPlan);
+    private sealed record DualStepSample(int Step, float Loss, float GradientNorm, bool FiniteGradient,
+        double TotalMs, double ZeroGradMs, double ForwardBackwardReduceMs, double ClipMs,
+        double OptimizerMs, double ReplicaSyncMs, long ManagedAllocatedBytes, long ManagedBytes,
+        long WorkingSetBytes, int[] GcCollections,
+        Dictionary<int, Dictionary<string, double?>> LaneDelta,
+        Dictionary<int, Dictionary<string, double?>> LaneSnapshot,
+        Dictionary<int, Dictionary<string, double>> KernelGpuMs,
+        Dictionary<int, IReadOnlyList<ArcProfileEntry>?> Profile,
+        Dictionary<int, ArcTimelineReport> Timelines);
+    private sealed record DualRunResult(string Device, string DeviceName, int[] DeviceIndices,
+        Dictionary<int, string> DeviceNames, Dictionary<int, string> DriverVersions,
+        long ParameterCount, double StepP50Ms, double StepMeanMs, double TokensPerSecond,
+        PhaseShare[] Amdahl, List<DualStepSample> Samples, ArcTransformerMemoryPlan? MemoryPlan);
 }

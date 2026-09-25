@@ -38,8 +38,8 @@ internal static partial class WikiLanguageModelCommand
             return checkpoint;
         ModuleState safeModel = safetensors.torch.load_file(safeTensorsPath);
         ModuleState expected = checkpoint.CurrentModel ?? checkpoint.Model;
-        // The JSON state is authoritative because it retains the exact FP32
-        // master weights. SafeTensors intentionally stores the quantized
+        // The JSON state is authoritative because it retains the master
+        // weights. SafeTensors intentionally stores the quantized
         // physical representation and is used only as a validated artifact.
         if (!ModuleStatesEqual(safeModel, expected))
         {
@@ -241,6 +241,15 @@ internal static partial class WikiLanguageModelCommand
 
         TensorPrecisionMode checkpointMode =
             GetCheckpointPrecisionMode(checkpoint);
+        if (checkpointMode == TensorPrecisionMode.Mix8_16
+            && (config.GetExecutionDevice() != TensorDevice.Arc
+                || !config.IsArchitecture(
+                    WikiTrainingConfiguration.TransformerArchitecture)))
+        {
+            throw new NotSupportedException(
+                "mix8_16 checkpoint resume currently requires device 'arc' " +
+                "and modelArchitecture 'transformer'.");
+        }
         TensorPrecisionMode? configuredMode = config.GetExplicitPrecisionMode();
         if (configuredMode is not null
             && configuredMode.Value != checkpointMode)
@@ -249,12 +258,13 @@ internal static partial class WikiLanguageModelCommand
         }
 
         int bfp8BlockSize = config.Bfp8BlockSize;
-        if (checkpointMode == TensorPrecisionMode.Mix8_32
+        if (checkpointMode is TensorPrecisionMode.Mix8_32
+                or TensorPrecisionMode.Mix8_16
             && checkpoint.Bfp8BlockSize is int checkpointBlockSize)
         {
             // An omitted setting preserves the checkpoint's exact payload
             // contract. An explicit setting is a requested precision
-            // migration: the FP32 master stored in the checkpoint is loaded
+            // migration: the master stored in the checkpoint is loaded
             // into a model created with the requested descriptor and safely
             // requantized once, before CUDA residency is prepared.
             bfp8BlockSize = config.HasExplicitBfp8BlockSize
@@ -271,6 +281,13 @@ internal static partial class WikiLanguageModelCommand
     private static void ValidateResumePrecisionMigration(
         TensorPrecisionMode source, TensorPrecisionMode destination)
     {
+        if (source == TensorPrecisionMode.Mix8_16
+            || destination == TensorPrecisionMode.Mix8_16)
+        {
+            throw new InvalidDataException(
+                "mix8_16 checkpoint precision migration is not supported. " +
+                "Resume with the saved precision mode.");
+        }
         static bool HasFloat32TrainingState(TensorPrecisionMode mode)
             => mode is TensorPrecisionMode.Float32 or TensorPrecisionMode.Mix16_32
                 or TensorPrecisionMode.Mix8_32;
@@ -777,7 +794,8 @@ internal static partial class WikiLanguageModelCommand
         TensorPrecisionMode precisionMode = model is Module module
             ? module.PrecisionMode
             : config.GetPrecisionMode();
-        if (precisionMode != TensorPrecisionMode.Mix8_32)
+        if (precisionMode is not (TensorPrecisionMode.Mix8_32
+            or TensorPrecisionMode.Mix8_16))
             return null;
 
         int? blockSize = null;
@@ -789,14 +807,14 @@ internal static partial class WikiLanguageModelCommand
                 { Granularity: Bfp8ScaleGranularity.Block })
             {
                 throw new InvalidOperationException(
-                    "A mix8_32 checkpoint requires block-scaled BFP8 " +
+                    "A mixed BFP8 checkpoint requires block-scaled BFP8 " +
                     "parameter storage.");
             }
             if (blockSize is int existing
                 && existing != descriptor.BlockSize)
             {
                 throw new InvalidOperationException(
-                    "A mix8_32 checkpoint cannot contain multiple BFP8 " +
+                    "A mixed BFP8 checkpoint cannot contain multiple BFP8 " +
                     "parameter block sizes.");
             }
             blockSize = descriptor.BlockSize;
@@ -810,9 +828,17 @@ internal static partial class WikiLanguageModelCommand
         TensorPrecisionMode precisionMode =
             GetCheckpointPrecisionMode(checkpoint);
         if (checkpoint.Bfp8BlockSize is null)
+        {
+            if (precisionMode == TensorPrecisionMode.Mix8_16)
+            {
+                throw new InvalidDataException(
+                    "mix8_16 checkpoint requires BFP8 block-size metadata.");
+            }
             return;
+        }
         if (checkpoint.Bfp8BlockSize <= 0
-            || precisionMode != TensorPrecisionMode.Mix8_32)
+            || precisionMode is not (TensorPrecisionMode.Mix8_32
+                or TensorPrecisionMode.Mix8_16))
         {
             throw new InvalidDataException(
                 "Wiki checkpoint BFP8 block-size metadata is invalid.");
@@ -911,6 +937,8 @@ internal static partial class WikiLanguageModelCommand
                 WikiTrainingConfiguration.Bfp8PrecisionMode,
             TensorPrecisionMode.Mix8_32 =>
                 WikiTrainingConfiguration.Mix8_32PrecisionMode,
+            TensorPrecisionMode.Mix8_16 =>
+                WikiTrainingConfiguration.Mix8_16PrecisionMode,
             _ => throw new ArgumentOutOfRangeException(nameof(mode)),
         };
 

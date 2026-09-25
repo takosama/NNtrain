@@ -4,6 +4,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable,
     IMix8QuantizationDiagnosticsProvider
 {
     private readonly ArcOptimizerStateCache _arcState = new();
+    private readonly bool _usesPackedBFloat16Checkpoint;
     private readonly List<Parameter> _parameters;
     private readonly long _totalElements;
     private readonly AdamWParameterRuntime[] _parameterRuntime;
@@ -38,6 +39,7 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable,
     private int? _cudaStateAuthorityDevice;
 
     internal IReadOnlyList<Parameter> Parameters => _parameters;
+    internal bool UsesPackedBFloat16Checkpoint => _usesPackedBFloat16Checkpoint;
     internal int CudaMultiTensorPlanBuildCount
         => _cudaMultiTensorPlanBuildCount;
 
@@ -47,6 +49,8 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable,
     {
         ArgumentNullException.ThrowIfNull(parameters);
         _cudaDispatchPolicy = CudaDispatchPolicy.Current.Validate();
+        _usesPackedBFloat16Checkpoint = TensorExecutionContext.ActivePrecisionPolicy?.Mode
+            == NNtrain.Runtime.Execution.PrecisionMode.Mix8_16;
 
         _parameters = [];
         var seenParameters =
@@ -77,7 +81,18 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable,
         _workItems = CreateWorkItems(_parameters);
 
         AdamWOptions effectiveOptions = options ?? new AdamWOptions();
-        if (TensorExecutionContext.ActivePrecisionPolicy?.OptimizerState
+        if (TensorExecutionContext.ActivePrecisionPolicy?.Mode
+                == NNtrain.Runtime.Execution.PrecisionMode.Mix8_16)
+        {
+            // The host checkpoint arrays remain float[] for compatibility;
+            // Arc resident moments use physically packed BF16 buffers.
+            effectiveOptions = effectiveOptions with
+            {
+                UseBFloat16FirstMoment = false,
+                UseBFloat16SecondMoment = false,
+            };
+        }
+        else if (TensorExecutionContext.ActivePrecisionPolicy?.OptimizerState
                 == NNtrain.Runtime.Execution.NumericFormat.BFloat16)
         {
             effectiveOptions = effectiveOptions with
@@ -103,7 +118,8 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable,
     public AdamWState CaptureState()
     {
         AdamWState state = CaptureStateForStreaming();
-        return _options.UseBFloat16FirstMoment
+        return _usesPackedBFloat16Checkpoint
+            || _options.UseBFloat16FirstMoment
             || _options.UseBFloat16SecondMoment
             ? state
             : CloneState(state);
@@ -126,6 +142,21 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable,
     internal AdamWState CaptureStateForStreaming()
     {
         SynchronizeStateForStreaming();
+        if (_usesPackedBFloat16Checkpoint)
+        {
+            var packedStates = new AdamWParameterState[_parameters.Count];
+            for (int index = 0; index < packedStates.Length; index++)
+            {
+                Parameter parameter = _parameters[index];
+                AdamWParameterRuntime runtime = _parameterRuntime[index];
+                packedStates[index] = new AdamWParameterState(index,
+                    parameter.Name, parameter.T.Shape.ToArray(),
+                    DecodePackedBFloat16(runtime.FirstMomentPacked!),
+                    DecodePackedBFloat16(runtime.SecondMomentPacked!));
+            }
+            return new AdamWState(AdamWState.CurrentFormatVersion,
+                _step, _options with { }, packedStates);
+        }
         if (_options.UseBFloat16FirstMoment
             || _options.UseBFloat16SecondMoment)
         {
@@ -188,6 +219,31 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable,
 
     internal int StreamingParameterCount => _parameterStates.Length;
 
+    internal (ushort[] First, ushort[] Second) GetStreamingPackedMoments(int index)
+    {
+        AdamWParameterRuntime runtime = _parameterRuntime[index];
+        return (runtime.FirstMomentPacked
+                ?? throw new InvalidOperationException("No packed first moment."),
+            runtime.SecondMomentPacked
+                ?? throw new InvalidOperationException("No packed second moment."));
+    }
+
+    private static ushort[] PackBFloat16(float[] values)
+    {
+        var packed = new ushort[values.Length];
+        for (int index = 0; index < values.Length; index++)
+            packed[index] = TensorStorageCodec.EncodeBFloat16(values[index]);
+        return packed;
+    }
+
+    private static float[] DecodePackedBFloat16(ushort[] values)
+    {
+        var decoded = new float[values.Length];
+        for (int index = 0; index < values.Length; index++)
+            decoded[index] = TensorStorageCodec.DecodeBFloat16(values[index]);
+        return decoded;
+    }
+
     internal AdamWStreamingParameterState GetStreamingParameterState(int index)
     {
         AdamWParameterState state = _parameterStates[index];
@@ -230,16 +286,41 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable,
         ValidateState(state);
         AdamWState restored = takeOwnership ? state : CloneState(state);
         _step = restored.Step;
-        _options = TensorExecutionContext.ActivePrecisionPolicy?.OptimizerState
-                == NNtrain.Runtime.Execution.NumericFormat.BFloat16
+        _options = TensorExecutionContext.ActivePrecisionPolicy?.Mode
+                == NNtrain.Runtime.Execution.PrecisionMode.Mix8_16
             ? restored.Options with
             {
-                UseBFloat16FirstMoment = true,
-                UseBFloat16SecondMoment = true,
+                UseBFloat16FirstMoment = false,
+                UseBFloat16SecondMoment = false,
             }
-            : restored.Options;
+            : TensorExecutionContext.ActivePrecisionPolicy?.OptimizerState
+                    == NNtrain.Runtime.Execution.NumericFormat.BFloat16
+                ? restored.Options with
+                {
+                    UseBFloat16FirstMoment = true,
+                    UseBFloat16SecondMoment = true,
+                }
+                : restored.Options;
         _parameterStates = restored.ParameterStates;
         DisposeCudaResources();
+        if (_usesPackedBFloat16Checkpoint)
+        {
+            for (int index = 0; index < _parameterRuntime.Length; index++)
+            {
+                AdamWParameterRuntime runtime = _parameterRuntime[index];
+                runtime.FirstMomentPacked = PackBFloat16(_parameterStates[index].FirstMoment);
+                runtime.SecondMomentPacked = PackBFloat16(_parameterStates[index].SecondMoment);
+                runtime.FirstMoment = runtime.SecondMoment = [];
+                runtime.FirstMomentBFloat16 = runtime.SecondMomentBFloat16 = null;
+                _parameterStates[index] = _parameterStates[index] with
+                {
+                    FirstMoment = [],
+                    SecondMoment = [],
+                };
+            }
+            RefreshWeightDecayFlags();
+            return;
+        }
         for (int index = 0; index < _parameterRuntime.Length; index++)
         {
             bool bfp8State = UsesPureBfp8OptimizerState(
@@ -325,6 +406,12 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable,
     internal void Step()
     {
         if (!Tensor.ArcResident) _arcState.Dispose();
+        if (_usesPackedBFloat16Checkpoint && Tensor.ExecutionDevice != TensorDevice.Arc)
+            throw new NotSupportedException("An Arc mix8_16 AdamW optimizer can only step in an Arc session.");
+        if (Tensor.ExecutionDevice == TensorDevice.Arc && !Tensor.ArcResident
+            && TensorExecutionContext.ActivePrecisionPolicy?.Mode
+                == NNtrain.Runtime.Execution.PrecisionMode.Mix8_16)
+            throw new NotSupportedException("Arc mix8_16 AdamW requires resident tensors and physical BF16 optimizer state.");
         if (_step == int.MaxValue)
         {
             throw new InvalidOperationException(
@@ -528,15 +615,30 @@ public partial class AdamW : IOptimizer, ILearningRateAdjustable,
 
         if (Tensor.ArcResident)
         {
+            bool bf16State = TensorExecutionContext.ActivePrecisionPolicy?.Mode
+                == NNtrain.Runtime.Execution.PrecisionMode.Mix8_16;
             foreach (AdamWParameterRuntime runtime in _parameterRuntime)
             {
                 if (runtime.FirstMomentBFloat16 is not null || runtime.SecondMomentBFloat16 is not null)
                     throw new NotSupportedException("Arc AdamW currently requires FP32 optimizer moments.");
                 Tensor tensor = runtime.Parameter.T;
-                Tensor.ArcLane.Run("adam", tensor.Numel, 0, tensor.ArcGradient(),
-                    _arcState.Get(runtime.FirstMoment), _arcState.Get(runtime.SecondMoment), tensor.ArcMaster(), tensor.Numel,
-                    options.Beta1, options.Beta2, _stepUpdateScale, _stepScaledEpsilon,
-                    runtime.ApplyWeightDecay ? 1f - options.LearningRate * options.WeightDecay : 1f);
+                if (bf16State)
+                {
+                    Tensor.ArcLane.Run("adam_bf16_packed", tensor.Numel, 0,
+                        tensor.ArcBFloat16Gradient(),
+                        _arcState.GetBFloat16(runtime.FirstMomentPacked!),
+                        _arcState.GetBFloat16(runtime.SecondMomentPacked!),
+                        tensor.ArcBFloat16Master(), tensor.Numel,
+                        options.Beta1, options.Beta2, _stepUpdateScale, _stepScaledEpsilon,
+                        runtime.ApplyWeightDecay ? 1f - options.LearningRate * options.WeightDecay : 1f);
+                }
+                else
+                {
+                    Tensor.ArcLane.Run("adam", tensor.Numel, 0, tensor.ArcGradient(),
+                        _arcState.Get(runtime.FirstMoment), _arcState.Get(runtime.SecondMoment), tensor.ArcMaster(), tensor.Numel,
+                        options.Beta1, options.Beta2, _stepUpdateScale, _stepScaledEpsilon,
+                        runtime.ApplyWeightDecay ? 1f - options.LearningRate * options.WeightDecay : 1f);
+                }
                 tensor.CompleteArcUpdate();
             }
             return;

@@ -80,10 +80,16 @@ internal static class ProductionTrainingSessionFactory
         NNtrain.Arc.ArcExecutionOptions? arcOptions = null)
     {
         ArgumentNullException.ThrowIfNull(cudaDeviceIndices);
+        if (precisionMode == TensorPrecisionMode.Mix8_16
+            && executionDevice != TensorDevice.Arc)
+        {
+            throw new NotSupportedException(
+                "mix8_16 currently requires an Arc Transformer execution session.");
+        }
         if (cudaDeviceIndices.Count == 0)
         {
             throw new ArgumentException(
-                "At least one configured CUDA device index is required.",
+                "At least one configured device index is required.",
                 nameof(cudaDeviceIndices));
         }
 
@@ -91,8 +97,13 @@ internal static class ProductionTrainingSessionFactory
         if (executionDevice == TensorDevice.Arc)
         {
             Tensor.ValidateArcPrecision(precisionMode);
-            if (configuredCudaDevices.Length != 1)
-                throw new NotSupportedException("Arc currently supports one GPU; set deviceIndices to [0].");
+            if (configuredCudaDevices.Length is < 1 or > 2
+                || configuredCudaDevices.Any(index => index < 0)
+                || configuredCudaDevices.Distinct().Count() != configuredCudaDevices.Length)
+            {
+                throw new NotSupportedException(
+                    "Arc training requires one or two unique, non-negative device indices.");
+            }
         }
         var execution = new ExecutionSession(new ExecutionOptions
         {
@@ -103,6 +114,9 @@ internal static class ProductionTrainingSessionFactory
                 _ => throw new ArgumentOutOfRangeException(nameof(executionDevice)),
             },
             ArcDeviceIndex = configuredCudaDevices[0],
+            ArcDevices = executionDevice == TensorDevice.Arc
+                ? new DeviceSet(configuredCudaDevices)
+                : null,
             RequireDeviceResidency = executionDevice != TensorDevice.Arc,
             CudaDevices = new DeviceSet(configuredCudaDevices),
             Precision = PrecisionPolicy.Parse(
@@ -112,9 +126,12 @@ internal static class ProductionTrainingSessionFactory
         {
             if (execution.Options.Device == ExecutionDeviceKind.Arc)
             {
-                var lane = new NNtrain.Arc.ArcExecutionLane(execution.Options.ArcDeviceIndex, arcOptions);
-                try { execution.AttachLane(lane); }
-                catch { lane.Dispose(); throw; }
+                foreach (int deviceIndex in configuredCudaDevices)
+                {
+                    var lane = new NNtrain.Arc.ArcExecutionLane(deviceIndex, arcOptions);
+                    try { execution.AttachLane(lane); }
+                    catch { lane.Dispose(); throw; }
+                }
             }
             if (execution.Options.Device == ExecutionDeviceKind.Cuda)
             {

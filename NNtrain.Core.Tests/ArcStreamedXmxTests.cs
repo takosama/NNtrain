@@ -116,6 +116,40 @@ public sealed class ArcStreamedXmxTests
         Assert.All(values, value => Assert.Equal(.125f, value));
     }
 
+    [Theory]
+    [InlineData(512, 512, 4096, true, "gemm_xmx_streamed_block_32x32_wg16")]
+    [InlineData(4096, 512, 512, false, "gemm_xmx_streamed_block_16x64_wg16")]
+    public void ExpandedStreamedTilesPreserveBitwiseGradientAndDeviceResidency(
+        int m, int n, int k, bool transposeLeft, string expectedKernel)
+    {
+        RequireXmx();
+        using var execution = Tensor.BeginArcExecution(precision: TensorPrecisionMode.Mix16_32, options: new() {
+            StreamedXmxMatrices = true, DirectXmxMatrices = true,
+            ExpandedStreamedXmxTiles = true, ParallelWeightGradients = true });
+        var lane = Tensor.ArcLane;
+        float[] sourceA = Enumerable.Range(0, checked(m * k))
+            .Select(i => TensorStorageCodec.RoundToBFloat16((i % 17 - 8) * .0019f)).ToArray();
+        float[] sourceB = Enumerable.Range(0, checked(n * k))
+            .Select(i => TensorStorageCodec.RoundToBFloat16((i % 13 - 6) * .0021f)).ToArray();
+        using var decodedA = lane.Upload(sourceA);
+        using var decodedB = lane.Upload(sourceB);
+        using var left = new ArcXmxStorageOperand(lane, decodedA, null, TensorDType.Float32, sourceA.Length);
+        using var right = new ArcXmxStorageOperand(lane, decodedB, null, TensorDType.Float32, sourceB.Length);
+        using var actual = lane.Upload(new float[m * n]);
+        using var expected = lane.Upload(new float[m * n]);
+        long uploads = lane.H2DBytes, downloads = lane.D2HBytes;
+        Assert.True(ArcXmxStorageOperand.TryGemmStreamed(lane, left, right, actual,
+            m, n, k, ta: transposeLeft, accumulate: true));
+        ArcMuonMath.Gemm(lane, decodedA, decodedB, expected,
+            m, n, k, transposeLeft, false, 3, true);
+        Assert.Equal(uploads, lane.H2DBytes);
+        Assert.Equal(downloads, lane.D2HBytes);
+        float[] result = new float[m * n], reference = new float[m * n];
+        lane.Read(actual, result); lane.Read(expected, reference);
+        Assert.Equal(reference.Select(BitConverter.SingleToInt32Bits), result.Select(BitConverter.SingleToInt32Bits));
+        Assert.Contains(expectedKernel, lane.KernelTimings.Keys);
+    }
+
     private static Tensor Make(TensorDType dtype, int length, int seed)
     {
         var tensor = new Tensor(Enumerable.Range(0, length)

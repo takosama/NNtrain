@@ -222,9 +222,12 @@ internal static partial class WikiLanguageModelCommand
 
     private static string GetAdamWMomentStorage(
         LanguageModel model)
-        => model.PrecisionMode == TensorPrecisionMode.BFloat16
-            ? "bf16/bf16"
-            : "f32/f32";
+        => model.PrecisionMode switch
+        {
+            TensorPrecisionMode.BFloat16 => "bf16/bf16",
+            TensorPrecisionMode.Mix8_16 => "bf16/bf16 on Arc",
+            _ => "f32/f32",
+        };
 
     internal static string FormatOptimizerDiagnostics(
         IOptimizer optimizer,

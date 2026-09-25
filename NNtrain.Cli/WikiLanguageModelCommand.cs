@@ -114,10 +114,20 @@ internal static partial class WikiLanguageModelCommand
                 : string.Empty));
         if (Tensor.ExecutionDevice == TensorDevice.Arc)
         {
-            int index = (config.DeviceIndices ?? [config.DeviceIndex])[0];
-            NNtrain.Arc.ArcDeviceInfo device = NNtrain.Arc.ArcDevices.Enumerate().FirstOrDefault(d => d.Index == index)
-                ?? throw new InvalidOperationException($"Intel Arc OpenCL device {index} is unavailable. Install the Intel graphics driver.");
-            output.WriteLine($"Arc [{index}] = {device.Name}, OpenCL driver {device.DriverVersion}; resident packed weights/activations, FP32 gradients/master/optimizer; token/target uploads and scalar readbacks; CUDA is not used");
+            ArcInferenceSettings? inference = generatePrompt is null
+                ? null
+                : ArcInferenceRouting.Resolve(config);
+            int[] indices = inference is null
+                ? config.DeviceIndices ?? [config.DeviceIndex]
+                : inference.UsesTwoDevices
+                    ? inference.DeviceIndices
+                    : [inference.DeviceIndices[0]];
+            foreach (int index in indices)
+            {
+                NNtrain.Arc.ArcDeviceInfo device = NNtrain.Arc.ArcDevices.Enumerate().FirstOrDefault(d => d.Index == index)
+                    ?? throw new InvalidOperationException($"Intel Arc OpenCL device {index} is unavailable. Install the Intel graphics driver.");
+                output.WriteLine($"Arc [{index}] = {device.Name}, OpenCL driver {device.DriverVersion}; resident packed weights/activations; token/target uploads and scalar readbacks; CUDA is not used");
+            }
         }
         if (Tensor.ExecutionDevice == TensorDevice.Cuda
             && Tensor.CudaDeviceIndices.Count > 1)
@@ -339,6 +349,12 @@ internal static partial class WikiLanguageModelCommand
         try
         {
         using IDisposable executionScope = executionSession.Enter();
+        using IDisposable? arcPrimaryScope =
+            config.GetExecutionDevice() == TensorDevice.Arc
+                && (config.DeviceIndices ?? [config.DeviceIndex]).Length == 2
+                ? TensorExecutionContext.Push(new TorchDevice(
+                    TensorDevice.Arc, (config.DeviceIndices ?? [config.DeviceIndex])[0]))
+                : null;
         LanguageModel model = CreateModel(
             config,
             tokenizer.VocabularySize,
@@ -418,6 +434,11 @@ internal static partial class WikiLanguageModelCommand
             ownsExecutionSession: false,
             lastCommittedStep: globalStep);
         trainingSession.OwnOptimizer(optimizer);
+        using ArcDataParallelEngine? arcDataParallelEngine =
+            CreateArcDataParallelEngine(config, model, tokenizer.VocabularySize,
+                precisionMode, precision.StorageDType, precision.Bfp8BlockSize);
+        if (arcDataParallelEngine is not null)
+            output.WriteLine($"Arc training data parallel = GPUs [{string.Join(',', config.DeviceIndices!)}]");
         CudaDataParallelEngine? dataParallelEngine =
             Tensor.ExecutionDevice == TensorDevice.Cuda
                 && Tensor.CudaDeviceIndices.Count > 0
@@ -448,6 +469,7 @@ internal static partial class WikiLanguageModelCommand
             optimizer,
             trainingParameters,
             dataParallelEngine,
+            arcDataParallelEngine,
             scheduler,
             metricReporter,
             config.GraphUpdateSteps,
@@ -715,16 +737,35 @@ internal static partial class WikiLanguageModelCommand
 
         TensorPrecisionMode checkpointMode =
             GetCheckpointPrecisionMode(checkpoint);
+        if (checkpointMode == TensorPrecisionMode.Mix8_16
+            && (config.GetExecutionDevice() != TensorDevice.Arc
+                || !string.Equals(
+                    GetCheckpointArchitecture(checkpoint),
+                    WikiTrainingConfiguration.TransformerArchitecture,
+                    StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new NotSupportedException(
+                "mix8_16 checkpoint generation currently requires device 'arc' " +
+                "and a Transformer checkpoint.");
+        }
         TensorDType checkpointDType = checkpointMode.ToStorageDType();
         bool configuredPrecisionDiffers =
             config.GetPrecisionMode() != checkpointMode;
 
-        using ExecutionSession executionSession =
-            ProductionTrainingSessionFactory.CreateExecutionSession(
+        ArcInferenceSettings? arcSettings = config.GetExecutionDevice() == TensorDevice.Arc
+            ? ArcInferenceRouting.Resolve(config)
+            : null;
+        IReadOnlyList<int> executionIndices = arcSettings is null
+            ? config.DeviceIndices ?? [config.DeviceIndex]
+            : [arcSettings.DeviceIndices[0]];
+        using ExecutionSession? executionSession = arcSettings?.UsesTwoDevices == true
+            ? null
+            : ProductionTrainingSessionFactory.CreateExecutionSession(
                 checkpointMode,
                 config.GetExecutionDevice(),
-                config.DeviceIndices ?? [config.DeviceIndex]);
-        using IDisposable executionScope = executionSession.Enter();
+                executionIndices);
+        using IDisposable executionScope = executionSession?.Enter()
+            ?? ArcInferenceRouting.BeginExecution(arcSettings!, checkpointMode);
         LanguageModel model = CreateModel(
             checkpoint,
             config.Seed,
@@ -756,7 +797,15 @@ internal static partial class WikiLanguageModelCommand
                 "in the checkpoint. JSON model settings take effect when " +
                 "a new training run starts and its checkpoint is saved.");
         }
+        if (arcSettings is not null)
+        {
+            ArcInferenceRouting.ConfigureModel(
+                model, tokenizer, prompt, config.MaxNewTokens,
+                arcSettings, output);
+        }
         WriteGeneration(model, tokenizer, prompt, config, output);
+        if (arcSettings is not null)
+            ArcInferenceRouting.WritePeakAllocations(output);
         return 0;
     }
 
@@ -791,6 +840,12 @@ internal static partial class WikiLanguageModelCommand
         try
         {
         using IDisposable executionScope = executionSession.Enter();
+        using IDisposable? arcPrimaryScope =
+            config.GetExecutionDevice() == TensorDevice.Arc
+                && (config.DeviceIndices ?? [config.DeviceIndex]).Length == 2
+                ? TensorExecutionContext.Push(new TorchDevice(
+                    TensorDevice.Arc, (config.DeviceIndices ?? [config.DeviceIndex])[0]))
+                : null;
         LanguageModel model = CreateModel(
             config,
             tokenizer.VocabularySize,
@@ -863,6 +918,11 @@ internal static partial class WikiLanguageModelCommand
             ownsExecutionSession: false,
             lastCommittedStep: globalStep);
         trainingSession.OwnOptimizer(optimizer);
+        using ArcDataParallelEngine? arcDataParallelEngine =
+            CreateArcDataParallelEngine(config, model, tokenizer.VocabularySize,
+                precisionMode, precision.StorageDType, precision.Bfp8BlockSize);
+        if (arcDataParallelEngine is not null)
+            output.WriteLine($"Arc training data parallel = GPUs [{string.Join(',', config.DeviceIndices!)}]");
         CudaDataParallelEngine? dataParallelEngine =
             Tensor.ExecutionDevice == TensorDevice.Cuda
                 && Tensor.CudaDeviceIndices.Count > 0
@@ -928,6 +988,7 @@ internal static partial class WikiLanguageModelCommand
                 optimizer,
                 trainingParameters,
                 dataParallelEngine,
+                arcDataParallelEngine,
                 scheduler,
                 metricReporter,
                 documentsPerEpoch,
@@ -1391,7 +1452,8 @@ internal static partial class WikiLanguageModelCommand
             $"{FormatPrecisionMode(precisionMode)}" +
             (precisionMode == TensorPrecisionMode.Bfp8
                 ? " (tensor scale)"
-                : precisionMode == TensorPrecisionMode.Mix8_32
+                : precisionMode is TensorPrecisionMode.Mix8_32
+                    or TensorPrecisionMode.Mix8_16
                     ? $" (block {bfp8BlockSize})"
                     : string.Empty) +
             (config.ResumeFromCheckpoint

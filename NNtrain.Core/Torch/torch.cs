@@ -18,6 +18,7 @@ public static class torch
     public const TensorPrecisionMode mix16_32 = TensorPrecisionMode.Mix16_32;
     public const TensorPrecisionMode fp16_32 = TensorPrecisionMode.Mix16_32;
     public const TensorPrecisionMode mix8_32 = TensorPrecisionMode.Mix8_32;
+    public const TensorPrecisionMode mix8_16 = TensorPrecisionMode.Mix8_16;
 
     public static class utils
     {

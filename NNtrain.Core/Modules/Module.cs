@@ -186,7 +186,8 @@ public abstract class Module
 
     /// <summary>
     /// Converts parameter storage in place. The block size is used only by
-    /// <see cref="TensorPrecisionMode.Mix8_32"/>.
+    /// <see cref="TensorPrecisionMode.Mix8_32"/> and
+    /// <see cref="TensorPrecisionMode.Mix8_16"/>.
     /// </summary>
     public Module to(
         TensorPrecisionMode precisionMode,
@@ -211,7 +212,7 @@ public abstract class Module
                 Bfp8QuantizationDescriptor.DefaultBlockSize),
             _ => throw new NotSupportedException(
                 $"Module conversion to dtype '{dtype}' is not supported. " +
-                "Use TensorPrecisionMode.Mix16_32 or Mix8_32 for mixed precision."),
+                "Use TensorPrecisionMode.Mix16_32, Mix8_32, or Mix8_16 for mixed precision."),
         };
 
     /// <summary>
@@ -233,13 +234,14 @@ public abstract class Module
             "mix16_32" or "fp16_32" => to(TensorPrecisionMode.Mix16_32),
             "bfp8" => to(TensorPrecisionMode.Bfp8),
             "mix8_32" => to(TensorPrecisionMode.Mix8_32),
+            "mix8_16" => to(TensorPrecisionMode.Mix8_16),
             _ when normalized.StartsWith("cuda:", StringComparison.Ordinal)
                 || normalized.StartsWith("arc:", StringComparison.Ordinal)
                 => to(TorchDevice.Parse(normalized)),
             _ => throw new ArgumentException(
                 $"Unsupported module conversion target '{target}'. " +
                 "Supported targets are cpu, cuda, cuda:N, arc, arc:N, auto, float32, " +
-                "bfloat16, mix16_32 (fp16_32), bfp8, and mix8_32.",
+                "bfloat16, mix16_32 (fp16_32), bfp8, mix8_32, and mix8_16.",
                 nameof(target)),
         };
     }
@@ -250,12 +252,13 @@ public abstract class Module
     {
         if (!Enum.IsDefined(precisionMode))
             throw new ArgumentOutOfRangeException(nameof(precisionMode));
-        if (precisionMode == TensorPrecisionMode.Mix8_32
+        if ((precisionMode is TensorPrecisionMode.Mix8_32
+                or TensorPrecisionMode.Mix8_16)
             && bfp8BlockSize <= 0)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(bfp8BlockSize),
-                "Mix8_32 requires a positive BFP8 block size.");
+                "Mix8_32 and Mix8_16 require a positive BFP8 block size.");
         }
 
         TensorDType storageDType = precisionMode.ToStorageDType();
@@ -265,10 +268,12 @@ public abstract class Module
                 Bfp8QuantizationDescriptor.TensorWide,
             TensorPrecisionMode.Mix8_32 =>
                 Bfp8QuantizationDescriptor.Block(bfp8BlockSize),
+            TensorPrecisionMode.Mix8_16 =>
+                Bfp8QuantizationDescriptor.Block(bfp8BlockSize),
             _ => null,
         };
         bool preserveMaster = precisionMode is TensorPrecisionMode.Mix16_32
-            or TensorPrecisionMode.Mix8_32;
+            or TensorPrecisionMode.Mix8_32 or TensorPrecisionMode.Mix8_16;
 
         foreach (Parameter parameter in Parameters())
         {
@@ -276,6 +281,8 @@ public abstract class Module
                 storageDType,
                 quantization,
                 preserveMaster);
+            if (precisionMode == TensorPrecisionMode.Mix8_16)
+                parameter.T.PackBFloat16MasterInPlace();
         }
         SetNumericContractRecursively(
             precisionMode,
@@ -421,7 +428,10 @@ public abstract class Module
                 parameters[index].T.RestoreBfp8ValuesInPlace(
                     parameterState.Values,
                     preserveFloat32Master:
-                        PrecisionMode == TensorPrecisionMode.Mix8_32);
+                        PrecisionMode is TensorPrecisionMode.Mix8_32
+                            or TensorPrecisionMode.Mix8_16);
+                if (PrecisionMode == TensorPrecisionMode.Mix8_16)
+                    parameters[index].T.PackBFloat16MasterInPlace();
             }
             else
             {

@@ -41,7 +41,8 @@ internal sealed record CudaPrecisionOperationEntry(
 /// Executable documentation for Transformer training precision dispatch. The
 /// manifest is deliberately independent of physical tensor dtype checks: its
 /// values describe the model policy contract which every CUDA dispatcher must
-/// preserve. Tests require a resident route for all five supported modes.
+/// preserve. Tests require a resident route for all five CUDA-supported modes;
+/// mix8_16 is currently implemented for Arc Transformer only.
 /// </summary>
 internal static class CudaPrecisionOperationManifest
 {

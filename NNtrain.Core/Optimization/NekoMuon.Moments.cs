@@ -17,7 +17,19 @@ public sealed partial class NekoMuon
         int length = fast.Length;
         if (Tensor.ExecutionDevice == TensorDevice.Arc)
         {
-            Tensor.ArcLane.Run("moments", length, 0,
+            bool bf16State = TensorExecutionContext.ActivePrecisionPolicy?.Mode
+                == NNtrain.Runtime.Execution.PrecisionMode.Mix8_16;
+            if (bf16State)
+            {
+                for (int i = 0; i < length; i++)
+                {
+                    if (gradientBuffer.Length == length)
+                        gradientBuffer[i] = TensorStorageCodec.RoundToBFloat16(gradientBuffer[i]);
+                    fast[i] = TensorStorageCodec.RoundToBFloat16(fast[i]);
+                    slow[i] = TensorStorageCodec.RoundToBFloat16(slow[i]);
+                }
+            }
+            Tensor.ArcLane.Run(bf16State ? "moments_bf16_state" : "moments", length, 0,
                 In(gradientBuffer.Length == 0 ? new float[length] : gradientBuffer),
                 InOut(fast), InOut(slow), InOut(fastHat), InOut(slowHat), length,
                 options.BetaFast, options.BetaSlow, fastCorrection, slowCorrection, options.Nesterov ? 1 : 0);

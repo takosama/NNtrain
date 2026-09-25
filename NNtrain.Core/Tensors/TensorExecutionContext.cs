@@ -81,6 +81,14 @@ internal static class TensorExecutionContext
             throw new InvalidOperationException(
                 $"CUDA device {device.Index} is not part of the active execution session.");
         }
+        if (device.IsArc
+            && session is not null
+            && session.Options.Device == ExecutionDeviceKind.Arc
+            && !session.Options.IncludesArcDevice(device.Index))
+        {
+            throw new InvalidOperationException(
+                $"Arc device {device.Index} is not part of the active execution session.");
+        }
 
         var frame = new ScopeFrame(
             AmbientState with { Device = device },
@@ -170,7 +178,17 @@ internal static class TensorExecutionContext
             ExecutionOptions options = session.Options;
             int[] cudaDevices = options.CudaDevices.ToArray();
             if (options.Device == ExecutionDeviceKind.Arc)
-                return ambient with { Device = new TorchDevice(TensorDevice.Arc, options.ArcDeviceIndex), PrecisionPolicy = options.Precision };
+            {
+                int arcDeviceIndex = ambient.Device.IsArc
+                    && options.IncludesArcDevice(ambient.Device.Index)
+                        ? ambient.Device.Index
+                        : options.ArcDeviceIndex;
+                return ambient with
+                {
+                    Device = new TorchDevice(TensorDevice.Arc, arcDeviceIndex),
+                    PrecisionPolicy = options.Precision,
+                };
+            }
             if (options.Device == ExecutionDeviceKind.Cpu)
             {
                 return ambient with

@@ -13,6 +13,11 @@ public partial class AdamW
         for (int index = 0; index < result.Length; index++)
         {
             Parameter parameter = parameters[index];
+            // Arc mix8_16 keeps the master and gradient on the device. Holding
+            // DataBuffer here would pin a full-size FP32 master on the host
+            // even after Tensor releases its checkpoint staging array.
+            bool packedArcState = TensorExecutionContext.ActivePrecisionPolicy?.Mode
+                    == PrecisionMode.Mix8_16;
             bool bfp8State = UsesPureBfp8OptimizerState(parameter.T);
             bool mix8State = UsesMix8Parameter(parameter.T);
             float[] firstMoment = bfp8State
@@ -25,10 +30,10 @@ public partial class AdamW
                 : states[index].SecondMoment;
             result[index] = new AdamWParameterRuntime(
                 parameter,
-                parameter.DataBuffer,
-                parameter.T.GradientBuffer,
-                firstMoment,
-                secondMoment,
+                packedArcState ? [] : parameter.DataBuffer,
+                packedArcState ? [] : parameter.T.GradientBuffer,
+                packedArcState ? [] : firstMoment,
+                packedArcState ? [] : secondMoment,
                 options.UseBFloat16FirstMoment && !bfp8State && !mix8State
                     ? new short[parameter.T.Numel]
                     : null,
@@ -36,6 +41,11 @@ public partial class AdamW
                     ? new short[parameter.T.Numel]
                     : null,
                 ShouldApplyWeightDecay(parameter, options));
+            if (packedArcState)
+            {
+                result[index].FirstMomentPacked = new ushort[parameter.T.Numel];
+                result[index].SecondMomentPacked = new ushort[parameter.T.Numel];
+            }
         }
         return result;
     }
@@ -72,17 +82,19 @@ public partial class AdamW
         IReadOnlyList<Parameter> parameters,
         AdamWOptions options)
     {
+        bool packedArcState = TensorExecutionContext.ActivePrecisionPolicy?.Mode
+                == PrecisionMode.Mix8_16;
         AdamWParameterState[] parameterStates = parameters
             .Select((parameter, index) =>
                 new AdamWParameterState(
                     index,
                     parameter.Name,
                     parameter.T.Shape.ToArray(),
-                    options.UseBFloat16FirstMoment
+                    packedArcState || options.UseBFloat16FirstMoment
                         && !UsesMix8Parameter(parameter.T)
                         ? []
                         : new float[parameter.T.Numel],
-                    options.UseBFloat16SecondMoment
+                    packedArcState || options.UseBFloat16SecondMoment
                         && !UsesMix8Parameter(parameter.T)
                         ? []
                         : new float[parameter.T.Numel]))
@@ -288,9 +300,11 @@ public partial class AdamW
         internal float[] Data { get; set; } = data;
         internal float[] Gradient { get; set; } = gradient;
         internal float[] FirstMoment { get; set; } = firstMoment;
+        internal ushort[]? FirstMomentPacked { get; set; }
         internal short[]? FirstMomentBFloat16 { get; set; } =
             firstMomentBFloat16;
         internal float[] SecondMoment { get; set; } = secondMoment;
+        internal ushort[]? SecondMomentPacked { get; set; }
         internal short[]? SecondMomentBFloat16 { get; set; } =
             secondMomentBFloat16;
         internal bool ApplyWeightDecay { get; set; } = applyWeightDecay;

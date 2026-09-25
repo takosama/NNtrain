@@ -11,6 +11,9 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
     private const float NewtonSchulzC = 2.0315f;
 
     private readonly List<Parameter> _parameters;
+    private readonly bool _usesPackedBFloat16Checkpoint;
+    private readonly ushort[][] _arcPackedFastMoments;
+    private readonly ushort[][] _arcPackedSlowMoments;
     private readonly long _totalElements;
     private readonly NekoMuonWorkspace?[] _workspaces;
     private readonly CudaOptimizerKernels.NekoMuonResidentState?[] _cudaStates;
@@ -43,6 +46,7 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
     private int? _cudaStateAuthorityDevice;
 
     internal IReadOnlyList<Parameter> Parameters => _parameters;
+    internal bool UsesPackedBFloat16Checkpoint => _usesPackedBFloat16Checkpoint;
 
     public bool ProfilingEnabled { get; set; }
 
@@ -69,6 +73,8 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
         CudaDispatchPolicy cudaDispatchPolicy)
     {
         ArgumentNullException.ThrowIfNull(parameters);
+        _usesPackedBFloat16Checkpoint = TensorExecutionContext.ActivePrecisionPolicy?.Mode
+            == NNtrain.Runtime.Execution.PrecisionMode.Mix8_16;
         _cudaDispatchPolicy = (cudaDispatchPolicy
             ?? throw new ArgumentNullException(nameof(cudaDispatchPolicy)))
             .Validate();
@@ -102,7 +108,14 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
 
         NekoMuonOptions effectiveOptions = options ?? new NekoMuonOptions();
         ValidateOptions(effectiveOptions, nameof(options));
-        _state = CreateInitialState(_parameters, effectiveOptions);
+        _state = CreateInitialState(_parameters, effectiveOptions,
+            _usesPackedBFloat16Checkpoint);
+        _arcPackedFastMoments = _usesPackedBFloat16Checkpoint
+            ? _parameters.Select(p => new ushort[p.T.Numel]).ToArray()
+            : [];
+        _arcPackedSlowMoments = _usesPackedBFloat16Checkpoint
+            ? _parameters.Select(p => new ushort[p.T.Numel]).ToArray()
+            : [];
         // CUDA never consumes the managed Newton-Schulz work arrays.  Keep
         // them lazy so constructing a CUDA optimizer does not retain another
         // six full-size host arrays for every matrix parameter.
@@ -121,7 +134,10 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
     }
 
     public NekoMuonState CaptureState()
-        => CloneState(CaptureStateForStreaming());
+    {
+        NekoMuonState state = CaptureStateForStreaming();
+        return _usesPackedBFloat16Checkpoint ? state : CloneState(state);
+    }
 
     /// <summary>
     /// Returns scalar optimizer diagnostics without copying the large moment
@@ -212,6 +228,21 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
     internal NekoMuonState CaptureStateForStreaming()
     {
         _arcState.Synchronize();
+        if (_usesPackedBFloat16Checkpoint)
+        {
+            var states = new NekoMuonParameterState[_state.ParameterStates.Length];
+            for (int index = 0; index < states.Length; index++)
+            {
+                NekoMuonParameterState parameter = _state.ParameterStates[index];
+                states[index] = parameter with
+                {
+                    Shape = parameter.Shape.ToArray(),
+                    FastMoment = DecodeArcPackedMoment(_arcPackedFastMoments[index]),
+                    SlowMoment = DecodeArcPackedMoment(_arcPackedSlowMoments[index]),
+                };
+            }
+            return _state with { ParameterStates = states, Options = _state.Options with { } };
+        }
         if (_cudaStateAuthorityDevice is int primaryDevice)
         {
             for (int index = 0; index < _cudaStates.Length; index++)
@@ -268,6 +299,33 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
             }
         }
         return _state;
+    }
+
+    internal NekoMuonState GetPackedStreamingState()
+    {
+        if (!_usesPackedBFloat16Checkpoint)
+            throw new InvalidOperationException("This NekoMuon has no packed BF16 state.");
+        _arcState.Synchronize();
+        return _state;
+    }
+
+    internal (ushort[] Fast, ushort[] Slow) GetStreamingPackedMoments(int index)
+        => (_arcPackedFastMoments[index], _arcPackedSlowMoments[index]);
+
+    private static ushort[] EncodeArcPackedMoment(float[] values)
+    {
+        var packed = new ushort[values.Length];
+        for (int i = 0; i < values.Length; i++)
+            packed[i] = TensorStorageCodec.EncodeBFloat16(values[i]);
+        return packed;
+    }
+
+    private static float[] DecodeArcPackedMoment(ushort[] values)
+    {
+        var decoded = new float[values.Length];
+        for (int i = 0; i < values.Length; i++)
+            decoded[i] = TensorStorageCodec.DecodeBFloat16(values[i]);
+        return decoded;
     }
 
     public float LearningRate => _state.Options.LearningRate;
@@ -362,6 +420,28 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
         ValidateState(state);
         NekoMuonState upgraded = UpgradeState(state);
         DisposeCudaResources();
+        if (_usesPackedBFloat16Checkpoint)
+        {
+            var packedStates = new NekoMuonParameterState[upgraded.ParameterStates.Length];
+            for (int index = 0; index < packedStates.Length; index++)
+            {
+                NekoMuonParameterState parameter = upgraded.ParameterStates[index];
+                _arcPackedFastMoments[index] = EncodeArcPackedMoment(parameter.FastMoment);
+                _arcPackedSlowMoments[index] = EncodeArcPackedMoment(parameter.SlowMoment);
+                packedStates[index] = parameter with
+                {
+                    Shape = parameter.Shape.ToArray(),
+                    FastMoment = [],
+                    SlowMoment = [],
+                };
+            }
+            _state = upgraded with
+            {
+                Options = upgraded.Options with { },
+                ParameterStates = packedStates,
+            };
+            return;
+        }
         _state = takeOwnership ? upgraded : CloneState(upgraded);
     }
 
@@ -388,6 +468,10 @@ public sealed partial class NekoMuon : IOptimizer, ILearningRateAdjustable,
     internal void Step()
     {
         if (!Tensor.ArcResident) _arcState.Dispose();
+        if (_usesPackedBFloat16Checkpoint
+            && (Tensor.ExecutionDevice != TensorDevice.Arc || !Tensor.ArcResident
+                || !Tensor.ArcLane.Options.ResidentMuonIterations))
+            throw new NotSupportedException("Arc mix8_16 NekoMuon requires resident Arc iteration kernels.");
         if (_state.Step == int.MaxValue)
         {
             throw new InvalidOperationException(

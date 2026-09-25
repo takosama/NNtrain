@@ -179,15 +179,50 @@ internal static class TensorFloat16OperationManifest
         InternalTensorReturningMembers { get; } =
         [
             new(
+                "ArcBatchedAttention(Int32,Int32,Int32,Int32,Boolean,Nullable`1)",
+                TensorFloat16ResultPolicy.BackendWithoutFloat16,
+                "ArcSavedDirectAttention2048Tests.SavedProbabilityDispatchPreservesForwardAndAccumulatedGradientBits",
+                "Arc attention accepts Float32, BFloat16 and Bfp8 storage; legacy Float16 is not a supported Arc execution precision."),
+            new(
                 "ArcCheckpoint(Func`2,IReadOnlyList`1)",
                 TensorFloat16ResultPolicy.BackendWithoutFloat16,
                 "TensorFloat16OperationManifestTests.ArcCheckpointCpuPassthroughPreservesDelegateContract",
                 "Arc checkpoint storage supports Float32, BFloat16 and Bfp8, not legacy Float16. Outside resident Arc it delegates unchanged to the supplied forward operation; that passthrough is not an Arc Float16 implementation."),
             new(
+                "ArcFlashAttention(Int32,Int32,Int32,Int32,Boolean,Nullable`1)",
+                TensorFloat16ResultPolicy.BackendWithoutFloat16,
+                "ArcFlashAttentionTests.PublicResultUsesTheRequestedStorageAndTheExistingQuantizer",
+                "Arc FlashAttention accepts Float32, BFloat16 and Bfp8 storage; legacy Float16 is not a supported Arc execution precision."),
+            new(
+                "ArcIncrementalCausalAttention(ArcAttentionKvCache,Int32)",
+                TensorFloat16ResultPolicy.BackendWithoutFloat16,
+                "ArcIncrementalAttentionKvTests.PrefillAndIncrementalTokensMatchFullCausalAttention",
+                "Arc incremental attention accepts Float32, BFloat16 and Bfp8 storage; legacy Float16 is not a supported Arc execution precision."),
+            new(
+                "ArcInferenceEmbeddingWithPositions(Tensor,Int32[],Int32)",
+                TensorFloat16ResultPolicy.BackendWithoutFloat16,
+                "ArcInferencePackedEmbeddingTests.PackedLookupMatchesOnePublicationReferenceExactly",
+                "Packed Arc inference embeddings accept Float32, BFloat16 and Bfp8 storage; legacy Float16 is not a supported Arc execution precision."),
+            new(
                 "ArcLinearCrossEntropy(Tensor,Tensor,Int32[],Int32)",
                 TensorFloat16ResultPolicy.BackendWithoutFloat16,
                 "ArcTransformerTests.TiledStreamingAndChunkedLossMatchReferenceWithTails",
-                "Arc training supports float32, mix16_32 with BFloat16 storage, and mix8_32 with Bfp8 storage; this fused loss returns Float32 and does not implement legacy Float16 arithmetic/storage semantics."),
+                "Arc training supports float32, mix16_32 with BFloat16 storage, and mix8_32/mix8_16 with Bfp8 storage; this fused loss returns Float32 and does not implement legacy Float16 arithmetic/storage semantics."),
+            new(
+                "ArcInferenceCopyToDevice(Int32)",
+                TensorFloat16ResultPolicy.BackendWithoutFloat16,
+                "ArcTensorParallelInferenceTests.TwoArcLanesContributeAndMatchSingleArcLogits",
+                "Arc inference copies Float32, BFloat16, or Bfp8 storage between Arc lanes; legacy Float16 is not an Arc execution precision."),
+            new(
+                "ArcInferenceLinearPartial(Tensor)",
+                TensorFloat16ResultPolicy.BackendWithoutFloat16,
+                "ArcTensorParallelInferenceTests.TwoArcLanesContributeAndMatchSingleArcLogits",
+                "Arc tensor-parallel projections use Float32, BFloat16, or Bfp8 inputs and return a Float32 partial; legacy Float16 is not supported."),
+            new(
+                "ArcInferenceSumPartials(Single[],Tensor,TensorDType)",
+                TensorFloat16ResultPolicy.BackendWithoutFloat16,
+                "ArcTensorParallelInferenceTests.TwoArcLanesContributeAndMatchSingleArcLogits",
+                "Arc tensor-parallel partial sums publish Float32, BFloat16, or Bfp8 results; legacy Float16 is not supported."),
             new(
                 "LinearLastDimFrozen(Tensor,Tensor,Boolean)",
                 TensorFloat16ResultPolicy.BackendWithoutFloat16,

@@ -14,9 +14,17 @@ public sealed partial class NekoMuon
         if (Tensor.ExecutionDevice == TensorDevice.Arc)
         {
             float[] master = parameter.DataBuffer;
+            bool bf16State = TensorExecutionContext.ActivePrecisionPolicy?.Mode
+                == NNtrain.Runtime.Execution.PrecisionMode.Mix8_16;
+            if (bf16State)
+                for (int i = 0; i < master.Length; i++)
+                    master[i] = TensorStorageCodec.RoundToBFloat16(master[i]);
             ArcTrainingMath.Combine(master, update, master,
                 applyWeightDecay ? 1f - options.LearningRate * options.WeightDecay : 1f,
                 -options.LearningRate * finalScale);
+            if (bf16State)
+                for (int i = 0; i < master.Length; i++)
+                    master[i] = TensorStorageCodec.RoundToBFloat16(master[i]);
             parameter.CompleteUpdate();
             return;
         }

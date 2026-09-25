@@ -73,6 +73,13 @@ public sealed class ExecutionSession : IDisposable
                 $"CUDA device {lane.DeviceIndex} is not part of this session's device set.",
                 nameof(lane));
         }
+        if (lane.DeviceKind == ExecutionDeviceKind.Arc
+            && !Options.IncludesArcDevice(lane.DeviceIndex))
+        {
+            throw new ArgumentException(
+                $"Arc device {lane.DeviceIndex} is not part of this session's device set.",
+                nameof(lane));
+        }
 
         lock (_sync)
         {

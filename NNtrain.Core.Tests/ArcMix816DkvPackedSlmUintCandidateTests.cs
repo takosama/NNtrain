@@ -1,0 +1,83 @@
+using System.Runtime.InteropServices;
+using NNtrain;
+using NNtrain.Arc;
+using Xunit;
+
+public sealed class ArcMix816DkvPackedSlmUintCandidateTests
+{
+    [Fact]
+    public void T2048PackedBf16DkvMatchesSelectedKernelAcrossHeadsAndAccumulations()
+    {
+        Assert.SkipWhen(!Tensor.IsArcAvailable(), "Intel Arc is required.");
+        ArcDeviceInfo device = ArcDevices.Enumerate()[0];
+        Assert.SkipWhen(!device.SupportsXmx || device.MinimumSubgroupSize != 16
+            || !device.Extensions.Split(' ').Contains("cl_intel_subgroup_local_block_io"),
+            "SG16 XMX with subgroup local block I/O is required.");
+
+        const int batch = 2, heads = 3, d = 32, sequence = 2048;
+        const int width = heads * d, first = 2, count = 2;
+        static ushort Bf16(float value)
+            => (ushort)((uint)BitConverter.SingleToInt32Bits(value) >> 16);
+
+        ushort[] qkv = Enumerable.Range(0, batch * sequence * 3 * width)
+            .Select(i => Bf16(((i * 17 % 127) - 63) * .0013f)).ToArray();
+        float[] dy = Enumerable.Range(0, batch * sequence * width)
+            .Select(i => ((i * 23 % 109) - 54) * .0007f).ToArray();
+        float[] initial = Enumerable.Range(0, qkv.Length)
+            .Select(i => .001f + (i % 17) * .00013f).ToArray();
+        var packed = new int[count * sequence * sequence];
+        for (int head = 0; head < count; ++head)
+        for (int query = 0; query < sequence; ++query)
+        for (int key = 0; key < sequence; ++key)
+        {
+            int index = (head * sequence + query) * sequence + key;
+            if (key <= query)
+            {
+                float p = ((key + head) % 13 + 1f) / sequence;
+                float ds = ((query * 7 + key * 3 + head) % 31 - 15) * .00011f;
+                packed[index] = unchecked((int)((uint)Bf16(p) | ((uint)Bf16(ds) << 16)));
+            }
+            else if (key >= ((query / 32) + 1) * 32)
+                packed[index] = unchecked((int)0x7fc07fc0u);
+            // Causal scores above the diagonal in the current K32 tile are zero.
+        }
+
+        using var lane = new ArcExecutionLane(options: new() { ExperimentalOptimizationKernels = true });
+        using var qkvBuffer = lane.UploadRaw(qkv);
+        using var dyBuffer = lane.Upload(dy);
+        using var packedBuffer = lane.UploadRaw(packed);
+
+        float[] Run(string kernel)
+        {
+            using var dxBuffer = lane.Upload(initial);
+            long h2d = lane.H2DBytes, d2h = lane.D2HBytes;
+            for (int repeat = 0; repeat < 2; ++repeat)
+                lane.Run3D(kernel, 16, (sequence / 32L) * 16, count, 16, 16, 1,
+                    qkvBuffer, dyBuffer, packedBuffer, dxBuffer,
+                    sequence, width, heads, first);
+            lane.Synchronize();
+            Assert.Equal(h2d, lane.H2DBytes);
+            Assert.Equal(d2h, lane.D2HBytes);
+            var output = new float[initial.Length];
+            lane.Read(dxBuffer, output);
+            return output;
+        }
+
+        const string selected = "attention_mix8_16_bf16_dkv_packed_2048";
+        const string candidate = "attention_mix8_16_bf16_dkv_packed_slm_uint_2048";
+        float[] expected = Run(selected);
+        float[] actual = Run(candidate);
+        ReadOnlySpan<int> expectedBits = MemoryMarshal.Cast<float, int>(expected.AsSpan());
+        ReadOnlySpan<int> actualBits = MemoryMarshal.Cast<float, int>(actual.AsSpan());
+        for (int i = 0; i < expectedBits.Length; ++i)
+            if (expectedBits[i] != actualBits[i])
+                Assert.Fail($"{candidate} differs from {selected} at element {i}: "
+                    + $"0x{expectedBits[i]:X8} != 0x{actualBits[i]:X8}.");
+
+        var existingResources = lane.GetKernelResources(selected);
+        var candidateResources = lane.GetKernelResources(candidate);
+        TestContext.Current.TestOutputHelper?.WriteLine(
+            $"dKV SLM bytes selected={existingResources.LocalMemoryBytes}, "
+            + $"packed uint={candidateResources.LocalMemoryBytes}");
+    }
+}

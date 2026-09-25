@@ -7,7 +7,12 @@ public sealed class CudaPrecisionSemanticAuditTests
     [Fact]
     public void TransformerManifestCoversEveryPrecisionWithoutCpuFallback()
     {
-        PrecisionMode[] modes = Enum.GetValues<PrecisionMode>();
+        PrecisionMode[] allModes = Enum.GetValues<PrecisionMode>();
+        Assert.Equal(6, allModes.Length);
+        // mix8_16 currently has an Arc Transformer implementation only.
+        PrecisionMode[] modes = allModes
+            .Where(static mode => mode != PrecisionMode.Mix8_16)
+            .ToArray();
         Assert.Equal(5, modes.Length);
         Assert.Equal(20, CudaPrecisionOperationManifest.Entries.Count);
 
@@ -15,6 +20,8 @@ public sealed class CudaPrecisionSemanticAuditTests
             in CudaPrecisionOperationManifest.Entries)
         {
             Assert.Equal(modes.Length, entry.Routes.Count);
+            Assert.DoesNotContain(entry.Routes,
+                static route => route.Mode == PrecisionMode.Mix8_16);
             Assert.Equal(
                 modes.OrderBy(static mode => mode),
                 entry.Routes.Select(static route => route.Mode)

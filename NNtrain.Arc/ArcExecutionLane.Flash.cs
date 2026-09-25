@@ -26,8 +26,9 @@ public sealed partial class ArcExecutionLane
         if (name.StartsWith("attention_products_", StringComparison.Ordinal)
             || name.StartsWith("attention_xmx_products_", StringComparison.Ordinal))
         {
-            if (!Options.XmxAttentionProducts || !Options.XmxMatrices || !Device.SupportsXmx || Device.MinimumSubgroupSize != 16)
-                throw new NotSupportedException("Compensated attention products require an enabled SG16 XMX session.");
+            if ((!Options.XmxAttentionProducts && !Options.Mix8_16XmxAttentionProducts)
+                || !Options.XmxMatrices || !Device.SupportsXmx || Device.MinimumSubgroupSize != 16)
+                throw new NotSupportedException("Attention matrix products require an enabled SG16 XMX session.");
             if (_attentionProductsProgram == 0)
                 _attentionProductsProgram = BuildAttentionProgram(".attention_xmx_products.cl",
                     "-cl-std=CL1.2 -cl-fp32-correctly-rounded-divide-sqrt -DARC_XMX=1 -DARC_SG=16"

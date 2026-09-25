@@ -93,7 +93,7 @@ public sealed class OptimizerStateCodecRegistryTests
         => new(
             stateType,
             static (_, _) => { },
-            static (_, _, _) => { },
+            static (_, _, _, _) => { },
             static (_, _) => { },
             static (_, _, _) => { });
 
