@@ -25,44 +25,52 @@ public sealed class GgufReader : IDisposable
         _stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         _reader = new BinaryReader(_stream, Encoding.UTF8, leaveOpen: true);
 
-        if (_reader.ReadUInt32() != Magic)
-            throw new InvalidDataException("Not a GGUF file.");
-        Version = _reader.ReadUInt32();
-        if (Version is < 2 or > 3)
-            throw new NotSupportedException($"GGUF version {Version} is not supported.");
-
-        ulong tensorCount = _reader.ReadUInt64();
-        ulong metadataCount = _reader.ReadUInt64();
-        if (tensorCount > int.MaxValue || metadataCount > int.MaxValue)
-            throw new InvalidDataException("GGUF table is too large.");
-
-        for (ulong i = 0; i < metadataCount; i++)
+        try
         {
-            string key = ReadString();
-            var type = (GgufValueType)_reader.ReadUInt32();
-            _metadata.Add(key, ReadValue(type));
-        }
+            if (_reader.ReadUInt32() != Magic)
+                throw new InvalidDataException("Not a GGUF file.");
+            Version = _reader.ReadUInt32();
+            if (Version is < 2 or > 3)
+                throw new NotSupportedException($"GGUF version {Version} is not supported.");
 
-        for (ulong i = 0; i < tensorCount; i++)
+            ulong tensorCount = _reader.ReadUInt64();
+            ulong metadataCount = _reader.ReadUInt64();
+            if (tensorCount > int.MaxValue || metadataCount > int.MaxValue)
+                throw new InvalidDataException("GGUF table is too large.");
+
+            for (ulong i = 0; i < metadataCount; i++)
+            {
+                string key = ReadString();
+                var type = (GgufValueType)_reader.ReadUInt32();
+                _metadata.Add(key, ReadValue(type));
+            }
+
+            for (ulong i = 0; i < tensorCount; i++)
+            {
+                string name = ReadString();
+                uint dimensions = _reader.ReadUInt32();
+                if (dimensions is 0 or > 4)
+                    throw new InvalidDataException($"Tensor '{name}' has unsupported rank {dimensions}.");
+                var shape = new ulong[dimensions];
+                for (int d = 0; d < shape.Length; d++) shape[d] = _reader.ReadUInt64();
+                uint type = _reader.ReadUInt32();
+                ulong offset = _reader.ReadUInt64();
+                _tensors.Add(new GgufTensorInfo(name, shape, type, offset));
+            }
+
+            int alignment = 32;
+            if (_metadata.TryGetValue("general.alignment", out object? value))
+                alignment = checked((int)Convert.ToUInt64(value));
+            if (alignment <= 0 || (alignment & (alignment - 1)) != 0)
+                throw new InvalidDataException($"Invalid GGUF alignment {alignment}.");
+
+            _dataOffset = Align(_stream.Position, alignment);
+        }
+        catch
         {
-            string name = ReadString();
-            uint dimensions = _reader.ReadUInt32();
-            if (dimensions is 0 or > 4)
-                throw new InvalidDataException($"Tensor '{name}' has unsupported rank {dimensions}.");
-            var shape = new ulong[dimensions];
-            for (int d = 0; d < shape.Length; d++) shape[d] = _reader.ReadUInt64();
-            uint type = _reader.ReadUInt32();
-            ulong offset = _reader.ReadUInt64();
-            _tensors.Add(new GgufTensorInfo(name, shape, type, offset));
+            Dispose();
+            throw;
         }
-
-        int alignment = 32;
-        if (_metadata.TryGetValue("general.alignment", out object? value))
-            alignment = checked((int)Convert.ToUInt64(value));
-        if (alignment <= 0 || (alignment & (alignment - 1)) != 0)
-            throw new InvalidDataException($"Invalid GGUF alignment {alignment}.");
-
-        _dataOffset = Align(_stream.Position, alignment);
     }
 
     public uint Version { get; }

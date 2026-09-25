@@ -9,10 +9,10 @@ inline float qwen_rope_inv_freq(int pair, int width, float theta) {
 inline void qwen_rope_pair(
     __global const float* x, int base, int pair, int width, int position,
     float theta, float* first, float* second) {
-    int half = width / 2;
+    int halfWidth = width / 2;
     float angle = (float)position * qwen_rope_inv_freq(pair, width, theta);
     float c = cos(angle), s = sin(angle);
-    float a = x[base + pair], b = x[base + pair + half];
+    float a = x[base + pair], b = x[base + pair + halfWidth];
     *first = a * c - b * s;
     *second = b * c + a * s;
 }
@@ -105,10 +105,10 @@ __kernel void qwen_gqa(
     __global const float* query, __global const float* key,
     __global const float* value, __global float* y, __global float* prob,
     int batch, int seq, int heads, int kv_heads, int head_width,
-    int causal, float theta, __local float* scores) {
+    int causal, float theta, int save_probabilities, __local float* scores) {
     int row = get_group_id(0);
     int lane = get_local_id(0);
-    int local = get_local_size(0);
+    int workGroupSize = get_local_size(0);
     int q = row % seq;
     int h = (row / seq) % heads;
     int b = row / (seq * heads);
@@ -119,7 +119,7 @@ __kernel void qwen_gqa(
     int active = causal ? q + 1 : seq;
     float scale = rsqrt((float)head_width);
 
-    for (int kpos = lane; kpos < seq; kpos += local) {
+    for (int kpos = lane; kpos < seq; kpos += workGroupSize) {
         float dot = 0.0f;
         if (kpos < active) {
             int kbase = (b * seq + kpos) * kv_width + kvh * head_width;
@@ -148,10 +148,11 @@ __kernel void qwen_gqa(
     }
     barrier(CLK_LOCAL_MEM_FENCE);
 
-    for (int kpos = lane; kpos < seq; kpos += local)
-        prob[row * seq + kpos] = scores[kpos];
+    if (save_probabilities)
+        for (int kpos = lane; kpos < seq; kpos += workGroupSize)
+            prob[row * seq + kpos] = scores[kpos];
 
-    for (int c = lane; c < head_width; c += local) {
+    for (int c = lane; c < head_width; c += workGroupSize) {
         float out = 0.0f;
         for (int kpos = 0; kpos < active; ++kpos) {
             int vi = (b * seq + kpos) * kv_width + kvh * head_width + c;
@@ -168,7 +169,7 @@ __kernel void qwen_gqa_ds(
     int causal, __local float* scratch) {
     int row = get_group_id(0);
     int lane = get_local_id(0);
-    int local = get_local_size(0);
+    int workGroupSize = get_local_size(0);
     int q = row % seq;
     int h = (row / seq) % heads;
     int b = row / (seq * heads);
@@ -177,7 +178,7 @@ __kernel void qwen_gqa_ds(
     int kv_width = kv_heads * head_width;
     int active = causal ? q + 1 : seq;
 
-    for (int kpos = lane; kpos < seq; kpos += local) {
+    for (int kpos = lane; kpos < seq; kpos += workGroupSize) {
         float dot = 0.0f;
         if (kpos < active) {
             int vbase = (b * seq + kpos) * kv_width + kvh * head_width;
@@ -198,7 +199,7 @@ __kernel void qwen_gqa_ds(
     barrier(CLK_LOCAL_MEM_FENCE);
 
     float scale = rsqrt((float)head_width);
-    for (int kpos = lane; kpos < seq; kpos += local) {
+    for (int kpos = lane; kpos < seq; kpos += workGroupSize) {
         float p = prob[row * seq + kpos];
         ds[row * seq + kpos] =
             kpos < active ? p * (scratch[kpos] - scratch[seq]) * scale : 0.0f;
@@ -209,14 +210,14 @@ __kernel void qwen_gqa_dq(
     __global const float* key, __global const float* ds,
     __global float* dq, int batch, int seq, int heads, int kv_heads,
     int head_width, int causal, float theta) {
-    int half = head_width / 2;
+    int halfWidth = head_width / 2;
     int i = get_global_id(0);
-    int total = batch * seq * heads * half;
+    int total = batch * seq * heads * halfWidth;
     if (i >= total) return;
-    int pair = i % half;
-    int h = (i / half) % heads;
-    int q = (i / (half * heads)) % seq;
-    int b = i / (half * heads * seq);
+    int pair = i % halfWidth;
+    int h = (i / halfWidth) % heads;
+    int q = (i / (halfWidth * heads)) % seq;
+    int b = i / (halfWidth * heads * seq);
     int kvh = h / (heads / kv_heads);
     int kv_width = kv_heads * head_width;
     int q_width = heads * head_width;
@@ -237,7 +238,7 @@ __kernel void qwen_gqa_dq(
     qwen_rope_pair_backward(dr1, dr2, pair, head_width, q, theta, &raw1, &raw2);
     int base = (b * seq + q) * q_width + h * head_width;
     dq[base + pair] += raw1;
-    dq[base + pair + half] += raw2;
+    dq[base + pair + halfWidth] += raw2;
 }
 
 __kernel void qwen_gqa_dkv(
@@ -246,14 +247,14 @@ __kernel void qwen_gqa_dkv(
     __global float* dk, __global float* dv,
     int batch, int seq, int heads, int kv_heads, int head_width,
     int causal, float theta) {
-    int half = head_width / 2;
+    int halfWidth = head_width / 2;
     int i = get_global_id(0);
-    int total = batch * seq * kv_heads * half;
+    int total = batch * seq * kv_heads * halfWidth;
     if (i >= total) return;
-    int pair = i % half;
-    int kvh = (i / half) % kv_heads;
-    int kpos = (i / (half * kv_heads)) % seq;
-    int b = i / (half * kv_heads * seq);
+    int pair = i % halfWidth;
+    int kvh = (i / halfWidth) % kv_heads;
+    int kpos = (i / (halfWidth * kv_heads)) % seq;
+    int b = i / (halfWidth * kv_heads * seq);
     int group = heads / kv_heads;
     int q_width = heads * head_width;
     int kv_width = kv_heads * head_width;
@@ -275,7 +276,7 @@ __kernel void qwen_gqa_dkv(
             float p = prob[row * seq + kpos];
             int dybase = (b * seq + q) * q_width + h * head_width;
             dv1 = fma(p, dy[dybase + pair], dv1);
-            dv2 = fma(p, dy[dybase + pair + half], dv2);
+            dv2 = fma(p, dy[dybase + pair + halfWidth], dv2);
         }
     }
 
@@ -284,9 +285,9 @@ __kernel void qwen_gqa_dkv(
         dkr1, dkr2, pair, head_width, kpos, theta, &raw1, &raw2);
     int base = (b * seq + kpos) * kv_width + kvh * head_width;
     dk[base + pair] += raw1;
-    dk[base + pair + half] += raw2;
+    dk[base + pair + halfWidth] += raw2;
     dv[base + pair] += dv1;
-    dv[base + pair + half] += dv2;
+    dv[base + pair + halfWidth] += dv2;
 }
 
 
@@ -301,7 +302,9 @@ inline float qwen_half_to_float(ushort h) {
             int shift = 0;
             while ((mantissa & 0x0400u) == 0u) { mantissa <<= 1; ++shift; }
             mantissa &= 0x03ffu;
-            bits = sign | ((uint)(127 - 15 - shift) << 23) | (mantissa << 13);
+            // A normalized half subnormal starts at exponent -14 before the
+            // shift, so the least subnormal (0x0001) becomes exactly 2^-24.
+            bits = sign | ((uint)(127 - 14 - shift) << 23) | (mantissa << 13);
         }
     } else if (exponent == 31u) {
         bits = sign | 0x7f800000u | (mantissa << 13);

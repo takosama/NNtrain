@@ -33,6 +33,14 @@ public static class Qwen2Gguf
         float ropeTheta = OptionalFloat(
             gguf, "qwen2.rope.freq_base", 1_000_000f);
 
+        if (vocabulary <= 0 || layers <= 0 || embedding <= 0 || heads <= 0
+            || kvHeads <= 0 || context <= 0 || feedForward <= 0
+            || embedding % heads != 0 || heads % kvHeads != 0)
+            throw new InvalidDataException("GGUF Qwen2 dimensions or attention head counts are invalid.");
+        if (!(rmsEpsilon > 0f) || !float.IsFinite(rmsEpsilon)
+            || !(ropeTheta > 0f) || !float.IsFinite(ropeTheta))
+            throw new InvalidDataException("GGUF Qwen2 normalization or RoPE metadata is invalid.");
+
         return new Qwen2GgufDescriptor(
             vocabulary, layers, embedding, heads, kvHeads, context,
             feedForward, rmsEpsilon, ropeTheta, gguf.Tensors.ToArray());
@@ -44,6 +52,9 @@ public static class Qwen2Gguf
     {
         Qwen2GgufDescriptor d = Inspect(path);
         using var gguf = new GgufReader(path);
+        // Validate the complete directory before reading any tensor payload.
+        // Matching element counts alone cannot establish matrix orientation.
+        ValidateQuantizedModelShapes(gguf, d);
 
         Parameter embedding = DenseParameter(
             gguf, "token_embd.weight", "token_embd.weight", activationDType);
@@ -108,9 +119,7 @@ public static class Qwen2Gguf
         int inputWidth, int outputWidth, TensorDType dtype)
     {
         GgufTensorInfo weight = gguf.GetTensor(weightName);
-        if (weight.Type is not (Q4KType or Q6KType))
-            throw new NotSupportedException(
-                $"Resident inference requires Q4_K/Q6_K matrix '{weightName}', got type {weight.Type}.");
+        ValidateQuantizedMatrix(weight, inputWidth, outputWidth);
         int blockBytes = weight.Type == Q4KType ? GgufQ4K.BlockBytes : GgufQ6K.BlockBytes;
         int bytes = checked(outputWidth * (inputWidth / 256) * blockBytes);
         byte[] payload = gguf.ReadTensorBytes(weight, bytes);
@@ -122,6 +131,65 @@ public static class Qwen2Gguf
         }
         return new QwenQuantizedLinear(
             payload, weight.Type, inputWidth, outputWidth, bias, dtype);
+    }
+
+    private static void ValidateQuantizedModelShapes(GgufReader gguf, Qwen2GgufDescriptor d)
+    {
+        ValidateShape(gguf.GetTensor("token_embd.weight"), d.EmbeddingLength, d.VocabularySize);
+        int kvWidth = checked(d.KvHeadCount * (d.EmbeddingLength / d.HeadCount));
+        for (int i = 0; i < d.LayerCount; ++i)
+        {
+            string p = $"blk.{i}.";
+            ValidateShape(gguf.GetTensor(p + "attn_norm.weight"), d.EmbeddingLength);
+            ValidateShape(gguf.GetTensor(p + "ffn_norm.weight"), d.EmbeddingLength);
+            ValidateLinear(p + "attn_q", d.EmbeddingLength, d.EmbeddingLength, hasBias: true);
+            ValidateLinear(p + "attn_k", d.EmbeddingLength, kvWidth, hasBias: true);
+            ValidateLinear(p + "attn_v", d.EmbeddingLength, kvWidth, hasBias: true);
+            ValidateLinear(p + "attn_output", d.EmbeddingLength, d.EmbeddingLength);
+            ValidateLinear(p + "ffn_gate", d.EmbeddingLength, d.FeedForwardLength);
+            ValidateLinear(p + "ffn_up", d.EmbeddingLength, d.FeedForwardLength);
+            ValidateLinear(p + "ffn_down", d.FeedForwardLength, d.EmbeddingLength);
+        }
+        ValidateShape(gguf.GetTensor("output_norm.weight"), d.EmbeddingLength);
+        if (!gguf.Tensors.Any(t => t.Name == "output.weight"))
+            throw new NotSupportedException(
+                "Tied token-embedding output is dense in this first resident path. " +
+                "Use a GGUF containing output.weight until the quantized tied-head path is added.");
+        ValidateLinear("output", d.EmbeddingLength, d.VocabularySize);
+
+        void ValidateLinear(string name, int inputWidth, int outputWidth, bool hasBias = false)
+        {
+            ValidateQuantizedMatrix(gguf.GetTensor(name + ".weight"), inputWidth, outputWidth);
+            if (!hasBias) return;
+            GgufTensorInfo? bias = gguf.Tensors.FirstOrDefault(t => t.Name == name + ".bias");
+            if (bias is not null) ValidateShape(bias, outputWidth);
+        }
+    }
+
+    private static void ValidateQuantizedMatrix(GgufTensorInfo weight, int inputWidth, int outputWidth)
+    {
+        ValidateShape(weight, inputWidth, outputWidth);
+        if (weight.Type is not (Q4KType or Q6KType))
+            throw new NotSupportedException(
+                $"Resident inference requires Q4_K/Q6_K matrix '{weight.Name}', got type {weight.Type}.");
+        ValidateKQuantRows(weight);
+    }
+
+    private static void ValidateShape(GgufTensorInfo tensor, params int[] expected)
+    {
+        if (tensor.Shape.Count != expected.Length
+            || expected.Where((dimension, i) => (ulong)dimension != tensor.Shape[i]).Any())
+            throw new InvalidDataException(
+                $"GGUF tensor '{tensor.Name}' shape [{string.Join(",", tensor.Shape)}] " +
+                $"does not match expected GGUF shape [{string.Join(",", expected)}].");
+    }
+
+    private static void ValidateKQuantRows(GgufTensorInfo tensor)
+    {
+        if (tensor.Shape.Count == 0 || tensor.Shape[0] == 0
+            || tensor.Shape[0] % GgufQ4K.BlockElements != 0)
+            throw new InvalidDataException(
+                $"Tensor '{tensor.Name}' requires a row width divisible by 256 for K-quant blocks.");
     }
 
     private static Parameter DenseParameter(
@@ -200,6 +268,7 @@ public static class Qwen2Gguf
     internal static float[] ReadTensor(GgufReader gguf, GgufTensorInfo tensor)
     {
         int elements = ElementCount(tensor);
+        if (tensor.Type is Q4KType or Q6KType) ValidateKQuantRows(tensor);
         int bytes = tensor.Type switch
         {
             F32Type => checked(elements * 4),
@@ -298,6 +367,8 @@ public static class Qwen2Gguf
 
     private static int ElementCount(GgufTensorInfo tensor)
     {
+        if (tensor.Shape.Count == 0 || tensor.Shape.Any(dimension => dimension == 0))
+            throw new InvalidDataException($"Tensor '{tensor.Name}' has an empty dimension.");
         long count = 1;
         foreach (ulong dimension in tensor.Shape)
             count = checked(count * (long)dimension);

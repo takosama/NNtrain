@@ -152,6 +152,9 @@ public sealed class Qwen2QuantizedForCausalLM : LanguageModel, IDisposable
                      generated < maxNewTokens && result.Count < ContextLength;
                      ++generated)
                 {
+                    // Quantized weights belong to the model. Only detached
+                    // activations are released after the logits have been read.
+                    using IDisposable? arcInference = Tensor.BeginArcInferenceFrame();
                     Tensor logits = Forward(result.ToArray(), 1, result.Count);
                     int next = SampleLogits(
                         logits, (result.Count - 1) * VocabularySize,

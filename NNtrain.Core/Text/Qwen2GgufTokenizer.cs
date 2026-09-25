@@ -13,10 +13,7 @@ public sealed class Qwen2GgufTokenizer
     // Equivalent to Qwen2's Unicode-property split, expressed without a
     // dependency on a third-party regex engine.
     private static readonly Regex SplitRegex = new(
-        @"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^
-p{L}p{N}]?p{L}+|p{N}| ?[^sp{L}p{N}]+[
-]*|s*[
-]+|s+(?!S)|s+",
+        @"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private readonly string[] _tokens;

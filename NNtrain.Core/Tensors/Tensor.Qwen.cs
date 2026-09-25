@@ -163,17 +163,31 @@ public partial class Tensor
         int groups = checked(batch * queryHeads * sequence);
         if (ExecutionDevice == TensorDevice.Arc)
         {
+            // Both GQA softmax kernels keep a complete row in OpenCL local memory.
+            // The backward kernel needs one additional element for its reduction.
+            // Keep this bound explicit until a tiled implementation is available.
+            const int maxLocalMemorySequence = 4096;
+            if (sequence > maxLocalMemorySequence)
+                throw new NotSupportedException(
+                    $"Arc Qwen GQA supports at most {maxLocalMemorySequence} tokens " +
+                    "because its softmax kernels use per-row local memory.");
+
             var lane = ArcLane;
+            bool saveProbabilities = AutogradContext.IsRecordingEnabled;
             using var q = ArcUploadValues(true);
             using var k = key.ArcUploadValues(true);
             using var v = value.ArcUploadValues(true);
             using var output = lane.Allocate(Numel);
-            var probabilities = lane.Allocate(checked(groups * sequence));
+            // Inference only needs the row-local softmax values. Backward alone
+            // retains the quadratic probability matrix.
+            var probabilities = lane.Allocate(saveProbabilities
+                ? checked(groups * sequence) : 1);
             try
             {
                 lane.Run("qwen_gqa", (long)groups * 64, 64, q, k, v, output,
                     probabilities, batch, sequence, queryHeads, kvHeads,
                     headWidth, causal ? 1 : 0, ropeTheta,
+                    saveProbabilities ? 1 : 0,
                     new LocalMemory(checked(sequence * sizeof(float))));
                 Tensor result = ArcDeviceResult(output, _shape, [this, key, value]);
                 if (result.Node.IsDetached) { probabilities.Dispose(); return result; }

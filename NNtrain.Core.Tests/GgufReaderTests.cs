@@ -1,4 +1,5 @@
 using System.Text;
+using Xunit;
 
 namespace NNtrain.Core.Tests;
 
@@ -41,6 +42,8 @@ public sealed class GgufReaderTests
         {
             File.WriteAllBytes(path, [1, 2, 3, 4]);
             Assert.Throws<InvalidDataException>(() => new GgufReader(path));
+            // A failed constructor must release the file on Windows as well.
+            using var exclusive = File.Open(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
         }
         finally { File.Delete(path); }
     }

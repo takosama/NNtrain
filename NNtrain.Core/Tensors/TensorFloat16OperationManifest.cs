@@ -130,6 +130,17 @@ internal static class TensorFloat16OperationManifest
                 "LayerNormLastDim(Tensor,Tensor,Single)",
                 "TensorFloat16ActivationAndLossTests.ActivationPipelinePreservesFloat16AndFloat32Gradients"),
             Preserve(
+                "RmsNormLastDim(Tensor,Single)",
+                "QwenArcKernelTests.CpuQwenPrimitivesPreserveHalfAndBfloat16Storage"),
+            Preserve(
+                "SiluMultiply(Tensor)",
+                "QwenArcKernelTests.CpuQwenPrimitivesPreserveHalfAndBfloat16Storage"),
+            new(
+                "QwenGroupedQueryAttention(Tensor,Tensor,Int32,Int32,Single,Boolean)",
+                TensorFloat16ResultPolicy.BackendWithoutFloat16,
+                "QwenArcKernelTests.GroupedQueryAttentionMatchesCpuReferenceAndAvoidsQuadraticNoGradStorage",
+                "Qwen GQA is Arc-only and accepts Float32, BFloat16 and Bfp8 storage; legacy Float16 is not supported."),
+            Preserve(
                 "AddLayerNormLastDim(Tensor,Tensor,Tensor,Single)",
                 "TensorFloat16FusedOperationTests.FusedLinearReluAndResidualLayerNormUseFloat16Storage"),
             Preserve(
@@ -178,6 +189,11 @@ internal static class TensorFloat16OperationManifest
     internal static IReadOnlyList<TensorFloat16OperationManifestEntry>
         InternalTensorReturningMembers { get; } =
         [
+            new(
+                "ArcQwenQuantizedLinear(ArcBuffer,Tensor,UInt32,Int32,Int32)",
+                TensorFloat16ResultPolicy.BackendWithoutFloat16,
+                "QwenArcKernelTests.QuantizedQ4AndQ6KArcKernelsMatchCpuForSubnormalScales",
+                "Arc Qwen quantized linear reads Q4_K/Q6_K weights and Float32, BFloat16 or Bfp8 activations; legacy Float16 is not supported."),
             new(
                 "ArcBatchedAttention(Int32,Int32,Int32,Int32,Boolean,Nullable`1)",
                 TensorFloat16ResultPolicy.BackendWithoutFloat16,

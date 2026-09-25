@@ -200,6 +200,9 @@ public sealed class Qwen2ForCausalLM : LanguageModel
                      generated < maxNewTokens && result.Count < ContextLength;
                      ++generated)
                 {
+                    // The logits must be sampled while their Arc buffers are
+                    // alive; release every detached activation after this token.
+                    using IDisposable? arcInference = Tensor.BeginArcInferenceFrame();
                     int sequence = result.Count;
                     Tensor logits = Forward(result.ToArray(), 1, sequence);
                     int offset = checked((sequence - 1) * VocabularySize);

@@ -1,3 +1,5 @@
+using Xunit;
+
 namespace NNtrain.Core.Tests;
 
 public sealed class QwenPrimitiveTests

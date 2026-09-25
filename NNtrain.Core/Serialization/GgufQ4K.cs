@@ -17,6 +17,8 @@ public static class GgufQ4K
 
         var output = new float[elementCount];
         int dst = 0;
+        Span<byte> sc = stackalloc byte[8];
+        Span<byte> m = stackalloc byte[8];
         for (int block = 0; block < blocks; block++)
         {
             ReadOnlySpan<byte> b = source.Slice(block * BlockBytes, BlockBytes);
@@ -25,8 +27,6 @@ public static class GgufQ4K
             ReadOnlySpan<byte> scales = b.Slice(4, 12);
             ReadOnlySpan<byte> qs = b.Slice(16, 128);
 
-            Span<byte> sc = stackalloc byte[8];
-            Span<byte> m = stackalloc byte[8];
             DecodeScales(scales, sc, m);
 
             for (int group = 0; group < 8 && dst < elementCount; group++)
