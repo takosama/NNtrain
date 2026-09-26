@@ -103,7 +103,7 @@ public sealed class QwenGenerationLifetimeTests
         return new Qwen2QuantizedForCausalLM(vocabulary, 8, width, 4, 2,
             new Parameter(embedding, [vocabulary, width], "embedding",
                 WeightDecayPolicy.Apply, dtype),
-            [block], Norm(),
+            null, [block], Norm(),
             Linear(width, vocabulary, Enumerable.Range(0, vocabulary)
                 .Select(index => index * 0.1f).ToArray()), dtype);
     }

@@ -59,6 +59,24 @@ internal sealed class ArcQuantizedMatrix : IDisposable
             encoded, bias, GgmlType, OutputWidth, InputWidth);
     }
 
+    internal Tensor LookupEmbedding(int[] tokenIds, int batch, int sequence)
+    {
+        ArgumentNullException.ThrowIfNull(tokenIds);
+        if (Tensor.ExecutionDevice != TensorDevice.Arc)
+            throw new NotSupportedException("Native GGUF K-quantized embedding requires Intel Arc.");
+        if (batch <= 0 || sequence <= 0 || tokenIds.Length != checked(batch * sequence))
+            throw new ArgumentException("Token count does not match batch * sequence.", nameof(tokenIds));
+        for (int position = 0; position < tokenIds.Length; ++position)
+            if ((uint)tokenIds[position] >= (uint)OutputWidth)
+                throw new ArgumentOutOfRangeException(
+                    nameof(tokenIds), tokenIds[position],
+                    $"Embedding index at position {position} is outside the vocabulary.");
+
+        ArcBuffer encoded = DevicePayload(Tensor.ArcLane);
+        return Tensor.ArcQwenQuantizedEmbedding(
+            encoded, tokenIds, batch, sequence, InputWidth, GgmlType);
+    }
+
     private ArcBuffer DevicePayload(ArcExecutionLane lane)
     {
         if (_devicePayload is not null && ReferenceEquals(_lane, lane))

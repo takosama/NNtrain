@@ -190,6 +190,11 @@ internal static class TensorFloat16OperationManifest
         InternalTensorReturningMembers { get; } =
         [
             new(
+                "ArcQwenQuantizedEmbedding(ArcBuffer,Int32[],Int32,Int32,Int32,UInt32)",
+                TensorFloat16ResultPolicy.BackendWithoutFloat16,
+                "ArcQwenQuantizedEmbeddingTests.LookupDecodesSelectedRowsWithoutReuploadingWeight",
+                "The Qwen K-quantized Arc embedding publishes Float32 values and does not support legacy Float16 storage."),
+            new(
                 "ArcQwenQuantizedLinear(ArcBuffer,Tensor,UInt32,Int32,Int32)",
                 TensorFloat16ResultPolicy.BackendWithoutFloat16,
                 "QwenArcKernelTests.QuantizedQ4AndQ6KArcKernelsMatchCpuForSubnormalScales",
