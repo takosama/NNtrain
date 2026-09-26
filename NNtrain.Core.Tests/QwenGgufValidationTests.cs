@@ -85,6 +85,30 @@ public sealed class QwenGgufValidationTests
         Assert.Throws<InvalidDataException>(() => Qwen2Gguf.Inspect(file.Path));
     }
 
+    [Theory]
+    [InlineData(Qwen2Gguf.Q4KType)]
+    [InlineData(Qwen2Gguf.Q6KType)]
+    public void QuantizedEmbeddingAcceptsTiedHeadBeforeReadingPayload(uint type)
+    {
+        GgufTensorInfo[] tensors = ValidTensorDirectory()
+            .Where(tensor => tensor.Name != "output.weight")
+            .Select(tensor => tensor.Name == "token_embd.weight"
+                ? tensor with { Type = type } : tensor).ToArray();
+        using var file = new TemporaryQwenGguf(ValidMetadata(), tensors);
+        Assert.Throws<EndOfStreamException>(() => Qwen2Gguf.LoadQuantizedModel(file.Path));
+    }
+
+    [Fact]
+    public void DenseEmbeddingRejectsTiedHeadBeforeReadingPayload()
+    {
+        GgufTensorInfo[] tensors = ValidTensorDirectory()
+            .Where(tensor => tensor.Name != "output.weight").ToArray();
+        using var file = new TemporaryQwenGguf(ValidMetadata(), tensors);
+        NotSupportedException error = Assert.Throws<NotSupportedException>(
+            () => Qwen2Gguf.LoadQuantizedModel(file.Path));
+        Assert.Contains("token_embd.weight", error.Message);
+    }
+
     private static Dictionary<string, object> ValidMetadata() => new()
     {
         ["general.architecture"] = "qwen2",

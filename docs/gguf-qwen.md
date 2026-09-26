@@ -12,8 +12,11 @@ dotnet run --project NNtrain.Cli -c Release -- qwen-gguf --model C:\models\qwen.
 
 The command uses greedy sampling and a single Arc GPU. Large projection matrices
 remain in their original Q4_K/Q6_K representation in host memory and VRAM;
-activations and the decoded embedding use Float32. The file must contain a
-separate quantized `output.weight`. This command does not use `generate.json`
+Q4_K/Q6_K token embeddings also remain encoded, with only selected rows decoded
+on the GPU into Float32 activations. F32/F16/BF16 embeddings use the dense path.
+When `output.weight` is absent, a Q4_K/Q6_K token embedding supplies the output
+head. This tied path currently holds separate encoded buffers for embedding and
+output; it does not share their storage. This command does not use `generate.json`
 or its two-GPU selection. Its current generation path recomputes the prefix;
 the GPT generation KV cache is not a Qwen KV cache.
 
@@ -55,3 +58,20 @@ The integrated source at `692a356` was tested on the local Arc B580 system:
 All 190 selected tests passed with no skips. The integration run includes both
 single-GPU and two-GPU training and generation; the earlier Arc optimization
 benchmark records are preserved separately under `benchmark-results/`.
+
+### Resident embedding validation (2026-09-26)
+
+Validated on Intel Arc B580 after rebasing the resident embedding changes onto
+`5d45ecc`:
+
+- `dotnet build NNtrain.slnx -c Release`: 0 warnings, 0 errors.
+- `dotnet test NNtrain.Core.Tests -c Release --no-restore --filter "FullyQualifiedName~Qwen|FullyQualifiedName~Gguf|FullyQualifiedName~TensorFloat16Operation"`:
+  53 passed, 0 failed, 0 skipped. Includes Q4_K/Q6_K selected-row CPU parity,
+  encoded-weight upload reuse, tied-head directory validation and generation lifetimes.
+- Real Qwen2.5-3B-Instruct Q4_K_M, raw prompt `こんにちは`, one greedy token:
+  input ID `89015`, output `こんにちは、` (exit 0).
+- Synthetic Q4_K tied-embedding GGUF: output `こんにちはA` (exit 0).
+
+The real checkpoint has a separate Q6_K output head. Tied-head coverage uses a
+synthetic fixture. This check does not establish full-logit parity or long-form
+generation quality. No LoRA, KV cache or performance changes are included.

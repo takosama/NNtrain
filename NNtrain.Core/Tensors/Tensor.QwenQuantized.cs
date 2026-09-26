@@ -2,6 +2,30 @@ namespace NNtrain;
 
 public partial class Tensor
 {
+    internal static Tensor ArcQwenQuantizedEmbedding(
+        NNtrain.Arc.ArcExecutionLane.ArcBuffer encodedWeight,
+        int[] tokenIds,
+        int batch,
+        int sequence,
+        int width,
+        uint ggmlType)
+    {
+        if (ExecutionDevice != TensorDevice.Arc)
+            throw new NotSupportedException("Qwen quantized embedding requires Intel Arc.");
+        var lane = ArcLane;
+        using var ids = lane.UploadRaw(tokenIds);
+        using var output = lane.Allocate(checked(tokenIds.Length * width));
+        string kernel = ggmlType switch
+        {
+            Qwen2Gguf.Q4KType => "qwen_embedding_q4_k",
+            Qwen2Gguf.Q6KType => "qwen_embedding_q6_k",
+            _ => throw new NotSupportedException($"GGML type {ggmlType} is not supported by quantized embedding.")
+        };
+        lane.Run(kernel, checked((long)tokenIds.Length * width), 0,
+            encodedWeight, ids, output, width);
+        return ArcDeviceResult(output, [batch, sequence, width], [], TensorDType.Float32);
+    }
+
     internal Tensor ArcQwenQuantizedLinear(
         NNtrain.Arc.ArcExecutionLane.ArcBuffer encodedWeight,
         Tensor bias,

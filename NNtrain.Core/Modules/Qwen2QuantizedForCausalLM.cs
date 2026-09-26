@@ -84,21 +84,25 @@ internal sealed class QwenQuantizedBlock : Module, IDisposable
 /// </summary>
 public sealed class Qwen2QuantizedForCausalLM : LanguageModel, IDisposable
 {
-    private readonly Parameter _embedding;
+    private readonly Parameter? _embedding;
+    private readonly ArcQuantizedMatrix? _quantizedEmbedding;
     private readonly QwenQuantizedBlock[] _blocks;
     private readonly QwenRmsNorm _finalNorm;
     private readonly QwenQuantizedLinear _head;
 
     internal Qwen2QuantizedForCausalLM(
         int vocabulary, int context, int width, int heads, int kvHeads,
-        Parameter embedding, QwenQuantizedBlock[] blocks,
+        Parameter? embedding, ArcQuantizedMatrix? quantizedEmbedding, QwenQuantizedBlock[] blocks,
         QwenRmsNorm finalNorm, QwenQuantizedLinear head,
         TensorDType dtype)
         : base(dtype)
     {
         VocabularySize = vocabulary; ContextLength = context; ModelWidth = width;
         QueryHeads = heads; KvHeads = kvHeads;
-        _embedding = RegisterParameter(embedding);
+        if ((embedding is null) == (quantizedEmbedding is null))
+            throw new ArgumentException("Exactly one embedding representation is required.");
+        _embedding = embedding is null ? null : RegisterParameter(embedding);
+        _quantizedEmbedding = quantizedEmbedding;
         _blocks = blocks.Select(RegisterModule).ToArray();
         _finalNorm = RegisterModule(finalNorm);
         _head = RegisterModule(head);
@@ -131,7 +135,9 @@ public sealed class Qwen2QuantizedForCausalLM : LanguageModel, IDisposable
             throw new ArgumentOutOfRangeException(nameof(sequence));
         if (tokenIds.Length != checked(batch * sequence))
             throw new ArgumentException("Token count does not match batch * sequence.", nameof(tokenIds));
-        Tensor h = _embedding.T.EmbeddingLookup(tokenIds, batch, sequence);
+        Tensor h = _quantizedEmbedding is not null
+            ? _quantizedEmbedding.LookupEmbedding(tokenIds, batch, sequence)
+            : _embedding!.T.EmbeddingLookup(tokenIds, batch, sequence);
         foreach (QwenQuantizedBlock block in _blocks) h = block.Forward(h);
         return _finalNorm.Forward(h);
     }
@@ -193,5 +199,6 @@ public sealed class Qwen2QuantizedForCausalLM : LanguageModel, IDisposable
     {
         foreach (QwenQuantizedBlock block in _blocks) block.Dispose();
         _head.Dispose();
+        _quantizedEmbedding?.Dispose();
     }
 }

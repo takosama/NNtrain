@@ -400,3 +400,21 @@ __kernel void qwen_linear_q6_k(
     }
     y[i] = sum;
 }
+
+__kernel void qwen_embedding_q4_k(
+    __global const uchar* weight, __global const int* token_ids,
+    __global float* output, int width) {
+    int i = get_global_id(0);
+    int position = i / width, column = i % width;
+    int block_index = token_ids[position] * (width / 256) + column / 256;
+    output[i] = qwen_q4_k_value(weight + block_index * 144, column & 255);
+}
+
+__kernel void qwen_embedding_q6_k(
+    __global const uchar* weight, __global const int* token_ids,
+    __global float* output, int width) {
+    int i = get_global_id(0);
+    int position = i / width, column = i % width;
+    int block_index = token_ids[position] * (width / 256) + column / 256;
+    output[i] = qwen_q6_k_value(weight + block_index * 210, column & 255);
+}

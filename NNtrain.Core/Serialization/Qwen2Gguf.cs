@@ -56,8 +56,23 @@ public static class Qwen2Gguf
         // Matching element counts alone cannot establish matrix orientation.
         ValidateQuantizedModelShapes(gguf, d);
 
-        Parameter embedding = DenseParameter(
-            gguf, "token_embd.weight", "token_embd.weight", activationDType);
+        GgufTensorInfo embeddingTensor = gguf.GetTensor("token_embd.weight");
+        Parameter? embedding = null;
+        ArcQuantizedMatrix? quantizedEmbedding = null;
+        if (embeddingTensor.Type is Q4KType or Q6KType)
+        {
+            int blockBytes = embeddingTensor.Type == Q4KType
+                ? GgufQ4K.BlockBytes : GgufQ6K.BlockBytes;
+            int bytes = checked(d.VocabularySize * (d.EmbeddingLength / 256) * blockBytes);
+            quantizedEmbedding = new ArcQuantizedMatrix(
+                gguf.ReadTensorBytes(embeddingTensor, bytes), embeddingTensor.Type,
+                d.VocabularySize, d.EmbeddingLength);
+        }
+        else
+        {
+            embedding = DenseParameter(
+                gguf, "token_embd.weight", "token_embd.weight", activationDType);
+        }
         var blocks = new QwenQuantizedBlock[d.LayerCount];
         for (int i = 0; i < blocks.Length; ++i)
         {
@@ -94,23 +109,15 @@ public static class Qwen2Gguf
         var finalNorm = new QwenRmsNorm(d.EmbeddingLength, d.RmsEpsilon, activationDType);
         Copy(gguf, finalNorm.Weight, "output_norm.weight");
 
-        QwenQuantizedLinear head;
-        if (gguf.Tensors.Any(t => t.Name == "output.weight"))
-        {
-            head = QuantizedLinear(
-                gguf, "output.weight", null,
-                d.EmbeddingLength, d.VocabularySize, activationDType);
-        }
-        else
-        {
-            throw new NotSupportedException(
-                "Tied token-embedding output is dense in this first resident path. " +
-                "Use a GGUF containing output.weight until the quantized tied-head path is added.");
-        }
+        string outputName = gguf.Tensors.Any(t => t.Name == "output.weight")
+            ? "output.weight" : "token_embd.weight";
+        QwenQuantizedLinear head = QuantizedLinear(
+            gguf, outputName, null,
+            d.EmbeddingLength, d.VocabularySize, activationDType);
 
         return new Qwen2QuantizedForCausalLM(
             d.VocabularySize, d.ContextLength, d.EmbeddingLength,
-            d.HeadCount, d.KvHeadCount, embedding, blocks, finalNorm,
+            d.HeadCount, d.KvHeadCount, embedding, quantizedEmbedding, blocks, finalNorm,
             head, activationDType);
     }
 
@@ -135,7 +142,9 @@ public static class Qwen2Gguf
 
     private static void ValidateQuantizedModelShapes(GgufReader gguf, Qwen2GgufDescriptor d)
     {
-        ValidateShape(gguf.GetTensor("token_embd.weight"), d.EmbeddingLength, d.VocabularySize);
+        GgufTensorInfo embedding = gguf.GetTensor("token_embd.weight");
+        ValidateShape(embedding, d.EmbeddingLength, d.VocabularySize);
+        if (embedding.Type is Q4KType or Q6KType) ValidateKQuantRows(embedding);
         int kvWidth = checked(d.KvHeadCount * (d.EmbeddingLength / d.HeadCount));
         for (int i = 0; i < d.LayerCount; ++i)
         {
@@ -151,11 +160,9 @@ public static class Qwen2Gguf
             ValidateLinear(p + "ffn_down", d.FeedForwardLength, d.EmbeddingLength);
         }
         ValidateShape(gguf.GetTensor("output_norm.weight"), d.EmbeddingLength);
-        if (!gguf.Tensors.Any(t => t.Name == "output.weight"))
-            throw new NotSupportedException(
-                "Tied token-embedding output is dense in this first resident path. " +
-                "Use a GGUF containing output.weight until the quantized tied-head path is added.");
-        ValidateLinear("output", d.EmbeddingLength, d.VocabularySize);
+        string outputName = gguf.Tensors.Any(t => t.Name == "output.weight")
+            ? "output.weight" : "token_embd.weight";
+        ValidateQuantizedMatrix(gguf.GetTensor(outputName), d.EmbeddingLength, d.VocabularySize);
 
         void ValidateLinear(string name, int inputWidth, int outputWidth, bool hasBias = false)
         {
