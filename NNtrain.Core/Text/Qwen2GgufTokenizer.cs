@@ -5,17 +5,24 @@ using System.Text.RegularExpressions;
 namespace NNtrain;
 
 /// <summary>
-/// Qwen2 byte-level BPE reconstructed directly from GGUF tokenizer metadata.
+/// Qwen2 / Qwen3.5 byte-level BPE reconstructed directly from GGUF tokenizer metadata.
 /// Token ids are exactly the GGUF vocabulary indices.
 /// </summary>
 public sealed class Qwen2GgufTokenizer
 {
     // Equivalent to Qwen2's Unicode-property split, expressed without a
     // dependency on a third-party regex engine.
-    private static readonly Regex SplitRegex = new(
+    private static readonly Regex Qwen2SplitRegex = new(
         @"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    // Qwen3.5 keeps combining marks with letter runs. Matches the qwen35
+    // pre-tokenizer in llama.cpp/src/llama-vocab.cpp.
+    private static readonly Regex Qwen35SplitRegex = new(
+        @"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+|\p{N}| ?[^\s\p{L}\p{M}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private readonly Regex _splitRegex;
     private readonly string[] _tokens;
     private readonly Dictionary<string, int> _vocabulary;
     private readonly Dictionary<(string Left, string Right), int> _mergeRanks;
@@ -29,8 +36,10 @@ public sealed class Qwen2GgufTokenizer
         int? eosTokenId,
         int? padTokenId,
         int? unknownTokenId,
-        IReadOnlyList<int>? tokenTypes)
+        IReadOnlyList<int>? tokenTypes,
+        Regex splitRegex)
     {
+        _splitRegex = splitRegex;
         _tokens = tokens;
         _vocabulary = tokens
             .Select((token, id) => (token, id))
@@ -73,6 +82,15 @@ public sealed class Qwen2GgufTokenizer
         if (!string.Equals(model, "gpt2", StringComparison.Ordinal))
             throw new NotSupportedException($"Qwen GGUF tokenizer model '{model}' is not GPT-2 BPE.");
 
+        string preTokenizer = gguf.Metadata.ContainsKey("tokenizer.ggml.pre")
+            ? StringValue(gguf, "tokenizer.ggml.pre") : "qwen2";
+        Regex splitRegex = preTokenizer switch
+        {
+            "qwen2" => Qwen2SplitRegex,
+            "qwen35" => Qwen35SplitRegex,
+            _ => throw new NotSupportedException($"Qwen GGUF pre-tokenizer '{preTokenizer}' is not supported.")
+        };
+
         string[] tokens = StringArray(gguf, "tokenizer.ggml.tokens");
         string[] merges = StringArray(gguf, "tokenizer.ggml.merges");
         int[]? tokenTypes = OptionalIntArray(gguf, "tokenizer.ggml.token_type");
@@ -82,7 +100,7 @@ public sealed class Qwen2GgufTokenizer
             OptionalInt(gguf, "tokenizer.ggml.eos_token_id"),
             OptionalInt(gguf, "tokenizer.ggml.padding_token_id"),
             OptionalInt(gguf, "tokenizer.ggml.unknown_token_id"),
-            tokenTypes);
+            tokenTypes, splitRegex);
     }
 
     public int[] Encode(string text)
@@ -96,7 +114,7 @@ public sealed class Qwen2GgufTokenizer
                 ids.Add(special);
                 continue;
             }
-            foreach (Match match in SplitRegex.Matches(piece))
+            foreach (Match match in _splitRegex.Matches(piece))
                 EncodePiece(match.Value, ids);
         }
         return ids.ToArray();

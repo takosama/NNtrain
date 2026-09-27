@@ -75,3 +75,76 @@ Validated on Intel Arc B580 after rebasing the resident embedding changes onto
 The real checkpoint has a separate Q6_K output head. Tied-head coverage uses a
 synthetic fixture. This check does not establish full-logit parity or long-form
 generation quality. No LoRA, KV cache or performance changes are included.
+
+## Qwen3.5 dense text models
+
+`qwen-gguf` also recognizes `general.architecture = qwen35`. Filenames are not
+used to choose the architecture; for example, the local file named
+`Qwen.Qwen3.8-27B.f16.gguf.Q4_K_M.gguf` contains the Qwen3.5 dense 27B layout.
+
+```powershell
+dotnet run --configuration Release --project NNtrain.Cli -- qwen-gguf --model "C:\models\Qwen.Qwen3.8-27B.f16.gguf.Q4_K_M.gguf" --prompt "こんにちは" --max-new-tokens 16 --devices 0,1
+```
+
+When no device option is supplied, Qwen3.5 selects enough available Arc devices
+for its encoded weights and a workspace reserve. `--device 0` forces one GPU;
+`--devices 0,1` selects two explicitly. The 27B Q4_K_M file requires more than one
+12 GiB B580. Layers are assigned to fixed, contiguous groups across the selected
+GPUs. The loader checks each group's capacity and each allocation size before
+uploading. It does not expand the large weight matrices to Float32.
+
+### Execution and supported scope
+
+- Q4_K/Q6_K embedding and projection matrices stay encoded in Arc VRAM. Encoded
+  host payloads are discarded after each blocking upload. Loading reports both
+  resident weight bytes and actual live device allocations.
+- Small normalization, gated full attention and Gated DeltaNet operations run
+  on the CPU with Float32 arrays. Activations cross the host/device boundary
+  for the projection calls. This is an initial correctness implementation.
+- The text path supports explicit Q/K head widths, Q/K normalization, gated Q
+  projections, partial RoPE, causal convolution and persistent DeltaNet state.
+  Full-attention KV and DeltaNet state are kept in host memory for a sequence.
+- Tokenization uses the `qwen35` BPE split, including combining marks. Prompts
+  are raw text; the embedded chat template is not applied automatically.
+- Dense text `qwen35` only: no MoE, vision input, MTP, scaled RoPE, training or
+  LoRA. Unsupported tensor directories are rejected before payload loading.
+- `GenerateTokenIds` resets sequence state. `ForwardToken` advances it by one
+  token, and `Reset` starts a new sequence. A model instance is not thread safe.
+
+The math and GGUF head ordering follow the
+[llama.cpp Qwen3.5 implementation](https://github.com/ggml-org/llama.cpp/blob/master/src/models/qwen35.cpp),
+[conversion code](https://github.com/ggml-org/llama.cpp/blob/master/conversion/qwen.py)
+and [tokenizer](https://github.com/ggml-org/llama.cpp/blob/master/src/llama-vocab.cpp).
+
+### Local 27B verification (2026-09-27)
+
+The local GGUF has 851 tensors, 64 layers, width 5120, 24 query heads / 4 KV heads,
+head width 256 and vocabulary 248320. Its file size is 16,547,400,064 bytes.
+On two Arc B580 devices, quantized residency was 8,099,020,800 bytes on device 0
+and 8,426,803,200 bytes on device 1 (7.54 / 7.85 GiB).
+
+With raw prompt `こんにちは`, NNtrain encoded token `85951` and greedily generated
+`5205,150517` (`、ゆ`). An independent CPU llama.cpp run against the same GGUF
+produced the same input and both output IDs. This short check does not establish
+long-context parity, chat quality or performance.
+
+Validation commands:
+
+```powershell
+dotnet build NNtrain.slnx -c Release --no-restore
+dotnet test NNtrain.Core.Tests -c Release --no-restore --filter "FullyQualifiedName~Qwen|FullyQualifiedName~Gguf|FullyQualifiedName~TensorFloat16Operation"
+```
+
+The Release build passed with zero warnings/errors, and all 106 selected tests
+passed with no skips. Tests cover tensor directory validation, GDN numeric
+references, partial RoPE, tokenizer splits, state reset, EOS/context behavior,
+separate/tied heads and single-GPU versus two-GPU logits. The existing Qwen2.5
+3B smoke test also still produced `こんにちは、`.
+
+[Recorded comparison data](qwen35-local-validation.json) includes the top-10
+log probabilities and transfer counts for both real-model tokens. Initial upload
+bytes equal resident encoded-weight bytes exactly. Each subsequent token uploaded
+14,590,980 / 15,604,736 bytes of inputs and zero biases, rather than the 16.5 GB
+of weights. The greedy IDs match the CPU reference, but probabilities differ
+(first token: NNtrain -0.977396, llama.cpp CPU -0.938354). Full-logit equivalence
+is not claimed.
