@@ -39,7 +39,7 @@ internal sealed class QwenLoraMetricReporter : IDisposable
         int totalEpochs = checked((int)((Math.Max((long)config.MaxSteps, checkpointStep) + exampleCount - 1) / exampleCount));
         reporter = TrainingMetricReporter.Open(htmlPath, totalEpochs, resume,
             checkpointStep, (double)checkpointStep / exampleCount, config.ShowLossGraph,
-            config.LossGraphEverySteps);
+            config.LossGraphEverySteps, renderWarning: error);
         foreach (string archive in ArchivedPaths) output.WriteLine($"Previous loss history = {archive}");
         output.WriteLine($"metrics = {reporter.SidecarPath}");
         if (config.ShowLossGraph)

@@ -159,8 +159,22 @@ internal sealed class LossGraph
             Directory.CreateDirectory(directory);
 
         string destination = atomically ? Path + "." + Guid.NewGuid().ToString("N") + ".tmp" : Path;
-        File.WriteAllText(destination, BuildHtml(), new UTF8Encoding(false));
-        if (atomically) File.Move(destination, Path, overwrite: true);
+        try
+        {
+            File.WriteAllText(destination, BuildHtml(), new UTF8Encoding(false));
+            if (atomically) File.Move(destination, Path, overwrite: true);
+        }
+        finally
+        {
+            if (atomically)
+            {
+                // Clean up only this render's temporary file. A failed cleanup
+                // must not mask the original replace error or fail after success.
+                try { File.Delete(destination); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+        }
     }
 
     internal void TryOpen(TextWriter error)

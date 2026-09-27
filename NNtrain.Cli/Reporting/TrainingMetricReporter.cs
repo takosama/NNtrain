@@ -15,7 +15,9 @@ internal sealed class TrainingMetricReporter : IDisposable
     private readonly bool _renderHtml;
     private readonly MetricJournal _journal;
     private readonly int _renderEverySteps;
+    private readonly TextWriter _renderWarning;
     private bool _dirty;
+    private bool _renderFailed;
 
     private TrainingMetricReporter(
         MetricJournalJsonlRepository repository,
@@ -23,7 +25,8 @@ internal sealed class TrainingMetricReporter : IDisposable
         int totalEpochs,
         bool renderHtml,
         MetricJournal journal,
-        int renderEverySteps)
+        int renderEverySteps,
+        TextWriter renderWarning)
     {
         _repository = repository;
         _htmlPath = htmlPath;
@@ -31,6 +34,7 @@ internal sealed class TrainingMetricReporter : IDisposable
         _renderHtml = renderHtml;
         _journal = journal;
         _renderEverySteps = renderEverySteps;
+        _renderWarning = renderWarning;
     }
 
     internal string SidecarPath => _repository.Path;
@@ -58,7 +62,8 @@ internal sealed class TrainingMetricReporter : IDisposable
         long checkpointGlobalStep,
         double checkpointEpoch,
         bool renderHtml,
-        int renderEverySteps = 1)
+        int renderEverySteps = 1,
+        TextWriter? renderWarning = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(htmlPath);
         if (totalEpochs <= 0)
@@ -104,7 +109,8 @@ internal sealed class TrainingMetricReporter : IDisposable
             totalEpochs,
             renderHtml,
             journal,
-            renderEverySteps);
+            renderEverySteps,
+            renderWarning ?? Console.Error);
         reporter.RenderHtml();
         return reporter;
     }
@@ -149,7 +155,7 @@ internal sealed class TrainingMetricReporter : IDisposable
         _repository.AppendAndFlush(entry);
         _journal.Append(entry);
         _dirty = true;
-        if (_journal.Count == 1 || globalStep % _renderEverySteps == 0)
+        if (_renderFailed || _journal.Count == 1 || globalStep % _renderEverySteps == 0)
             RenderHtml();
     }
 
@@ -178,11 +184,28 @@ internal sealed class TrainingMetricReporter : IDisposable
     {
         if (_renderHtml)
         {
-            LossGraphMetricAdapter.RenderFromJournal(
-                _journal,
-                _htmlPath,
-                _totalEpochs);
+            try
+            {
+                LossGraphMetricAdapter.RenderFromJournal(
+                    _journal,
+                    _htmlPath,
+                    _totalEpochs);
+            }
+            catch (Exception exception) when (exception is UnauthorizedAccessException
+                || exception is IOException)
+            {
+                // Browsers and file scanners may temporarily deny replacement on
+                // Windows. The durable journal is already committed; a derived
+                // HTML failure must not discard the in-memory optimizer update.
+                _dirty = true;
+                if (!_renderFailed)
+                    _renderWarning.WriteLine($"Warning: loss graph update deferred for '{_htmlPath}': "
+                        + exception.Message + " Loss history is saved; retrying on the next update or flush.");
+                _renderFailed = true;
+                return;
+            }
         }
+        _renderFailed = false;
         _dirty = false;
     }
 
