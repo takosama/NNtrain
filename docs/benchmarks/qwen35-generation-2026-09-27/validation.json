@@ -1,0 +1,162 @@
+{
+  "comparisons": {
+    "base": {
+      "before": 14.724700797703557,
+      "after": 17.122586004226758,
+      "speedup": 1.1628478051586062,
+      "before_rates": [
+        14.696952386352518,
+        14.728651029710319,
+        14.720750565696795
+      ],
+      "after_rates": [
+        17.096318607476288,
+        17.12584723329218,
+        17.119324775161335
+      ],
+      "before_first_ms": 786.28065,
+      "after_first_ms": 514.7280000000001,
+      "weights": [
+        5035468800,
+        5116405760
+      ],
+      "peak_gib": [
+        4.833836022764444,
+        4.9101592637598515
+      ],
+      "token_checks": [
+        {
+          "kind": "baseline",
+          "run": 1,
+          "matching": true,
+          "first_mismatch": null
+        },
+        {
+          "kind": "baseline",
+          "run": 2,
+          "matching": true,
+          "first_mismatch": null
+        },
+        {
+          "kind": "baseline",
+          "run": 3,
+          "matching": true,
+          "first_mismatch": null
+        },
+        {
+          "kind": "final",
+          "run": 1,
+          "matching": true,
+          "first_mismatch": null
+        },
+        {
+          "kind": "final",
+          "run": 2,
+          "matching": true,
+          "first_mismatch": null
+        },
+        {
+          "kind": "final",
+          "run": 3,
+          "matching": true,
+          "first_mismatch": null
+        }
+      ],
+      "all_tokens_match": true
+    },
+    "lora": {
+      "before": 3.6516050017221424,
+      "after": 16.158892292449526,
+      "speedup": 4.425147923948179,
+      "before_rates": [
+        3.6488604357016388,
+        3.650578617283479,
+        3.6526313861608055
+      ],
+      "after_rates": [
+        16.11661573594886,
+        16.161178692688793,
+        16.15660589221026
+      ],
+      "before_first_ms": 3789.8219,
+      "after_first_ms": 569.59745,
+      "weights": [
+        5035468800,
+        5116405760
+      ],
+      "peak_gib": [
+        4.942547295242548,
+        5.018870536237955
+      ],
+      "token_checks": [
+        {
+          "kind": "baseline",
+          "run": 1,
+          "matching": true,
+          "first_mismatch": null
+        },
+        {
+          "kind": "baseline",
+          "run": 2,
+          "matching": true,
+          "first_mismatch": null
+        },
+        {
+          "kind": "baseline",
+          "run": 3,
+          "matching": true,
+          "first_mismatch": null
+        },
+        {
+          "kind": "final",
+          "run": 1,
+          "matching": true,
+          "first_mismatch": null
+        },
+        {
+          "kind": "final",
+          "run": 2,
+          "matching": true,
+          "first_mismatch": null
+        },
+        {
+          "kind": "final",
+          "run": 3,
+          "matching": true,
+          "first_mismatch": null
+        }
+      ],
+      "all_tokens_match": true
+    }
+  },
+  "tests": {
+    "Qwen35": {
+      "total": 158,
+      "passed": 158,
+      "failed": 0,
+      "skipped": 0
+    },
+    "Integration": {
+      "total": 51,
+      "passed": 45,
+      "failed": 0,
+      "skipped": 6
+    }
+  },
+  "fullLogitsComparison": {
+    "reference": "baseline-base/lora: original binary, same fixed teacher inputs, four steps by 248320 vocabulary values",
+    "base": {
+      "maxAbsoluteDifference": 3.528594970703125e-05,
+      "relativeL2": 1.7612118909e-06,
+      "top1Matches": 4,
+      "nonFinite": 0
+    },
+    "lora": {
+      "maxAbsoluteDifference": 1.71661376953125e-05,
+      "relativeL2": 1.0517559778e-06,
+      "top1Matches": 4,
+      "nonFinite": 0
+    }
+  },
+  "notes": "Paths sanitized; generated text omitted; token IDs retained. Raw float logits remain in local benchmark records."
+}

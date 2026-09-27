@@ -42,7 +42,10 @@ internal static partial class Qwen35Gpu
         {
             lane.Run("q35d_convolution", channels, 0,
                 qkv, convWeights, convState, mixed, channels, convKernel);
-            lane.Run("q35d_normalize_qk", keyHeads, 0, mixed, keyHeads, headWidth, eps);
+            if (lane.Options.Qwen35ParallelDeltaNorm)
+                lane.Run("q35d_normalize_qk_coop128", (long)keyHeads * 128, 128, mixed, keyHeads, eps);
+            else
+                lane.Run("q35d_normalize_qk", keyHeads, 0, mixed, keyHeads, headWidth, eps);
             lane.Run("q35d_recurrent_gated_rmsnorm_fused128", valueSize, 128,
                 mixed, alpha, beta, dt, a, recurrentState, norm, gate, output, keyHeads, eps);
             return output;

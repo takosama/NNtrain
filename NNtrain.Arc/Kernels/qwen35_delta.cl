@@ -56,6 +56,40 @@ __kernel void q35d_normalize_qk(
     }
 }
 
+// One workgroup normalizes the Q/K pair for a width-128 key head.
+// Only the square-sum reduction order differs from q35d_normalize_qk;
+// epsilon placement and the extra query scale remain the same.
+__attribute__((reqd_work_group_size(128, 1, 1)))
+__kernel void q35d_normalize_qk_coop128(
+    __global float* mixed, int key_heads, float eps)
+{
+    int h = get_group_id(0), tid = get_local_id(0);
+    if (h >= key_heads) return;
+    int q_offset = h * 128, k_offset = key_heads * 128 + q_offset;
+    float q = mixed[q_offset + tid], k = mixed[k_offset + tid];
+    __local float q_sums[128], k_sums[128], q_inverse, k_inverse;
+    q_sums[tid] = q * q;
+    k_sums[tid] = k * k;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int stride = 64; stride > 0; stride >>= 1)
+    {
+        if (tid < stride)
+        {
+            q_sums[tid] += q_sums[tid + stride];
+            k_sums[tid] += k_sums[tid + stride];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    if (tid == 0)
+    {
+        q_inverse = (1.0f / sqrt(128.0f)) / sqrt(q_sums[0] + eps);
+        k_inverse = 1.0f / sqrt(k_sums[0] + eps);
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+    mixed[q_offset + tid] = q * q_inverse;
+    mixed[k_offset + tid] = k * k_inverse;
+}
+
 __kernel void q35d_recurrent(
     __global const float* mixed, __global const float* alpha,
     __global const float* beta, __global const float* dt,

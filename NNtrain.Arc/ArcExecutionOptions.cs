@@ -7,6 +7,12 @@ public sealed record ArcExecutionOptions
     // kernels. General Arc sessions keep the complete program by default.
     public bool Qwen35TrainingKernels { get; init; }
     public bool Qwen35CooperativeLora { get; init; }
+    public int Qwen35ProjectionWorkgroupSize { get; init; } = 32;
+    public bool Qwen35ParallelArgmax { get; init; }
+    public bool Qwen35ParallelDeltaNorm { get; init; }
+    public int Qwen35LoraReductionSize { get; init; } = 128;
+    public bool Qwen35UnrollQ4 { get; init; }
+    public bool Qwen35NativeHalfScale { get; init; }
     public bool Qwen35CooperativeDelta { get; init; }
     public bool Qwen35InferenceKernelsOnly { get; init; } = false;
 
@@ -29,6 +35,9 @@ public sealed record ArcExecutionOptions
     public bool ParallelWeightGradients { get; init; } = true;
     public int AttentionWorkspaceMiB { get; init; } = 64;
     public bool DetailedProfiling { get; init; } = false;
+    // Diagnostic A/B: retain dispatch/fence order while omitting per-kernel
+    // timing events. Detailed profiling and an active timeline override this.
+    public bool CollectKernelTimings { get; init; } = true;
     public bool CompactAttentionTiles { get; init; } = true;
     public bool UnrolledAttentionTiles { get; init; } = true;
     public bool PanelAttention { get; init; } = true;

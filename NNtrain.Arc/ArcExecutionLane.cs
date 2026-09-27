@@ -27,6 +27,8 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
     private readonly Dictionary<long, LinkedList<CachedBuffer>> _lruPool = [];
     private readonly LinkedList<CachedBuffer> _freeLru = [];
     private readonly List<(nint Handle, long Bytes)> _retired = [];
+    // Entries also count eventless kernels: retirement and queue-window
+    // safety depend on pending commands, not on whether timing is enabled.
     private readonly List<(string Name, nint Event, string? Label)> _pendingEvents = [];
     private readonly List<(string Kind, nint Event, long Bytes)> _pendingCopyEvents = [];
     private bool _queuedCopies;
@@ -47,6 +49,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
     public ArcDeviceInfo Device { get; }
     public ArcExecutionOptions Options { get; }
     public ArcDetailedProfiler? DetailedProfiler { get; }
+    private bool CollectKernelEvents => Options.CollectKernelTimings || DetailedProfiler is not null || Timeline is not null;
     public void ResetDetailedProfile()
     {
         lock (_sync)
@@ -126,6 +129,10 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(Options.LossChunkRows);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(Options.LossLogitsWorkspaceMiB);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(Options.LossPanelWorkspaceMiB);
+        if (Options.Qwen35ProjectionWorkgroupSize is not (32 or 64 or 128))
+            throw new ArgumentOutOfRangeException(nameof(options));
+        if (Options.Qwen35LoraReductionSize is not (16 or 128 or 256 or 512 or 1024))
+            throw new ArgumentOutOfRangeException(nameof(options));
         if (!Enum.IsDefined(Options.XmxGemmMode)) throw new ArgumentOutOfRangeException(nameof(options));
         if (Options.AttentionWorkspaceMiB is < 8 or > 256)
             throw new ArgumentOutOfRangeException(nameof(options), "Attention workspace must be between 8 and 256 MiB.");
@@ -163,6 +170,9 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
             finally { pin.Free(); }
             OpenClNative.Check(error, "create program");
             string buildOptions = "-cl-std=CL1.2 -cl-fp32-correctly-rounded-divide-sqrt";
+            buildOptions += $" -DQ35_PROJECTION_WG={Options.Qwen35ProjectionWorkgroupSize}";
+            if (Options.Qwen35UnrollQ4) buildOptions += " -DQ35_Q4_UNROLL=1";
+            if (Options.Qwen35NativeHalfScale) buildOptions += " -DQ35_NATIVE_HALF=1";
             if (Options.Qwen35TrainingKernels || !Options.Qwen35InferenceKernelsOnly) buildOptions += " -DARC_QWEN35_TRAINING=1";
             if (Options.ExperimentalOptimizationKernels) buildOptions += " -DARC_OPTIMIZATION_PROBES=1";
             if (Options.Mix8_16Int8Linear) buildOptions += " -DARC_INT8_LINEAR=1";
@@ -443,8 +453,13 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
                     }
                     OpenClNative.Check(status, $"set {name} argument {i}");
                 }
+                // With timing disabled, retain one event at each half-window
+                // boundary. The existing partial wait therefore fences the
+                // same oldest commands without allocating an event per kernel.
+                bool eventRequired = CollectKernelEvents || (Options.BatchDispatch && Options.PipelineEventCollection
+                    && (_pendingEvents.Count + 1) % (Options.QueuedKernelLimit / 2) == 0);
                 OpenClNative.Check(OpenClNative.clEnqueueNDRangeKernel(_queue, kernel, (uint)global.Length, 0,
-                    global, localSize, 0, 0, (nint)(&kernelEvent)), $"launch {name}");
+                    global, localSize, 0, 0, eventRequired ? (nint)(&kernelEvent) : 0), $"launch {name}");
                 KernelLaunchCount++;
                 }
                 if (label is not null) DetailedProfiler!.Add("host-submit", label, Stopwatch.GetElapsedTime(submitStart).TotalMilliseconds);
@@ -497,6 +512,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
     {
         int count = _pendingEvents.Count / 2;
         nint last = _pendingEvents[count - 1].Event;
+        if (last == 0) throw new InvalidOperationException("The queued kernel window has no completion event.");
         long start = Stopwatch.GetTimestamp();
         using (Timeline?.Host("queue-partial-wait", "event-half"))
         {
@@ -515,7 +531,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
                 {
                     var entry = _pendingEvents[removed++];
                     try { RecordKernelTime(entry.Name, entry.Event, entry.Label); }
-                    finally { OpenClNative.clReleaseEvent(entry.Event); }
+                    finally { if (entry.Event != 0) OpenClNative.clReleaseEvent(entry.Event); }
                 }
             }
             finally { _pendingEvents.RemoveRange(0, removed); }
@@ -542,7 +558,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
         foreach (var entry in _pendingEvents)
         {
             try { RecordKernelTime(entry.Name, entry.Event, entry.Label); }
-            finally { OpenClNative.clReleaseEvent(entry.Event); }
+            finally { if (entry.Event != 0) OpenClNative.clReleaseEvent(entry.Event); }
         }
         _pendingEvents.Clear();
         foreach (var entry in _pendingCopyEvents)
@@ -558,8 +574,8 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
 
     private void RecordKernelTime(string name, nint evt, string? label)
     {
+        if (evt == 0 || !CollectKernelEvents) return;
         Timeline?.Device(name, label, evt, "kernel", 0);
-        if (evt == 0) return;
         if (OpenClNative.clGetEventProfilingInfo(evt, 0x1282, 8, out ulong start, out _) != 0
             || OpenClNative.clGetEventProfilingInfo(evt, 0x1283, 8, out ulong end, out _) != 0) return;
         double ms = (end - start) * 1e-6;

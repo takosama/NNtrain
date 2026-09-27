@@ -2,7 +2,15 @@
 // channel; its lanes read contiguous portions of each encoded 256-value block.
 // Decoding uses only registers: quantized weights remain resident unchanged.
 
+#ifndef Q35_NATIVE_HALF
+#define Q35_NATIVE_HALF 0
+#endif
+
 inline float q35l_half_to_float(ushort encoded) {
+#if Q35_NATIVE_HALF
+    // OpenCL storage-half conversion; all subsequent arithmetic remains FP32.
+    return vload_half(0, (__private const half*)&encoded);
+#else
     uint sign = ((uint)encoded & 0x8000u) << 16;
     uint exponent = ((uint)encoded >> 10) & 0x1fu;
     uint mantissa = (uint)encoded & 0x03ffu;
@@ -21,7 +29,17 @@ inline float q35l_half_to_float(ushort encoded) {
         bits = sign | ((exponent + 112u) << 23) | (mantissa << 13);
     }
     return as_float(bits);
+#endif
 }
+
+#ifdef ARC_OPTIMIZATION_PROBES
+// Exercise every half encoding independently of a quantized matrix operation.
+__kernel void q35l_half_convert_probe(__global const ushort* encoded,
+    __global float* decoded, int count) {
+    int i = get_global_id(0);
+    if (i < count) decoded[i] = q35l_half_to_float(encoded[i]);
+}
+#endif
 
 inline float q35l_q4_value(
     __global const uchar* block, int index, float d, float dmin) {
@@ -106,11 +124,20 @@ Q35L_DEFINE_FAST_LINEAR(q35l_q6_k_coop64, 210, q35l_q6_value)
 
 #undef Q35L_DEFINE_FAST_LINEAR
 
-// K-quantized GEMV: two independent SG16 outputs per WG32. Each Q4 lane
+// K-quantized GEMV: one independent output per SG16. Each Q4 lane
 // owns two values in each 32-value quantization group. The low/high nibble
 // groups share the same packed bytes, which are loaded only once per pair.
 #if defined(ARC_XMX) && ARC_SG == 16
 #pragma OPENCL EXTENSION cl_intel_subgroups : enable
+#ifndef Q35_PROJECTION_WG
+#define Q35_PROJECTION_WG 32
+#endif
+#if Q35_PROJECTION_WG != 32 && Q35_PROJECTION_WG != 64 && Q35_PROJECTION_WG != 128
+#error Q35_PROJECTION_WG must be 32, 64 or 128
+#endif
+#ifndef Q35_Q4_UNROLL
+#define Q35_Q4_UNROLL 0
+#endif
 
 inline void q35l_q4_scale_min(
     __global const uchar* block, int group, float d, float dmin,
@@ -131,13 +158,13 @@ inline void q35l_q4_scale_min(
 }
 
 __attribute__((intel_reqd_sub_group_size(16)))
-__attribute__((reqd_work_group_size(32, 1, 1)))
+__attribute__((reqd_work_group_size(Q35_PROJECTION_WG, 1, 1)))
 __kernel void q35l_q4_k_sg16(
     __global const float* x, __global const uchar* weight,
     __global const float* bias, __global float* y,
     int rows, int input_width, int output_width) {
     int lane = get_sub_group_local_id();
-    int flatOutput = get_group_id(0) * 2 + get_sub_group_id();
+    int flatOutput = get_group_id(0) * (Q35_PROJECTION_WG / 16) + get_sub_group_id();
     if (flatOutput >= rows * output_width) return;
     int row = rows == 1 ? 0 : flatOutput / output_width;
     int output = flatOutput - row * output_width;
@@ -152,6 +179,9 @@ __kernel void q35l_q4_k_sg16(
             (ushort)block[0] | ((ushort)block[1] << 8));
         float dmin = q35l_half_to_float(
             (ushort)block[2] | ((ushort)block[3] << 8));
+        #if Q35_Q4_UNROLL
+        #pragma unroll
+        #endif
         for (int pair = 0; pair < 4; ++pair) {
             int evenGroup = pair * 2;
             float evenMultiplier, evenMinimum, oddMultiplier, oddMinimum;
@@ -179,18 +209,78 @@ __kernel void q35l_q4_k_sg16(
     if (lane == 0) y[flatOutput] = bias[output] + total;
 }
 
+// Preserve the base SG16 projection, then add the low-rank branch before its store.
+__attribute__((intel_reqd_sub_group_size(16)))
+__attribute__((reqd_work_group_size(Q35_PROJECTION_WG, 1, 1)))
+__kernel void q35l_q4_k_sg16_lora(
+    __global const float* x, __global const uchar* weight,
+    __global const float* bias, __global float* y,
+    int rows, int input_width, int output_width,
+    __global const float* z, __global const float* b, int rank, float scale) {
+    int lane = get_sub_group_local_id();
+    int flatOutput = get_group_id(0) * (Q35_PROJECTION_WG / 16) + get_sub_group_id();
+    if (flatOutput >= rows * output_width) return;
+    int row = rows == 1 ? 0 : flatOutput / output_width;
+    int output = flatOutput - row * output_width;
+    x += row * input_width;
+
+    int blocksPerRow = input_width >> 8;
+    __global const uchar* rowWeight = weight + output * blocksPerRow * 144;
+    float partial = 0.0f;
+    for (int blockIndex = 0; blockIndex < blocksPerRow; ++blockIndex) {
+        __global const uchar* block = rowWeight + blockIndex * 144;
+        float d = q35l_half_to_float(
+            (ushort)block[0] | ((ushort)block[1] << 8));
+        float dmin = q35l_half_to_float(
+            (ushort)block[2] | ((ushort)block[3] << 8));
+        #if Q35_Q4_UNROLL
+        #pragma unroll
+        #endif
+        for (int pair = 0; pair < 4; ++pair) {
+            int evenGroup = pair * 2;
+            float evenMultiplier, evenMinimum, oddMultiplier, oddMinimum;
+            q35l_q4_scale_min(block, evenGroup, d, dmin,
+                &evenMultiplier, &evenMinimum);
+            q35l_q4_scale_min(block, evenGroup + 1, d, dmin,
+                &oddMultiplier, &oddMinimum);
+
+            int packedBase = 16 + pair * 32;
+            uchar first = block[packedBase + lane];
+            uchar second = block[packedBase + lane + 16];
+            int inputBase = blockIndex * 256 + pair * 64;
+            float w0 = fma(evenMultiplier, (float)(first & 15), -evenMinimum);
+            float w1 = fma(evenMultiplier, (float)(second & 15), -evenMinimum);
+            float w2 = fma(oddMultiplier, (float)(first >> 4), -oddMinimum);
+            float w3 = fma(oddMultiplier, (float)(second >> 4), -oddMinimum);
+            partial = fma(x[inputBase + lane], w0, partial);
+            partial = fma(x[inputBase + lane + 16], w1, partial);
+            partial = fma(x[inputBase + lane + 32], w2, partial);
+            partial = fma(x[inputBase + lane + 48], w3, partial);
+        }
+    }
+
+    float total = sub_group_reduce_add(partial);
+    if (lane == 0) {
+        float base = bias[output] + total;
+        float sum = 0.0f;
+        for (int r = 0; r < rank; ++r)
+            sum = fma(z[row * rank + r], b[output * rank + r], sum);
+        y[flatOutput] = base + scale * sum;
+    }
+}
+
 // Q6_K stores four 32-value quarters in each 128-value half-block. A lane
 // handles positions lane and lane+16 in every quarter. The same low/high
 // packed bytes decode all four quarters, and each 16-value scale is uniform
 // across the subgroup. Accumulation and the subgroup reduction stay FP32.
 __attribute__((intel_reqd_sub_group_size(16)))
-__attribute__((reqd_work_group_size(32, 1, 1)))
+__attribute__((reqd_work_group_size(Q35_PROJECTION_WG, 1, 1)))
 __kernel void q35l_q6_k_sg16(
     __global const float* x, __global const uchar* weight,
     __global const float* bias, __global float* y,
     int rows, int input_width, int output_width) {
     int lane = get_sub_group_local_id();
-    int flatOutput = get_group_id(0) * 2 + get_sub_group_id();
+    int flatOutput = get_group_id(0) * (Q35_PROJECTION_WG / 16) + get_sub_group_id();
     if (flatOutput >= rows * output_width) return;
     int row = rows == 1 ? 0 : flatOutput / output_width;
     int output = flatOutput - row * output_width;
@@ -245,5 +335,77 @@ __kernel void q35l_q6_k_sg16(
 
     float total = sub_group_reduce_add(partial);
     if (lane == 0) y[flatOutput] = bias[output] + total;
+}
+
+// Preserve the base SG16 projection, then add the low-rank branch before its store.
+__attribute__((intel_reqd_sub_group_size(16)))
+__attribute__((reqd_work_group_size(Q35_PROJECTION_WG, 1, 1)))
+__kernel void q35l_q6_k_sg16_lora(
+    __global const float* x, __global const uchar* weight,
+    __global const float* bias, __global float* y,
+    int rows, int input_width, int output_width,
+    __global const float* z, __global const float* b, int rank, float scale) {
+    int lane = get_sub_group_local_id();
+    int flatOutput = get_group_id(0) * (Q35_PROJECTION_WG / 16) + get_sub_group_id();
+    if (flatOutput >= rows * output_width) return;
+    int row = rows == 1 ? 0 : flatOutput / output_width;
+    int output = flatOutput - row * output_width;
+    x += row * input_width;
+
+    int blocksPerRow = input_width >> 8;
+    __global const uchar* rowWeight = weight + output * blocksPerRow * 210;
+    float partial = 0.0f;
+    for (int blockIndex = 0; blockIndex < blocksPerRow; ++blockIndex) {
+        __global const uchar* block = rowWeight + blockIndex * 210;
+        float d = q35l_half_to_float(
+            (ushort)block[208] | ((ushort)block[209] << 8));
+        for (int halfIndex = 0; halfIndex < 2; ++halfIndex) {
+            int lowBase = halfIndex * 64 + lane;
+            int highBase = 128 + halfIndex * 32 + lane;
+            uchar low0 = block[lowBase];
+            uchar low1 = block[lowBase + 16];
+            uchar low2 = block[lowBase + 32];
+            uchar low3 = block[lowBase + 48];
+            uchar high0 = block[highBase];
+            uchar high1 = block[highBase + 16];
+            __global const char* scales =
+                (__global const char*)(block + 192 + halfIndex * 8);
+            int inputBase = blockIndex * 256 + halfIndex * 128 + lane;
+
+            float w0 = (d * (float)scales[0])
+                * (float)(((low0 & 15) | ((high0 & 3) << 4)) - 32);
+            float w1 = (d * (float)scales[1])
+                * (float)(((low1 & 15) | ((high1 & 3) << 4)) - 32);
+            float w2 = (d * (float)scales[2])
+                * (float)(((low2 & 15) | (((high0 >> 2) & 3) << 4)) - 32);
+            float w3 = (d * (float)scales[3])
+                * (float)(((low3 & 15) | (((high1 >> 2) & 3) << 4)) - 32);
+            float w4 = (d * (float)scales[4])
+                * (float)(((low0 >> 4) | (((high0 >> 4) & 3) << 4)) - 32);
+            float w5 = (d * (float)scales[5])
+                * (float)(((low1 >> 4) | (((high1 >> 4) & 3) << 4)) - 32);
+            float w6 = (d * (float)scales[6])
+                * (float)(((low2 >> 4) | (((high0 >> 6) & 3) << 4)) - 32);
+            float w7 = (d * (float)scales[7])
+                * (float)(((low3 >> 4) | (((high1 >> 6) & 3) << 4)) - 32);
+            partial = fma(x[inputBase], w0, partial);
+            partial = fma(x[inputBase + 16], w1, partial);
+            partial = fma(x[inputBase + 32], w2, partial);
+            partial = fma(x[inputBase + 48], w3, partial);
+            partial = fma(x[inputBase + 64], w4, partial);
+            partial = fma(x[inputBase + 80], w5, partial);
+            partial = fma(x[inputBase + 96], w6, partial);
+            partial = fma(x[inputBase + 112], w7, partial);
+        }
+    }
+
+    float total = sub_group_reduce_add(partial);
+    if (lane == 0) {
+        float base = bias[output] + total;
+        float sum = 0.0f;
+        for (int r = 0; r < rank; ++r)
+            sum = fma(z[row * rank + r], b[output * rank + r], sum);
+        y[flatOutput] = base + scale * sum;
+    }
 }
 #endif

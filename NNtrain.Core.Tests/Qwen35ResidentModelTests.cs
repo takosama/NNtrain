@@ -134,12 +134,14 @@ public sealed class Qwen35ResidentModelTests
         using Qwen35QuantizedModel reference = Qwen35QuantizedModel.Load(file.Path, [0], options: new()
         {
             QuantizedKernel = Qwen35QuantizedKernel.Reference,
-            FusedDelta = false
+            FusedDelta = false,
+            CollectKernelTimings = true
         });
         using Qwen35QuantizedModel optimized = Qwen35QuantizedModel.Load(file.Path, [0], options: new()
         {
             QuantizedKernel = Qwen35QuantizedKernel.Auto,
-            FusedDelta = true
+            FusedDelta = true,
+            CollectKernelTimings = true
         });
         long[] encodedBytes = optimized.ResidentWeightBytes.ToArray();
         Assert.Equal(reference.ResidentWeightBytes, encodedBytes);

@@ -159,3 +159,89 @@ __kernel void q35a_argmax(__global const float* logits, __global int* result, in
     }
     if (tid == 0) { result[0] = indices[0]; result[1] = invalid[0]; }
 }
+
+// Independent vocabulary partitions expose more work than one work-group can.
+// Values are compared, never summed: partitioning preserves exact finite ties.
+__kernel void q35a_argmax_partition(__global const float* logits,
+    __global int* partials, int count, int partition_size)
+{
+    int group = get_group_id(0), tid = get_local_id(0);
+    int start = group * partition_size, length = min(partition_size, count - start);
+    __local float maxima[128];
+    __local int indices[128], invalid[128];
+    float maximum = -INFINITY;
+    int index = 2147483647, bad = 0;
+    for (int offset = tid; offset < length; offset += 128)
+    {
+        int i = start + offset;
+        float x = logits[i];
+        if (!isfinite(x)) bad = 1;
+        if (x > maximum || (x == maximum && i < index)) { maximum = x; index = i; }
+    }
+    maxima[tid] = maximum;
+    indices[tid] = index;
+    invalid[tid] = bad;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int stride = 64; stride > 0; stride >>= 1)
+    {
+        if (tid < stride)
+        {
+            float candidate = maxima[tid + stride];
+            int candidate_index = indices[tid + stride];
+            if (candidate > maxima[tid] || (candidate == maxima[tid] && candidate_index < indices[tid]))
+            {
+                maxima[tid] = candidate;
+                indices[tid] = candidate_index;
+            }
+            invalid[tid] |= invalid[tid + stride];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    if (tid == 0)
+    {
+        partials[3 * group] = as_int(maxima[0]);
+        partials[3 * group + 1] = indices[0];
+        partials[3 * group + 2] = invalid[0];
+    }
+}
+
+__kernel void q35a_argmax_reduce(__global const int* partials,
+    __global int* result, int partitions)
+{
+    int tid = get_local_id(0);
+    __local float maxima[128];
+    __local int indices[128], invalid[128];
+    float maximum = -INFINITY;
+    int index = 2147483647, bad = 0;
+    for (int group = tid; group < partitions; group += 128)
+    {
+        float x = as_float(partials[3 * group]);
+        int candidate_index = partials[3 * group + 1];
+        bad |= partials[3 * group + 2];
+        if (x > maximum || (x == maximum && candidate_index < index))
+        {
+            maximum = x;
+            index = candidate_index;
+        }
+    }
+    maxima[tid] = maximum;
+    indices[tid] = index;
+    invalid[tid] = bad;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int stride = 64; stride > 0; stride >>= 1)
+    {
+        if (tid < stride)
+        {
+            float candidate = maxima[tid + stride];
+            int candidate_index = indices[tid + stride];
+            if (candidate > maxima[tid] || (candidate == maxima[tid] && candidate_index < indices[tid]))
+            {
+                maxima[tid] = candidate;
+                indices[tid] = candidate_index;
+            }
+            invalid[tid] |= invalid[tid + stride];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    if (tid == 0) { result[0] = indices[0]; result[1] = invalid[0]; }
+}

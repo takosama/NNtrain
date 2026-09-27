@@ -114,7 +114,20 @@ internal static partial class Qwen35Gpu
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
         ValidateAttentionBuffer(logits, count, nameof(logits));
         using ArcBuffer result = lane.Allocate(2);
-        lane.Run("q35a_argmax", AttentionReductionSize, AttentionReductionSize, logits, result, count);
+        const int partitionSize = 4096;
+        if (lane.Options.Qwen35ParallelArgmax && count >= partitionSize)
+        {
+            int partitions = checked((int)(((long)count + partitionSize - 1) / partitionSize));
+            // Each partition stores the maximum's float bits, its token ID and
+            // a non-finite flag. Only the final two integers leave the device.
+            using ArcBuffer partials = lane.Allocate(checked(partitions * 3));
+            lane.Run("q35a_argmax_partition", (long)partitions * AttentionReductionSize,
+                AttentionReductionSize, logits, partials, count, partitionSize);
+            lane.Run("q35a_argmax_reduce", AttentionReductionSize, AttentionReductionSize,
+                partials, result, partitions);
+        }
+        else
+            lane.Run("q35a_argmax", AttentionReductionSize, AttentionReductionSize, logits, result, count);
         int[] status = new int[2];
         lane.ReadRaw(result, status);
         if (status[1] != 0) throw new ArithmeticException("Qwen3.5 produced non-finite logits.");

@@ -43,13 +43,36 @@ internal sealed class Qwen35LoraMatrix : IDisposable
     }
     internal ArcBuffer Forward(ArcBuffer x, ArcBuffer y, int rows)
     {
+        ArcBuffer z = ProjectA(x, rows);
+        try
+        {
+            Lane.Run("q35l_lora_b", (long)rows * Output, 0, z, B, y, rows, Output, Rank, Scale);
+            return z;
+        }
+        catch { z.Dispose(); throw; }
+    }
+    internal ArcBuffer ProjectA(ArcBuffer x, int rows)
+    {
         ArcBuffer z = Lane.Allocate(checked(rows * Rank));
         try
         {
             if (Lane.Options.Qwen35CooperativeLora)
-                Lane.Run("q35l_lora_a_coop", (long)rows * Rank * 128, 128, x, A, z, rows, Input, Rank);
+            {
+                int reductionSize = Lane.Options.Qwen35LoraReductionSize;
+                if (reductionSize == 16 && Lane.Options.XmxMatrices && Lane.Device.SupportsXmx
+                    && Lane.Device.MinimumSubgroupSize == 16
+                    && Lane.Device.Extensions.Split(' ').Contains("cl_intel_subgroups"))
+                    Lane.Run("q35l_lora_a_sg16", ((long)rows * Rank + 1) / 2 * 32, 32,
+                        x, A, z, rows, Input, Rank);
+                else
+                {
+                    if (reductionSize == 16) reductionSize = 128;
+                    string kernel = reductionSize == 128 ? "q35l_lora_a_coop" : $"q35l_lora_a_coop{reductionSize}";
+                    Lane.Run(kernel, (long)rows * Rank * reductionSize, reductionSize,
+                        x, A, z, rows, Input, Rank);
+                }
+            }
             else Lane.Run("q35l_lora_a", rows * Rank, 0, x, A, z, rows, Input, Rank);
-            Lane.Run("q35l_lora_b", (long)rows * Output, 0, z, B, y, rows, Output, Rank, Scale);
             return z;
         }
         catch { z.Dispose(); throw; }

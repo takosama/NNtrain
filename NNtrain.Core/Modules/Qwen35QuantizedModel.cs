@@ -45,6 +45,8 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
     {
         options ??= new Qwen35ExecutionOptions();
         if (!Enum.IsDefined(options.QuantizedKernel) || options.QueuedKernelLimit is < 16 or > 4096
+            || options.ProjectionWorkgroupSize is not (32 or 64 or 128)
+            || options.LoraReductionSize is not (16 or 128 or 256 or 512 or 1024)
             || options.TrainingTransposeRows is not (1 or 4 or 8 or 16 or 32)
             || options.TrainingNormSplits is < 1 or > 32
             || options.TrainingForwardRows is not (1 or 2 or 4)
@@ -89,7 +91,14 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                 {
                     Qwen35InferenceKernelsOnly = true,
                     Qwen35TrainingKernels = options.LoraTraining,
-                    Qwen35CooperativeLora = options.LoraTraining && options.TrainingCooperativeLora,
+                    Qwen35CooperativeLora = options.LoraTraining ? options.TrainingCooperativeLora : options.InferenceCooperativeLora,
+                    Qwen35ProjectionWorkgroupSize = options.LoraTraining ? 32 : options.ProjectionWorkgroupSize,
+                    Qwen35ParallelArgmax = !options.LoraTraining && options.ParallelArgmax,
+                    Qwen35ParallelDeltaNorm = !options.LoraTraining && options.ParallelDeltaNorm,
+                    Qwen35LoraReductionSize = options.LoraTraining ? 128 : options.LoraReductionSize,
+                    Qwen35UnrollQ4 = !options.LoraTraining && options.UnrollQ4,
+                    Qwen35NativeHalfScale = !options.LoraTraining && options.NativeHalfScale,
+                    CollectKernelTimings = options.LoraTraining || options.CollectKernelTimings,
                     Qwen35CooperativeDelta = options.TrainingCooperativeDelta,
                     DetailedProfiling = options.DetailedProfiling,
                     BufferPoolBytes = options.LoraTraining ? (long)options.TrainingBufferPoolMiB * 1024 * 1024 : WorkspaceReserveBytes,
@@ -273,9 +282,7 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
             ArcBuffer finalNorm = Qwen35Gpu.RmsNorm(lane, hidden!, _dense["output_norm.weight"], 1, d.EmbeddingLength, d.RmsEpsilon);
             hidden!.Dispose(); hidden = finalNorm;
             MoveToLane(ref hidden, ref lane, OutputMatrix.Lane, d.EmbeddingLength);
-            ArcBuffer logits = OutputMatrix.Forward(hidden!, _zeroBias[lane]);
-            try { ApplyLora("output.weight", hidden!, logits, 1); }
-            catch { logits.Dispose(); throw; }
+            ArcBuffer logits = ProjectMatrix("output.weight", OutputMatrix, hidden!);
             _position++;
             return logits;
         }
@@ -296,8 +303,17 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
     }
 
     private ArcBuffer Project(string name, ArcBuffer input)
+        => ProjectMatrix(name, _matrices[name], input);
+
+    private ArcBuffer ProjectMatrix(string name, Matrix matrix, ArcBuffer input)
     {
-        Matrix matrix = _matrices[name];
+        if (_loraFaulted) throw new InvalidOperationException("LoRA optimizer state is invalid; reload the last saved checkpoint in a new model.");
+        if (_options.InferenceFusedLora && !_options.LoraTraining && matrix.SupportsFusedLora
+            && _lora.TryGetValue(name, out var adapter))
+        {
+            using ArcBuffer z = adapter.ProjectA(input, 1);
+            return matrix.ForwardFusedLora(input, _zeroBias[matrix.Lane], z, adapter);
+        }
         ArcBuffer output = matrix.Forward(input, _zeroBias[matrix.Lane]);
         try { ApplyLora(name, input, output, 1); return output; }
         catch { output.Dispose(); throw; }
@@ -451,6 +467,7 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         private readonly Qwen35QuantizedKernel _kernel;
         private readonly int _transposeRows;
         private readonly int _forwardRows;
+        internal bool SupportsFusedLora => _kernel == Qwen35QuantizedKernel.Subgroup;
         internal Matrix(ArcExecutionLane lane, GgufTensorInfo info, byte[] payload, Qwen35QuantizedKernel kernel, int transposeRows, int forwardRows)
         {
             _transposeRows = transposeRows;
@@ -486,7 +503,9 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                         input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
                 else if (_kernel == Qwen35QuantizedKernel.Subgroup)
                     Lane.Run($"q35l_{_quantization}_sg16",
-                        ((long)rows * OutputWidth + 1) / 2 * 32, 32, input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
+                        ((long)rows * OutputWidth + Lane.Options.Qwen35ProjectionWorkgroupSize / 16 - 1)
+                            / (Lane.Options.Qwen35ProjectionWorkgroupSize / 16) * Lane.Options.Qwen35ProjectionWorkgroupSize,
+                        Lane.Options.Qwen35ProjectionWorkgroupSize, input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
                 else if (_kernel == Qwen35QuantizedKernel.Cooperative)
                     Lane.Run2D($"q35l_{_quantization}_coop64",
                         (long)OutputWidth * 64, rows, 64, 1, input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
@@ -494,6 +513,19 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                     Lane.Run(_type is Qwen2Gguf.Q4KType or Qwen2Gguf.Q6KType
                         ? $"qwen_linear_{_quantization}" : $"q35l_{_quantization}_reference",
                         (long)rows * OutputWidth, 0, input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
+                return output;
+            }
+            catch { output.Dispose(); throw; }
+        }
+        internal ArcBuffer ForwardFusedLora(ArcBuffer input, ArcBuffer zeroBias, ArcBuffer z, Qwen35LoraMatrix adapter)
+        {
+            ArcBuffer output = Lane.Allocate(OutputWidth);
+            try
+            {
+                int group = Lane.Options.Qwen35ProjectionWorkgroupSize;
+                Lane.Run($"q35l_{_quantization}_sg16_lora", ((long)OutputWidth + group / 16 - 1) / (group / 16) * group,
+                    group, input, _encoded, zeroBias, output, 1, _inputWidth, OutputWidth,
+                    z, adapter.B, adapter.Rank, adapter.Scale);
                 return output;
             }
             catch { output.Dispose(); throw; }
