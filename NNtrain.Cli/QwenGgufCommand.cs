@@ -96,7 +96,7 @@ internal static class QwenGgufCommand
             output.WriteLine(tokenizer.Decode(promptIds));
             return 0;
         }
-        output.WriteLine("Text inference: quantized matrices on Arc; attention and recurrent state on CPU (Float32).");
+        output.WriteLine("Text inference: quantized weights, attention, recurrent state and greedy sampling on Arc (Float32).");
         using Qwen35QuantizedModel model = Qwen35QuantizedModel.Load(path, devices, output.WriteLine);
         int[] generated = model.GenerateTokenIds(promptIds, maxNewTokens, tokenizer.EosTokenId);
         output.WriteLine($"generated token ids: {string.Join(',', generated.Skip(promptIds.Length))}");
