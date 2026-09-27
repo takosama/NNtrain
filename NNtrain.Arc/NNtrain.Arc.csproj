@@ -21,6 +21,8 @@
     <EmbeddedResource Include="Kernels\qwen35_train_attention.cl" />
     <EmbeddedResource Include="Kernels\qwen35_train_delta.cl" />
     <EmbeddedResource Include="Kernels\qwen35_train_linear.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_train_embedding.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_train_transpose.cl" />
     <EmbeddedResource Include="Kernels\qwen35_delta_fused.cl" />
     <EmbeddedResource Include="Kernels\mix8_16_state.cl" />
     <EmbeddedResource Include="Kernels\loss_head_cached_bf16.cl" />

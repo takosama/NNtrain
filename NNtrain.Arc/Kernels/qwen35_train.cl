@@ -1,4 +1,7 @@
 // Full sequence FP32 adjoints. Each output element has one writer.
+__kernel void q35t_zero_range(__global float* result,int offset,int length) {
+    int i=get_global_id(0);if(i<length)result[offset+i]=0.0f;
+}
 __kernel void q35t_norm2_split(__global const float* x,__global float* result,int n,int offset,int splits) {
     int group=get_group_id(0),tid=get_local_id(0);__local float v[128];float sum=0;
     for(int i=group*128+tid;i<n;i+=128*splits){float g=x[i];sum+=isfinite(g)?g*g:INFINITY;}
@@ -50,6 +53,18 @@ __kernel void q35t_lora_da(__global const float* dz,__global const float* x,__gl
     int rows,int width,int rank) {
     int i=get_global_id(0);if(i>=rank*width)return;int r=i/width,j=i%width;float sum=0;
     for(int t=0;t<rows;t++)sum=fma(dz[t*rank+r],x[t*width+j],sum);da[i]+=sum;
+}
+// First contribution after ZeroGrad: replace stale storage without a separate
+// clear launch. Later backward calls retain the additive kernels above.
+__kernel void q35t_lora_db_write(__global const float* dy,__global const float* z,__global float* db,
+    int rows,int output,int rank,float scale) {
+    int i=get_global_id(0);if(i>=output*rank)return;int o=i/rank,r=i%rank;float sum=0;
+    for(int t=0;t<rows;t++)sum=fma(dy[t*output+o],z[t*rank+r],sum);db[i]=0.0f+sum*scale;
+}
+__kernel void q35t_lora_da_write(__global const float* dz,__global const float* x,__global float* da,
+    int rows,int width,int rank) {
+    int i=get_global_id(0);if(i>=rank*width)return;int r=i/width,j=i%width;float sum=0;
+    for(int t=0;t<rows;t++)sum=fma(dz[t*rank+r],x[t*width+j],sum);da[i]=0.0f+sum;
 }
 __kernel void q35t_lora_dx(__global const float* dz,__global const float* a,__global float* dx,
     int rows,int width,int rank) {

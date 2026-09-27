@@ -10,6 +10,7 @@ internal sealed class Qwen35LoraMatrix : IDisposable
     internal readonly float Scale;
     internal readonly ArcBuffer A, B;
     private ArcBuffer? _da, _db, _ma, _mb, _va, _vb;
+    private bool _gradientsWritten;
     internal long ParameterCount => (long)Rank * (Input + Output);
 
     internal Qwen35LoraMatrix(ArcExecutionLane lane, int input, int output, Qwen35LoraOptions options, Random random)
@@ -84,18 +85,23 @@ internal sealed class Qwen35LoraMatrix : IDisposable
         if (Lane.Options.Qwen35CooperativeLora)
             Lane.Run("q35t_lora_dz_coop", (long)rows * Rank * 128, 128, dy, B, dz, rows, Output, Rank, Scale);
         else Lane.Run("q35t_lora_dz", rows * Rank, 0, dy, B, dz, rows, Output, Rank, Scale);
-        Lane.Run("q35t_lora_db", (long)Output * Rank, 0, dy, z, _db!, rows, Output, Rank, Scale);
-        Lane.Run("q35t_lora_da", (long)Input * Rank, 0, dz, x, _da!, rows, Input, Rank);
+        Lane.Run(_gradientsWritten ? "q35t_lora_db" : "q35t_lora_db_write",
+            (long)Output * Rank, 0, dy, z, _db!, rows, Output, Rank, Scale);
+        Lane.Run(_gradientsWritten ? "q35t_lora_da" : "q35t_lora_da_write",
+            (long)Input * Rank, 0, dz, x, _da!, rows, Input, Rank);
+        _gradientsWritten = true;
         if (dx is not null) Lane.Run("q35t_lora_dx", (long)rows * Input, 0, dz, A, dx, rows, Input, Rank);
     }
     internal void ZeroGrad()
     {
         PrepareTraining();
-        Lane.Run("q35a_zero", Input * Rank, 0, _da!, Input * Rank);
-        Lane.Run("q35a_zero", Output * Rank, 0, _db!, Output * Rank);
+        // The first backward fully writes both arrays. Keep logical zeros for
+        // unused adapters, materializing only if their optimizer consumes them.
+        _gradientsWritten = false;
     }
     internal double GradientSquaredNorm()
     {
+        if (!_gradientsWritten) return 0;
         using ArcBuffer result = Lane.Allocate(1);
         var value = new float[1]; double sum = 0;
         foreach (ArcBuffer buffer in new[] { _da!, _db! })
@@ -107,11 +113,25 @@ internal sealed class Qwen35LoraMatrix : IDisposable
     }
     internal void EnqueueGradientSquaredNorm(ArcBuffer results, int offset, int splits)
     {
+        if (!_gradientsWritten)
+        {
+            Lane.Run("q35t_zero_range", checked(2 * splits), 0, results, offset, checked(2 * splits));
+            return;
+        }
         Lane.Run("q35t_norm2_split", splits * 128, 128, _da!, results, Input * Rank, offset, splits);
         Lane.Run("q35t_norm2_split", splits * 128, 128, _db!, results, Output * Rank, offset + splits, splits);
     }
     internal void Update(Qwen35LoraOptions options, int step, float clip)
     {
+        PrepareTraining();
+        if (!_gradientsWritten)
+        {
+            // A zero gradient still updates existing Adam moments and weight
+            // decay. Never let an unused adapter consume the previous step.
+            Lane.Run("q35a_zero", Input * Rank, 0, _da!, Input * Rank);
+            Lane.Run("q35a_zero", Output * Rank, 0, _db!, Output * Rank);
+            _gradientsWritten = true;
+        }
         float c1 = (float)(1 - Math.Pow(.9, step)), c2 = (float)(1 - Math.Pow(.999, step));
         Lane.Run("q35t_adam", Input * Rank, 0, A, _da!, _ma!, _va!, Input * Rank,
             options.LearningRate, options.WeightDecay, clip, c1, c2);
@@ -138,7 +158,7 @@ internal sealed class Qwen35LoraMatrix : IDisposable
     internal float[][] ReadGradients()
     {
         var a = new float[Input * Rank]; var b = new float[Output * Rank];
-        if (_da is not null) { Lane.Read(_da, a); Lane.Read(_db!, b); }
+        if (_gradientsWritten) { Lane.Read(_da!, a); Lane.Read(_db!, b); }
         return [a, b];
     }
     public void Dispose()

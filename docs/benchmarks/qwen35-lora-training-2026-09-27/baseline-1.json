@@ -1,0 +1,3436 @@
+{
+  "SchemaVersion": 1,
+  "Status": "completed",
+  "StartedUtc": "2026-09-27T10:46:32.137077+00:00",
+  "CommandArguments": [
+    "--model",
+    "<repo>\\models\\Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf",
+    "--data",
+    "<benchmark-workspace>\\tuku-training\\run\\train.jsonl",
+    "--examples",
+    "1,2,3,1,241,174,257,512",
+    "--devices",
+    "0,1",
+    "--options",
+    "<benchmark-workspace>\\lora-training-speed\\official-options.json",
+    "--output",
+    "<benchmark-workspace>\\lora-training-speed\\official-baseline-1.json",
+    "--checkpoint",
+    "<benchmark-workspace>\\lora-training-speed\\official-baseline-1-adapter.bin"
+  ],
+  "Model": {
+    "Path": "<repo>\\models\\Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf",
+    "Bytes": 10173451200,
+    "Sha256": "676db8ccd38035117e705858fd591964005cb0a921b39255b0691d8339a8dfe2"
+  },
+  "Data": {
+    "Path": "<benchmark-workspace>\\tuku-training\\run\\train.jsonl",
+    "Sha256": "690f7853b4b6bec9d97fad3437d23503e772b9e1463d35765ef3d917543578b5",
+    "RecordCount": 512
+  },
+  "Resume": null,
+  "Source": {
+    "Path": "<benchmark-workspace>\\NNtrain-qwen35\\NNtrain.Benchmarks\\Qwen35LoraTrainingProbe.cs",
+    "Sha256": "e25a33a468297aff363279d217f8ba5e8d7190ff88e14cda1602de2f72d76e43",
+    "Note": "Source file observed at runtime; assembly SHA-256 identifies the actual compiled implementation."
+  },
+  "BinarySha256": {
+    "NNtrain.Benchmarks": "9b451f78d348cb88bf1447c2ac3950c6b4fcb7bdda1820ebca033b4d39d91169",
+    "NNtrain.Core": "aedf48ed47c6c0c790b2fb41897b65bf14810799b6b670fd53254369de2199d7",
+    "NNtrain.Arc": "78194691cfd7e80b25c649c24ed7d0db6adf9f60117c2711b1e834a8a6176b2d",
+    "NNtrain.Runtime": "4668ba96044fd752abf258a4d9b9905054ebef4a25b88da0a667765477e1ffee"
+  },
+  "Options": {
+    "QuantizedKernel": "Auto",
+    "LoraTraining": true,
+    "InferenceCooperativeLora": true,
+    "ProjectionWorkgroupSize": 32,
+    "ParallelArgmax": true,
+    "ParallelDeltaNorm": true,
+    "InferenceFusedLora": true,
+    "LoraReductionSize": 1024,
+    "UnrollQ4": false,
+    "NativeHalfScale": true,
+    "CollectKernelTimings": false,
+    "TrainingBatchGradientNorm": true,
+    "TrainingNormSplits": 8,
+    "TrainingCooperativeLora": true,
+    "TrainingCooperativeDelta": true,
+    "TrainingResponseOnlyHead": true,
+    "TrainingTransposeRows": 16,
+    "TrainingForwardRows": 4,
+    "TrainingBufferPoolMiB": 512,
+    "DetailedProfiling": false,
+    "FusedDelta": true,
+    "QueuedKernelLimit": 512
+  },
+  "Runtime": {
+    "Framework": ".NET 10.0.11",
+    "OperatingSystem": "Microsoft Windows 10.0.26200",
+    "Architecture": "X64"
+  },
+  "SelectedExamples": [
+    1,
+    2,
+    3,
+    1,
+    241,
+    174,
+    257,
+    512
+  ],
+  "Samples": [
+    {
+      "Case": 1,
+      "Example": 1,
+      "PhysicalLine": 1,
+      "ExampleSourceSha256": "5a22ded64d263089fd4b04a63e2e57497e15dc0f8c7b35656d2384be8a61ed27",
+      "Tokens": 26,
+      "ResponseStartIndex": 14,
+      "SupervisedTokens": 12,
+      "Step": 1,
+      "Seconds": 3.6166985,
+      "Loss": 6.12617970132851,
+      "GradientNorm": 14.871114399458401,
+      "TrainingTokensPerSecond": 6.912381554613966,
+      "Kernels": [
+        {
+          "Kernel": "q35t_xpose_iq2_s_rows16",
+          "Milliseconds": 1563.995359
+        },
+        {
+          "Kernel": "q35t_linear_iq2_s_rows4",
+          "Milliseconds": 542.507223
+        },
+        {
+          "Kernel": "q35t_xpose_q4_k_rows16",
+          "Milliseconds": 332.00695099999996
+        },
+        {
+          "Kernel": "q35t_linear_q4_k_rows4",
+          "Milliseconds": 121.57518199999998
+        },
+        {
+          "Kernel": "q35t_delta_recur",
+          "Milliseconds": 95.37402099999994
+        },
+        {
+          "Kernel": "q35t_xpose_iq3_s_rows16",
+          "Milliseconds": 93.673844
+        },
+        {
+          "Kernel": "q35t_delta_prepare",
+          "Milliseconds": 88.36502499999996
+        },
+        {
+          "Kernel": "q35t_xpose_q5_k_rows16",
+          "Milliseconds": 66.53177
+        },
+        {
+          "Kernel": "q35l_q5_k_sg16",
+          "Milliseconds": 52.255207999999996
+        },
+        {
+          "Kernel": "q35t_linear_iq3_s_rows4",
+          "Milliseconds": 43.326240000000006
+        },
+        {
+          "Kernel": "q35t_delta_finish",
+          "Milliseconds": 32.42147599999989
+        },
+        {
+          "Kernel": "q35t_norm2_split",
+          "Milliseconds": 17.471451999999992
+        },
+        {
+          "Kernel": "q35t_lora_dz_coop",
+          "Milliseconds": 13.601881999999982
+        },
+        {
+          "Kernel": "q35t_delta_qk_backward_step_cooperative",
+          "Milliseconds": 13.159174000000016
+        },
+        {
+          "Kernel": "q35l_lora_a_coop",
+          "Milliseconds": 10.070210000000007
+        },
+        {
+          "Kernel": "q35t_delta_gate_backward",
+          "Milliseconds": 9.730293
+        },
+        {
+          "Kernel": "q35t_xpose_reduce",
+          "Milliseconds": 6.584279999999996
+        },
+        {
+          "Kernel": "q35t_delta_qk_backward",
+          "Milliseconds": 5.708943999999998
+        },
+        {
+          "Kernel": "q35a_zero",
+          "Milliseconds": 5.499489000000047
+        },
+        {
+          "Kernel": "q35t_lora_da",
+          "Milliseconds": 5.3607510000000005
+        },
+        {
+          "Kernel": "q35l_lora_b",
+          "Milliseconds": 4.797172999999997
+        },
+        {
+          "Kernel": "q35t_lora_db",
+          "Milliseconds": 4.510319000000001
+        },
+        {
+          "Kernel": "q35t_lora_dx",
+          "Milliseconds": 4.2736360000000015
+        },
+        {
+          "Kernel": "q35t_rms_dx",
+          "Milliseconds": 3.6698429999999993
+        },
+        {
+          "Kernel": "q35t_adam",
+          "Milliseconds": 3.538859999999999
+        },
+        {
+          "Kernel": "q35t_delta_gate",
+          "Milliseconds": 3.2411250000000003
+        },
+        {
+          "Kernel": "q35t_delta_qk",
+          "Milliseconds": 3.072166
+        },
+        {
+          "Kernel": "q35a_rms_norm",
+          "Milliseconds": 2.664308
+        },
+        {
+          "Kernel": "q35t_ce_stats",
+          "Milliseconds": 1.029479
+        },
+        {
+          "Kernel": "q35t_delta_conv_backward",
+          "Milliseconds": 1.0140379999999998
+        },
+        {
+          "Kernel": "q35t_silu_dx",
+          "Milliseconds": 0.8013270000000001
+        },
+        {
+          "Kernel": "q35a_silu_multiply",
+          "Milliseconds": 0.7064389999999996
+        },
+        {
+          "Kernel": "q35t_delta_conv",
+          "Milliseconds": 0.5690390000000001
+        },
+        {
+          "Kernel": "q35t_add",
+          "Milliseconds": 0.4268250000000001
+        },
+        {
+          "Kernel": "q35t_attn_key_value_backward",
+          "Milliseconds": 0.404891
+        },
+        {
+          "Kernel": "q35a_add_in_place",
+          "Milliseconds": 0.3648239999999995
+        },
+        {
+          "Kernel": "q35t_attn_scores",
+          "Milliseconds": 0.33916199999999996
+        },
+        {
+          "Kernel": "q35t_attn_probability_backward",
+          "Milliseconds": 0.33655599999999997
+        },
+        {
+          "Kernel": "q35t_attn_output",
+          "Milliseconds": 0.226245
+        },
+        {
+          "Kernel": "q35t_attn_query_backward",
+          "Milliseconds": 0.213224
+        },
+        {
+          "Kernel": "q35t_attn_norm_backward",
+          "Milliseconds": 0.136863
+        },
+        {
+          "Kernel": "q35t_attn_gate_backward",
+          "Milliseconds": 0.126035
+        },
+        {
+          "Kernel": "q35t_attn_rope",
+          "Milliseconds": 0.11508300000000005
+        },
+        {
+          "Kernel": "q35t_ce_grad",
+          "Milliseconds": 0.078333
+        },
+        {
+          "Kernel": "qwen_embedding_q4_k",
+          "Milliseconds": 0.07738500000000001
+        },
+        {
+          "Kernel": "q35t_attn_softmax",
+          "Milliseconds": 0.06874
+        },
+        {
+          "Kernel": "q35t_attn_softmax_backward",
+          "Milliseconds": 0.05291199999999999
+        },
+        {
+          "Kernel": "q35t_add_offset",
+          "Milliseconds": 0.001979
+        }
+      ],
+      "GpuBefore": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 5095013376,
+          "D2HBytes": 0,
+          "AllocatedBytes": 5237965824,
+          "PeakAllocatedBytes": 5237965824,
+          "CachedBytes": 0,
+          "RetiredBytes": 0,
+          "AllocationCount": 986,
+          "NativeAllocatedBytes": 5237965824,
+          "NativeReleasedBytes": 0,
+          "KernelLaunchCount": 345,
+          "PoolHits": 0,
+          "AllocationMilliseconds": 41.998700000000085,
+          "TransferMilliseconds": 1910.6726999999992
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 5175970816,
+          "D2HBytes": 0,
+          "AllocatedBytes": 5318923264,
+          "PeakAllocatedBytes": 5318923264,
+          "CachedBytes": 0,
+          "RetiredBytes": 0,
+          "AllocationCount": 987,
+          "NativeAllocatedBytes": 5318923264,
+          "NativeReleasedBytes": 0,
+          "KernelLaunchCount": 345,
+          "PoolHits": 0,
+          "AllocationMilliseconds": 45.6545000000001,
+          "TransferMilliseconds": 982.6931000000004
+        }
+      ],
+      "GpuAfter": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 5095525476,
+          "D2HBytes": 527872,
+          "AllocatedBytes": 5588149248,
+          "PeakAllocatedBytes": 6445474692,
+          "CachedBytes": 536458272,
+          "RetiredBytes": 0,
+          "AllocationCount": 3721,
+          "NativeAllocatedBytes": 6445490564,
+          "NativeReleasedBytes": 320883044,
+          "KernelLaunchCount": 8628,
+          "PoolHits": 705,
+          "AllocationMilliseconds": 278.0972999999977,
+          "TransferMilliseconds": 2035.7705999999996
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 5176482864,
+          "D2HBytes": 528016,
+          "AllocatedBytes": 5669106688,
+          "PeakAllocatedBytes": 6613021760,
+          "CachedBytes": 535741472,
+          "RetiredBytes": 0,
+          "AllocationCount": 3732,
+          "NativeAllocatedBytes": 6613037632,
+          "NativeReleasedBytes": 408189472,
+          "KernelLaunchCount": 8629,
+          "PoolHits": 659,
+          "AllocationMilliseconds": 280.511999999997,
+          "TransferMilliseconds": 1219.5172000000005
+        }
+      ],
+      "GpuDelta": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 512100,
+          "D2HBytes": 527872,
+          "AllocationCount": 2735,
+          "NativeAllocatedBytes": 1207524740,
+          "NativeReleasedBytes": 320883044,
+          "KernelLaunchCount": 8283,
+          "PoolHits": 705,
+          "AllocationMilliseconds": 236.0985999999976,
+          "TransferMilliseconds": 125.09790000000044
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 512048,
+          "D2HBytes": 528016,
+          "AllocationCount": 2745,
+          "NativeAllocatedBytes": 1294114368,
+          "NativeReleasedBytes": 408189472,
+          "KernelLaunchCount": 8284,
+          "PoolHits": 659,
+          "AllocationMilliseconds": 234.8574999999969,
+          "TransferMilliseconds": 236.82410000000004
+        }
+      ],
+      "DetailedProfile": [
+        {
+          "DeviceIndex": 0,
+          "Entries": null
+        },
+        {
+          "DeviceIndex": 1,
+          "Entries": null
+        }
+      ],
+      "TestId": "3d238e7ac71a33d74848f700faf5204637dc534de5209c75dbf9bb808e94cac6/step-1"
+    },
+    {
+      "Case": 2,
+      "Example": 2,
+      "PhysicalLine": 2,
+      "ExampleSourceSha256": "05d3932321b76ed569c2e0c7d067bf4a32252e814b67f822f7c7acad356a224e",
+      "Tokens": 47,
+      "ResponseStartIndex": 33,
+      "SupervisedTokens": 14,
+      "Step": 2,
+      "Seconds": 5.2575171,
+      "Loss": 4.6488693011924624,
+      "GradientNorm": 9.767518211179484,
+      "TrainingTokensPerSecond": 8.74937715371387,
+      "Kernels": [
+        {
+          "Kernel": "q35t_xpose_iq2_s_rows16",
+          "Milliseconds": 2501.2821210000025
+        },
+        {
+          "Kernel": "q35t_linear_iq2_s_rows4",
+          "Milliseconds": 971.5583759999987
+        },
+        {
+          "Kernel": "q35t_xpose_q4_k_rows16",
+          "Milliseconds": 500.14195499999994
+        },
+        {
+          "Kernel": "q35t_linear_q4_k_rows4",
+          "Milliseconds": 219.875703
+        },
+        {
+          "Kernel": "q35t_delta_recur",
+          "Milliseconds": 174.70932800000006
+        },
+        {
+          "Kernel": "q35t_delta_prepare",
+          "Milliseconds": 164.3245130000003
+        },
+        {
+          "Kernel": "q35t_xpose_iq3_s_rows16",
+          "Milliseconds": 154.04551100000003
+        },
+        {
+          "Kernel": "q35t_linear_iq3_s_rows4",
+          "Milliseconds": 78.90228199999999
+        },
+        {
+          "Kernel": "q35t_xpose_q5_k_rows16",
+          "Milliseconds": 70.33249999999998
+        },
+        {
+          "Kernel": "q35l_q5_k_sg16",
+          "Milliseconds": 60.96541599999999
+        },
+        {
+          "Kernel": "q35t_delta_finish",
+          "Milliseconds": 58.6213059999989
+        },
+        {
+          "Kernel": "q35t_delta_qk_backward_step_cooperative",
+          "Milliseconds": 24.35718900000021
+        },
+        {
+          "Kernel": "q35t_lora_dz_coop",
+          "Milliseconds": 22.689154000000016
+        },
+        {
+          "Kernel": "q35t_norm2_split",
+          "Milliseconds": 21.693964000000044
+        },
+        {
+          "Kernel": "q35l_lora_a_coop",
+          "Milliseconds": 16.695721000000017
+        },
+        {
+          "Kernel": "q35t_xpose_reduce",
+          "Milliseconds": 12.709490999999996
+        },
+        {
+          "Kernel": "q35t_delta_gate_backward",
+          "Milliseconds": 9.906441999999995
+        },
+        {
+          "Kernel": "q35t_lora_da",
+          "Milliseconds": 9.596569000000002
+        },
+        {
+          "Kernel": "q35l_lora_b",
+          "Milliseconds": 7.886137999999992
+        },
+        {
+          "Kernel": "q35t_lora_db",
+          "Milliseconds": 7.767295999999995
+        },
+        {
+          "Kernel": "q35t_lora_dx",
+          "Milliseconds": 6.628948000000017
+        },
+        {
+          "Kernel": "q35t_delta_qk_backward",
+          "Milliseconds": 5.791023999999999
+        },
+        {
+          "Kernel": "q35t_adam",
+          "Milliseconds": 4.780919999999978
+        },
+        {
+          "Kernel": "q35t_rms_dx",
+          "Milliseconds": 3.606931000000002
+        },
+        {
+          "Kernel": "q35a_zero",
+          "Milliseconds": 3.353309999999958
+        },
+        {
+          "Kernel": "q35t_delta_gate",
+          "Milliseconds": 3.241543
+        },
+        {
+          "Kernel": "q35a_rms_norm",
+          "Milliseconds": 2.7179480000000007
+        },
+        {
+          "Kernel": "q35t_delta_qk",
+          "Milliseconds": 2.1900869999999983
+        },
+        {
+          "Kernel": "q35t_delta_conv_backward",
+          "Milliseconds": 1.8464389999999993
+        },
+        {
+          "Kernel": "q35t_silu_dx",
+          "Milliseconds": 1.590494
+        },
+        {
+          "Kernel": "q35a_silu_multiply",
+          "Milliseconds": 1.2807010000000005
+        },
+        {
+          "Kernel": "q35t_ce_stats",
+          "Milliseconds": 1.03677
+        },
+        {
+          "Kernel": "q35t_delta_conv",
+          "Milliseconds": 0.9957069999999997
+        },
+        {
+          "Kernel": "q35t_attn_key_value_backward",
+          "Milliseconds": 0.7925969999999999
+        },
+        {
+          "Kernel": "q35t_add",
+          "Milliseconds": 0.699008
+        },
+        {
+          "Kernel": "q35t_attn_scores",
+          "Milliseconds": 0.6663469999999998
+        },
+        {
+          "Kernel": "q35t_attn_probability_backward",
+          "Milliseconds": 0.6630139999999999
+        },
+        {
+          "Kernel": "q35t_attn_output",
+          "Milliseconds": 0.5358259999999999
+        },
+        {
+          "Kernel": "q35a_add_in_place",
+          "Milliseconds": 0.5202430000000008
+        },
+        {
+          "Kernel": "q35t_attn_query_backward",
+          "Milliseconds": 0.478117
+        },
+        {
+          "Kernel": "q35t_attn_norm_backward",
+          "Milliseconds": 0.2051909999999999
+        },
+        {
+          "Kernel": "q35t_attn_gate_backward",
+          "Milliseconds": 0.201557
+        },
+        {
+          "Kernel": "qwen_embedding_q4_k",
+          "Milliseconds": 0.13633199999999998
+        },
+        {
+          "Kernel": "q35t_attn_rope",
+          "Milliseconds": 0.12727999999999995
+        },
+        {
+          "Kernel": "q35t_attn_softmax",
+          "Milliseconds": 0.11686400000000002
+        },
+        {
+          "Kernel": "q35t_attn_softmax_backward",
+          "Milliseconds": 0.09582499999999997
+        },
+        {
+          "Kernel": "q35t_ce_grad",
+          "Milliseconds": 0.09374999999999999
+        },
+        {
+          "Kernel": "q35t_add_offset",
+          "Milliseconds": 0.0022909999999999996
+        }
+      ],
+      "GpuBefore": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 5095525476,
+          "D2HBytes": 527872,
+          "AllocatedBytes": 5588149248,
+          "PeakAllocatedBytes": 6445474692,
+          "CachedBytes": 536458272,
+          "RetiredBytes": 0,
+          "AllocationCount": 3721,
+          "NativeAllocatedBytes": 6445490564,
+          "NativeReleasedBytes": 320883044,
+          "KernelLaunchCount": 8628,
+          "PoolHits": 705,
+          "AllocationMilliseconds": 278.0972999999977,
+          "TransferMilliseconds": 2035.7705999999996
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 5176482864,
+          "D2HBytes": 528016,
+          "AllocatedBytes": 5669106688,
+          "PeakAllocatedBytes": 6613021760,
+          "CachedBytes": 535741472,
+          "RetiredBytes": 0,
+          "AllocationCount": 3732,
+          "NativeAllocatedBytes": 6613037632,
+          "NativeReleasedBytes": 408189472,
+          "KernelLaunchCount": 8629,
+          "PoolHits": 659,
+          "AllocationMilliseconds": 280.511999999997,
+          "TransferMilliseconds": 1219.5172000000005
+        }
+      ],
+      "GpuAfter": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 5096467740,
+          "D2HBytes": 1485824,
+          "AllocatedBytes": 5588149248,
+          "PeakAllocatedBytes": 7498696356,
+          "CachedBytes": 536789504,
+          "RetiredBytes": 0,
+          "AllocationCount": 4968,
+          "NativeAllocatedBytes": 8018435272,
+          "NativeReleasedBytes": 1893496520,
+          "KernelLaunchCount": 16956,
+          "PoolHits": 1452,
+          "AllocationMilliseconds": 390.84049999998956,
+          "TransferMilliseconds": 2227.6504999999984
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 5177425000,
+          "D2HBytes": 1486136,
+          "AllocatedBytes": 5669106688,
+          "PeakAllocatedBytes": 7612590976,
+          "CachedBytes": 536789504,
+          "RetiredBytes": 0,
+          "AllocationCount": 4989,
+          "NativeAllocatedBytes": 8288730720,
+          "NativeReleasedBytes": 2082834528,
+          "KernelLaunchCount": 16937,
+          "PoolHits": 1318,
+          "AllocationMilliseconds": 390.6281999999896,
+          "TransferMilliseconds": 1541.8089000000004
+        }
+      ],
+      "GpuDelta": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 942264,
+          "D2HBytes": 957952,
+          "AllocationCount": 1247,
+          "NativeAllocatedBytes": 1572944708,
+          "NativeReleasedBytes": 1572613476,
+          "KernelLaunchCount": 8328,
+          "PoolHits": 747,
+          "AllocationMilliseconds": 112.74319999999187,
+          "TransferMilliseconds": 191.87989999999877
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 942136,
+          "D2HBytes": 958120,
+          "AllocationCount": 1257,
+          "NativeAllocatedBytes": 1675693088,
+          "NativeReleasedBytes": 1674645056,
+          "KernelLaunchCount": 8308,
+          "PoolHits": 659,
+          "AllocationMilliseconds": 110.1161999999926,
+          "TransferMilliseconds": 322.2917
+        }
+      ],
+      "DetailedProfile": [
+        {
+          "DeviceIndex": 0,
+          "Entries": null
+        },
+        {
+          "DeviceIndex": 1,
+          "Entries": null
+        }
+      ],
+      "TestId": "3d238e7ac71a33d74848f700faf5204637dc534de5209c75dbf9bb808e94cac6/step-2"
+    },
+    {
+      "Case": 3,
+      "Example": 3,
+      "PhysicalLine": 3,
+      "ExampleSourceSha256": "7af3a8505f6cd621a74b8f7fdf76f4c8a795a7adefef2bf8c1beff1051476b7f",
+      "Tokens": 22,
+      "ResponseStartIndex": 12,
+      "SupervisedTokens": 10,
+      "Step": 3,
+      "Seconds": 2.9393835,
+      "Loss": 6.942337736487389,
+      "GradientNorm": 12.975338644918866,
+      "TrainingTokensPerSecond": 7.144355270416399,
+      "Kernels": [
+        {
+          "Kernel": "q35t_xpose_iq2_s_rows16",
+          "Milliseconds": 1447.1432680000034
+        },
+        {
+          "Kernel": "q35t_linear_iq2_s_rows4",
+          "Milliseconds": 458.37076999999954
+        },
+        {
+          "Kernel": "q35t_xpose_q4_k_rows16",
+          "Milliseconds": 316.2323700000002
+        },
+        {
+          "Kernel": "q35t_linear_q4_k_rows4",
+          "Milliseconds": 102.48789
+        },
+        {
+          "Kernel": "q35t_xpose_iq3_s_rows16",
+          "Milliseconds": 87.01592800000006
+        },
+        {
+          "Kernel": "q35t_delta_recur",
+          "Milliseconds": 80.38735399999979
+        },
+        {
+          "Kernel": "q35t_delta_prepare",
+          "Milliseconds": 72.80489800000035
+        },
+        {
+          "Kernel": "q35t_xpose_q5_k_rows16",
+          "Milliseconds": 62.61177000000001
+        },
+        {
+          "Kernel": "q35l_q5_k_sg16",
+          "Milliseconds": 43.54822899999999
+        },
+        {
+          "Kernel": "q35t_linear_iq3_s_rows4",
+          "Milliseconds": 36.645302000000015
+        },
+        {
+          "Kernel": "q35t_delta_finish",
+          "Milliseconds": 26.59917499999844
+        },
+        {
+          "Kernel": "q35t_delta_gate_backward",
+          "Milliseconds": 21.51601999999999
+        },
+        {
+          "Kernel": "q35t_norm2_split",
+          "Milliseconds": 21.503135
+        },
+        {
+          "Kernel": "q35t_lora_dz_coop",
+          "Milliseconds": 13.62104200000001
+        },
+        {
+          "Kernel": "q35t_delta_qk_backward_step_cooperative",
+          "Milliseconds": 10.984064000000117
+        },
+        {
+          "Kernel": "q35l_lora_a_coop",
+          "Milliseconds": 10.0279180000001
+        },
+        {
+          "Kernel": "q35t_delta_qk_backward",
+          "Milliseconds": 5.702581
+        },
+        {
+          "Kernel": "q35t_xpose_reduce",
+          "Milliseconds": 5.527206000000039
+        },
+        {
+          "Kernel": "q35t_adam",
+          "Milliseconds": 5.0480419999999455
+        },
+        {
+          "Kernel": "q35t_delta_gate",
+          "Milliseconds": 5.028313000000001
+        },
+        {
+          "Kernel": "q35t_lora_da",
+          "Milliseconds": 4.617497000000014
+        },
+        {
+          "Kernel": "q35l_lora_b",
+          "Milliseconds": 4.200426999999998
+        },
+        {
+          "Kernel": "q35t_lora_db",
+          "Milliseconds": 3.931143999999998
+        },
+        {
+          "Kernel": "q35t_lora_dx",
+          "Milliseconds": 3.780663999999998
+        },
+        {
+          "Kernel": "q35t_rms_dx",
+          "Milliseconds": 3.695466999999999
+        },
+        {
+          "Kernel": "q35t_delta_qk",
+          "Milliseconds": 2.7719580000000024
+        },
+        {
+          "Kernel": "q35a_zero",
+          "Milliseconds": 2.7555980000000737
+        },
+        {
+          "Kernel": "q35a_rms_norm",
+          "Milliseconds": 2.6770159999999956
+        },
+        {
+          "Kernel": "q35t_ce_stats",
+          "Milliseconds": 0.990729
+        },
+        {
+          "Kernel": "q35t_delta_conv_backward",
+          "Milliseconds": 0.8512340000000003
+        },
+        {
+          "Kernel": "q35t_silu_dx",
+          "Milliseconds": 0.6515350000000013
+        },
+        {
+          "Kernel": "q35a_silu_multiply",
+          "Milliseconds": 0.6042429999999976
+        },
+        {
+          "Kernel": "q35t_delta_conv",
+          "Milliseconds": 0.4933129999999999
+        },
+        {
+          "Kernel": "q35t_add",
+          "Milliseconds": 0.3820290000000033
+        },
+        {
+          "Kernel": "q35t_attn_scores",
+          "Milliseconds": 0.34238999999999975
+        },
+        {
+          "Kernel": "q35t_attn_key_value_backward",
+          "Milliseconds": 0.3406169999999995
+        },
+        {
+          "Kernel": "q35t_attn_probability_backward",
+          "Milliseconds": 0.3399939999999997
+        },
+        {
+          "Kernel": "q35a_add_in_place",
+          "Milliseconds": 0.3280399999999939
+        },
+        {
+          "Kernel": "q35t_attn_output",
+          "Milliseconds": 0.18874400000000013
+        },
+        {
+          "Kernel": "q35t_attn_query_backward",
+          "Milliseconds": 0.17582699999999996
+        },
+        {
+          "Kernel": "q35t_attn_norm_backward",
+          "Milliseconds": 0.13175999999999993
+        },
+        {
+          "Kernel": "q35t_attn_gate_backward",
+          "Milliseconds": 0.11926400000000004
+        },
+        {
+          "Kernel": "q35t_attn_rope",
+          "Milliseconds": 0.11372999999999989
+        },
+        {
+          "Kernel": "q35t_attn_softmax",
+          "Milliseconds": 0.06655399999999997
+        },
+        {
+          "Kernel": "qwen_embedding_q4_k",
+          "Milliseconds": 0.06499299999999986
+        },
+        {
+          "Kernel": "q35t_ce_grad",
+          "Milliseconds": 0.06301999999999999
+        },
+        {
+          "Kernel": "q35t_attn_softmax_backward",
+          "Milliseconds": 0.05155699999999999
+        },
+        {
+          "Kernel": "q35t_add_offset",
+          "Milliseconds": 0.001979
+        }
+      ],
+      "GpuBefore": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 5096467740,
+          "D2HBytes": 1485824,
+          "AllocatedBytes": 5588149248,
+          "PeakAllocatedBytes": 7498696356,
+          "CachedBytes": 536789504,
+          "RetiredBytes": 0,
+          "AllocationCount": 4968,
+          "NativeAllocatedBytes": 8018435272,
+          "NativeReleasedBytes": 1893496520,
+          "KernelLaunchCount": 16956,
+          "PoolHits": 1452,
+          "AllocationMilliseconds": 390.84049999998956,
+          "TransferMilliseconds": 2227.6504999999984
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 5177425000,
+          "D2HBytes": 1486136,
+          "AllocatedBytes": 5669106688,
+          "PeakAllocatedBytes": 7612590976,
+          "CachedBytes": 536789504,
+          "RetiredBytes": 0,
+          "AllocationCount": 4989,
+          "NativeAllocatedBytes": 8288730720,
+          "NativeReleasedBytes": 2082834528,
+          "KernelLaunchCount": 16937,
+          "PoolHits": 1318,
+          "AllocationMilliseconds": 390.6281999999896,
+          "TransferMilliseconds": 1541.8089000000004
+        }
+      ],
+      "GpuAfter": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 5096897904,
+          "D2HBytes": 1931776,
+          "AllocatedBytes": 5588149248,
+          "PeakAllocatedBytes": 7498696356,
+          "CachedBytes": 536673728,
+          "RetiredBytes": 0,
+          "AllocationCount": 6215,
+          "NativeAllocatedBytes": 8739557580,
+          "NativeReleasedBytes": 2614734604,
+          "KernelLaunchCount": 23459,
+          "PoolHits": 2149,
+          "AllocationMilliseconds": 500.2104999999832,
+          "TransferMilliseconds": 2324.3908999999976
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 5177855120,
+          "D2HBytes": 1932208,
+          "AllocatedBytes": 5669106688,
+          "PeakAllocatedBytes": 7612590976,
+          "CachedBytes": 536587712,
+          "RetiredBytes": 0,
+          "AllocationCount": 6246,
+          "NativeAllocatedBytes": 9082024704,
+          "NativeReleasedBytes": 2876330304,
+          "KernelLaunchCount": 23445,
+          "PoolHits": 1977,
+          "AllocationMilliseconds": 500.080299999983,
+          "TransferMilliseconds": 1756.8418000000004
+        }
+      ],
+      "GpuDelta": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 430164,
+          "D2HBytes": 445952,
+          "AllocationCount": 1247,
+          "NativeAllocatedBytes": 721122308,
+          "NativeReleasedBytes": 721238084,
+          "KernelLaunchCount": 6503,
+          "PoolHits": 697,
+          "AllocationMilliseconds": 109.36999999999364,
+          "TransferMilliseconds": 96.74039999999923
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 430120,
+          "D2HBytes": 446072,
+          "AllocationCount": 1257,
+          "NativeAllocatedBytes": 793293984,
+          "NativeReleasedBytes": 793495776,
+          "KernelLaunchCount": 6508,
+          "PoolHits": 659,
+          "AllocationMilliseconds": 109.45209999999344,
+          "TransferMilliseconds": 215.03289999999993
+        }
+      ],
+      "DetailedProfile": [
+        {
+          "DeviceIndex": 0,
+          "Entries": null
+        },
+        {
+          "DeviceIndex": 1,
+          "Entries": null
+        }
+      ],
+      "TestId": "3d238e7ac71a33d74848f700faf5204637dc534de5209c75dbf9bb808e94cac6/step-3"
+    },
+    {
+      "Case": 4,
+      "Example": 1,
+      "PhysicalLine": 1,
+      "ExampleSourceSha256": "5a22ded64d263089fd4b04a63e2e57497e15dc0f8c7b35656d2384be8a61ed27",
+      "Tokens": 26,
+      "ResponseStartIndex": 14,
+      "SupervisedTokens": 12,
+      "Step": 4,
+      "Seconds": 3.2562906,
+      "Loss": 2.9581686966121197,
+      "GradientNorm": 8.035403342317956,
+      "TrainingTokensPerSecond": 7.677447461230887,
+      "Kernels": [
+        {
+          "Kernel": "q35t_xpose_iq2_s_rows16",
+          "Milliseconds": 1564.457030999999
+        },
+        {
+          "Kernel": "q35t_linear_iq2_s_rows4",
+          "Milliseconds": 541.8958729999986
+        },
+        {
+          "Kernel": "q35t_xpose_q4_k_rows16",
+          "Milliseconds": 332.14539000000013
+        },
+        {
+          "Kernel": "q35t_linear_q4_k_rows4",
+          "Milliseconds": 121.77007400000002
+        },
+        {
+          "Kernel": "q35t_delta_recur",
+          "Milliseconds": 95.41870899999992
+        },
+        {
+          "Kernel": "q35t_xpose_iq3_s_rows16",
+          "Milliseconds": 93.70842799999991
+        },
+        {
+          "Kernel": "q35t_delta_prepare",
+          "Milliseconds": 88.61993799999976
+        },
+        {
+          "Kernel": "q35t_xpose_q5_k_rows16",
+          "Milliseconds": 66.39739499999999
+        },
+        {
+          "Kernel": "q35l_q5_k_sg16",
+          "Milliseconds": 52.25385399999999
+        },
+        {
+          "Kernel": "q35t_linear_iq3_s_rows4",
+          "Milliseconds": 43.181759
+        },
+        {
+          "Kernel": "q35t_delta_finish",
+          "Milliseconds": 32.027851000000766
+        },
+        {
+          "Kernel": "q35t_norm2_split",
+          "Milliseconds": 21.666048999999788
+        },
+        {
+          "Kernel": "q35t_lora_dz_coop",
+          "Milliseconds": 13.568343999999982
+        },
+        {
+          "Kernel": "q35t_delta_qk_backward_step_cooperative",
+          "Milliseconds": 13.302425000000127
+        },
+        {
+          "Kernel": "q35l_lora_a_coop",
+          "Milliseconds": 10.101244000000186
+        },
+        {
+          "Kernel": "q35t_delta_gate_backward",
+          "Milliseconds": 9.733729000000011
+        },
+        {
+          "Kernel": "q35t_xpose_reduce",
+          "Milliseconds": 6.669798999999973
+        },
+        {
+          "Kernel": "q35t_delta_qk_backward",
+          "Milliseconds": 5.723628000000012
+        },
+        {
+          "Kernel": "q35t_lora_da",
+          "Milliseconds": 5.411372000000014
+        },
+        {
+          "Kernel": "q35t_adam",
+          "Milliseconds": 5.177925000000062
+        },
+        {
+          "Kernel": "q35l_lora_b",
+          "Milliseconds": 4.802073
+        },
+        {
+          "Kernel": "q35t_lora_db",
+          "Milliseconds": 4.568132000000027
+        },
+        {
+          "Kernel": "q35t_lora_dx",
+          "Milliseconds": 4.278334000000051
+        },
+        {
+          "Kernel": "q35t_rms_dx",
+          "Milliseconds": 3.6749439999999893
+        },
+        {
+          "Kernel": "q35t_delta_gate",
+          "Milliseconds": 3.2461260000000003
+        },
+        {
+          "Kernel": "q35t_delta_qk",
+          "Milliseconds": 3.068001000000004
+        },
+        {
+          "Kernel": "q35a_zero",
+          "Milliseconds": 2.8797770000001
+        },
+        {
+          "Kernel": "q35a_rms_norm",
+          "Milliseconds": 2.669931999999992
+        },
+        {
+          "Kernel": "q35t_ce_stats",
+          "Milliseconds": 1.0419790000000004
+        },
+        {
+          "Kernel": "q35t_delta_conv_backward",
+          "Milliseconds": 1.0153920000000012
+        },
+        {
+          "Kernel": "q35t_silu_dx",
+          "Milliseconds": 0.7998750000000001
+        },
+        {
+          "Kernel": "q35a_silu_multiply",
+          "Milliseconds": 0.7208110000000016
+        },
+        {
+          "Kernel": "q35t_delta_conv",
+          "Milliseconds": 0.5737290000000006
+        },
+        {
+          "Kernel": "q35t_add",
+          "Milliseconds": 0.4312000000000036
+        },
+        {
+          "Kernel": "q35t_attn_key_value_backward",
+          "Milliseconds": 0.407181
+        },
+        {
+          "Kernel": "q35a_add_in_place",
+          "Milliseconds": 0.36451099999999004
+        },
+        {
+          "Kernel": "q35t_attn_probability_backward",
+          "Milliseconds": 0.33853699999999987
+        },
+        {
+          "Kernel": "q35t_attn_scores",
+          "Milliseconds": 0.3371799999999996
+        },
+        {
+          "Kernel": "q35t_attn_output",
+          "Milliseconds": 0.22343000000000035
+        },
+        {
+          "Kernel": "q35t_attn_query_backward",
+          "Milliseconds": 0.21134900000000023
+        },
+        {
+          "Kernel": "q35t_attn_norm_backward",
+          "Milliseconds": 0.13686599999999982
+        },
+        {
+          "Kernel": "q35t_attn_gate_backward",
+          "Milliseconds": 0.1300969999999999
+        },
+        {
+          "Kernel": "q35t_attn_rope",
+          "Milliseconds": 0.11487599999999987
+        },
+        {
+          "Kernel": "q35t_ce_grad",
+          "Milliseconds": 0.07708299999999998
+        },
+        {
+          "Kernel": "qwen_embedding_q4_k",
+          "Milliseconds": 0.07572099999999982
+        },
+        {
+          "Kernel": "q35t_attn_softmax",
+          "Milliseconds": 0.06811400000000001
+        },
+        {
+          "Kernel": "q35t_attn_softmax_backward",
+          "Milliseconds": 0.053536999999999973
+        },
+        {
+          "Kernel": "q35t_add_offset",
+          "Milliseconds": 0.0025000000000000005
+        }
+      ],
+      "GpuBefore": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 5096897904,
+          "D2HBytes": 1931776,
+          "AllocatedBytes": 5588149248,
+          "PeakAllocatedBytes": 7498696356,
+          "CachedBytes": 536673728,
+          "RetiredBytes": 0,
+          "AllocationCount": 6215,
+          "NativeAllocatedBytes": 8739557580,
+          "NativeReleasedBytes": 2614734604,
+          "KernelLaunchCount": 23459,
+          "PoolHits": 2149,
+          "AllocationMilliseconds": 500.2104999999832,
+          "TransferMilliseconds": 2324.3908999999976
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 5177855120,
+          "D2HBytes": 1932208,
+          "AllocatedBytes": 5669106688,
+          "PeakAllocatedBytes": 7612590976,
+          "CachedBytes": 536587712,
+          "RetiredBytes": 0,
+          "AllocationCount": 6246,
+          "NativeAllocatedBytes": 9082024704,
+          "NativeReleasedBytes": 2876330304,
+          "KernelLaunchCount": 23445,
+          "PoolHits": 1977,
+          "AllocationMilliseconds": 500.080299999983,
+          "TransferMilliseconds": 1756.8418000000004
+        }
+      ],
+      "GpuAfter": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 5097410004,
+          "D2HBytes": 2459648,
+          "AllocatedBytes": 5588149248,
+          "PeakAllocatedBytes": 7498696356,
+          "CachedBytes": 536458272,
+          "RetiredBytes": 0,
+          "AllocationCount": 7462,
+          "NativeAllocatedBytes": 9596898896,
+          "NativeReleasedBytes": 3472291376,
+          "KernelLaunchCount": 30254,
+          "PoolHits": 2854,
+          "AllocationMilliseconds": 609.0487999999716,
+          "TransferMilliseconds": 2436.7324999999973
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 5178367168,
+          "D2HBytes": 2460224,
+          "AllocatedBytes": 5669106688,
+          "PeakAllocatedBytes": 7612590976,
+          "CachedBytes": 535741472,
+          "RetiredBytes": 0,
+          "AllocationCount": 7503,
+          "NativeAllocatedBytes": 10025955648,
+          "NativeReleasedBytes": 3821107488,
+          "KernelLaunchCount": 30241,
+          "PoolHits": 2636,
+          "AllocationMilliseconds": 612.0919999999728,
+          "TransferMilliseconds": 2002.1641000000004
+        }
+      ],
+      "GpuDelta": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 512100,
+          "D2HBytes": 527872,
+          "AllocationCount": 1247,
+          "NativeAllocatedBytes": 857341316,
+          "NativeReleasedBytes": 857556772,
+          "KernelLaunchCount": 6795,
+          "PoolHits": 705,
+          "AllocationMilliseconds": 108.83829999998841,
+          "TransferMilliseconds": 112.34159999999974
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 512048,
+          "D2HBytes": 528016,
+          "AllocationCount": 1257,
+          "NativeAllocatedBytes": 943930944,
+          "NativeReleasedBytes": 944777184,
+          "KernelLaunchCount": 6796,
+          "PoolHits": 659,
+          "AllocationMilliseconds": 112.01169999998979,
+          "TransferMilliseconds": 245.32230000000004
+        }
+      ],
+      "DetailedProfile": [
+        {
+          "DeviceIndex": 0,
+          "Entries": null
+        },
+        {
+          "DeviceIndex": 1,
+          "Entries": null
+        }
+      ],
+      "TestId": "3d238e7ac71a33d74848f700faf5204637dc534de5209c75dbf9bb808e94cac6/step-4"
+    },
+    {
+      "Case": 5,
+      "Example": 241,
+      "PhysicalLine": 241,
+      "ExampleSourceSha256": "20190862ad277d2ab0be5c572a22400f7667795f79b06d10e783220932cde79b",
+      "Tokens": 69,
+      "ResponseStartIndex": 38,
+      "SupervisedTokens": 31,
+      "Step": 5,
+      "Seconds": 7.7820119,
+      "Loss": 5.270130332777626,
+      "GradientNorm": 7.32293511799819,
+      "TrainingTokensPerSecond": 8.738100233437063,
+      "Kernels": [
+        {
+          "Kernel": "q35t_xpose_iq2_s_rows16",
+          "Milliseconds": 3683.4874340000033
+        },
+        {
+          "Kernel": "q35t_linear_iq2_s_rows4",
+          "Milliseconds": 1422.9034680000013
+        },
+        {
+          "Kernel": "q35t_xpose_q4_k_rows16",
+          "Milliseconds": 732.3213280000004
+        },
+        {
+          "Kernel": "q35t_linear_q4_k_rows4",
+          "Milliseconds": 322.81809699999985
+        },
+        {
+          "Kernel": "q35t_delta_recur",
+          "Milliseconds": 258.9198500000003
+        },
+        {
+          "Kernel": "q35t_delta_prepare",
+          "Milliseconds": 243.78811300000126
+        },
+        {
+          "Kernel": "q35t_xpose_iq3_s_rows16",
+          "Milliseconds": 218.96218099999987
+        },
+        {
+          "Kernel": "q35t_xpose_q5_k_rows16",
+          "Milliseconds": 145.88343699999996
+        },
+        {
+          "Kernel": "q35l_q5_k_sg16",
+          "Milliseconds": 134.97875
+        },
+        {
+          "Kernel": "q35t_linear_iq3_s_rows4",
+          "Milliseconds": 118.63769699999995
+        },
+        {
+          "Kernel": "q35t_delta_finish",
+          "Milliseconds": 86.60582000000579
+        },
+        {
+          "Kernel": "q35t_delta_qk_backward_step_cooperative",
+          "Milliseconds": 35.8789299999945
+        },
+        {
+          "Kernel": "q35t_lora_dz_coop",
+          "Milliseconds": 23.327412000000137
+        },
+        {
+          "Kernel": "q35t_norm2_split",
+          "Milliseconds": 21.683747000000054
+        },
+        {
+          "Kernel": "q35t_xpose_reduce",
+          "Milliseconds": 19.680826999999965
+        },
+        {
+          "Kernel": "q35l_lora_a_coop",
+          "Milliseconds": 17.194578999999955
+        },
+        {
+          "Kernel": "q35t_lora_da",
+          "Milliseconds": 13.851250999999927
+        },
+        {
+          "Kernel": "q35l_lora_b",
+          "Milliseconds": 11.138856999999987
+        },
+        {
+          "Kernel": "q35t_lora_db",
+          "Milliseconds": 10.760949
+        },
+        {
+          "Kernel": "q35t_delta_gate_backward",
+          "Milliseconds": 10.41862300000001
+        },
+        {
+          "Kernel": "q35t_lora_dx",
+          "Milliseconds": 9.21635599999998
+        },
+        {
+          "Kernel": "q35t_delta_qk_backward",
+          "Milliseconds": 5.851120999999992
+        },
+        {
+          "Kernel": "q35t_adam",
+          "Milliseconds": 5.317928000000059
+        },
+        {
+          "Kernel": "q35a_zero",
+          "Milliseconds": 4.06610700000018
+        },
+        {
+          "Kernel": "q35t_rms_dx",
+          "Milliseconds": 3.6213060000000077
+        },
+        {
+          "Kernel": "q35t_delta_gate",
+          "Milliseconds": 3.3672729999999937
+        },
+        {
+          "Kernel": "q35t_silu_dx",
+          "Milliseconds": 2.8152840000000015
+        },
+        {
+          "Kernel": "q35a_rms_norm",
+          "Milliseconds": 2.756175999999993
+        },
+        {
+          "Kernel": "q35t_delta_conv_backward",
+          "Milliseconds": 2.7266499999999994
+        },
+        {
+          "Kernel": "q35t_delta_qk",
+          "Milliseconds": 2.2057079999999996
+        },
+        {
+          "Kernel": "q35a_silu_multiply",
+          "Milliseconds": 1.8576829999999984
+        },
+        {
+          "Kernel": "q35t_attn_key_value_backward",
+          "Milliseconds": 1.5432240000000004
+        },
+        {
+          "Kernel": "q35t_delta_conv",
+          "Milliseconds": 1.446954999999999
+        },
+        {
+          "Kernel": "q35t_ce_stats",
+          "Milliseconds": 1.3286449999999999
+        },
+        {
+          "Kernel": "q35t_attn_probability_backward",
+          "Milliseconds": 1.264472
+        },
+        {
+          "Kernel": "q35t_attn_scores",
+          "Milliseconds": 1.2558269999999996
+        },
+        {
+          "Kernel": "q35t_attn_output",
+          "Milliseconds": 1.038847
+        },
+        {
+          "Kernel": "q35t_add",
+          "Milliseconds": 0.9682750000000002
+        },
+        {
+          "Kernel": "q35t_attn_query_backward",
+          "Milliseconds": 0.9113479999999998
+        },
+        {
+          "Kernel": "q35a_add_in_place",
+          "Milliseconds": 0.6689920000000029
+        },
+        {
+          "Kernel": "q35t_attn_gate_backward",
+          "Milliseconds": 0.2784310000000001
+        },
+        {
+          "Kernel": "q35t_attn_norm_backward",
+          "Milliseconds": 0.26925999999999983
+        },
+        {
+          "Kernel": "q35t_ce_grad",
+          "Milliseconds": 0.20572899999999994
+        },
+        {
+          "Kernel": "qwen_embedding_q4_k",
+          "Milliseconds": 0.19195199999999996
+        },
+        {
+          "Kernel": "q35t_attn_softmax",
+          "Milliseconds": 0.16676100000000005
+        },
+        {
+          "Kernel": "q35t_attn_rope",
+          "Milliseconds": 0.16060399999999975
+        },
+        {
+          "Kernel": "q35t_attn_softmax_backward",
+          "Milliseconds": 0.13239100000000004
+        },
+        {
+          "Kernel": "q35t_add_offset",
+          "Milliseconds": 0.003644999999999999
+        }
+      ],
+      "GpuBefore": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 5097410004,
+          "D2HBytes": 2459648,
+          "AllocatedBytes": 5588149248,
+          "PeakAllocatedBytes": 7498696356,
+          "CachedBytes": 536458272,
+          "RetiredBytes": 0,
+          "AllocationCount": 7462,
+          "NativeAllocatedBytes": 9596898896,
+          "NativeReleasedBytes": 3472291376,
+          "KernelLaunchCount": 30254,
+          "PoolHits": 2854,
+          "AllocationMilliseconds": 609.0487999999716,
+          "TransferMilliseconds": 2436.7324999999973
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 5178367168,
+          "D2HBytes": 2460224,
+          "AllocatedBytes": 5669106688,
+          "PeakAllocatedBytes": 7612590976,
+          "CachedBytes": 535741472,
+          "RetiredBytes": 0,
+          "AllocationCount": 7503,
+          "NativeAllocatedBytes": 10025955648,
+          "NativeReleasedBytes": 3821107488,
+          "KernelLaunchCount": 30241,
+          "PoolHits": 2636,
+          "AllocationMilliseconds": 612.0919999999728,
+          "TransferMilliseconds": 2002.1641000000004
+        }
+      ],
+      "GpuAfter": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 5098802916,
+          "D2HBytes": 3868160,
+          "AllocatedBytes": 5588149248,
+          "PeakAllocatedBytes": 8156788644,
+          "CachedBytes": 536745856,
+          "RetiredBytes": 0,
+          "AllocationCount": 8709,
+          "NativeAllocatedBytes": 11920340692,
+          "NativeReleasedBytes": 5795445588,
+          "KernelLaunchCount": 40188,
+          "PoolHits": 3645,
+          "AllocationMilliseconds": 713.9261999999608,
+          "TransferMilliseconds": 2713.5559999999964
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 5179759932,
+          "D2HBytes": 3869108,
+          "AllocatedBytes": 5669106688,
+          "PeakAllocatedBytes": 8307283856,
+          "CachedBytes": 536745856,
+          "RetiredBytes": 0,
+          "AllocationCount": 8760,
+          "NativeAllocatedBytes": 12573469616,
+          "NativeReleasedBytes": 6367617072,
+          "KernelLaunchCount": 40133,
+          "PoolHits": 3295,
+          "AllocationMilliseconds": 721.4195999999627,
+          "TransferMilliseconds": 2516.3351000000007
+        }
+      ],
+      "GpuDelta": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 1392912,
+          "D2HBytes": 1408512,
+          "AllocationCount": 1247,
+          "NativeAllocatedBytes": 2323441796,
+          "NativeReleasedBytes": 2323154212,
+          "KernelLaunchCount": 9934,
+          "PoolHits": 791,
+          "AllocationMilliseconds": 104.87739999998917,
+          "TransferMilliseconds": 276.82349999999906
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 1392764,
+          "D2HBytes": 1408884,
+          "AllocationCount": 1257,
+          "NativeAllocatedBytes": 2547513968,
+          "NativeReleasedBytes": 2546509584,
+          "KernelLaunchCount": 9892,
+          "PoolHits": 659,
+          "AllocationMilliseconds": 109.32759999998984,
+          "TransferMilliseconds": 514.1710000000003
+        }
+      ],
+      "DetailedProfile": [
+        {
+          "DeviceIndex": 0,
+          "Entries": null
+        },
+        {
+          "DeviceIndex": 1,
+          "Entries": null
+        }
+      ],
+      "TestId": "3d238e7ac71a33d74848f700faf5204637dc534de5209c75dbf9bb808e94cac6/step-5"
+    },
+    {
+      "Case": 6,
+      "Example": 174,
+      "PhysicalLine": 174,
+      "ExampleSourceSha256": "a6316ac7cb485ac50f6fb54cc1a4e1e29fab4ece9fe1cf11d341fa2e68a26fe6",
+      "Tokens": 16,
+      "ResponseStartIndex": 11,
+      "SupervisedTokens": 5,
+      "Step": 6,
+      "Seconds": 2.0998034,
+      "Loss": 8.193778488785028,
+      "GradientNorm": 26.640461493758114,
+      "TrainingTokensPerSecond": 7.143525912949755,
+      "Kernels": [
+        {
+          "Kernel": "q35t_xpose_iq2_s_rows16",
+          "Milliseconds": 1021.2361839999994
+        },
+        {
+          "Kernel": "q35t_linear_iq2_s_rows4",
+          "Milliseconds": 314.88901100000203
+        },
+        {
+          "Kernel": "q35t_xpose_q4_k_rows16",
+          "Milliseconds": 220.3110140000008
+        },
+        {
+          "Kernel": "q35t_linear_q4_k_rows4",
+          "Milliseconds": 70.20206000000007
+        },
+        {
+          "Kernel": "q35t_xpose_iq3_s_rows16",
+          "Milliseconds": 58.64978199999996
+        },
+        {
+          "Kernel": "q35t_delta_recur",
+          "Milliseconds": 57.7146469999999
+        },
+        {
+          "Kernel": "q35t_delta_prepare",
+          "Milliseconds": 52.39397600000018
+        },
+        {
+          "Kernel": "q35t_xpose_q5_k_rows16",
+          "Milliseconds": 52.32937500000003
+        },
+        {
+          "Kernel": "q35t_linear_iq3_s_rows4",
+          "Milliseconds": 25.147282000000132
+        },
+        {
+          "Kernel": "q35l_q5_k_sg16",
+          "Milliseconds": 21.777811999999983
+        },
+        {
+          "Kernel": "q35t_norm2_split",
+          "Milliseconds": 21.500017000000113
+        },
+        {
+          "Kernel": "q35t_delta_finish",
+          "Milliseconds": 19.25407700000119
+        },
+        {
+          "Kernel": "q35t_delta_gate_backward",
+          "Milliseconds": 15.553832999999926
+        },
+        {
+          "Kernel": "q35t_lora_dz_coop",
+          "Milliseconds": 13.934694999999579
+        },
+        {
+          "Kernel": "q35l_lora_a_coop",
+          "Milliseconds": 10.1997980000001
+        },
+        {
+          "Kernel": "q35t_delta_qk_backward_step_cooperative",
+          "Milliseconds": 7.997191999998705
+        },
+        {
+          "Kernel": "q35t_delta_qk_backward",
+          "Milliseconds": 5.691748000000004
+        },
+        {
+          "Kernel": "q35t_adam",
+          "Milliseconds": 5.0442990000001515
+        },
+        {
+          "Kernel": "q35t_delta_gate",
+          "Milliseconds": 4.397894000000001
+        },
+        {
+          "Kernel": "q35t_rms_dx",
+          "Milliseconds": 3.741620000000001
+        },
+        {
+          "Kernel": "q35t_lora_da",
+          "Milliseconds": 3.5041800000000762
+        },
+        {
+          "Kernel": "q35l_lora_b",
+          "Milliseconds": 3.268448999999947
+        },
+        {
+          "Kernel": "q35t_lora_db",
+          "Milliseconds": 3.1340500000000553
+        },
+        {
+          "Kernel": "q35t_lora_dx",
+          "Milliseconds": 3.0033879999999975
+        },
+        {
+          "Kernel": "q35t_xpose_reduce",
+          "Milliseconds": 2.923429999999996
+        },
+        {
+          "Kernel": "q35a_zero",
+          "Milliseconds": 2.56240799999998
+        },
+        {
+          "Kernel": "q35a_rms_norm",
+          "Milliseconds": 2.5303539999999884
+        },
+        {
+          "Kernel": "q35t_delta_qk",
+          "Milliseconds": 2.412060999999996
+        },
+        {
+          "Kernel": "q35t_ce_stats",
+          "Milliseconds": 1.002916
+        },
+        {
+          "Kernel": "q35t_delta_conv_backward",
+          "Milliseconds": 0.6183120000000004
+        },
+        {
+          "Kernel": "q35t_silu_dx",
+          "Milliseconds": 0.5147590000000006
+        },
+        {
+          "Kernel": "q35a_silu_multiply",
+          "Milliseconds": 0.48653399999999714
+        },
+        {
+          "Kernel": "q35t_delta_conv",
+          "Milliseconds": 0.3701869999999978
+        },
+        {
+          "Kernel": "q35t_attn_probability_backward",
+          "Milliseconds": 0.3220779999999994
+        },
+        {
+          "Kernel": "q35t_attn_scores",
+          "Milliseconds": 0.31551199999999957
+        },
+        {
+          "Kernel": "q35t_add",
+          "Milliseconds": 0.3131739999999974
+        },
+        {
+          "Kernel": "q35a_add_in_place",
+          "Milliseconds": 0.2746379999999977
+        },
+        {
+          "Kernel": "q35t_attn_key_value_backward",
+          "Milliseconds": 0.19874499999999973
+        },
+        {
+          "Kernel": "q35t_attn_output",
+          "Milliseconds": 0.13155499999999964
+        },
+        {
+          "Kernel": "q35t_attn_norm_backward",
+          "Milliseconds": 0.12749100000000002
+        },
+        {
+          "Kernel": "q35t_attn_query_backward",
+          "Milliseconds": 0.12395099999999992
+        },
+        {
+          "Kernel": "q35t_attn_rope",
+          "Milliseconds": 0.11185599999999951
+        },
+        {
+          "Kernel": "q35t_attn_gate_backward",
+          "Milliseconds": 0.0974910000000001
+        },
+        {
+          "Kernel": "q35t_attn_softmax",
+          "Milliseconds": 0.062080000000000135
+        },
+        {
+          "Kernel": "q35t_attn_softmax_backward",
+          "Milliseconds": 0.04968199999999989
+        },
+        {
+          "Kernel": "qwen_embedding_q4_k",
+          "Milliseconds": 0.04582900000000023
+        },
+        {
+          "Kernel": "q35t_ce_grad",
+          "Milliseconds": 0.027916000000000052
+        },
+        {
+          "Kernel": "q35t_add_offset",
+          "Milliseconds": 0.0015620000000000009
+        }
+      ],
+      "GpuBefore": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 5098802916,
+          "D2HBytes": 3868160,
+          "AllocatedBytes": 5588149248,
+          "PeakAllocatedBytes": 8156788644,
+          "CachedBytes": 536745856,
+          "RetiredBytes": 0,
+          "AllocationCount": 8709,
+          "NativeAllocatedBytes": 11920340692,
+          "NativeReleasedBytes": 5795445588,
+          "KernelLaunchCount": 40188,
+          "PoolHits": 3645,
+          "AllocationMilliseconds": 713.9261999999608,
+          "TransferMilliseconds": 2713.5559999999964
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 5179759932,
+          "D2HBytes": 3869108,
+          "AllocatedBytes": 5669106688,
+          "PeakAllocatedBytes": 8307283856,
+          "CachedBytes": 536745856,
+          "RetiredBytes": 0,
+          "AllocationCount": 8760,
+          "NativeAllocatedBytes": 12573469616,
+          "NativeReleasedBytes": 6367617072,
+          "KernelLaunchCount": 40133,
+          "PoolHits": 3295,
+          "AllocationMilliseconds": 721.4195999999627,
+          "TransferMilliseconds": 2516.3351000000007
+        }
+      ],
+      "GpuAfter": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 5099110176,
+          "D2HBytes": 4191232,
+          "AllocatedBytes": 5588149248,
+          "PeakAllocatedBytes": 8156788644,
+          "CachedBytes": 535846468,
+          "RetiredBytes": 0,
+          "AllocationCount": 9955,
+          "NativeAllocatedBytes": 12437170456,
+          "NativeReleasedBytes": 6313174740,
+          "KernelLaunchCount": 46253,
+          "PoolHits": 4331,
+          "AllocationMilliseconds": 842.4153999999522,
+          "TransferMilliseconds": 2783.2855999999965
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 5180067152,
+          "D2HBytes": 4192240,
+          "AllocatedBytes": 5669106688,
+          "PeakAllocatedBytes": 8307283856,
+          "CachedBytes": 528498832,
+          "RetiredBytes": 0,
+          "AllocationCount": 10017,
+          "NativeAllocatedBytes": 13126851648,
+          "NativeReleasedBytes": 6929246128,
+          "KernelLaunchCount": 46209,
+          "PoolHits": 3954,
+          "AllocationMilliseconds": 840.3203999999508,
+          "TransferMilliseconds": 2695.594200000001
+        }
+      ],
+      "GpuDelta": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 307260,
+          "D2HBytes": 323072,
+          "AllocationCount": 1246,
+          "NativeAllocatedBytes": 516829764,
+          "NativeReleasedBytes": 517729152,
+          "KernelLaunchCount": 6065,
+          "PoolHits": 686,
+          "AllocationMilliseconds": 128.48919999999146,
+          "TransferMilliseconds": 69.72960000000012
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 307220,
+          "D2HBytes": 323132,
+          "AllocationCount": 1257,
+          "NativeAllocatedBytes": 553382032,
+          "NativeReleasedBytes": 561629056,
+          "KernelLaunchCount": 6076,
+          "PoolHits": 659,
+          "AllocationMilliseconds": 118.90079999998818,
+          "TransferMilliseconds": 179.25910000000022
+        }
+      ],
+      "DetailedProfile": [
+        {
+          "DeviceIndex": 0,
+          "Entries": null
+        },
+        {
+          "DeviceIndex": 1,
+          "Entries": null
+        }
+      ],
+      "TestId": "3d238e7ac71a33d74848f700faf5204637dc534de5209c75dbf9bb808e94cac6/step-6"
+    },
+    {
+      "Case": 7,
+      "Example": 257,
+      "PhysicalLine": 257,
+      "ExampleSourceSha256": "4d0cdb19c982b6c824398288f01d494f2c5d7e1d0aea33f3972dba864aaa6c1b",
+      "Tokens": 37,
+      "ResponseStartIndex": 18,
+      "SupervisedTokens": 19,
+      "Step": 7,
+      "Seconds": 4.5391407,
+      "Loss": 3.733532684156671,
+      "GradientNorm": 5.855746547731177,
+      "TrainingTokensPerSecond": 7.931016546810281,
+      "Kernels": [
+        {
+          "Kernel": "q35t_xpose_iq2_s_rows16",
+          "Milliseconds": 2151.2078469999997
+        },
+        {
+          "Kernel": "q35t_linear_iq2_s_rows4",
+          "Milliseconds": 748.7112900000011
+        },
+        {
+          "Kernel": "q35t_xpose_q4_k_rows16",
+          "Milliseconds": 446.63924399999996
+        },
+        {
+          "Kernel": "q35t_linear_q4_k_rows4",
+          "Milliseconds": 169.6038289999998
+        },
+        {
+          "Kernel": "q35t_delta_recur",
+          "Milliseconds": 135.84308999999973
+        },
+        {
+          "Kernel": "q35t_xpose_iq3_s_rows16",
+          "Milliseconds": 129.53780200000006
+        },
+        {
+          "Kernel": "q35t_delta_prepare",
+          "Milliseconds": 128.30471400000056
+        },
+        {
+          "Kernel": "q35t_xpose_q5_k_rows16",
+          "Milliseconds": 121.02927
+        },
+        {
+          "Kernel": "q35l_q5_k_sg16",
+          "Milliseconds": 82.731875
+        },
+        {
+          "Kernel": "q35t_linear_iq3_s_rows4",
+          "Milliseconds": 60.87311799999998
+        },
+        {
+          "Kernel": "q35t_delta_finish",
+          "Milliseconds": 45.63544500000319
+        },
+        {
+          "Kernel": "q35t_norm2_split",
+          "Milliseconds": 21.575115999999554
+        },
+        {
+          "Kernel": "q35t_delta_qk_backward_step_cooperative",
+          "Milliseconds": 19.165419999996743
+        },
+        {
+          "Kernel": "q35t_lora_dz_coop",
+          "Milliseconds": 13.649578999999505
+        },
+        {
+          "Kernel": "q35l_lora_a_coop",
+          "Milliseconds": 10.270217000000045
+        },
+        {
+          "Kernel": "q35t_xpose_reduce",
+          "Milliseconds": 10.237110000000094
+        },
+        {
+          "Kernel": "q35t_delta_gate_backward",
+          "Milliseconds": 9.781229000000025
+        },
+        {
+          "Kernel": "q35t_lora_da",
+          "Milliseconds": 7.6703219999999135
+        },
+        {
+          "Kernel": "q35t_lora_db",
+          "Milliseconds": 6.4119760000000525
+        },
+        {
+          "Kernel": "q35l_lora_b",
+          "Milliseconds": 6.393441000000095
+        },
+        {
+          "Kernel": "q35t_delta_qk_backward",
+          "Milliseconds": 5.743630999999986
+        },
+        {
+          "Kernel": "q35t_lora_dx",
+          "Milliseconds": 5.522802000000009
+        },
+        {
+          "Kernel": "q35t_adam",
+          "Milliseconds": 5.311250000000172
+        },
+        {
+          "Kernel": "q35t_rms_dx",
+          "Milliseconds": 3.657549999999997
+        },
+        {
+          "Kernel": "q35t_delta_gate",
+          "Milliseconds": 3.2454990000000024
+        },
+        {
+          "Kernel": "q35a_zero",
+          "Milliseconds": 3.0730119999996326
+        },
+        {
+          "Kernel": "q35a_rms_norm",
+          "Milliseconds": 2.6876329999999946
+        },
+        {
+          "Kernel": "q35t_delta_qk",
+          "Milliseconds": 2.1945629999999916
+        },
+        {
+          "Kernel": "q35t_delta_conv_backward",
+          "Milliseconds": 1.4407070000000015
+        },
+        {
+          "Kernel": "q35t_ce_stats",
+          "Milliseconds": 1.3073949999999996
+        },
+        {
+          "Kernel": "q35t_silu_dx",
+          "Milliseconds": 1.147576
+        },
+        {
+          "Kernel": "q35a_silu_multiply",
+          "Milliseconds": 1.027681000000003
+        },
+        {
+          "Kernel": "q35t_delta_conv",
+          "Milliseconds": 0.7892560000000035
+        },
+        {
+          "Kernel": "q35t_attn_key_value_backward",
+          "Milliseconds": 0.5915550000000005
+        },
+        {
+          "Kernel": "q35t_add",
+          "Milliseconds": 0.5859879999999968
+        },
+        {
+          "Kernel": "q35a_add_in_place",
+          "Milliseconds": 0.4529010000000051
+        },
+        {
+          "Kernel": "q35t_attn_probability_backward",
+          "Milliseconds": 0.38145199999999946
+        },
+        {
+          "Kernel": "q35t_attn_output",
+          "Milliseconds": 0.3770759999999993
+        },
+        {
+          "Kernel": "q35t_attn_scores",
+          "Milliseconds": 0.3717670000000002
+        },
+        {
+          "Kernel": "q35t_attn_query_backward",
+          "Milliseconds": 0.3381180000000006
+        },
+        {
+          "Kernel": "q35t_attn_norm_backward",
+          "Milliseconds": 0.17394200000000115
+        },
+        {
+          "Kernel": "q35t_attn_gate_backward",
+          "Milliseconds": 0.16572399999999998
+        },
+        {
+          "Kernel": "q35t_ce_grad",
+          "Milliseconds": 0.12322900000000003
+        },
+        {
+          "Kernel": "q35t_attn_rope",
+          "Milliseconds": 0.12153999999999976
+        },
+        {
+          "Kernel": "qwen_embedding_q4_k",
+          "Milliseconds": 0.11175600000000108
+        },
+        {
+          "Kernel": "q35t_attn_softmax",
+          "Milliseconds": 0.09259999999999968
+        },
+        {
+          "Kernel": "q35t_attn_softmax_backward",
+          "Milliseconds": 0.077075
+        },
+        {
+          "Kernel": "q35t_add_offset",
+          "Milliseconds": 0.0026039999999999987
+        }
+      ],
+      "GpuBefore": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 5099110176,
+          "D2HBytes": 4191232,
+          "AllocatedBytes": 5588149248,
+          "PeakAllocatedBytes": 8156788644,
+          "CachedBytes": 535846468,
+          "RetiredBytes": 0,
+          "AllocationCount": 9955,
+          "NativeAllocatedBytes": 12437170456,
+          "NativeReleasedBytes": 6313174740,
+          "KernelLaunchCount": 46253,
+          "PoolHits": 4331,
+          "AllocationMilliseconds": 842.4153999999522,
+          "TransferMilliseconds": 2783.2855999999965
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 5180067152,
+          "D2HBytes": 4192240,
+          "AllocatedBytes": 5669106688,
+          "PeakAllocatedBytes": 8307283856,
+          "CachedBytes": 528498832,
+          "RetiredBytes": 0,
+          "AllocationCount": 10017,
+          "NativeAllocatedBytes": 13126851648,
+          "NativeReleasedBytes": 6929246128,
+          "KernelLaunchCount": 46209,
+          "PoolHits": 3954,
+          "AllocationMilliseconds": 840.3203999999508,
+          "TransferMilliseconds": 2695.594200000001
+        }
+      ],
+      "GpuAfter": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 5099847600,
+          "D2HBytes": 4944384,
+          "AllocatedBytes": 5588149248,
+          "PeakAllocatedBytes": 8156788644,
+          "CachedBytes": 536843264,
+          "RetiredBytes": 0,
+          "AllocationCount": 11182,
+          "NativeAllocatedBytes": 13654195608,
+          "NativeReleasedBytes": 7529203096,
+          "KernelLaunchCount": 53851,
+          "PoolHits": 5078,
+          "AllocationMilliseconds": 949.45649999994,
+          "TransferMilliseconds": 2940.4875999999963
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 5180804508,
+          "D2HBytes": 4945620,
+          "AllocatedBytes": 5669106688,
+          "PeakAllocatedBytes": 8307283856,
+          "CachedBytes": 536842112,
+          "RetiredBytes": 0,
+          "AllocationCount": 11257,
+          "NativeAllocatedBytes": 14480740848,
+          "NativeReleasedBytes": 8274792048,
+          "KernelLaunchCount": 53797,
+          "PoolHits": 4630,
+          "AllocationMilliseconds": 951.365899999941,
+          "TransferMilliseconds": 3044.1178000000014
+        }
+      ],
+      "GpuDelta": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 737424,
+          "D2HBytes": 753152,
+          "AllocationCount": 1227,
+          "NativeAllocatedBytes": 1217025152,
+          "NativeReleasedBytes": 1216028356,
+          "KernelLaunchCount": 7598,
+          "PoolHits": 747,
+          "AllocationMilliseconds": 107.04109999998775,
+          "TransferMilliseconds": 157.20199999999977
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 737356,
+          "D2HBytes": 753380,
+          "AllocationCount": 1240,
+          "NativeAllocatedBytes": 1353889200,
+          "NativeReleasedBytes": 1345545920,
+          "KernelLaunchCount": 7588,
+          "PoolHits": 676,
+          "AllocationMilliseconds": 111.04549999999017,
+          "TransferMilliseconds": 348.52360000000044
+        }
+      ],
+      "DetailedProfile": [
+        {
+          "DeviceIndex": 0,
+          "Entries": null
+        },
+        {
+          "DeviceIndex": 1,
+          "Entries": null
+        }
+      ],
+      "TestId": "3d238e7ac71a33d74848f700faf5204637dc534de5209c75dbf9bb808e94cac6/step-7"
+    },
+    {
+      "Case": 8,
+      "Example": 512,
+      "PhysicalLine": 512,
+      "ExampleSourceSha256": "88dc13a94f7cf17a5a98e8dd56fd16fd33c2b12d35b108931261f26769b0c1bf",
+      "Tokens": 30,
+      "ResponseStartIndex": 14,
+      "SupervisedTokens": 16,
+      "Step": 8,
+      "Seconds": 3.5879254,
+      "Loss": 3.3212818801403046,
+      "GradientNorm": 4.895953135652088,
+      "TrainingTokensPerSecond": 8.082665263887593,
+      "Kernels": [
+        {
+          "Kernel": "q35t_xpose_iq2_s_rows16",
+          "Milliseconds": 1693.8333699999948
+        },
+        {
+          "Kernel": "q35t_linear_iq2_s_rows4",
+          "Milliseconds": 625.9018059999999
+        },
+        {
+          "Kernel": "q35t_xpose_q4_k_rows16",
+          "Milliseconds": 350.20497600000044
+        },
+        {
+          "Kernel": "q35t_linear_q4_k_rows4",
+          "Milliseconds": 140.57663900000034
+        },
+        {
+          "Kernel": "q35t_delta_recur",
+          "Milliseconds": 110.78370900000016
+        },
+        {
+          "Kernel": "q35t_delta_prepare",
+          "Milliseconds": 103.16152999999997
+        },
+        {
+          "Kernel": "q35t_xpose_iq3_s_rows16",
+          "Milliseconds": 102.62561600000004
+        },
+        {
+          "Kernel": "q35t_xpose_q5_k_rows16",
+          "Milliseconds": 74.40541600000006
+        },
+        {
+          "Kernel": "q35l_q5_k_sg16",
+          "Milliseconds": 69.67375000000004
+        },
+        {
+          "Kernel": "q35t_linear_iq3_s_rows4",
+          "Milliseconds": 50.24561600000004
+        },
+        {
+          "Kernel": "q35t_delta_finish",
+          "Milliseconds": 37.036949000002835
+        },
+        {
+          "Kernel": "q35t_norm2_split",
+          "Milliseconds": 21.64603299999959
+        },
+        {
+          "Kernel": "q35t_delta_qk_backward_step_cooperative",
+          "Milliseconds": 15.243592000001456
+        },
+        {
+          "Kernel": "q35t_lora_dz_coop",
+          "Milliseconds": 13.589174999999557
+        },
+        {
+          "Kernel": "q35l_lora_a_coop",
+          "Milliseconds": 10.209581000000114
+        },
+        {
+          "Kernel": "q35t_delta_gate_backward",
+          "Milliseconds": 9.597170000000006
+        },
+        {
+          "Kernel": "q35t_xpose_reduce",
+          "Milliseconds": 7.424815999999822
+        },
+        {
+          "Kernel": "q35t_lora_da",
+          "Milliseconds": 6.210107000000107
+        },
+        {
+          "Kernel": "q35t_delta_qk_backward",
+          "Milliseconds": 5.728307999999991
+        },
+        {
+          "Kernel": "q35l_lora_b",
+          "Milliseconds": 5.386859999999984
+        },
+        {
+          "Kernel": "q35t_adam",
+          "Milliseconds": 5.294693000000322
+        },
+        {
+          "Kernel": "q35t_lora_db",
+          "Milliseconds": 5.121351999999959
+        },
+        {
+          "Kernel": "q35t_lora_dx",
+          "Milliseconds": 4.696767000000264
+        },
+        {
+          "Kernel": "q35t_rms_dx",
+          "Milliseconds": 3.655571000000002
+        },
+        {
+          "Kernel": "q35t_delta_qk",
+          "Milliseconds": 3.3648780000000045
+        },
+        {
+          "Kernel": "q35t_delta_gate",
+          "Milliseconds": 3.224876000000009
+        },
+        {
+          "Kernel": "q35a_zero",
+          "Milliseconds": 2.9664109999999404
+        },
+        {
+          "Kernel": "q35a_rms_norm",
+          "Milliseconds": 2.6983649999999884
+        },
+        {
+          "Kernel": "q35t_delta_conv_backward",
+          "Milliseconds": 1.1676889999999958
+        },
+        {
+          "Kernel": "q35t_ce_stats",
+          "Milliseconds": 1.1663539999999992
+        },
+        {
+          "Kernel": "q35t_silu_dx",
+          "Milliseconds": 0.9345540000000021
+        },
+        {
+          "Kernel": "q35a_silu_multiply",
+          "Milliseconds": 0.837057999999999
+        },
+        {
+          "Kernel": "q35t_delta_conv",
+          "Milliseconds": 0.6521659999999976
+        },
+        {
+          "Kernel": "q35t_add",
+          "Milliseconds": 0.4869279999999989
+        },
+        {
+          "Kernel": "q35t_attn_key_value_backward",
+          "Milliseconds": 0.47186899999999987
+        },
+        {
+          "Kernel": "q35a_add_in_place",
+          "Milliseconds": 0.40424599999999744
+        },
+        {
+          "Kernel": "q35t_attn_probability_backward",
+          "Milliseconds": 0.34593200000000035
+        },
+        {
+          "Kernel": "q35t_attn_scores",
+          "Milliseconds": 0.3441610000000006
+        },
+        {
+          "Kernel": "q35t_attn_output",
+          "Milliseconds": 0.277701
+        },
+        {
+          "Kernel": "q35t_attn_query_backward",
+          "Milliseconds": 0.2535360000000004
+        },
+        {
+          "Kernel": "q35t_attn_norm_backward",
+          "Milliseconds": 0.1624840000000014
+        },
+        {
+          "Kernel": "q35t_attn_gate_backward",
+          "Milliseconds": 0.1455160000000002
+        },
+        {
+          "Kernel": "q35t_attn_rope",
+          "Milliseconds": 0.11664399999999941
+        },
+        {
+          "Kernel": "q35t_ce_grad",
+          "Milliseconds": 0.10499999999999998
+        },
+        {
+          "Kernel": "q35t_attn_softmax",
+          "Milliseconds": 0.08957500000000018
+        },
+        {
+          "Kernel": "qwen_embedding_q4_k",
+          "Milliseconds": 0.08801100000000073
+        },
+        {
+          "Kernel": "q35t_attn_softmax_backward",
+          "Milliseconds": 0.07249700000000003
+        },
+        {
+          "Kernel": "q35t_add_offset",
+          "Milliseconds": 0.0020830000000000015
+        }
+      ],
+      "GpuBefore": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 5099847600,
+          "D2HBytes": 4944384,
+          "AllocatedBytes": 5588149248,
+          "PeakAllocatedBytes": 8156788644,
+          "CachedBytes": 536843264,
+          "RetiredBytes": 0,
+          "AllocationCount": 11182,
+          "NativeAllocatedBytes": 13654195608,
+          "NativeReleasedBytes": 7529203096,
+          "KernelLaunchCount": 53851,
+          "PoolHits": 5078,
+          "AllocationMilliseconds": 949.45649999994,
+          "TransferMilliseconds": 2940.4875999999963
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 5180804508,
+          "D2HBytes": 4945620,
+          "AllocatedBytes": 5669106688,
+          "PeakAllocatedBytes": 8307283856,
+          "CachedBytes": 536842112,
+          "RetiredBytes": 0,
+          "AllocationCount": 11257,
+          "NativeAllocatedBytes": 14480740848,
+          "NativeReleasedBytes": 8274792048,
+          "KernelLaunchCount": 53797,
+          "PoolHits": 4630,
+          "AllocationMilliseconds": 951.365899999941,
+          "TransferMilliseconds": 3044.1178000000014
+        }
+      ],
+      "GpuAfter": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 5100441636,
+          "D2HBytes": 5554176,
+          "AllocatedBytes": 5588149248,
+          "PeakAllocatedBytes": 8156788644,
+          "CachedBytes": 535543328,
+          "RetiredBytes": 0,
+          "AllocationCount": 12429,
+          "NativeAllocatedBytes": 14647783580,
+          "NativeReleasedBytes": 8524091004,
+          "KernelLaunchCount": 60938,
+          "PoolHits": 5791,
+          "AllocationMilliseconds": 1062.8956999999248,
+          "TransferMilliseconds": 3075.1864999999952
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 5181398492,
+          "D2HBytes": 5555604,
+          "AllocatedBytes": 5669106688,
+          "PeakAllocatedBytes": 8307283856,
+          "CachedBytes": 536731168,
+          "RetiredBytes": 0,
+          "AllocationCount": 12514,
+          "NativeAllocatedBytes": 15589344752,
+          "NativeReleasedBytes": 9383506896,
+          "KernelLaunchCount": 60881,
+          "PoolHits": 5289,
+          "AllocationMilliseconds": 1060.8379999999238,
+          "TransferMilliseconds": 3327.6979000000015
+        }
+      ],
+      "GpuDelta": [
+        {
+          "DeviceIndex": 0,
+          "H2DBytes": 594036,
+          "D2HBytes": 609792,
+          "AllocationCount": 1247,
+          "NativeAllocatedBytes": 993587972,
+          "NativeReleasedBytes": 994887908,
+          "KernelLaunchCount": 7087,
+          "PoolHits": 713,
+          "AllocationMilliseconds": 113.4391999999848,
+          "TransferMilliseconds": 134.69889999999896
+        },
+        {
+          "DeviceIndex": 1,
+          "H2DBytes": 593984,
+          "D2HBytes": 609984,
+          "AllocationCount": 1257,
+          "NativeAllocatedBytes": 1108603904,
+          "NativeReleasedBytes": 1108714848,
+          "KernelLaunchCount": 7084,
+          "PoolHits": 659,
+          "AllocationMilliseconds": 109.47209999998279,
+          "TransferMilliseconds": 283.58010000000013
+        }
+      ],
+      "DetailedProfile": [
+        {
+          "DeviceIndex": 0,
+          "Entries": null
+        },
+        {
+          "DeviceIndex": 1,
+          "Entries": null
+        }
+      ],
+      "TestId": "3d238e7ac71a33d74848f700faf5204637dc534de5209c75dbf9bb808e94cac6/step-8"
+    }
+  ],
+  "Notes": "Each example is one complete optimizer update; repeated rows continue training, not reset-state repetitions. Only TrainLora and completion synchronization are timed per step. Tokenization, diagnostic snapshots, JSON, console output, hashes and checkpoint saving are excluded. No data truncation or shortening is performed. Kernel sums across devices are not wall-clock durations. Device memory counters include cached/retired allocations, and are backend accounting rather than driver-reported VRAM. Peaks are cumulative. Kernel timing collection defaults on for this diagnostic command; supplied options can disable it, leaving kernel deltas empty. First checkpoint save can include lazy base-model fingerprinting. OS/driver caches are not flushed.",
+  "LoadSeconds": 7.4014286,
+  "AdapterSetupSeconds": 0.2498383,
+  "LoraOptions": {
+    "Rank": 8,
+    "Alpha": 16,
+    "LearningRate": 0.0001,
+    "WeightDecay": 0,
+    "GradientClip": 1,
+    "Seed": 1,
+    "Layers": null,
+    "Targets": [
+      "attn_q",
+      "attn_k",
+      "attn_v",
+      "attn_output",
+      "attn_qkv",
+      "attn_gate",
+      "ssm_alpha",
+      "ssm_beta",
+      "ssm_out",
+      "ffn_gate",
+      "ffn_up",
+      "ffn_down"
+    ],
+    "IncludeOutput": false
+  },
+  "InitialStep": 0,
+  "LoraTargets": [
+    "blk.0.attn_gate.weight",
+    "blk.0.attn_qkv.weight",
+    "blk.0.ffn_down.weight",
+    "blk.0.ffn_gate.weight",
+    "blk.0.ffn_up.weight",
+    "blk.0.ssm_alpha.weight",
+    "blk.0.ssm_beta.weight",
+    "blk.0.ssm_out.weight",
+    "blk.1.attn_gate.weight",
+    "blk.1.attn_qkv.weight",
+    "blk.1.ffn_down.weight",
+    "blk.1.ffn_gate.weight",
+    "blk.1.ffn_up.weight",
+    "blk.1.ssm_alpha.weight",
+    "blk.1.ssm_beta.weight",
+    "blk.1.ssm_out.weight",
+    "blk.10.attn_gate.weight",
+    "blk.10.attn_qkv.weight",
+    "blk.10.ffn_down.weight",
+    "blk.10.ffn_gate.weight",
+    "blk.10.ffn_up.weight",
+    "blk.10.ssm_alpha.weight",
+    "blk.10.ssm_beta.weight",
+    "blk.10.ssm_out.weight",
+    "blk.11.attn_k.weight",
+    "blk.11.attn_output.weight",
+    "blk.11.attn_q.weight",
+    "blk.11.attn_v.weight",
+    "blk.11.ffn_down.weight",
+    "blk.11.ffn_gate.weight",
+    "blk.11.ffn_up.weight",
+    "blk.12.attn_gate.weight",
+    "blk.12.attn_qkv.weight",
+    "blk.12.ffn_down.weight",
+    "blk.12.ffn_gate.weight",
+    "blk.12.ffn_up.weight",
+    "blk.12.ssm_alpha.weight",
+    "blk.12.ssm_beta.weight",
+    "blk.12.ssm_out.weight",
+    "blk.13.attn_gate.weight",
+    "blk.13.attn_qkv.weight",
+    "blk.13.ffn_down.weight",
+    "blk.13.ffn_gate.weight",
+    "blk.13.ffn_up.weight",
+    "blk.13.ssm_alpha.weight",
+    "blk.13.ssm_beta.weight",
+    "blk.13.ssm_out.weight",
+    "blk.14.attn_gate.weight",
+    "blk.14.attn_qkv.weight",
+    "blk.14.ffn_down.weight",
+    "blk.14.ffn_gate.weight",
+    "blk.14.ffn_up.weight",
+    "blk.14.ssm_alpha.weight",
+    "blk.14.ssm_beta.weight",
+    "blk.14.ssm_out.weight",
+    "blk.15.attn_k.weight",
+    "blk.15.attn_output.weight",
+    "blk.15.attn_q.weight",
+    "blk.15.attn_v.weight",
+    "blk.15.ffn_down.weight",
+    "blk.15.ffn_gate.weight",
+    "blk.15.ffn_up.weight",
+    "blk.16.attn_gate.weight",
+    "blk.16.attn_qkv.weight",
+    "blk.16.ffn_down.weight",
+    "blk.16.ffn_gate.weight",
+    "blk.16.ffn_up.weight",
+    "blk.16.ssm_alpha.weight",
+    "blk.16.ssm_beta.weight",
+    "blk.16.ssm_out.weight",
+    "blk.17.attn_gate.weight",
+    "blk.17.attn_qkv.weight",
+    "blk.17.ffn_down.weight",
+    "blk.17.ffn_gate.weight",
+    "blk.17.ffn_up.weight",
+    "blk.17.ssm_alpha.weight",
+    "blk.17.ssm_beta.weight",
+    "blk.17.ssm_out.weight",
+    "blk.18.attn_gate.weight",
+    "blk.18.attn_qkv.weight",
+    "blk.18.ffn_down.weight",
+    "blk.18.ffn_gate.weight",
+    "blk.18.ffn_up.weight",
+    "blk.18.ssm_alpha.weight",
+    "blk.18.ssm_beta.weight",
+    "blk.18.ssm_out.weight",
+    "blk.19.attn_k.weight",
+    "blk.19.attn_output.weight",
+    "blk.19.attn_q.weight",
+    "blk.19.attn_v.weight",
+    "blk.19.ffn_down.weight",
+    "blk.19.ffn_gate.weight",
+    "blk.19.ffn_up.weight",
+    "blk.2.attn_gate.weight",
+    "blk.2.attn_qkv.weight",
+    "blk.2.ffn_down.weight",
+    "blk.2.ffn_gate.weight",
+    "blk.2.ffn_up.weight",
+    "blk.2.ssm_alpha.weight",
+    "blk.2.ssm_beta.weight",
+    "blk.2.ssm_out.weight",
+    "blk.20.attn_gate.weight",
+    "blk.20.attn_qkv.weight",
+    "blk.20.ffn_down.weight",
+    "blk.20.ffn_gate.weight",
+    "blk.20.ffn_up.weight",
+    "blk.20.ssm_alpha.weight",
+    "blk.20.ssm_beta.weight",
+    "blk.20.ssm_out.weight",
+    "blk.21.attn_gate.weight",
+    "blk.21.attn_qkv.weight",
+    "blk.21.ffn_down.weight",
+    "blk.21.ffn_gate.weight",
+    "blk.21.ffn_up.weight",
+    "blk.21.ssm_alpha.weight",
+    "blk.21.ssm_beta.weight",
+    "blk.21.ssm_out.weight",
+    "blk.22.attn_gate.weight",
+    "blk.22.attn_qkv.weight",
+    "blk.22.ffn_down.weight",
+    "blk.22.ffn_gate.weight",
+    "blk.22.ffn_up.weight",
+    "blk.22.ssm_alpha.weight",
+    "blk.22.ssm_beta.weight",
+    "blk.22.ssm_out.weight",
+    "blk.23.attn_k.weight",
+    "blk.23.attn_output.weight",
+    "blk.23.attn_q.weight",
+    "blk.23.attn_v.weight",
+    "blk.23.ffn_down.weight",
+    "blk.23.ffn_gate.weight",
+    "blk.23.ffn_up.weight",
+    "blk.24.attn_gate.weight",
+    "blk.24.attn_qkv.weight",
+    "blk.24.ffn_down.weight",
+    "blk.24.ffn_gate.weight",
+    "blk.24.ffn_up.weight",
+    "blk.24.ssm_alpha.weight",
+    "blk.24.ssm_beta.weight",
+    "blk.24.ssm_out.weight",
+    "blk.25.attn_gate.weight",
+    "blk.25.attn_qkv.weight",
+    "blk.25.ffn_down.weight",
+    "blk.25.ffn_gate.weight",
+    "blk.25.ffn_up.weight",
+    "blk.25.ssm_alpha.weight",
+    "blk.25.ssm_beta.weight",
+    "blk.25.ssm_out.weight",
+    "blk.26.attn_gate.weight",
+    "blk.26.attn_qkv.weight",
+    "blk.26.ffn_down.weight",
+    "blk.26.ffn_gate.weight",
+    "blk.26.ffn_up.weight",
+    "blk.26.ssm_alpha.weight",
+    "blk.26.ssm_beta.weight",
+    "blk.26.ssm_out.weight",
+    "blk.27.attn_k.weight",
+    "blk.27.attn_output.weight",
+    "blk.27.attn_q.weight",
+    "blk.27.attn_v.weight",
+    "blk.27.ffn_down.weight",
+    "blk.27.ffn_gate.weight",
+    "blk.27.ffn_up.weight",
+    "blk.28.attn_gate.weight",
+    "blk.28.attn_qkv.weight",
+    "blk.28.ffn_down.weight",
+    "blk.28.ffn_gate.weight",
+    "blk.28.ffn_up.weight",
+    "blk.28.ssm_alpha.weight",
+    "blk.28.ssm_beta.weight",
+    "blk.28.ssm_out.weight",
+    "blk.29.attn_gate.weight",
+    "blk.29.attn_qkv.weight",
+    "blk.29.ffn_down.weight",
+    "blk.29.ffn_gate.weight",
+    "blk.29.ffn_up.weight",
+    "blk.29.ssm_alpha.weight",
+    "blk.29.ssm_beta.weight",
+    "blk.29.ssm_out.weight",
+    "blk.3.attn_k.weight",
+    "blk.3.attn_output.weight",
+    "blk.3.attn_q.weight",
+    "blk.3.attn_v.weight",
+    "blk.3.ffn_down.weight",
+    "blk.3.ffn_gate.weight",
+    "blk.3.ffn_up.weight",
+    "blk.30.attn_gate.weight",
+    "blk.30.attn_qkv.weight",
+    "blk.30.ffn_down.weight",
+    "blk.30.ffn_gate.weight",
+    "blk.30.ffn_up.weight",
+    "blk.30.ssm_alpha.weight",
+    "blk.30.ssm_beta.weight",
+    "blk.30.ssm_out.weight",
+    "blk.31.attn_k.weight",
+    "blk.31.attn_output.weight",
+    "blk.31.attn_q.weight",
+    "blk.31.attn_v.weight",
+    "blk.31.ffn_down.weight",
+    "blk.31.ffn_gate.weight",
+    "blk.31.ffn_up.weight",
+    "blk.32.attn_gate.weight",
+    "blk.32.attn_qkv.weight",
+    "blk.32.ffn_down.weight",
+    "blk.32.ffn_gate.weight",
+    "blk.32.ffn_up.weight",
+    "blk.32.ssm_alpha.weight",
+    "blk.32.ssm_beta.weight",
+    "blk.32.ssm_out.weight",
+    "blk.33.attn_gate.weight",
+    "blk.33.attn_qkv.weight",
+    "blk.33.ffn_down.weight",
+    "blk.33.ffn_gate.weight",
+    "blk.33.ffn_up.weight",
+    "blk.33.ssm_alpha.weight",
+    "blk.33.ssm_beta.weight",
+    "blk.33.ssm_out.weight",
+    "blk.34.attn_gate.weight",
+    "blk.34.attn_qkv.weight",
+    "blk.34.ffn_down.weight",
+    "blk.34.ffn_gate.weight",
+    "blk.34.ffn_up.weight",
+    "blk.34.ssm_alpha.weight",
+    "blk.34.ssm_beta.weight",
+    "blk.34.ssm_out.weight",
+    "blk.35.attn_k.weight",
+    "blk.35.attn_output.weight",
+    "blk.35.attn_q.weight",
+    "blk.35.attn_v.weight",
+    "blk.35.ffn_down.weight",
+    "blk.35.ffn_gate.weight",
+    "blk.35.ffn_up.weight",
+    "blk.36.attn_gate.weight",
+    "blk.36.attn_qkv.weight",
+    "blk.36.ffn_down.weight",
+    "blk.36.ffn_gate.weight",
+    "blk.36.ffn_up.weight",
+    "blk.36.ssm_alpha.weight",
+    "blk.36.ssm_beta.weight",
+    "blk.36.ssm_out.weight",
+    "blk.37.attn_gate.weight",
+    "blk.37.attn_qkv.weight",
+    "blk.37.ffn_down.weight",
+    "blk.37.ffn_gate.weight",
+    "blk.37.ffn_up.weight",
+    "blk.37.ssm_alpha.weight",
+    "blk.37.ssm_beta.weight",
+    "blk.37.ssm_out.weight",
+    "blk.38.attn_gate.weight",
+    "blk.38.attn_qkv.weight",
+    "blk.38.ffn_down.weight",
+    "blk.38.ffn_gate.weight",
+    "blk.38.ffn_up.weight",
+    "blk.38.ssm_alpha.weight",
+    "blk.38.ssm_beta.weight",
+    "blk.38.ssm_out.weight",
+    "blk.39.attn_k.weight",
+    "blk.39.attn_output.weight",
+    "blk.39.attn_q.weight",
+    "blk.39.attn_v.weight",
+    "blk.39.ffn_down.weight",
+    "blk.39.ffn_gate.weight",
+    "blk.39.ffn_up.weight",
+    "blk.4.attn_gate.weight",
+    "blk.4.attn_qkv.weight",
+    "blk.4.ffn_down.weight",
+    "blk.4.ffn_gate.weight",
+    "blk.4.ffn_up.weight",
+    "blk.4.ssm_alpha.weight",
+    "blk.4.ssm_beta.weight",
+    "blk.4.ssm_out.weight",
+    "blk.40.attn_gate.weight",
+    "blk.40.attn_qkv.weight",
+    "blk.40.ffn_down.weight",
+    "blk.40.ffn_gate.weight",
+    "blk.40.ffn_up.weight",
+    "blk.40.ssm_alpha.weight",
+    "blk.40.ssm_beta.weight",
+    "blk.40.ssm_out.weight",
+    "blk.41.attn_gate.weight",
+    "blk.41.attn_qkv.weight",
+    "blk.41.ffn_down.weight",
+    "blk.41.ffn_gate.weight",
+    "blk.41.ffn_up.weight",
+    "blk.41.ssm_alpha.weight",
+    "blk.41.ssm_beta.weight",
+    "blk.41.ssm_out.weight",
+    "blk.42.attn_gate.weight",
+    "blk.42.attn_qkv.weight",
+    "blk.42.ffn_down.weight",
+    "blk.42.ffn_gate.weight",
+    "blk.42.ffn_up.weight",
+    "blk.42.ssm_alpha.weight",
+    "blk.42.ssm_beta.weight",
+    "blk.42.ssm_out.weight",
+    "blk.43.attn_k.weight",
+    "blk.43.attn_output.weight",
+    "blk.43.attn_q.weight",
+    "blk.43.attn_v.weight",
+    "blk.43.ffn_down.weight",
+    "blk.43.ffn_gate.weight",
+    "blk.43.ffn_up.weight",
+    "blk.44.attn_gate.weight",
+    "blk.44.attn_qkv.weight",
+    "blk.44.ffn_down.weight",
+    "blk.44.ffn_gate.weight",
+    "blk.44.ffn_up.weight",
+    "blk.44.ssm_alpha.weight",
+    "blk.44.ssm_beta.weight",
+    "blk.44.ssm_out.weight",
+    "blk.45.attn_gate.weight",
+    "blk.45.attn_qkv.weight",
+    "blk.45.ffn_down.weight",
+    "blk.45.ffn_gate.weight",
+    "blk.45.ffn_up.weight",
+    "blk.45.ssm_alpha.weight",
+    "blk.45.ssm_beta.weight",
+    "blk.45.ssm_out.weight",
+    "blk.46.attn_gate.weight",
+    "blk.46.attn_qkv.weight",
+    "blk.46.ffn_down.weight",
+    "blk.46.ffn_gate.weight",
+    "blk.46.ffn_up.weight",
+    "blk.46.ssm_alpha.weight",
+    "blk.46.ssm_beta.weight",
+    "blk.46.ssm_out.weight",
+    "blk.47.attn_k.weight",
+    "blk.47.attn_output.weight",
+    "blk.47.attn_q.weight",
+    "blk.47.attn_v.weight",
+    "blk.47.ffn_down.weight",
+    "blk.47.ffn_gate.weight",
+    "blk.47.ffn_up.weight",
+    "blk.48.attn_gate.weight",
+    "blk.48.attn_qkv.weight",
+    "blk.48.ffn_down.weight",
+    "blk.48.ffn_gate.weight",
+    "blk.48.ffn_up.weight",
+    "blk.48.ssm_alpha.weight",
+    "blk.48.ssm_beta.weight",
+    "blk.48.ssm_out.weight",
+    "blk.49.attn_gate.weight",
+    "blk.49.attn_qkv.weight",
+    "blk.49.ffn_down.weight",
+    "blk.49.ffn_gate.weight",
+    "blk.49.ffn_up.weight",
+    "blk.49.ssm_alpha.weight",
+    "blk.49.ssm_beta.weight",
+    "blk.49.ssm_out.weight",
+    "blk.5.attn_gate.weight",
+    "blk.5.attn_qkv.weight",
+    "blk.5.ffn_down.weight",
+    "blk.5.ffn_gate.weight",
+    "blk.5.ffn_up.weight",
+    "blk.5.ssm_alpha.weight",
+    "blk.5.ssm_beta.weight",
+    "blk.5.ssm_out.weight",
+    "blk.50.attn_gate.weight",
+    "blk.50.attn_qkv.weight",
+    "blk.50.ffn_down.weight",
+    "blk.50.ffn_gate.weight",
+    "blk.50.ffn_up.weight",
+    "blk.50.ssm_alpha.weight",
+    "blk.50.ssm_beta.weight",
+    "blk.50.ssm_out.weight",
+    "blk.51.attn_k.weight",
+    "blk.51.attn_output.weight",
+    "blk.51.attn_q.weight",
+    "blk.51.attn_v.weight",
+    "blk.51.ffn_down.weight",
+    "blk.51.ffn_gate.weight",
+    "blk.51.ffn_up.weight",
+    "blk.52.attn_gate.weight",
+    "blk.52.attn_qkv.weight",
+    "blk.52.ffn_down.weight",
+    "blk.52.ffn_gate.weight",
+    "blk.52.ffn_up.weight",
+    "blk.52.ssm_alpha.weight",
+    "blk.52.ssm_beta.weight",
+    "blk.52.ssm_out.weight",
+    "blk.53.attn_gate.weight",
+    "blk.53.attn_qkv.weight",
+    "blk.53.ffn_down.weight",
+    "blk.53.ffn_gate.weight",
+    "blk.53.ffn_up.weight",
+    "blk.53.ssm_alpha.weight",
+    "blk.53.ssm_beta.weight",
+    "blk.53.ssm_out.weight",
+    "blk.54.attn_gate.weight",
+    "blk.54.attn_qkv.weight",
+    "blk.54.ffn_down.weight",
+    "blk.54.ffn_gate.weight",
+    "blk.54.ffn_up.weight",
+    "blk.54.ssm_alpha.weight",
+    "blk.54.ssm_beta.weight",
+    "blk.54.ssm_out.weight",
+    "blk.55.attn_k.weight",
+    "blk.55.attn_output.weight",
+    "blk.55.attn_q.weight",
+    "blk.55.attn_v.weight",
+    "blk.55.ffn_down.weight",
+    "blk.55.ffn_gate.weight",
+    "blk.55.ffn_up.weight",
+    "blk.56.attn_gate.weight",
+    "blk.56.attn_qkv.weight",
+    "blk.56.ffn_down.weight",
+    "blk.56.ffn_gate.weight",
+    "blk.56.ffn_up.weight",
+    "blk.56.ssm_alpha.weight",
+    "blk.56.ssm_beta.weight",
+    "blk.56.ssm_out.weight",
+    "blk.57.attn_gate.weight",
+    "blk.57.attn_qkv.weight",
+    "blk.57.ffn_down.weight",
+    "blk.57.ffn_gate.weight",
+    "blk.57.ffn_up.weight",
+    "blk.57.ssm_alpha.weight",
+    "blk.57.ssm_beta.weight",
+    "blk.57.ssm_out.weight",
+    "blk.58.attn_gate.weight",
+    "blk.58.attn_qkv.weight",
+    "blk.58.ffn_down.weight",
+    "blk.58.ffn_gate.weight",
+    "blk.58.ffn_up.weight",
+    "blk.58.ssm_alpha.weight",
+    "blk.58.ssm_beta.weight",
+    "blk.58.ssm_out.weight",
+    "blk.59.attn_k.weight",
+    "blk.59.attn_output.weight",
+    "blk.59.attn_q.weight",
+    "blk.59.attn_v.weight",
+    "blk.59.ffn_down.weight",
+    "blk.59.ffn_gate.weight",
+    "blk.59.ffn_up.weight",
+    "blk.6.attn_gate.weight",
+    "blk.6.attn_qkv.weight",
+    "blk.6.ffn_down.weight",
+    "blk.6.ffn_gate.weight",
+    "blk.6.ffn_up.weight",
+    "blk.6.ssm_alpha.weight",
+    "blk.6.ssm_beta.weight",
+    "blk.6.ssm_out.weight",
+    "blk.60.attn_gate.weight",
+    "blk.60.attn_qkv.weight",
+    "blk.60.ffn_down.weight",
+    "blk.60.ffn_gate.weight",
+    "blk.60.ffn_up.weight",
+    "blk.60.ssm_alpha.weight",
+    "blk.60.ssm_beta.weight",
+    "blk.60.ssm_out.weight",
+    "blk.61.attn_gate.weight",
+    "blk.61.attn_qkv.weight",
+    "blk.61.ffn_down.weight",
+    "blk.61.ffn_gate.weight",
+    "blk.61.ffn_up.weight",
+    "blk.61.ssm_alpha.weight",
+    "blk.61.ssm_beta.weight",
+    "blk.61.ssm_out.weight",
+    "blk.62.attn_gate.weight",
+    "blk.62.attn_qkv.weight",
+    "blk.62.ffn_down.weight",
+    "blk.62.ffn_gate.weight",
+    "blk.62.ffn_up.weight",
+    "blk.62.ssm_alpha.weight",
+    "blk.62.ssm_beta.weight",
+    "blk.62.ssm_out.weight",
+    "blk.63.attn_k.weight",
+    "blk.63.attn_output.weight",
+    "blk.63.attn_q.weight",
+    "blk.63.attn_v.weight",
+    "blk.63.ffn_down.weight",
+    "blk.63.ffn_gate.weight",
+    "blk.63.ffn_up.weight",
+    "blk.7.attn_k.weight",
+    "blk.7.attn_output.weight",
+    "blk.7.attn_q.weight",
+    "blk.7.attn_v.weight",
+    "blk.7.ffn_down.weight",
+    "blk.7.ffn_gate.weight",
+    "blk.7.ffn_up.weight",
+    "blk.8.attn_gate.weight",
+    "blk.8.attn_qkv.weight",
+    "blk.8.ffn_down.weight",
+    "blk.8.ffn_gate.weight",
+    "blk.8.ffn_up.weight",
+    "blk.8.ssm_alpha.weight",
+    "blk.8.ssm_beta.weight",
+    "blk.8.ssm_out.weight",
+    "blk.9.attn_gate.weight",
+    "blk.9.attn_qkv.weight",
+    "blk.9.ffn_down.weight",
+    "blk.9.ffn_gate.weight",
+    "blk.9.ffn_up.weight",
+    "blk.9.ssm_alpha.weight",
+    "blk.9.ssm_beta.weight",
+    "blk.9.ssm_out.weight"
+  ],
+  "Lanes": [
+    {
+      "Device": {
+        "Index": 0,
+        "Name": "Intel(R) Arc(TM) B580 Graphics",
+        "DriverVersion": "32.0.101.9030",
+        "GlobalMemoryBytes": 12452507648,
+        "MaximumAllocationBytes": 12452507648,
+        "Extensions": "cl_khr_byte_addressable_store cl_khr_device_uuid cl_khr_fp16 cl_khr_global_int32_base_atomics cl_khr_global_int32_extended_atomics cl_khr_icd cl_khr_icd_unloadable cl_khr_local_int32_base_atomics cl_khr_local_int32_extended_atomics cl_intel_command_queue_families cl_intel_subgroups cl_intel_required_subgroup_size cl_intel_subgroups_short cl_intel_accelerator cl_intel_driver_diagnostics cl_khr_priority_hints cl_khr_throttle_hints cl_khr_create_command_queue cl_intel_subgroups_char cl_intel_subgroups_long cl_khr_il_program cl_intel_mem_force_host_memory cl_khr_subgroup_extended_types cl_khr_subgroup_non_uniform_vote cl_khr_subgroup_ballot cl_khr_subgroup_non_uniform_arithmetic cl_khr_subgroup_shuffle cl_khr_subgroup_shuffle_relative cl_khr_subgroup_clustered_reduce cl_intel_device_attribute_query cl_khr_expect_assume cl_khr_extended_bit_ops cl_khr_suggested_local_work_size cl_intel_split_work_group_barrier cl_khr_int64_base_atomics cl_khr_int64_extended_atomics cl_khr_integer_dot_product cl_intel_spirv_subgroups cl_khr_spirv_linkonce_odr cl_khr_spirv_no_integer_wrap_decoration cl_khr_spirv_queries cl_intel_unified_shared_memory cl_ext_float_atomics cl_intel_kernel_allocations_info cl_khr_fp64 cl_khr_subgroups cl_khr_mipmap_image cl_khr_mipmap_image_writes cl_khr_external_memory cl_intel_planar_yuv cl_intel_packed_yuv cl_khr_image2d_from_buffer cl_khr_depth_images cl_khr_3d_image_writes cl_intel_bfloat16_conversions cl_intel_create_buffer_with_properties cl_intel_subgroup_local_block_io cl_intel_subgroup_matrix_multiply_accumulate cl_intel_subgroup_matrix_multiply_accumulate_tf32 cl_khr_subgroup_named_barrier cl_intel_subgroup_extended_block_read cl_intel_subgroup_2d_block_io cl_intel_subgroup_buffer_prefetch cl_khr_gl_sharing cl_khr_gl_depth_images cl_khr_gl_event cl_khr_gl_msaa_sharing cl_intel_dx9_media_sharing cl_khr_dx9_media_sharing cl_khr_d3d10_sharing cl_khr_d3d11_sharing cl_intel_d3d11_nv12_media_sharing cl_intel_sharing_format_query cl_khr_pci_bus_info cl_intel_simultaneous_sharing ",
+        "MinimumSubgroupSize": 16,
+        "SupportsXmx": true
+      },
+      "Options": {
+        "Qwen35TrainingKernels": true,
+        "Qwen35CooperativeLora": true,
+        "Qwen35ProjectionWorkgroupSize": 32,
+        "Qwen35ParallelArgmax": false,
+        "Qwen35ParallelDeltaNorm": false,
+        "Qwen35LoraReductionSize": 128,
+        "Qwen35UnrollQ4": false,
+        "Qwen35NativeHalfScale": false,
+        "Qwen35CooperativeDelta": true,
+        "Qwen35InferenceKernelsOnly": true,
+        "QwenQuantizedLinearFast": true,
+        "QwenInferenceKvCache": true,
+        "QwenRmsNormFast": true,
+        "QwenQuantizedLinearSubgroup": true,
+        "QwenQuantizedSubgroupPrefill": true,
+        "InferenceKvCache": true,
+        "InferenceGemv": true,
+        "InferencePackedEmbedding": true,
+        "InferenceSmallRowNorm": true,
+        "InferenceFusedGemv": true,
+        "ResidentTensors": true,
+        "CoalescedAttention": true,
+        "BatchedAttention": true,
+        "XmxMatrices": true,
+        "XmxGemmMode": "Auto",
+        "ParallelReductions": true,
+        "WideMatrices": true,
+        "DeepMatrices": true,
+        "CausalAttentionBounds": true,
+        "ParallelWeightGradients": true,
+        "AttentionWorkspaceMiB": 64,
+        "DetailedProfiling": false,
+        "CollectKernelTimings": true,
+        "CompactAttentionTiles": true,
+        "UnrolledAttentionTiles": true,
+        "PanelAttention": true,
+        "MixedBackwardMatrixOperands": true,
+        "InlineMatrixGradient": true,
+        "FusedAttentionDkv": true,
+        "AttentionDkvRows": 16,
+        "FusedAttentionDq": false,
+        "FusedAttentionPv": false,
+        "BlockResidualNorm": false,
+        "FusedNormGradient": true,
+        "DirectXmxMatrices": true,
+        "PackedMatrixStorage": true,
+        "SubgroupAttentionReduction": false,
+        "CachedAttentionProbabilities": true,
+        "CachedAttentionProbabilities2048": false,
+        "SavedAttentionProbabilitiesDirect2048": true,
+        "AttentionDqM32T2048": false,
+        "CachedAttentionDerivatives2048": false,
+        "AttentionDerivativePrefix4T2048": true,
+        "AttentionDerivativePrefix8T2048": true,
+        "Mix8_16PackedAttentionBackward": true,
+        "Mix8_16Bf16QkvActivations": true,
+        "Mix8_16Bf16Activations": true,
+        "Mix8_16LinearDualGradientPack": true,
+        "Mix8_16ReluDualGradientPack": true,
+        "Mix8_16FusedNormResidualBackward": true,
+        "Mix8_16DirectBf16NormOutput": true,
+        "Mix8_16ParallelNormReduction": true,
+        "Mix8_16CachedLossLogits": true,
+        "Mix8_16BiasOnlyGradientReduction": true,
+        "Mix8_16XmxAttentionProducts": false,
+        "Mix8_16XmxAttentionSlm": false,
+        "Mix8_16AttentionRowDelta": true,
+        "Mix8_16FusedAttentionDpDs": true,
+        "Mix8_16FusedAttentionDpDsXmx": false,
+        "Mix8_16NativeExpAttention": true,
+        "Mix8_16DkvPackedSlm": true,
+        "Mix8_16DpDsK32": true,
+        "Mix8_16PvM128": false,
+        "Mix8_16DqM128": false,
+        "Mix8_16PvPackedSlm": true,
+        "Mix8_16DqPackedSlm": true,
+        "Mix8_16DqPackedSlmBoth": false,
+        "Mix8_16FusedNormParameterGradients": true,
+        "AttentionDerivativePrefix16T2048": false,
+        "FusedAttentionDpDs2048": false,
+        "DkvQueryMajorPitch2048": 0,
+        "CacheSizedAttentionBackward": true,
+        "TunedFp32Attention": true,
+        "QueuedKernelLimit": 512,
+        "PipelineEventCollection": true,
+        "PowerOfTwoPackScales": true,
+        "BulkAttentionQkPanels": true,
+        "FusedBfp8Linear": true,
+        "Mix8_16Int8Linear": false,
+        "ExpandedXmxTiles": true,
+        "BlockIoAttention": true,
+        "MatrixPanelCacheMiB": 0,
+        "ExperimentalOptimizationKernels": false,
+        "ExplicitHostUploads": true,
+        "DeferredReleaseBytes": 0,
+        "BatchDispatch": true,
+        "LossChunkRows": 512,
+        "LossLogitsWorkspaceMiB": 32,
+        "LossPanelWorkspaceMiB": 96,
+        "TiledMatrices": true,
+        "StreamingAttention": true,
+        "FlashAttention": false,
+        "FlashAttentionXmxProducts": false,
+        "FlashAttentionAsyncCopy": false,
+        "FlashAttentionLargeRegisters": true,
+        "XmxAttentionProducts": false,
+        "DirectXmxAttentionProducts": true,
+        "ResidentMuonIterations": true,
+        "ChunkedLossHead": true,
+        "PackedUploads": true,
+        "FusedNormalization": true,
+        "BufferPoolBytes": 536870912,
+        "LruBufferPool": true,
+        "ReuseRetiredBuffers": true,
+        "PhysicalBufferBudgetBytes": 11207256876,
+        "StreamedXmxMatrices": true,
+        "ExpandedStreamedXmxTiles": false,
+        "StreamedWeightGradientWorkspaceMiB": 96,
+        "PackedReluBackward": true,
+        "FusedPackedReluBackward": true,
+        "FusedReluPackBias": true,
+        "FusedAttentionQkvDecodePack2048": true,
+        "FusedPackedResidualNorm": false,
+        "FusedDualGradientPack": true,
+        "FusedLossHeadLogitRound": true,
+        "Mix8_16FusedGradientAccumulation": false,
+        "Mix8_16DirectGradientReduction": false,
+        "Mix8_16PipelinedGradientReduction": false,
+        "CoalescedBfp8Publication": true,
+        "DirectAttentionQk": true,
+        "TransformerCheckpointing": false,
+        "TransformerCheckpointLayers": 2147483647,
+        "TransformerFfnCheckpointing": false,
+        "AutomaticTransformerMemoryPlan": true,
+        "OrderedTiledNorm": true,
+        "PackedNormInput": true
+      }
+    },
+    {
+      "Device": {
+        "Index": 1,
+        "Name": "Intel(R) Arc(TM) B580 Graphics",
+        "DriverVersion": "32.0.101.9030",
+        "GlobalMemoryBytes": 12452507648,
+        "MaximumAllocationBytes": 12452507648,
+        "Extensions": "cl_khr_byte_addressable_store cl_khr_device_uuid cl_khr_fp16 cl_khr_global_int32_base_atomics cl_khr_global_int32_extended_atomics cl_khr_icd cl_khr_icd_unloadable cl_khr_local_int32_base_atomics cl_khr_local_int32_extended_atomics cl_intel_command_queue_families cl_intel_subgroups cl_intel_required_subgroup_size cl_intel_subgroups_short cl_intel_accelerator cl_intel_driver_diagnostics cl_khr_priority_hints cl_khr_throttle_hints cl_khr_create_command_queue cl_intel_subgroups_char cl_intel_subgroups_long cl_khr_il_program cl_intel_mem_force_host_memory cl_khr_subgroup_extended_types cl_khr_subgroup_non_uniform_vote cl_khr_subgroup_ballot cl_khr_subgroup_non_uniform_arithmetic cl_khr_subgroup_shuffle cl_khr_subgroup_shuffle_relative cl_khr_subgroup_clustered_reduce cl_intel_device_attribute_query cl_khr_expect_assume cl_khr_extended_bit_ops cl_khr_suggested_local_work_size cl_intel_split_work_group_barrier cl_khr_int64_base_atomics cl_khr_int64_extended_atomics cl_khr_integer_dot_product cl_intel_spirv_subgroups cl_khr_spirv_linkonce_odr cl_khr_spirv_no_integer_wrap_decoration cl_khr_spirv_queries cl_intel_unified_shared_memory cl_ext_float_atomics cl_intel_kernel_allocations_info cl_khr_fp64 cl_khr_subgroups cl_khr_mipmap_image cl_khr_mipmap_image_writes cl_khr_external_memory cl_intel_planar_yuv cl_intel_packed_yuv cl_khr_image2d_from_buffer cl_khr_depth_images cl_khr_3d_image_writes cl_intel_bfloat16_conversions cl_intel_create_buffer_with_properties cl_intel_subgroup_local_block_io cl_intel_subgroup_matrix_multiply_accumulate cl_intel_subgroup_matrix_multiply_accumulate_tf32 cl_khr_subgroup_named_barrier cl_intel_subgroup_extended_block_read cl_intel_subgroup_2d_block_io cl_intel_subgroup_buffer_prefetch cl_khr_gl_sharing cl_khr_gl_depth_images cl_khr_gl_event cl_khr_gl_msaa_sharing cl_intel_dx9_media_sharing cl_khr_dx9_media_sharing cl_khr_d3d10_sharing cl_khr_d3d11_sharing cl_intel_d3d11_nv12_media_sharing cl_intel_sharing_format_query cl_khr_pci_bus_info cl_intel_simultaneous_sharing ",
+        "MinimumSubgroupSize": 16,
+        "SupportsXmx": true
+      },
+      "Options": {
+        "Qwen35TrainingKernels": true,
+        "Qwen35CooperativeLora": true,
+        "Qwen35ProjectionWorkgroupSize": 32,
+        "Qwen35ParallelArgmax": false,
+        "Qwen35ParallelDeltaNorm": false,
+        "Qwen35LoraReductionSize": 128,
+        "Qwen35UnrollQ4": false,
+        "Qwen35NativeHalfScale": false,
+        "Qwen35CooperativeDelta": true,
+        "Qwen35InferenceKernelsOnly": true,
+        "QwenQuantizedLinearFast": true,
+        "QwenInferenceKvCache": true,
+        "QwenRmsNormFast": true,
+        "QwenQuantizedLinearSubgroup": true,
+        "QwenQuantizedSubgroupPrefill": true,
+        "InferenceKvCache": true,
+        "InferenceGemv": true,
+        "InferencePackedEmbedding": true,
+        "InferenceSmallRowNorm": true,
+        "InferenceFusedGemv": true,
+        "ResidentTensors": true,
+        "CoalescedAttention": true,
+        "BatchedAttention": true,
+        "XmxMatrices": true,
+        "XmxGemmMode": "Auto",
+        "ParallelReductions": true,
+        "WideMatrices": true,
+        "DeepMatrices": true,
+        "CausalAttentionBounds": true,
+        "ParallelWeightGradients": true,
+        "AttentionWorkspaceMiB": 64,
+        "DetailedProfiling": false,
+        "CollectKernelTimings": true,
+        "CompactAttentionTiles": true,
+        "UnrolledAttentionTiles": true,
+        "PanelAttention": true,
+        "MixedBackwardMatrixOperands": true,
+        "InlineMatrixGradient": true,
+        "FusedAttentionDkv": true,
+        "AttentionDkvRows": 16,
+        "FusedAttentionDq": false,
+        "FusedAttentionPv": false,
+        "BlockResidualNorm": false,
+        "FusedNormGradient": true,
+        "DirectXmxMatrices": true,
+        "PackedMatrixStorage": true,
+        "SubgroupAttentionReduction": false,
+        "CachedAttentionProbabilities": true,
+        "CachedAttentionProbabilities2048": false,
+        "SavedAttentionProbabilitiesDirect2048": true,
+        "AttentionDqM32T2048": false,
+        "CachedAttentionDerivatives2048": false,
+        "AttentionDerivativePrefix4T2048": true,
+        "AttentionDerivativePrefix8T2048": true,
+        "Mix8_16PackedAttentionBackward": true,
+        "Mix8_16Bf16QkvActivations": true,
+        "Mix8_16Bf16Activations": true,
+        "Mix8_16LinearDualGradientPack": true,
+        "Mix8_16ReluDualGradientPack": true,
+        "Mix8_16FusedNormResidualBackward": true,
+        "Mix8_16DirectBf16NormOutput": true,
+        "Mix8_16ParallelNormReduction": true,
+        "Mix8_16CachedLossLogits": true,
+        "Mix8_16BiasOnlyGradientReduction": true,
+        "Mix8_16XmxAttentionProducts": false,
+        "Mix8_16XmxAttentionSlm": false,
+        "Mix8_16AttentionRowDelta": true,
+        "Mix8_16FusedAttentionDpDs": true,
+        "Mix8_16FusedAttentionDpDsXmx": false,
+        "Mix8_16NativeExpAttention": true,
+        "Mix8_16DkvPackedSlm": true,
+        "Mix8_16DpDsK32": true,
+        "Mix8_16PvM128": false,
+        "Mix8_16DqM128": false,
+        "Mix8_16PvPackedSlm": true,
+        "Mix8_16DqPackedSlm": true,
+        "Mix8_16DqPackedSlmBoth": false,
+        "Mix8_16FusedNormParameterGradients": true,
+        "AttentionDerivativePrefix16T2048": false,
+        "FusedAttentionDpDs2048": false,
+        "DkvQueryMajorPitch2048": 0,
+        "CacheSizedAttentionBackward": true,
+        "TunedFp32Attention": true,
+        "QueuedKernelLimit": 512,
+        "PipelineEventCollection": true,
+        "PowerOfTwoPackScales": true,
+        "BulkAttentionQkPanels": true,
+        "FusedBfp8Linear": true,
+        "Mix8_16Int8Linear": false,
+        "ExpandedXmxTiles": true,
+        "BlockIoAttention": true,
+        "MatrixPanelCacheMiB": 0,
+        "ExperimentalOptimizationKernels": false,
+        "ExplicitHostUploads": true,
+        "DeferredReleaseBytes": 0,
+        "BatchDispatch": true,
+        "LossChunkRows": 512,
+        "LossLogitsWorkspaceMiB": 32,
+        "LossPanelWorkspaceMiB": 96,
+        "TiledMatrices": true,
+        "StreamingAttention": true,
+        "FlashAttention": false,
+        "FlashAttentionXmxProducts": false,
+        "FlashAttentionAsyncCopy": false,
+        "FlashAttentionLargeRegisters": true,
+        "XmxAttentionProducts": false,
+        "DirectXmxAttentionProducts": true,
+        "ResidentMuonIterations": true,
+        "ChunkedLossHead": true,
+        "PackedUploads": true,
+        "FusedNormalization": true,
+        "BufferPoolBytes": 536870912,
+        "LruBufferPool": true,
+        "ReuseRetiredBuffers": true,
+        "PhysicalBufferBudgetBytes": 11207256876,
+        "StreamedXmxMatrices": true,
+        "ExpandedStreamedXmxTiles": false,
+        "StreamedWeightGradientWorkspaceMiB": 96,
+        "PackedReluBackward": true,
+        "FusedPackedReluBackward": true,
+        "FusedReluPackBias": true,
+        "FusedAttentionQkvDecodePack2048": true,
+        "FusedPackedResidualNorm": false,
+        "FusedDualGradientPack": true,
+        "FusedLossHeadLogitRound": true,
+        "Mix8_16FusedGradientAccumulation": false,
+        "Mix8_16DirectGradientReduction": false,
+        "Mix8_16PipelinedGradientReduction": false,
+        "CoalescedBfp8Publication": true,
+        "DirectAttentionQk": true,
+        "TransformerCheckpointing": false,
+        "TransformerCheckpointLayers": 2147483647,
+        "TransformerFfnCheckpointing": false,
+        "AutomaticTransformerMemoryPlan": true,
+        "OrderedTiledNorm": true,
+        "PackedNormInput": true
+      }
+    }
+  ],
+  "KernelTimingsEnabled": true,
+  "ResidentWeightBytes": [
+    5035468800,
+    5116405760
+  ],
+  "ResidentAuxiliaryWeightBytes": [
+    5280768,
+    5301248
+  ],
+  "TotalTrainingSeconds": 33.0787711,
+  "CheckpointSaveSeconds": 11.5656418,
+  "Checkpoint": {
+    "Path": "<benchmark-workspace>\\lora-training-speed\\official-baseline-1-adapter.bin",
+    "Bytes": 700397417,
+    "Sha256": "d70b31afea8ebb923b8b5899855f0be0926e74159673320e60856b6ad35a50ab",
+    "Step": 8
+  },
+  "EvidenceId": "3d238e7ac71a33d74848f700faf5204637dc534de5209c75dbf9bb808e94cac6",
+  "FinalStep": 8,
+  "CompletedUtc": "2026-09-27T10:47:35.4690845+00:00"
+}

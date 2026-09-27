@@ -72,7 +72,9 @@ public sealed partial class Qwen35QuantizedModel
         {
             foreach (var adapter in _lora.Values) adapter.Update(_loraOptions, LoraStep + 1, clip);
             foreach (var lane in _lanes) lane.Synchronize();
-            LoraStep++; Reset();
+            // LoraLoss reset inference state before its independent sequence
+            // tape. Training never mutates those caches, so they remain empty.
+            LoraStep++;
             return result with { Step = LoraStep };
         }
         catch { _faulted = true; _loraFaulted = true; throw; }
@@ -94,22 +96,34 @@ public sealed partial class Qwen35QuantizedModel
     {
         var sums = new Dictionary<Qwen35LoraMatrix, double>();
         int splits = _options.TrainingNormSplits;
-        foreach (var group in _lora.Values.GroupBy(adapter => adapter.Lane))
+        var batches = new List<(ArcExecutionLane Lane, Qwen35LoraMatrix[] Adapters, ArcBuffer Results)>();
+        try
         {
-            var adapters = group.ToArray();
-            using ArcBuffer buffer = group.Key.Allocate(checked(adapters.Length * 2 * splits));
-            for (int i = 0; i < adapters.Length; i++) adapters[i].EnqueueGradientSquaredNorm(buffer, i * 2 * splits, splits);
-            var values = new float[adapters.Length * 2 * splits];
-            group.Key.Read(buffer, values);
-            for (int i = 0; i < adapters.Length; i++)
+            // Queue every device's independent reductions before a blocking
+            // readback. Summation below retains the previous adapter order.
+            foreach (var group in _lora.Values.GroupBy(adapter => adapter.Lane))
             {
-                double sum = 0;
-                for (int j = 0; j < 2 * splits; j++) sum += values[i * 2 * splits + j];
-                sums[adapters[i]] = sum;
+                var adapters = group.ToArray();
+                ArcBuffer buffer = group.Key.Allocate(checked(adapters.Length * 2 * splits));
+                batches.Add((group.Key, adapters, buffer));
+                for (int i = 0; i < adapters.Length; i++)
+                    adapters[i].EnqueueGradientSquaredNorm(buffer, i * 2 * splits, splits);
             }
+            foreach (var (lane, adapters, buffer) in batches)
+            {
+                var values = new float[adapters.Length * 2 * splits];
+                lane.Read(buffer, values);
+                for (int i = 0; i < adapters.Length; i++)
+                {
+                    double sum = 0;
+                    for (int j = 0; j < 2 * splits; j++) sum += values[i * 2 * splits + j];
+                    sums[adapters[i]] = sum;
+                }
+            }
+            // Splits=1 also preserves the original GPU norm reduction.
+            return _lora.Values.Sum(adapter => sums[adapter]);
         }
-        // Preserve adapter order. Splits=1 also preserves the original GPU norm reduction.
-        return _lora.Values.Sum(adapter => sums[adapter]);
+        finally { foreach (var batch in batches) batch.Results.Dispose(); }
     }
 
     public double EvaluateLoraLoss(IReadOnlyList<int> tokens, int responseStartIndex)
@@ -150,12 +164,7 @@ public sealed partial class Qwen35QuantizedModel
         try
         {
             Matrix embedding = _matrices["token_embd.weight"];
-            V hidden = tape.Add(embedding.Lane, embedding.Lane.Allocate(checked(rows * d.EmbeddingLength)), rows, d.EmbeddingLength, false);
-            for (int t = 0; t < rows; t++)
-            {
-                using ArcBuffer one = embedding.Embedding(tokens[t]);
-                embedding.Lane.CopyBytes(one, hidden.Data, 0, t * d.EmbeddingLength * 4, d.EmbeddingLength * 4);
-            }
+            V hidden = tape.Add(embedding.Lane, embedding.Embedding(tokens, rows), rows, d.EmbeddingLength, false);
             for (int layer = 0; layer < d.LayerCount; layer++)
             {
                 string p = $"blk.{layer}."; var lane = _states[layer].Lane;

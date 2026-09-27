@@ -7,9 +7,11 @@ namespace NNtrain.Core.Tests;
 public sealed class Qwen35InferenceHalfScaleTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void EveryHalfEncodingPreservesFiniteBitsAndNanClassification(bool nativeHalf)
+    [InlineData(false, "q35l_half_convert_probe")]
+    [InlineData(true, "q35l_half_convert_probe")]
+    [InlineData(false, "q35l_qwen_half_convert_probe")]
+    [InlineData(true, "q35l_qwen_half_convert_probe")]
+    public void EveryHalfEncodingPreservesFiniteBitsAndNanClassification(bool nativeHalf, string kernel)
     {
         Assert.SkipWhen(ArcDevices.Enumerate().Count == 0, "Intel Arc GPU is required.");
         using var lane = new ArcExecutionLane(0, new()
@@ -21,7 +23,7 @@ public sealed class Qwen35InferenceHalfScaleTests
         ushort[] encoded = Enumerable.Range(0, count).Select(i => (ushort)i).ToArray();
         using ArcBuffer input = lane.UploadRaw(encoded);
         using ArcBuffer output = lane.Upload(Enumerable.Repeat(float.NaN, count + 2).ToArray());
-        lane.Run("q35l_half_convert_probe", count, 128, input, output, count);
+        lane.Run(kernel, count, 128, input, output, count);
         var actual = new float[count + 2];
         lane.Read(output, actual);
         for (int bits = 0; bits < count; bits++)
@@ -36,6 +38,6 @@ public sealed class Qwen35InferenceHalfScaleTests
         // Exact-bit comparisons above include both signed zeros, infinities,
         // all positive/negative subnormals and the normal/subnormal boundaries.
         Assert.True(float.IsNaN(actual[count]) && float.IsNaN(actual[count + 1]));
-        Assert.Contains("q35l_half_convert_probe", lane.KernelTimings.Keys);
+        Assert.Contains(kernel, lane.KernelTimings.Keys);
     }
 }

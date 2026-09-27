@@ -292,6 +292,9 @@ __kernel void qwen_gqa_dkv(
 
 
 inline float qwen_half_to_float(ushort h) {
+#if Q35_NATIVE_HALF
+    return vload_half(0, (__private const half*)&h);
+#else
     uint sign = ((uint)h & 0x8000u) << 16;
     uint exponent = ((uint)h >> 10) & 0x1fu;
     uint mantissa = (uint)h & 0x03ffu;
@@ -312,6 +315,7 @@ inline float qwen_half_to_float(ushort h) {
         bits = sign | ((exponent + 112u) << 23) | (mantissa << 13);
     }
     return as_float(bits);
+#endif
 }
 
 inline void qwen_q4_scale_min(

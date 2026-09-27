@@ -75,6 +75,51 @@ Q35T_LINEAR_IQ_ROWS(q35t_linear_iq3_s_rows2, 110, q35t_iq3_octet, 2)
 Q35T_LINEAR_IQ_ROWS(q35t_linear_iq3_s_rows4, 110, q35t_iq3_octet, 4)
 #undef Q35T_LINEAR_IQ_ROWS
 
+// Larger row tiles keep one independent accumulator per row. The macro lists
+// expose fixed registers rather than dynamically indexing private arrays.
+#define Q35T_ROW_LIST8(M) M(0) M(1) M(2) M(3) M(4) M(5) M(6) M(7)
+#define Q35T_ROW_LIST16(M) Q35T_ROW_LIST8(M) M(8) M(9) M(10) M(11) M(12) M(13) M(14) M(15)
+#define Q35T_IQ_DECLARE(N) float8 s##N = (float8)(0.0f);
+#define Q35T_IQ_ACCUMULATE(N) \
+    if (row + N < rows) s##N = fma(vload8(0, x0 + (size_t)N * input_width + offset), decoded, s##N);
+#define Q35T_IQ_STORE(N) { \
+    float total = sub_group_reduce_add(dot(s##N.lo, (float4)(1.0f)) + dot(s##N.hi, (float4)(1.0f))); \
+    if (lane == 0 && row + N < rows) y[(size_t)(row + N) * output_width + output] = bias[output] + total; \
+}
+
+#define Q35T_LINEAR_IQ_WIDE_ROWS(NAME, BLOCK_BYTES, DECODE, ROWS, APPLY) \
+__attribute__((intel_reqd_sub_group_size(16))) \
+__attribute__((reqd_work_group_size(32, 1, 1))) \
+__kernel void NAME(__global const float* x, __global const uchar* weight, \
+    __global const float* bias, __global float* y, int rows, int input_width, int output_width) { \
+    int lane = get_sub_group_local_id(), flat = get_group_id(0) * 2 + get_sub_group_id(); \
+    int tiles = (rows + ROWS - 1) / ROWS; \
+    if (flat >= tiles * output_width) return; \
+    int row = (flat / output_width) * ROWS, output = flat % output_width, blocks = input_width >> 8; \
+    __global const uchar* rowWeight = weight + (size_t)output * blocks * BLOCK_BYTES; \
+    __global const float* x0 = x + (size_t)row * input_width; \
+    APPLY(Q35T_IQ_DECLARE) \
+    for (int b = 0; b < blocks; ++b) { \
+        __global const uchar* block = rowWeight + b * BLOCK_BYTES; \
+        float d = q35l_half_to_float((ushort)block[0] | ((ushort)block[1] << 8)); \
+        _Pragma("unroll") \
+        for (int halfIndex = 0; halfIndex < 2; ++halfIndex) { \
+            int octet = halfIndex * 16 + lane, offset = b * 256 + octet * 8; \
+            float8 decoded = DECODE(block, octet, d); \
+            APPLY(Q35T_IQ_ACCUMULATE) \
+        } \
+    } \
+    APPLY(Q35T_IQ_STORE) \
+}
+Q35T_LINEAR_IQ_WIDE_ROWS(q35t_linear_iq2_s_rows8, 82, q35t_iq2_octet, 8, Q35T_ROW_LIST8)
+Q35T_LINEAR_IQ_WIDE_ROWS(q35t_linear_iq2_s_rows16, 82, q35t_iq2_octet, 16, Q35T_ROW_LIST16)
+Q35T_LINEAR_IQ_WIDE_ROWS(q35t_linear_iq3_s_rows8, 110, q35t_iq3_octet, 8, Q35T_ROW_LIST8)
+Q35T_LINEAR_IQ_WIDE_ROWS(q35t_linear_iq3_s_rows16, 110, q35t_iq3_octet, 16, Q35T_ROW_LIST16)
+#undef Q35T_LINEAR_IQ_WIDE_ROWS
+#undef Q35T_IQ_DECLARE
+#undef Q35T_IQ_ACCUMULATE
+#undef Q35T_IQ_STORE
+
 inline float q35t_q4_accumulate(__global const float* x, int offset, float4 weights, float sum) {
     sum = fma(x[offset], weights.s0, sum);
     sum = fma(x[offset + 16], weights.s1, sum);
@@ -128,4 +173,49 @@ __kernel void NAME(__global const float* x, __global const uchar* weight, \
 Q35T_LINEAR_Q4_ROWS(q35t_linear_q4_k_rows2, 2)
 Q35T_LINEAR_Q4_ROWS(q35t_linear_q4_k_rows4, 4)
 #undef Q35T_LINEAR_Q4_ROWS
+
+#define Q35T_Q4_DECLARE(N) float s##N = 0.0f;
+#define Q35T_Q4_ACCUMULATE(N) \
+    if (row + N < rows) s##N = q35t_q4_accumulate(x0 + (size_t)N * input_width, offset, decoded, s##N);
+#define Q35T_Q4_STORE(N) { \
+    float total = sub_group_reduce_add(s##N); \
+    if (lane == 0 && row + N < rows) y[(size_t)(row + N) * output_width + output] = bias[output] + total; \
+}
+#define Q35T_LINEAR_Q4_WIDE_ROWS(NAME, ROWS, APPLY) \
+__attribute__((intel_reqd_sub_group_size(16))) \
+__attribute__((reqd_work_group_size(32, 1, 1))) \
+__kernel void NAME(__global const float* x, __global const uchar* weight, \
+    __global const float* bias, __global float* y, int rows, int input_width, int output_width) { \
+    int lane = get_sub_group_local_id(), flat = get_group_id(0) * 2 + get_sub_group_id(); \
+    int tiles = (rows + ROWS - 1) / ROWS; \
+    if (flat >= tiles * output_width) return; \
+    int row = (flat / output_width) * ROWS, output = flat % output_width, blocks = input_width >> 8; \
+    __global const uchar* rowWeight = weight + (size_t)output * blocks * 144; \
+    __global const float* x0 = x + (size_t)row * input_width; \
+    APPLY(Q35T_Q4_DECLARE) \
+    for (int b = 0; b < blocks; ++b) { \
+        __global const uchar* block = rowWeight + b * 144; \
+        float d = q35l_half_to_float((ushort)block[0] | ((ushort)block[1] << 8)); \
+        float dmin = q35l_half_to_float((ushort)block[2] | ((ushort)block[3] << 8)); \
+        for (int pair = 0; pair < 4; ++pair) { \
+            float em, en, om, on; \
+            q35l_q4_scale_min(block, pair * 2, d, dmin, &em, &en); \
+            q35l_q4_scale_min(block, pair * 2 + 1, d, dmin, &om, &on); \
+            uchar first = block[16 + pair * 32 + lane], second = block[32 + pair * 32 + lane]; \
+            float4 decoded = (float4)(fma(em, (float)(first & 15), -en), fma(em, (float)(second & 15), -en), \
+                fma(om, (float)(first >> 4), -on), fma(om, (float)(second >> 4), -on)); \
+            int offset = b * 256 + pair * 64 + lane; \
+            APPLY(Q35T_Q4_ACCUMULATE) \
+        } \
+    } \
+    APPLY(Q35T_Q4_STORE) \
+}
+Q35T_LINEAR_Q4_WIDE_ROWS(q35t_linear_q4_k_rows8, 8, Q35T_ROW_LIST8)
+Q35T_LINEAR_Q4_WIDE_ROWS(q35t_linear_q4_k_rows16, 16, Q35T_ROW_LIST16)
+#undef Q35T_LINEAR_Q4_WIDE_ROWS
+#undef Q35T_Q4_DECLARE
+#undef Q35T_Q4_ACCUMULATE
+#undef Q35T_Q4_STORE
+#undef Q35T_ROW_LIST8
+#undef Q35T_ROW_LIST16
 #endif

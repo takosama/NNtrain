@@ -16,7 +16,7 @@ public sealed record Qwen35ExecutionOptions
     public bool UnrollQ4 { get; init; }
     public bool NativeHalfScale { get; init; } = true;
     // Full diagnostics opt back into per-kernel events; completion fences are
-    // retained when timing is disabled. Training always retains its telemetry.
+    // retained when timing is disabled. Step loss/time telemetry is independent.
     public bool CollectKernelTimings { get; init; }
     public bool TrainingBatchGradientNorm { get; init; } = true;
     public int TrainingNormSplits { get; init; } = 8;
@@ -24,16 +24,20 @@ public sealed record Qwen35ExecutionOptions
     public bool TrainingCooperativeDelta { get; init; } = true;
     public bool TrainingResponseOnlyHead { get; init; } = true;
     public int TrainingTransposeRows { get; init; } = 16;
+    // Eight packed components share decode work across eight sequence rows.
+    // Set a tile to zero to compare with the scalar transpose implementation.
+    public int TrainingTransposeOctetRows { get; init; } = 8;
+    public int TrainingQ4TransposeOctetRows { get; init; } = 8;
+    public int TrainingIQ3TransposeOctetRows { get; init; } = 8;
     public int TrainingForwardRows { get; init; } = 4;
-    public int TrainingBufferPoolMiB { get; init; } = 512;
+    public int TrainingBufferPoolMiB { get; init; } = 2048;
     public bool DetailedProfiling { get; init; }
     public bool FusedDelta { get; init; } = true;
     private int? _queuedKernelLimit;
-    // An explicit override applies to either workload; unchanged training
-    // callers keep their original 512-command window.
+    // The physical device budget still bounds retained buffers and pending work.
     public int QueuedKernelLimit
     {
-        get => _queuedKernelLimit ?? (LoraTraining ? 512 : 4096);
+        get => _queuedKernelLimit ?? 4096;
         init => _queuedKernelLimit = value;
     }
 }

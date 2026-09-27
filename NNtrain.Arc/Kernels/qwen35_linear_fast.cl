@@ -39,6 +39,11 @@ __kernel void q35l_half_convert_probe(__global const ushort* encoded,
     int i = get_global_id(0);
     if (i < count) decoded[i] = q35l_half_to_float(encoded[i]);
 }
+__kernel void q35l_qwen_half_convert_probe(__global const ushort* encoded,
+    __global float* decoded, int count) {
+    int i = get_global_id(0);
+    if (i < count) decoded[i] = qwen_half_to_float(encoded[i]);
+}
 #endif
 
 inline float q35l_q4_value(
