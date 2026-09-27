@@ -1,4 +1,22 @@
 // Full sequence FP32 adjoints. Each output element has one writer.
+__kernel void q35t_norm2_split(__global const float* x,__global float* result,int n,int offset,int splits) {
+    int group=get_group_id(0),tid=get_local_id(0);__local float v[128];float sum=0;
+    for(int i=group*128+tid;i<n;i+=128*splits){float g=x[i];sum+=isfinite(g)?g*g:INFINITY;}
+    v[tid]=sum;barrier(CLK_LOCAL_MEM_FENCE);
+    for(int s=64;s>0;s>>=1){if(tid<s)v[tid]+=v[tid+s];barrier(CLK_LOCAL_MEM_FENCE);}if(tid==0)result[offset+group]=v[0];
+}
+__kernel void q35t_add_offset(__global const float* x,__global float* y,int n,int offset) {
+    int i=get_global_id(0);if(i<n)y[offset+i]+=x[i];
+}
+__kernel void q35t_lora_dz_coop(__global const float* dy,__global const float* b,__global float* dz,
+    int rows,int output,int rank,float scale) {
+    int item=get_group_id(0),tid=get_local_id(0),t=item/rank,r=item%rank;
+    __local float partial[128];float sum=0;
+    for(int o=tid;o<output;o+=128)sum=fma(dy[t*output+o],b[o*rank+r],sum);
+    partial[tid]=sum;barrier(CLK_LOCAL_MEM_FENCE);
+    for(int s=64;s>0;s>>=1){if(tid<s)partial[tid]+=partial[tid+s];barrier(CLK_LOCAL_MEM_FENCE);}
+    if(tid==0)dz[item]=partial[0]*scale;
+}
 __kernel void q35t_add(__global const float* x,__global const float* y,__global float* z,int n) {
     int i=get_global_id(0); if(i<n) z[i]=x[i]+y[i];
 }

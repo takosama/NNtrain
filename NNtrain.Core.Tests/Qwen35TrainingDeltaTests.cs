@@ -89,6 +89,36 @@ public sealed class Qwen35TrainingDeltaTests
     private static ArcExecutionLane CreateLane() => new(0, new()
         { Qwen35InferenceKernelsOnly = true, Qwen35TrainingKernels = true });
 
+    [Theory]
+    [InlineData(2, 6, 7)]
+    [InlineData(16, 48, 128)]
+    [InlineData(2, 6, 129)]
+    public void CooperativeQkBackwardMatchesSerialForGroupedHeadsAndPartialValueTiles(int keys, int heads, int width)
+    {
+        Assert.SkipWhen(ArcDevices.Enumerate().Count == 0, "Intel Arc is required.");
+        using var lane = CreateLane();
+        const int time = 1, sequence = 3;
+        int values = heads * width, channels = (2 * keys + heads) * width;
+        var random = new Random(821 + width);
+        float[] Random(int count) => Enumerable.Range(0, count).Select(_ => (float)(random.NextDouble() * 2 - 1)).ToArray();
+        using ArcBuffer alpha = lane.Upload(Random(sequence * heads));
+        using ArcBuffer dt = lane.Upload(Random(heads));
+        using ArcBuffer a = lane.Upload(Random(heads).Select(x => -MathF.Abs(x)).ToArray());
+        using ArcBuffer states = lane.Upload(Random((sequence + 1) * values * width));
+        using ArcBuffer draw = lane.Upload(Random(sequence * values));
+        using ArcBuffer adj = lane.Upload(Random(values * width));
+        using ArcBuffer scratch = lane.Upload(Random(values * 4));
+        // Untouched tokens and value gradients must survive both paths unchanged.
+        float[] initial = Random(sequence * channels);
+        using ArcBuffer serial = lane.Upload(initial);
+        using ArcBuffer cooperative = lane.Upload(initial);
+        lane.Run("q35t_delta_qk_backward_step", keys * width, 0,
+            alpha, dt, a, states, draw, adj, scratch, serial, time, keys, heads, width);
+        lane.Run("q35t_delta_qk_backward_step_cooperative", (long)keys * width * 32, 32,
+            alpha, dt, a, states, draw, adj, scratch, cooperative, time, keys, heads, width);
+        AssertClose(Read(lane, serial, initial.Length), Read(lane, cooperative, initial.Length), 3e-5f, 3e-5f);
+    }
+
     private sealed class Data
     {
         internal readonly int Keys, Heads, Width, Kernel, Sequence, Channels, Values;

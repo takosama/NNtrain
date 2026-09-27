@@ -18,7 +18,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
     ];
 
     private static readonly string[] Qwen35TrainingResourceSuffixes =
-        [".qwen35_train.cl", ".qwen35_train_attention.cl", ".qwen35_train_delta.cl"];
+        [".qwen35_train.cl", ".qwen35_train_attention.cl", ".qwen35_train_delta.cl", ".qwen35_train_linear.cl"];
 
     private readonly object _sync = new();
     private readonly Dictionary<string, nint> _kernels = [];

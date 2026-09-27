@@ -81,10 +81,33 @@ public sealed partial class Qwen35QuantizedModel
         ValidateLoraSequence(tokens, responseStartIndex);
         foreach (var adapter in _lora.Values) adapter.ZeroGrad();
         double loss = LoraLoss(tokens, responseStartIndex, backward: true);
-        double squared = _lora.Values.Sum(adapter => adapter.GradientSquaredNorm());
+        double squared = _options.TrainingBatchGradientNorm ? BatchedGradientSquaredNorm()
+            : _lora.Values.Sum(adapter => adapter.GradientSquaredNorm());
         if (!double.IsFinite(loss) || !double.IsFinite(squared) || squared < 0)
             throw new ArithmeticException("Non-finite LoRA loss/gradient; optimizer update was not committed.");
         return new(LoraStep, loss, Math.Sqrt(squared), tokens.Count - responseStartIndex);
+    }
+
+    private double BatchedGradientSquaredNorm()
+    {
+        var sums = new Dictionary<Qwen35LoraMatrix, double>();
+        int splits = _options.TrainingNormSplits;
+        foreach (var group in _lora.Values.GroupBy(adapter => adapter.Lane))
+        {
+            var adapters = group.ToArray();
+            using ArcBuffer buffer = group.Key.Allocate(checked(adapters.Length * 2 * splits));
+            for (int i = 0; i < adapters.Length; i++) adapters[i].EnqueueGradientSquaredNorm(buffer, i * 2 * splits, splits);
+            var values = new float[adapters.Length * 2 * splits];
+            group.Key.Read(buffer, values);
+            for (int i = 0; i < adapters.Length; i++)
+            {
+                double sum = 0;
+                for (int j = 0; j < 2 * splits; j++) sum += values[i * 2 * splits + j];
+                sums[adapters[i]] = sum;
+            }
+        }
+        // Preserve adapter order. Splits=1 also preserves the original GPU norm reduction.
+        return _lora.Values.Sum(adapter => sums[adapter]);
     }
 
     public double EvaluateLoraLoss(IReadOnlyList<int> tokens, int responseStartIndex)
@@ -167,16 +190,20 @@ public sealed partial class Qwen35QuantizedModel
                 hidden = tape.Sum(hidden, ProjectTrain(p + "ffn_down.weight", activated));
             }
             V final = tape.Norm(hidden, _dense["output_norm.weight"], d.RmsEpsilon);
-            V logits = ProjectTrain("output.weight", tape.Move(final, OutputMatrix.Lane));
-            int[] targets = Enumerable.Range(0, rows).Select(t => t + 1 >= start ? tokens[t + 1] : -1).ToArray();
-            using ArcBuffer labels = logits.Lane.UploadRaw(targets), stats = logits.Lane.Allocate(checked(rows * 3));
-            logits.Lane.Run("q35t_ce_stats", (long)rows * 128, 128, logits.Data, labels, stats, d.VocabularySize, valid);
-            float[] numbers = new float[rows * 3]; logits.Lane.Read(stats, numbers);
-            double loss = Enumerable.Range(0, rows).Sum(t => (double)numbers[t * 3]);
+            final = tape.Move(final, OutputMatrix.Lane);
+            V head = _options.TrainingResponseOnlyHead ? tape.SliceRows(final, start - 1, valid) : final;
+            V logits = ProjectTrain("output.weight", head);
+            int[] targets = _options.TrainingResponseOnlyHead ? tokens.Skip(start).ToArray()
+                : Enumerable.Range(0, rows).Select(t => t + 1 >= start ? tokens[t + 1] : -1).ToArray();
+            int logitRows = logits.Rows;
+            using ArcBuffer labels = logits.Lane.UploadRaw(targets), stats = logits.Lane.Allocate(checked(logitRows * 3));
+            logits.Lane.Run("q35t_ce_stats", (long)logitRows * 128, 128, logits.Data, labels, stats, d.VocabularySize, valid);
+            float[] numbers = new float[logitRows * 3]; logits.Lane.Read(stats, numbers);
+            double loss = Enumerable.Range(0, logitRows).Sum(t => (double)numbers[t * 3]);
             if (!double.IsFinite(loss)) throw new ArithmeticException("Non-finite LoRA loss; optimizer update was not committed.");
             if (backward)
             {
-                logits.Lane.Run("q35t_ce_grad", (long)rows * d.VocabularySize, 0, logits.Data, labels, stats, logits.Grad(), rows, d.VocabularySize, valid);
+                logits.Lane.Run("q35t_ce_grad", (long)logitRows * d.VocabularySize, 0, logits.Data, labels, stats, logits.Grad(), logitRows, d.VocabularySize, valid);
                 tape.Backward();
             }
             return loss;
@@ -187,15 +214,16 @@ public sealed partial class Qwen35QuantizedModel
         {
             Matrix matrix = name == "output.weight" ? OutputMatrix : _matrices[name];
             _lora.TryGetValue(name, out var adapter);
-            V output = tape.Add(matrix.Lane, matrix.Forward(input.Data, _zeroBias[matrix.Lane], rows), rows, matrix.OutputWidth,
+            int projectionRows = input.Rows;
+            V output = tape.Add(matrix.Lane, matrix.Forward(input.Data, _zeroBias[matrix.Lane], projectionRows), projectionRows, matrix.OutputWidth,
                 input.Differentiable || adapter is not null);
-            ArcBuffer? z = adapter is null ? null : tape.Own(adapter.Forward(input.Data, output.Data, rows));
+            ArcBuffer? z = adapter is null ? null : tape.Own(adapter.Forward(input.Data, output.Data, projectionRows));
             tape.Record(() =>
             {
                 if (output.Gradient is null) return;
                 ArcBuffer? dx = input.Differentiable ? input.Grad() : null;
-                if (dx is not null) matrix.BackwardInput(output.Gradient, dx, rows);
-                adapter?.Backward(input.Data, z!, output.Gradient, dx, rows);
+                if (dx is not null) matrix.BackwardInput(output.Gradient, dx, projectionRows);
+                adapter?.Backward(input.Data, z!, output.Gradient, dx, projectionRows);
             });
             return output;
         }

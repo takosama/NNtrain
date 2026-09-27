@@ -7,26 +7,30 @@ namespace NNtrain;
 /// authoritative; the existing HTML graph is a projection that can always be
 /// rebuilt from it.
 /// </summary>
-internal sealed class TrainingMetricReporter
+internal sealed class TrainingMetricReporter : IDisposable
 {
     private readonly MetricJournalJsonlRepository _repository;
     private readonly string _htmlPath;
     private readonly int _totalEpochs;
     private readonly bool _renderHtml;
     private readonly MetricJournal _journal;
+    private readonly int _renderEverySteps;
+    private bool _dirty;
 
     private TrainingMetricReporter(
         MetricJournalJsonlRepository repository,
         string htmlPath,
         int totalEpochs,
         bool renderHtml,
-        MetricJournal journal)
+        MetricJournal journal,
+        int renderEverySteps)
     {
         _repository = repository;
         _htmlPath = htmlPath;
         _totalEpochs = totalEpochs;
         _renderHtml = renderHtml;
         _journal = journal;
+        _renderEverySteps = renderEverySteps;
     }
 
     internal string SidecarPath => _repository.Path;
@@ -53,11 +57,14 @@ internal sealed class TrainingMetricReporter
         bool resume,
         long checkpointGlobalStep,
         double checkpointEpoch,
-        bool renderHtml)
+        bool renderHtml,
+        int renderEverySteps = 1)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(htmlPath);
         if (totalEpochs <= 0)
             throw new ArgumentOutOfRangeException(nameof(totalEpochs));
+        if (renderEverySteps <= 0)
+            throw new ArgumentOutOfRangeException(nameof(renderEverySteps));
         if (checkpointGlobalStep < -1)
         {
             throw new ArgumentOutOfRangeException(
@@ -96,7 +103,8 @@ internal sealed class TrainingMetricReporter
             fullHtmlPath,
             totalEpochs,
             renderHtml,
-            journal);
+            journal,
+            renderEverySteps);
         reporter.RenderHtml();
         return reporter;
     }
@@ -140,7 +148,9 @@ internal sealed class TrainingMetricReporter
         // ahead of its authoritative sidecar.
         _repository.AppendAndFlush(entry);
         _journal.Append(entry);
-        RenderHtml();
+        _dirty = true;
+        if (_journal.Count == 1 || globalStep % _renderEverySteps == 0)
+            RenderHtml();
     }
 
     internal void AppendCommittedEpochLosses(
@@ -173,5 +183,13 @@ internal sealed class TrainingMetricReporter
                 _htmlPath,
                 _totalEpochs);
         }
+        _dirty = false;
     }
+
+    internal void Flush()
+    {
+        if (_dirty) RenderHtml();
+    }
+
+    public void Dispose() => Flush();
 }

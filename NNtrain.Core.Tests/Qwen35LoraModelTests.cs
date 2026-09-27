@@ -115,7 +115,7 @@ public sealed class Qwen35LoraModelTests
             Assert.Equal(tokens.Length - 2, result.SupervisedTokens);
             Assert.Equal(resident, model.ResidentWeightBytes);
             // Only input IDs and target IDs are uploaded during a resident step.
-            Assert.Equal(2L * sizeof(int) * (tokens.Length - 1), model.UploadedBytes.Sum() - uploaded);
+            Assert.Equal((long)sizeof(int) * ((tokens.Length - 1) + (tokens.Length - 2)), model.UploadedBytes.Sum() - uploaded);
         }
         double finalLoss = model.EvaluateLoraLoss(tokens, 2);
         Assert.True(finalLoss < initialLoss - 1e-5, $"Training did not reduce loss: {initialLoss:R} -> {finalLoss:R}.");

@@ -87,7 +87,9 @@ internal sealed class Qwen35TrainingDelta : IDisposable
             _lane.Run("q35t_delta_prepare", _values, 0,
                 _mixed, _alpha, _beta, _dt, _a, states, draw, adj, scratch, dmixed,
                 t, _keys, _heads, _width);
-            _lane.Run("q35t_delta_qk_backward_step", _keys * _width, 0,
+            bool cooperative = _lane.Options.Qwen35CooperativeDelta && _width >= 32;
+            _lane.Run(cooperative ? "q35t_delta_qk_backward_step_cooperative" : "q35t_delta_qk_backward_step",
+                (long)_keys * _width * (cooperative ? 32 : 1), cooperative ? 32 : 0,
                 _alpha, _dt, _a, states, draw, adj, scratch, dmixed, t, _keys, _heads, _width);
             _lane.Run("q35t_delta_finish", _values, 0,
                 _mixed, _alpha, _beta, _dt, _a, scratch, adj, dalpha, dbeta,

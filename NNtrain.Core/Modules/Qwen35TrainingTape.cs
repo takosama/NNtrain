@@ -34,6 +34,21 @@ internal sealed class Qwen35TrainingTape : IDisposable
     internal void Record(Action action) => _backward.Add(action);
     internal void Backward() { for (int i = _backward.Count - 1; i >= 0; i--) _backward[i](); }
 
+    internal Value SliceRows(Value input, int start, int count)
+    {
+        if (start < 0 || count < 1 || start + count > input.Rows) throw new ArgumentOutOfRangeException(nameof(start));
+        if (start == 0 && count == input.Rows) return input;
+        int elements = checked(count * input.Width), offset = checked(start * input.Width);
+        Value output = Add(input.Lane, input.Lane.Allocate(elements), count, input.Width, input.Differentiable);
+        input.Lane.CopyBytes(input.Data, output.Data, checked(offset * 4), 0, checked(elements * 4));
+        if (input.Differentiable) Record(() =>
+        {
+            if (output.Gradient is not null)
+                input.Lane.Run("q35t_add_offset", elements, 0, output.Gradient, input.Grad(), elements, offset);
+        });
+        return output;
+    }
+
     internal Value Move(Value input, ArcExecutionLane destination)
     {
         if (ReferenceEquals(input.Lane, destination)) return input;

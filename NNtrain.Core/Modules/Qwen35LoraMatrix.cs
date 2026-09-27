@@ -46,7 +46,9 @@ internal sealed class Qwen35LoraMatrix : IDisposable
         ArcBuffer z = Lane.Allocate(checked(rows * Rank));
         try
         {
-            Lane.Run("q35l_lora_a", rows * Rank, 0, x, A, z, rows, Input, Rank);
+            if (Lane.Options.Qwen35CooperativeLora)
+                Lane.Run("q35l_lora_a_coop", (long)rows * Rank * 128, 128, x, A, z, rows, Input, Rank);
+            else Lane.Run("q35l_lora_a", rows * Rank, 0, x, A, z, rows, Input, Rank);
             Lane.Run("q35l_lora_b", (long)rows * Output, 0, z, B, y, rows, Output, Rank, Scale);
             return z;
         }
@@ -56,7 +58,9 @@ internal sealed class Qwen35LoraMatrix : IDisposable
     {
         PrepareTraining();
         using ArcBuffer dz = Lane.Allocate(checked(rows * Rank));
-        Lane.Run("q35t_lora_dz", rows * Rank, 0, dy, B, dz, rows, Output, Rank, Scale);
+        if (Lane.Options.Qwen35CooperativeLora)
+            Lane.Run("q35t_lora_dz_coop", (long)rows * Rank * 128, 128, dy, B, dz, rows, Output, Rank, Scale);
+        else Lane.Run("q35t_lora_dz", rows * Rank, 0, dy, B, dz, rows, Output, Rank, Scale);
         Lane.Run("q35t_lora_db", (long)Output * Rank, 0, dy, z, _db!, rows, Output, Rank, Scale);
         Lane.Run("q35t_lora_da", (long)Input * Rank, 0, dz, x, _da!, rows, Input, Rank);
         if (dx is not null) Lane.Run("q35t_lora_dx", (long)rows * Input, 0, dz, A, dx, rows, Input, Rank);
@@ -77,6 +81,11 @@ internal sealed class Qwen35LoraMatrix : IDisposable
             Lane.Read(result, value); sum += value[0];
         }
         return sum;
+    }
+    internal void EnqueueGradientSquaredNorm(ArcBuffer results, int offset, int splits)
+    {
+        Lane.Run("q35t_norm2_split", splits * 128, 128, _da!, results, Input * Rank, offset, splits);
+        Lane.Run("q35t_norm2_split", splits * 128, 128, _db!, results, Output * Rank, offset + splits, splits);
     }
     internal void Update(Qwen35LoraOptions options, int step, float clip)
     {

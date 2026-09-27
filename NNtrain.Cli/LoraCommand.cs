@@ -15,6 +15,7 @@ internal static class LoraCommand
 
     internal static int Run(string[] args, TextWriter output, TextWriter error)
     {
+        if (UsesGgufModel(args)) return QwenLoraCommand.Run(args, output, error);
         try
         {
             string? modelPath = null, generate = null;
@@ -31,7 +32,7 @@ internal static class LoraCommand
                     default: throw new ArgumentException($"Unknown LoRA option: {args[i]}");
                 }
             }
-            if (modelPath is null) throw new ArgumentException("Usage: lora --model <DRN-checkpoint.json> [--config traning-lora.json] [--generate <prompt>]");
+            if (modelPath is null) throw new ArgumentException("Usage: lora --model <DRN-checkpoint.json> [--config traning-lora.json] [--generate <prompt>]; or lora --model <qwen35.gguf> --config <qwen-lora.json> [--resume]");
             configPath = Path.GetFullPath(configPath);
             var config = LoraConfiguration.Load<LoraTrainingConfiguration>(configPath);
             config.Validate();
@@ -163,6 +164,19 @@ internal static class LoraCommand
         }
         catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
         { error.WriteLine($"Error: {exception.Message}"); error.WriteLine(exception.StackTrace); return 2; }
+    }
+
+    internal static bool UsesGgufModel(string[] args)
+    {
+        for (int i = 1; i < args.Length; ++i)
+        {
+            if (args[i] == "--resume") continue;
+            string option = args[i];
+            if (++i == args.Length) return false;
+            if (option == "--model")
+                return string.Equals(Path.GetExtension(args[i]), ".gguf", StringComparison.OrdinalIgnoreCase);
+        }
+        return false;
     }
 
     internal static (int[] Input, int[] Target, int Batch) BuildBatch(Example[] examples, BpeTokenizer tokenizer, LoraTrainingConfiguration config)

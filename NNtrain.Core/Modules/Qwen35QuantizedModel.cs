@@ -44,7 +44,11 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         Qwen35ExecutionOptions? options = null)
     {
         options ??= new Qwen35ExecutionOptions();
-        if (!Enum.IsDefined(options.QuantizedKernel) || options.QueuedKernelLimit is < 16 or > 4096)
+        if (!Enum.IsDefined(options.QuantizedKernel) || options.QueuedKernelLimit is < 16 or > 4096
+            || options.TrainingTransposeRows is not (1 or 4 or 8 or 16 or 32)
+            || options.TrainingNormSplits is < 1 or > 32
+            || options.TrainingForwardRows is not (1 or 2 or 4)
+            || options.TrainingBufferPoolMiB is < 0 or > 2048)
             throw new ArgumentException("Invalid Qwen3.5 execution options.", nameof(options));
         Qwen35GgufDescriptor d = Qwen35Gguf.Inspect(path);
         ArcDeviceInfo[] available = ArcDevices.Enumerate().ToArray();
@@ -85,7 +89,10 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                 {
                     Qwen35InferenceKernelsOnly = true,
                     Qwen35TrainingKernels = options.LoraTraining,
-                    BufferPoolBytes = WorkspaceReserveBytes,
+                    Qwen35CooperativeLora = options.LoraTraining && options.TrainingCooperativeLora,
+                    Qwen35CooperativeDelta = options.TrainingCooperativeDelta,
+                    DetailedProfiling = options.DetailedProfiling,
+                    BufferPoolBytes = options.LoraTraining ? (long)options.TrainingBufferPoolMiB * 1024 * 1024 : WorkspaceReserveBytes,
                     DeferredReleaseBytes = 0,
                     QueuedKernelLimit = options.QueuedKernelLimit,
                     PhysicalBufferBudgetBytes = DeviceBudget(available[index])
@@ -100,7 +107,8 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                 {
                     // UploadRaw is blocking; no model-sized host payload is retained.
                     model._matrices.Add(tensor.Name, new Matrix(lane, tensor,
-                        gguf.ReadTensorBytes(tensor, EncodedBytes(tensor)), options.QuantizedKernel));
+                        gguf.ReadTensorBytes(tensor, EncodedBytes(tensor)), options.QuantizedKernel,
+                        options.TrainingTransposeRows, options.LoraTraining ? options.TrainingForwardRows : 1));
                 }
                 else
                 {
@@ -441,8 +449,12 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         private readonly string _quantization;
         internal readonly int _inputWidth;
         private readonly Qwen35QuantizedKernel _kernel;
-        internal Matrix(ArcExecutionLane lane, GgufTensorInfo info, byte[] payload, Qwen35QuantizedKernel kernel)
+        private readonly int _transposeRows;
+        private readonly int _forwardRows;
+        internal Matrix(ArcExecutionLane lane, GgufTensorInfo info, byte[] payload, Qwen35QuantizedKernel kernel, int transposeRows, int forwardRows)
         {
+            _transposeRows = transposeRows;
+            _forwardRows = forwardRows;
             Lane = lane; StorageBytes = payload.Length; _type = info.Type;
             _quantization = _type switch
             {
@@ -467,7 +479,12 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
             ArcBuffer output = Lane.Allocate(checked(rows * OutputWidth));
             try
             {
-                if (_kernel == Qwen35QuantizedKernel.Subgroup)
+                if (_kernel == Qwen35QuantizedKernel.Subgroup && _forwardRows > 1 && rows > 1
+                    && _type is Qwen2Gguf.Q4KType or Qwen35Gguf.IQ2SType or Qwen35Gguf.IQ3SType)
+                    Lane.Run($"q35t_linear_{_quantization}_rows{_forwardRows}",
+                        ((((long)rows + _forwardRows - 1) / _forwardRows * OutputWidth + 1) / 2) * 32, 32,
+                        input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
+                else if (_kernel == Qwen35QuantizedKernel.Subgroup)
                     Lane.Run($"q35l_{_quantization}_sg16",
                         ((long)rows * OutputWidth + 1) / 2 * 32, 32, input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
                 else if (_kernel == Qwen35QuantizedKernel.Cooperative)
@@ -486,7 +503,8 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
             const int tile = 1024;
             int splits = (OutputWidth + tile - 1) / tile;
             using ArcBuffer partial = Lane.Allocate(checked(rows * splits * _inputWidth));
-            Lane.Run("q35t_xpose_" + _quantization, (long)rows * splits * _inputWidth, 0,
+            string suffix = _transposeRows == 1 ? "" : "_rows" + _transposeRows;
+            Lane.Run("q35t_xpose_" + _quantization + suffix, ((long)rows + _transposeRows - 1) / _transposeRows * splits * _inputWidth, 128,
                 dy, _encoded, partial, rows, _inputWidth, OutputWidth, splits, tile);
             Lane.Run("q35t_xpose_reduce", (long)rows * _inputWidth, 0,
                 partial, dx, rows, _inputWidth, splits);

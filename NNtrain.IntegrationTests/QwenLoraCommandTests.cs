@@ -22,7 +22,7 @@ public sealed class QwenLoraCommandTests
         {
             DataPath = "train.jsonl", AdapterPath = "adapter.bin", Devices = [0],
             ContextLength = 8, Rank = 2, Alpha = 4, MaxSteps = 1, SaveEverySteps = 1,
-            PromptPrefix = "", ResponsePrefix = "", IncludeOutput = true
+            PromptPrefix = "", ResponsePrefix = "", IncludeOutput = true, OpenLossGraph = false
         };
         (int Exit, string Output, string Error) Run(bool resume = false)
         {
@@ -39,6 +39,9 @@ public sealed class QwenLoraCommandTests
         Assert.Contains("supervised-tokens=2", first.Output);
         Assert.Contains("Arc 0 GPU bytes: encoded=", first.Output);
         Assert.Contains("encoded weight byte count unchanged", first.Output);
+        Assert.True(File.Exists(Path.ChangeExtension(configPath, ".html")));
+        Assert.True(first.Output.IndexOf("loss graph =", StringComparison.Ordinal)
+            < first.Output.IndexOf("LoRA step=1", StringComparison.Ordinal));
         Assert.True(File.Exists(adapterPath));
         byte[] afterOne = File.ReadAllBytes(adapterPath);
         config = config with { MaxSteps = 2 };
@@ -115,7 +118,8 @@ public sealed class QwenLoraCommandTests
         var config = new QwenLoraTrainingConfiguration();
         string identity = QwenLoraCommand.TrainingIdentity(dataset, 3, config);
         Assert.Equal(identity, QwenLoraCommand.TrainingIdentity(dataset, 3, config with
-        { MaxSteps = 100, SaveEverySteps = 5, AdapterPath = "different.bin", DataPath = "copy.jsonl", Devices = [1] }));
+        { MaxSteps = 100, SaveEverySteps = 5, AdapterPath = "different.bin", DataPath = "copy.jsonl", Devices = [1],
+            LossGraphPath = "different.html", ShowLossGraph = false, OpenLossGraph = false, LossGraphEverySteps = 100 }));
         Assert.NotEqual(identity, QwenLoraCommand.TrainingIdentity([.. dataset, 10], 3, config));
         Assert.NotEqual(identity, QwenLoraCommand.TrainingIdentity(dataset, 3, config with { Seed = 9 }));
         Assert.NotEqual(identity, QwenLoraCommand.TrainingIdentity(dataset, 3, config with { IncludeOutput = true }));

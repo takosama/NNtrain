@@ -190,6 +190,52 @@ __kernel void q35t_delta_qk_backward_step(__global const float* alpha,
     dmixed[time * channels + keys + item] = dk;
 }
 
+// One group owns a key component. Adjacent lanes walk adjacent value columns,
+// matching the state layout rather than loading a different strided row per lane.
+// The serial variant above remains the small-width path and a numerical oracle.
+__attribute__((reqd_work_group_size(32, 1, 1)))
+__kernel void q35t_delta_qk_backward_step_cooperative(__global const float* alpha,
+    __global const float* dt, __global const float* a,
+    __global const float* states, __global const float* draw,
+    __global const float* adj, __global const float* scratch, __global float* dmixed,
+    int time, int key_heads, int value_heads, int width)
+{
+    int item = get_group_id(0), lane = get_local_id(0), keys = key_heads * width;
+    if (item >= keys) return;
+    int kh = item / width, k = item % width, values = value_heads * width;
+    int stride = values * width, channels = 2 * keys + values;
+    float dq = 0.0f, dk = 0.0f;
+    for (int h = kh; h < value_heads; h += key_heads)
+    {
+        float decay = exp(a[h] * q35d_softplus(alpha[time * value_heads + h] + dt[h]));
+        for (int v = lane; v < width; v += 32)
+        {
+            int vi = h * width + v, si = h * width * width + k * width + v;
+            dq += states[(time + 1) * stride + si] * draw[time * values + vi];
+            dk += scratch[vi * 4] * adj[si]
+                + (decay * states[time * stride + si]) * scratch[vi * 4 + 1];
+        }
+    }
+    __local float sum_q[32], sum_k[32];
+    sum_q[lane] = dq;
+    sum_k[lane] = dk;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int offset = 16; offset > 0; offset >>= 1)
+    {
+        if (lane < offset)
+        {
+            sum_q[lane] += sum_q[lane + offset];
+            sum_k[lane] += sum_k[lane + offset];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    if (lane == 0)
+    {
+        dmixed[time * channels + item] = sum_q[0];
+        dmixed[time * channels + keys + item] = sum_k[0];
+    }
+}
+
 __kernel void q35t_delta_finish(__global const float* mixed,
     __global const float* alpha, __global const float* beta,
     __global const float* dt, __global const float* a,

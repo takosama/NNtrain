@@ -29,13 +29,17 @@ internal static class QwenLoraCommand
                 else configPath = Path.GetFullPath(args[i]);
             }
             if (modelPath is null || configPath is null)
-                throw new ArgumentException("Usage: qwen-lora --model <qwen35.gguf> --config <qwen-lora.json> [--resume]");
+                throw new ArgumentException("Usage: lora (or qwen-lora) --model <qwen35.gguf> --config <qwen-lora.json> [--resume]");
             QwenLoraTrainingConfiguration config = QwenLoraTrainingConfiguration.Load(configPath);
             config.Validate();
             string directory = Path.GetDirectoryName(configPath)!;
             string dataPath = Path.GetFullPath(config.DataPath, directory);
             string adapterPath = Path.GetFullPath(config.AdapterPath, directory);
-            ValidateDistinctPaths(modelPath, configPath, dataPath, adapterPath);
+            string graphPath = QwenLoraMetricReporter.ResolveHtmlPath(configPath, config);
+            string metricPath = TrainingMetricReporter.GetSidecarPath(graphPath);
+            ValidateDistinctPaths(modelPath, configPath, dataPath, adapterPath, graphPath, metricPath);
+            if (Directory.Exists(graphPath) || Directory.Exists(metricPath))
+                throw new ArgumentException("Loss graph and metrics paths must name files.");
             if (!File.Exists(modelPath)) throw new FileNotFoundException("GGUF model not found.", modelPath);
             if (!File.Exists(dataPath)) throw new FileNotFoundException("LoRA JSONL dataset not found.", dataPath);
             if (Directory.Exists(adapterPath)) throw new ArgumentException("adapterPath must name a file.");
@@ -63,6 +67,8 @@ internal static class QwenLoraCommand
             output.WriteLine($"Qwen3.5 LoRA: rank={config.Rank}, trainable={model.LoraParameterCount}, "
                 + $"examples={examples.Length}, context={config.ContextLength}, step={model.LoraStep}/{config.MaxSteps}");
             output.WriteLine("Frozen quantized GPU base; response-only next-token loss including EOS; one example per step.");
+            using var metrics = new QwenLoraMetricReporter(config, graphPath, examples.Length,
+                model.LoraStep, resume, output, error);
             long savedStep = resume ? model.LoraStep : -1;
             while (model.LoraStep < config.MaxSteps)
             {
@@ -70,6 +76,7 @@ internal static class QwenLoraCommand
                 TrainingExample example = examples[index];
                 var timer = Stopwatch.StartNew();
                 Qwen35LoraStepResult result = model.TrainLora(example.Tokens, example.ResponseStartIndex);
+                metrics.Append(result.Step, result.Loss);
                 output.WriteLine(FormattableString.Invariant(
                     $"LoRA step={result.Step}, example={index + 1}/{examples.Length}, loss={result.Loss:F6}, gradient-norm={result.GradientNorm:G6}, supervised-tokens={result.SupervisedTokens}, elapsed={timer.Elapsed.TotalSeconds:F3} s"));
                 output.Flush();
@@ -78,6 +85,7 @@ internal static class QwenLoraCommand
             if (!encodedBeforeTraining.SequenceEqual(model.ResidentWeightBytes))
                 throw new InvalidOperationException("Encoded GGUF weight residency changed during LoRA training.");
             if (savedStep != model.LoraStep) Save();
+            metrics.Flush();
             long[] live = model.LiveDeviceBytes.ToArray(), peak = model.PeakDeviceBytes.ToArray();
             for (int slot = 0; slot < config.Devices.Length; ++slot)
                 output.WriteLine($"Arc {config.Devices[slot]} GPU bytes: encoded={encodedBeforeTraining[slot]}, "
@@ -107,7 +115,7 @@ internal static class QwenLoraCommand
     internal static void ValidateDistinctPaths(params string[] paths)
     {
         if (paths.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).Count() != paths.Length)
-            throw new ArgumentException("Model, configuration, dataset and adapter paths must all be distinct.");
+            throw new ArgumentException("Model, configuration, dataset, adapter, loss graph and metrics paths must all be distinct.");
     }
 
     internal static TrainingExample[] ReadExamples(byte[] dataset, Qwen2GgufTokenizer tokenizer,

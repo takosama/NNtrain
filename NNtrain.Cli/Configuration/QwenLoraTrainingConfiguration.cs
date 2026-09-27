@@ -11,6 +11,10 @@ internal sealed record QwenLoraTrainingConfiguration
     public int ContextLength { get; init; } = 64;
     public int MaxSteps { get; init; } = 10;
     public int SaveEverySteps { get; init; } = 1;
+    public string? LossGraphPath { get; init; }
+    public bool ShowLossGraph { get; init; } = true;
+    public bool OpenLossGraph { get; init; } = true;
+    public int LossGraphEverySteps { get; init; } = 1;
     public int Rank { get; init; } = 8;
     public float Alpha { get; init; } = 16f;
     public float LearningRate { get; init; } = 0.0001f;
@@ -41,6 +45,10 @@ internal sealed record QwenLoraTrainingConfiguration
             throw new ArgumentException("devices must contain distinct nonnegative Arc indices.");
         if (ContextLength < 2 || MaxSteps <= 0 || SaveEverySteps <= 0)
             throw new ArgumentException("contextLength must be at least 2; maxSteps and saveEverySteps must be positive.");
+        if (LossGraphEverySteps <= 0)
+            throw new ArgumentException("lossGraphEverySteps must be positive.");
+        if (LossGraphPath is not null && string.IsNullOrWhiteSpace(LossGraphPath))
+            throw new ArgumentException("lossGraphPath must be null for the configuration-derived path or a non-empty HTML path.");
         if (Rank is < 1 or > 256 || !float.IsFinite(Alpha) || Alpha <= 0)
             throw new ArgumentException("rank must be 1..256 and alpha must be finite and positive.");
         if (!float.IsFinite(LearningRate) || LearningRate <= 0

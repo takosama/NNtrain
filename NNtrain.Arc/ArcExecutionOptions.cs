@@ -6,6 +6,8 @@ public sealed record ArcExecutionOptions
     // Dedicated Qwen3.5 inference lanes can skip compiling unrelated training
     // kernels. General Arc sessions keep the complete program by default.
     public bool Qwen35TrainingKernels { get; init; }
+    public bool Qwen35CooperativeLora { get; init; }
+    public bool Qwen35CooperativeDelta { get; init; }
     public bool Qwen35InferenceKernelsOnly { get; init; } = false;
 
     // Measured one-sequence generation paths; matrix/normalization dispatch
