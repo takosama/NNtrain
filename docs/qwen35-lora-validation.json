@@ -1,0 +1,5585 @@
+{
+  "date": "2026-09-27",
+  "model": "Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf",
+  "model_sha256": "676DB8CCD38035117E705858FD591964005CB0A921B39255B0691D8339A8DFE2",
+  "devices": [
+    "Intel Arc B580 12 GiB",
+    "Intel Arc B580 12 GiB"
+  ],
+  "options": {
+    "Rank": 8,
+    "Alpha": 16,
+    "LearningRate": 0.0001,
+    "WeightDecay": 0,
+    "GradientClip": 1,
+    "Seed": 1,
+    "Layers": null,
+    "Targets": [
+      "attn_q",
+      "attn_k",
+      "attn_v",
+      "attn_output",
+      "attn_qkv",
+      "attn_gate",
+      "ssm_alpha",
+      "ssm_beta",
+      "ssm_out",
+      "ffn_gate",
+      "ffn_up",
+      "ffn_down"
+    ],
+    "IncludeOutput": false
+  },
+  "training_identity": "6C095AECF2413EAF9E3BD5527CF235D348408182699EA538D1B3458113AED75C",
+  "dataset": "{\"prompt\": \"こんにちは\", \"response\": \"こんにちは。\"}\n",
+  "input_sequence_tokens": 11,
+  "total_tokens_including_target_eos": 12,
+  "supervised_tokens": 3,
+  "layers": 64,
+  "adapters": 496,
+  "trainable_parameters": 58363904,
+  "all_adapter_B_nonzero": true,
+  "steps": [
+    {
+      "step": 1,
+      "loss_before_update": 7.726788,
+      "gradient_norm": 17.4056,
+      "supervised_tokens": 3,
+      "seconds": 6.913,
+      "log": "train.log"
+    },
+    {
+      "step": 2,
+      "loss_before_update": 3.937487,
+      "gradient_norm": 17.0025,
+      "supervised_tokens": 3,
+      "seconds": 6.517,
+      "log": "train.log"
+    },
+    {
+      "step": 3,
+      "loss_before_update": 1.98163,
+      "gradient_norm": 8.81073,
+      "supervised_tokens": 3,
+      "seconds": 6.537,
+      "log": "resume.log"
+    },
+    {
+      "step": 4,
+      "loss_before_update": 0.357264,
+      "gradient_norm": 5.95677,
+      "supervised_tokens": 3,
+      "seconds": 6.554,
+      "log": "normal-resume.log"
+    }
+  ],
+  "resident_encoded_bytes": [
+    5035468800,
+    5116405760
+  ],
+  "final_live_device_bytes": [
+    5588149248,
+    5669106688
+  ],
+  "peak_device_bytes": [
+    5968829124,
+    6072744816
+  ],
+  "checkpoint_bytes": 700397479,
+  "checkpoint_sha256": "CA753916313F1709C75CC04198DDF73D571839948FF13DCEC2CE808873BE760C",
+  "checkpoint_format": "NNQ35LR1 binary FP32 LoRA and Adam states with JSON header and SHA256 checksum",
+  "final_normal_binary_sha256": {
+    "NNtrain.Cli.dll": "FA21AEC57AA58B3E9B5F6ABA8339A706A952E36EF74938C27C48C842486EC308",
+    "NNtrain.Core.dll": "D11C53DF2375FC8F5F675234009E0E549A2740CD432E487FE97174820A9018FF",
+    "NNtrain.Arc.dll": "2A4D51976E7AE1083972963893718AF1B5886A2D8A786B742305A6952AA2375B"
+  },
+  "tests": {
+    "core": 111,
+    "integration": 21,
+    "failed": 0,
+    "skipped": 0
+  },
+  "base_cli_tokens_per_second": 14.76,
+  "base_cli_same_64_token_text": true,
+  "adapter_cli_short_run": {
+    "generated_tokens": 3,
+    "tokens_per_second": 3.66,
+    "note": "Only three emitted tokens including EOS; not a sustained throughput benchmark."
+  },
+  "logs": {
+    "train.log": "Preparing Arc 0: Intel(R) Arc(TM) B580 Graphics\nPreparing Arc 1: Intel(R) Arc(TM) B580 Graphics\nLoading tensors: 100/851\nLoading tensors: 200/851\nLoading tensors: 300/851\nLoading tensors: 400/851\nLoading tensors: 500/851\nLoading tensors: 600/851\nLoading tensors: 700/851\nLoading tensors: 800/851\nArc 0: quantized weights = 5035468800 bytes (4.69 GiB), GPU state = 79495168 bytes, live device allocation = 5121238016 bytes\nArc 1: quantized weights = 5116405760 bytes (4.77 GiB), GPU state = 79495168 bytes, live device allocation = 5202195456 bytes\nQwen3.5 LoRA: rank=8, trainable=58363904, examples=1, context=64, step=0/2\nFrozen quantized GPU base; response-only next-token loss including EOS; one example per step.\nLoRA step=1, example=1/1, loss=7.726788, gradient-norm=17.4056, supervised-tokens=3, elapsed=6.913 s\nLoRA checkpoint = C:\\Users\\takos\\.codex\\.chatgpt-projects\\g-p-6ab5b46136b4819195c9f9855d947256\\qwen35-lora-smoke\\adapter.bin, step 1\nLoRA step=2, example=1/1, loss=3.937487, gradient-norm=17.0025, supervised-tokens=3, elapsed=6.517 s\nLoRA checkpoint = C:\\Users\\takos\\.codex\\.chatgpt-projects\\g-p-6ab5b46136b4819195c9f9855d947256\\qwen35-lora-smoke\\adapter.bin, step 2\n",
+    "resume.log": "Preparing Arc 0: Intel(R) Arc(TM) B580 Graphics\nPreparing Arc 1: Intel(R) Arc(TM) B580 Graphics\nLoading tensors: 100/851\nLoading tensors: 200/851\nLoading tensors: 300/851\nLoading tensors: 400/851\nLoading tensors: 500/851\nLoading tensors: 600/851\nLoading tensors: 700/851\nLoading tensors: 800/851\nArc 0: quantized weights = 5035468800 bytes (4.69 GiB), GPU state = 79495168 bytes, live device allocation = 5121238016 bytes\nArc 1: quantized weights = 5116405760 bytes (4.77 GiB), GPU state = 79495168 bytes, live device allocation = 5202195456 bytes\nQwen3.5 LoRA: rank=8, trainable=58363904, examples=1, context=64, step=2/3\nFrozen quantized GPU base; response-only next-token loss including EOS; one example per step.\nLoRA step=3, example=1/1, loss=1.981630, gradient-norm=8.81073, supervised-tokens=3, elapsed=6.537 s\nLoRA checkpoint = C:\\Users\\takos\\.codex\\.chatgpt-projects\\g-p-6ab5b46136b4819195c9f9855d947256\\qwen35-lora-smoke\\adapter.bin, step 3\n",
+    "normal-resume.log": "Preparing Arc 0: Intel(R) Arc(TM) B580 Graphics\nPreparing Arc 1: Intel(R) Arc(TM) B580 Graphics\nLoading tensors: 100/851\nLoading tensors: 200/851\nLoading tensors: 300/851\nLoading tensors: 400/851\nLoading tensors: 500/851\nLoading tensors: 600/851\nLoading tensors: 700/851\nLoading tensors: 800/851\nArc 0: quantized weights = 5035468800 bytes (4.69 GiB), GPU state = 79495168 bytes, live device allocation = 5121238016 bytes\nArc 1: quantized weights = 5116405760 bytes (4.77 GiB), GPU state = 79495168 bytes, live device allocation = 5202195456 bytes\nQwen3.5 LoRA: rank=8, trainable=58363904, examples=1, context=64, step=3/4\nFrozen quantized GPU base; response-only next-token loss including EOS; one example per step.\nLoRA step=4, example=1/1, loss=0.357264, gradient-norm=5.95677, supervised-tokens=3, elapsed=6.554 s\nLoRA checkpoint = C:\\Users\\takos\\.codex\\.chatgpt-projects\\g-p-6ab5b46136b4819195c9f9855d947256\\qwen35-lora-smoke\\adapter.bin, step 4\nArc 0 GPU bytes: encoded=5035468800, live=5588149248, peak=5968829124; encoded weight byte count unchanged.\nArc 1 GPU bytes: encoded=5116405760, live=5669106688, peak=6072744816; encoded weight byte count unchanged.\n",
+    "normal-generate-matched.log": "Qwen3.5 GGUF: layers=64, width=5120, heads=24/4, head-width=256, vocab=248320\ntoken ids: 248045,846,198,85951,248046,198,248045,74455,198\nText inference: quantized weights, attention, recurrent state and greedy sampling on Arc (Float32).\nGPU KV cache and Gated DeltaNet state reuse: enabled.\nPreparing Arc 0: Intel(R) Arc(TM) B580 Graphics\nPreparing Arc 1: Intel(R) Arc(TM) B580 Graphics\nLoading tensors: 100/851\nLoading tensors: 200/851\nLoading tensors: 300/851\nLoading tensors: 400/851\nLoading tensors: 500/851\nLoading tensors: 600/851\nLoading tensors: 700/851\nLoading tensors: 800/851\nArc 0: quantized weights = 5035468800 bytes (4.69 GiB), GPU state = 79495168 bytes, live device allocation = 5121238016 bytes\nArc 1: quantized weights = 5116405760 bytes (4.77 GiB), GPU state = 79495168 bytes, live device allocation = 5202195456 bytes\nLoRA adapter = C:\\Users\\takos\\.codex\\.chatgpt-projects\\g-p-6ab5b46136b4819195c9f9855d947256\\qwen35-lora-smoke\\adapter.bin, step 4, parameters=58363904\ngenerated:\n<|im_start|>user\nこんにちは<|im_end|>\n<|im_start|>assistant\nこんにちは。<|im_end|>\ntiming: load=18.741 s, prefill/first-token=2.155 s, decode=3.66 tok/s, generated=3, total-generation=2.701 s\n",
+    "normal-base-generation.log": "Qwen3.5 GGUF: layers=64, width=5120, heads=24/4, head-width=256, vocab=248320\ntoken ids: 248045,846,198,19816,741,198,120683,98358,95924,97131,170872,184700,180014,162066,198,248046,198,248045,74455\nText inference: quantized weights, attention, recurrent state and greedy sampling on Arc (Float32).\nGPU KV cache and Gated DeltaNet state reuse: enabled.\nPreparing Arc 0: Intel(R) Arc(TM) B580 Graphics\nLoading tensors: 100/851\nLoading tensors: 200/851\nLoading tensors: 300/851\nLoading tensors: 400/851\nLoading tensors: 500/851\nLoading tensors: 600/851\nLoading tensors: 700/851\nLoading tensors: 800/851\nArc 0: quantized weights = 10151874560 bytes (9.45 GiB), GPU state = 158990336 bytes, live device allocation = 10322440192 bytes\ngenerated:\n<|im_start|>user\n/think\n国会議事堂への行き方を教えて\n<|im_end|>\n<|im_start|>assistant<think>\nThe user is asking for directions to the National Diet Building (国会議事堂) in Japanese. Let me provide helpful directions. The National Diet Building is located in Chiyoda, Tokyo, near the Imperial Palace. Let me think about the best ways to get there.\n\nThe National Diet Building (国会\ntiming: load=7.610 s, prefill/first-token=1.210 s, decode=14.76 tok/s, generated=64, total-generation=5.478 s\n",
+    "normal-build.log": "\nビルドに成功しました。\n    0 個の警告\n    0 エラー\n\n経過時間 00:00:05.65\n",
+    "normal-core-tests.log": "C:\\Users\\takos\\source\\repos\\NNtrain\\NNtrain.Core.Tests\\bin\\Release\\net10.0\\NNtrain.Core.Tests.dll (.NETCoreApp,Version=v10.0) のテスト実行\n合計 1 個のテスト ファイルが指定されたパターンと一致しました。\n[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v3.1.1+bf6400fd51 (64-bit .NET 10.0.11)\n[xUnit.net 00:00:00.46]   Discovering: NNtrain.Core.Tests\n[xUnit.net 00:00:01.36]   Discovered:  NNtrain.Core.Tests\n[xUnit.net 00:00:01.69]   Starting:    NNtrain.Core.Tests\n  成功 NNtrain.Core.Tests.Qwen35TokenizerTests.Qwen35MergesLettersAndEveryCombiningMarkCategory(text: \"aः\") [38 ms]\n  成功 NNtrain.Core.Tests.Qwen35TokenizerTests.Qwen35MergesLettersAndEveryCombiningMarkCategory(text: \"a⃝\") [4 ms]\n  成功 NNtrain.Core.Tests.Qwen35TokenizerTests.Qwen35MergesLettersAndEveryCombiningMarkCategory(text: \"áb\") [5 ms]\n  成功 NNtrain.Core.Tests.Qwen35TokenizerTests.Qwen35MergesLettersAndEveryCombiningMarkCategory(text: \"á\") [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35TokenizerTests.UnsupportedPreTokenizerFailsInsteadOfUsingQwen2Boundaries [19 ms]\n  成功 NNtrain.Core.Tests.Qwen35TokenizerTests.ExistingQwen2NormalizationRemainsEnabled(preTokenizer: null) [6 ms]\n  成功 NNtrain.Core.Tests.Qwen35TokenizerTests.ExistingQwen2NormalizationRemainsEnabled(preTokenizer: \"qwen2\") [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35TokenizerTests.Qwen35StillSeparatesPunctuationDigitsAndLineBoundaries [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35ResidentModelTests.TwoDevicesMatchSingleDeviceAcrossBothHybridLayers(tiedOutput: False) [5 s]\n  成功 NNtrain.Core.Tests.Qwen35ResidentModelTests.TwoDevicesMatchSingleDeviceAcrossBothHybridLayers(tiedOutput: True) [156 ms]\n  成功 NNtrain.Core.Tests.Qwen35ResidentModelTests.OptimizedHybridModelMatchesReferenceThroughKvGrowthAndStreamingGeneration(tiedOutput: True) [245 ms]\n  成功 NNtrain.Core.Tests.Qwen35ResidentModelTests.OptimizedHybridModelMatchesReferenceThroughKvGrowthAndStreamingGeneration(tiedOutput: False) [232 ms]\n  成功 NNtrain.Core.Tests.Qwen35ResidentModelTests.HybridGenerationResetsStateAndKeepsEncodedWeightsResident(tiedOutput: True) [76 ms]\n  成功 NNtrain.Core.Tests.Qwen35ResidentModelTests.HybridGenerationResetsStateAndKeepsEncodedWeightsResident(tiedOutput: False) [68 ms]\n  成功 NNtrain.Core.Tests.Qwen35ResidentModelTests.NonFiniteOutputRequiresResetAfterStateWasAdvanced(greedyGeneration: False) [62 ms]\n  成功 NNtrain.Core.Tests.Qwen35ResidentModelTests.NonFiniteOutputRequiresResetAfterStateWasAdvanced(greedyGeneration: True) [62 ms]\n  成功 NNtrain.Core.Tests.Qwen35ResidentModelTests.KvGrowthStaysOnDeviceAndResetReusesStateWithoutHostTransfers [103 ms]\n  成功 NNtrain.Core.Tests.Qwen35ResidentModelTests.ContextAndDisposalGuardsLeaveResetUsableBeforeDisposal [67 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingDeltaTests.ExactBpttMatchesFiniteDifferencesAndAccumulates(lastTokenLossOnly: False) [2 s]\n  成功 NNtrain.Core.Tests.Qwen35TrainingDeltaTests.ExactBpttMatchesFiniteDifferencesAndAccumulates(lastTokenLossOnly: True) [84 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingDeltaTests.SequenceForwardMatchesCpuAndRetainsNoRecurrentTape(keys: 1, heads: 2, width: 128, kernel: 4) [83 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingDeltaTests.SequenceForwardMatchesCpuAndRetainsNoRecurrentTape(keys: 2, heads: 4, width: 7, kernel: 4) [72 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingDeltaTests.SequenceForwardMatchesCpuAndRetainsNoRecurrentTape(keys: 2, heads: 4, width: 1, kernel: 1) [73 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingProjectionTests.EncodedTransposeAndSplitReductionMatchIndependentDecodedWeights(type: 21, quant: \"iq3_s\", blockBytes: 110) [134 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingProjectionTests.EncodedTransposeAndSplitReductionMatchIndependentDecodedWeights(type: 13, quant: \"q5_k\", blockBytes: 176) [101 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingProjectionTests.EncodedTransposeAndSplitReductionMatchIndependentDecodedWeights(type: 14, quant: \"q6_k\", blockBytes: 210) [87 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingProjectionTests.EncodedTransposeAndSplitReductionMatchIndependentDecodedWeights(type: 22, quant: \"iq2_s\", blockBytes: 82) [107 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingProjectionTests.EncodedTransposeAndSplitReductionMatchIndependentDecodedWeights(type: 12, quant: \"q4_k\", blockBytes: 144) [85 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingProjectionTests.LoraForwardAndAllAdjointsMatchCpuAndAccumulateWithNonzeroB [83 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingProjectionTests.ZeroInitializedBPreservesBaseOutputAndFirstStepOnlyTrainsB [74 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuLinearTests.CooperativeAndSubgroupGemvMatchDecodedCpuAndOriginalKernel(type: 12, variant: \"sg16\") [78 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuLinearTests.CooperativeAndSubgroupGemvMatchDecodedCpuAndOriginalKernel(type: 14, variant: \"sg16\") [60 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuLinearTests.CooperativeAndSubgroupGemvMatchDecodedCpuAndOriginalKernel(type: 14, variant: \"coop64\") [55 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuLinearTests.CooperativeAndSubgroupGemvMatchDecodedCpuAndOriginalKernel(type: 12, variant: \"coop64\") [56 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuIqTests.EncodedEmbeddingAndGemvMatchIndependentNativeGgml(type: 22, quant: \"iq2_s\", blockBytes: 82) [87 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuIqTests.EncodedEmbeddingAndGemvMatchIndependentNativeGgml(type: 21, quant: \"iq3_s\", blockBytes: 110) [53 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuIqTests.EncodedEmbeddingAndGemvMatchIndependentNativeGgml(type: 13, quant: \"q5_k\", blockBytes: 176) [54 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingAttentionTests.BackwardOfFirstPositionDoesNotReachFutureInputs [77 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingAttentionTests.FullSequenceForwardMatchesIncrementalAttentionAndKeepsInputsOwnedByCaller(ropeDimensions: 6) [100 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingAttentionTests.FullSequenceForwardMatchesIncrementalAttentionAndKeepsInputsOwnedByCaller(ropeDimensions: 4) [73 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingAttentionTests.FullSequenceForwardMatchesIncrementalAttentionAndKeepsInputsOwnedByCaller(ropeDimensions: 0) [75 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingAttentionTests.BackwardMatchesIndependentFiniteDifferencesAndAccumulates(ropeDimensions: 0) [88 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingAttentionTests.BackwardMatchesIndependentFiniteDifferencesAndAccumulates(ropeDimensions: 2) [83 ms]\n  成功 NNtrain.Core.Tests.Qwen35TrainingAttentionTests.BackwardMatchesIndependentFiniteDifferencesAndAccumulates(ropeDimensions: 4) [82 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectValidatesExplicitRecurrentPattern(key: \"qwen35.recurrent_layers\") [4 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectValidatesExplicitRecurrentPattern(key: \"qwen35.attention.recurrent_layers\") [2 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsMalformedRecurrentPattern(pattern: [-1, 0]) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsMalformedRecurrentPattern(pattern: [1, 2]) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsMalformedRecurrentPattern(pattern: [1]) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsInconsistentMetadata(suffix: \"full_attention_interval\", value: 0) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsInconsistentMetadata(suffix: \"ssm.group_count\", value: 3) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsInconsistentMetadata(suffix: \"attention.value_length\", value: 128) [9 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsInconsistentMetadata(suffix: \"rope.dimension_count\", value: 512) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsInconsistentMetadata(suffix: \"rope.dimension_count\", value: 65) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsInconsistentMetadata(suffix: \"ssm.conv_kernel\", value: 0) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsInconsistentMetadata(suffix: \"ssm.inner_size\", value: 512) [< 1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsInconsistentMetadata(suffix: \"attention.head_count_kv\", value: 2) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectAcceptsQuantizedTiedOutput(type: 21) [2 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectAcceptsQuantizedTiedOutput(type: 13) [8 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectAcceptsQuantizedTiedOutput(type: 22) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectAcceptsQuantizedTiedOutput(type: 14) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectAcceptsQuantizedTiedOutput(type: 12) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectAcceptsMixedIq2ModelStorage [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsUnsupportedStorageBeforePayloadReads(name: \"token_embd.weight\", type: 0) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsUnsupportedStorageBeforePayloadReads(name: \"blk.0.ssm_conv1d.weight\", type: 12) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsUnsupportedStorageBeforePayloadReads(name: \"blk.1.attn_q_norm.weight\", type: 14) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsUnsupportedStorageBeforePayloadReads(name: \"blk.0.attn_qkv.weight\", type: 1) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsMissingOrDuplicateRequiredTensor [2 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsWrongHybridShapesBeforePayloadReads(name: \"blk.0.attn_gate.weight\", shape: [128, 512]) [3 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsWrongHybridShapesBeforePayloadReads(name: \"blk.0.ssm_conv1d.weight\", shape: [512, 4]) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsWrongHybridShapesBeforePayloadReads(name: \"blk.0.ssm_alpha.weight\", shape: [256, 1]) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsWrongHybridShapesBeforePayloadReads(name: \"blk.0.ssm_norm.weight\", shape: [256]) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsWrongHybridShapesBeforePayloadReads(name: \"token_embd.weight\", shape: [4, 256]) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsWrongHybridShapesBeforePayloadReads(name: \"blk.0.attn_qkv.weight\", shape: [256, 256]) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsWrongHybridShapesBeforePayloadReads(name: \"blk.0.post_attention_norm.weight\", shape: [1, 256]) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsWrongHybridShapesBeforePayloadReads(name: \"blk.1.ffn_down.weight\", shape: [256, 512]) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsWrongHybridShapesBeforePayloadReads(name: \"blk.1.attn_output.weight\", shape: [256, 768]) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsWrongHybridShapesBeforePayloadReads(name: \"blk.1.attn_k_norm.weight\", shape: [768]) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsWrongHybridShapesBeforePayloadReads(name: \"blk.1.attn_q.weight\", shape: [256, 768]) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectAcceptsSupportedDenseAuxiliaryStorage(type: 30) [8 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectAcceptsSupportedDenseAuxiliaryStorage(type: 1) [1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectValidatesHybridDirectoryWithoutReadingPayloads [2 ms]\n  成功 NNtrain.Core.Tests.Qwen35GgufTests.InspectRejectsUnknownArchitectureAndUnexpectedTensors [2 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuDeltaFusedTests.FusedCandidateMatchesCpuAndGenericAcrossTwoTokensWithNonzeroState(keyHeads: 2, valueHeads: 4, width: 128, convKernel: 4) [167 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuDeltaFusedTests.FusedCandidateMatchesCpuAndGenericAcrossTwoTokensWithNonzeroState(keyHeads: 3, valueHeads: 6, width: 128, convKernel: 1) [193 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuDeltaFusedTests.FusedCandidateMatchesCpuAndGenericAcrossTwoTokensWithNonzeroState(keyHeads: 2, valueHeads: 4, width: 7, convKernel: 4) [42 ms]\n  成功 NNtrain.Core.Tests.Qwen35LoraModelTests.ZeroAdapterFullSequenceLossMatchesIncrementalTeacherForcingAndResponseMask(tiedOutput: False) [147 ms]\n  成功 NNtrain.Core.Tests.Qwen35LoraModelTests.ZeroAdapterFullSequenceLossMatchesIncrementalTeacherForcingAndResponseMask(tiedOutput: True) [122 ms]\n  成功 NNtrain.Core.Tests.Qwen35LoraModelTests.CheckpointRestoresOptimizerAndRejectsInvalidInputsBeforeAttaching [370 ms]\n  成功 NNtrain.Core.Tests.Qwen35LoraModelTests.HybridAttentionAndMlpAdapterGradientsMatchFullModelFiniteDifferences [187 ms]\n  成功 NNtrain.Core.Tests.Qwen35LoraModelTests.TrainingUpdatesAttentionAndMlpLowersLossAndKeepsBaseFrozen [162 ms]\n  成功 NNtrain.Core.Tests.Qwen35MathTests.PartialRopeUsesSplitHalfPairsAndPreservesUnrotatedDimensions [< 1 ms]\n  成功 NNtrain.Core.Tests.Qwen35MathTests.DeltaStepMatchesIndependentTwoTokenMatrixCalculation [< 1 ms]\n  成功 NNtrain.Core.Tests.Qwen35MathTests.DeltaConvolutionUsesOldestToNewestTapsAndStoresUnactivatedInputs [< 1 ms]\n  成功 NNtrain.Core.Tests.Qwen35MathTests.ActivationsRemainFiniteForLargePositiveAndNegativeInputs [< 1 ms]\n  成功 NNtrain.Core.Tests.Qwen35MathTests.DeltaStepMapsGgufValueHeadsToTiledKeyHeads [< 1 ms]\n  成功 NNtrain.Core.Tests.Qwen35MathTests.RmsNormUsesEffectiveGgufWeightsSeparatelyForEachHead [< 1 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuAttentionTests.ArgMaxRejectsAnyNonFiniteLogitEvenAwayFromMaximum(invalid: ∞) [40 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuAttentionTests.ArgMaxRejectsAnyNonFiniteLogitEvenAwayFromMaximum(invalid: NaN) [39 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuAttentionTests.ArgMaxRejectsAnyNonFiniteLogitEvenAwayFromMaximum(invalid: -∞) [37 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuAttentionTests.AttentionPreservesMultiTokenGroupedCachesAndMatchesDoubleReference(ropeDimensions: 0) [51 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuAttentionTests.AttentionPreservesMultiTokenGroupedCachesAndMatchesDoubleReference(ropeDimensions: 8) [43 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuAttentionTests.AttentionPreservesMultiTokenGroupedCachesAndMatchesDoubleReference(ropeDimensions: 12) [40 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuAttentionTests.NormActivationAndResidualMatchCpuWithoutHostTransfers [40 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuAttentionTests.ArgMaxSelectsFirstTieAndReadsOnlyTokenAndStatus(count: 3001) [39 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuAttentionTests.ArgMaxSelectsFirstTieAndReadsOnlyTokenAndStatus(count: 1) [39 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuAttentionTests.AttentionSupportsMoreThan4096CachedTokensAndStableSoftmax [41 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuDeltaTests.DeviceDeltaMatchesCpuAcrossTokensWithHistoryTiledHeadsAndReset(keyHeads: 2, valueHeads: 4, headWidth: 1, convKernel: 1) [45 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuDeltaTests.DeviceDeltaMatchesCpuAcrossTokensWithHistoryTiledHeadsAndReset(keyHeads: 1, valueHeads: 2, headWidth: 128, convKernel: 4) [56 ms]\n[xUnit.net 00:00:14.66]   Finished:    NNtrain.Core.Tests\n  成功 NNtrain.Core.Tests.Qwen35GpuDeltaTests.DeviceDeltaMatchesCpuAcrossTokensWithHistoryTiledHeadsAndReset(keyHeads: 2, valueHeads: 4, headWidth: 7, convKernel: 4) [42 ms]\n  成功 NNtrain.Core.Tests.Qwen35GpuDeltaTests.InvalidDeltaBufferIsRejectedBeforeDispatchOrStateMutation [39 ms]\n\nテストの実行に成功しました。\nテストの合計数: 111\n     成功: 111\n合計時間: 15.3422 秒\n",
+    "normal-cli-tests.log": "C:\\Users\\takos\\source\\repos\\NNtrain\\NNtrain.IntegrationTests\\bin\\Release\\net10.0\\NNtrain.IntegrationTests.dll (.NETCoreApp,Version=v10.0) のテスト実行\n合計 1 個のテスト ファイルが指定されたパターンと一致しました。\n[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v3.1.1+bf6400fd51 (64-bit .NET 10.0.11)\n[xUnit.net 00:00:00.48]   Discovering: NNtrain.IntegrationTests\n[xUnit.net 00:00:00.82]   Discovered:  NNtrain.IntegrationTests\n[xUnit.net 00:00:01.15]   Starting:    NNtrain.IntegrationTests\n  成功 QwenGgufCommandTests.MaxNewTokensAcceptsAsciiAndCompatibilityDigits(value: \"1０００\", expected: 1000) [16 ms]\n  成功 QwenGgufCommandTests.MaxNewTokensAcceptsAsciiAndCompatibilityDigits(value: \"１２\", expected: 12) [< 1 ms]\n  成功 QwenGgufCommandTests.MaxNewTokensAcceptsAsciiAndCompatibilityDigits(value: \"0\", expected: 0) [< 1 ms]\n  成功 QwenGgufCommandTests.MaxNewTokensAcceptsAsciiAndCompatibilityDigits(value: \"1000\", expected: 1000) [< 1 ms]\n  成功 QwenGgufCommandTests.GenerationOutputPreservesUnicodeAndStreamsBeforeGenerationReturns(stream: False) [11 ms]\n  成功 QwenGgufCommandTests.GenerationOutputPreservesUnicodeAndStreamsBeforeGenerationReturns(stream: True) [12 ms]\n  成功 Qwen35StreamingTests.GenerationOutputPreservesUnicodeAndStreamsBeforeGenerationReturns(stream: True) [49 ms]\n  成功 QwenGgufCommandTests.MaxNewTokensRejectsInvalidValues(value: \"2147483648\") [< 1 ms]\n  成功 QwenGgufCommandTests.MaxNewTokensRejectsInvalidValues(value: \"many\") [< 1 ms]\n  成功 QwenGgufCommandTests.MaxNewTokensRejectsInvalidValues(value: \"-1\") [< 1 ms]\n  成功 QwenGgufCommandTests.MaxNewTokensRejectsInvalidValues(value: \"１.５\") [< 1 ms]\n  成功 Qwen35StreamingTests.GenerationOutputPreservesUnicodeAndStreamsBeforeGenerationReturns(stream: False) [1 ms]\n  成功 QwenGgufCommandTests.ZeroTokenGenerationHasNoFirstTokenOrDecodeRate [1 ms]\n  成功 Qwen35StreamingTests.ZeroTokenGenerationHasNoFirstTokenOrDecodeRate [1 ms]\n  成功 QwenGgufCommandTests.StreamingAndBufferedOutputUseTheSameNormalizedPrompt [1 ms]\n  成功 QwenGgufCommandTests.CommandParsesNoStreamWithoutAValueAndNormalizesMixedDigits [153 ms]\n  成功 QwenLoraCommandTests.InvalidPathsAndConfigurationFailBeforeModelAllocation [218 ms]\n  成功 QwenLoraCommandTests.ResponseMaskIncludesFirstResponseTokenAndEosWithoutTruncation [30 ms]\n  成功 QwenLoraCommandTests.ResumeIdentityProtectsDataAndNumericalContractButAllowsExtendingSteps [7 ms]\n  成功 QwenLoraCommandTests.AdapterIsRejectedForQwen2AndCannotAliasGguf [21 ms]\n[xUnit.net 00:00:02.83]   Finished:    NNtrain.IntegrationTests\n  成功 QwenLoraCommandTests.TrainResumeAndGeneratePreserveBaseAndDeterministicDatasetCursor [1 s]\n\nテストの実行に成功しました。\nテストの合計数: 21\n     成功: 21\n合計時間: 3.3141 秒\n"
+  },
+  "adapter_matrix_norms": [
+    {
+      "name": "blk.0.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.635136269155826
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.0637222565522785
+      }
+    },
+    {
+      "name": "blk.0.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6348693420362672
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08045890753780272
+      }
+    },
+    {
+      "name": "blk.0.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6375394830640901
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.055593924997026554
+      }
+    },
+    {
+      "name": "blk.0.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6409730465431738
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.1046806869398808
+      }
+    },
+    {
+      "name": "blk.0.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.634030921949826
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10575510822182092
+      }
+    },
+    {
+      "name": "blk.0.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.631557807685633
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005328700202585452
+      }
+    },
+    {
+      "name": "blk.0.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6323869959428565
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005410386214947293
+      }
+    },
+    {
+      "name": "blk.0.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6322392379909547
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05791017765108871
+      }
+    },
+    {
+      "name": "blk.1.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.63833694619118
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06132283674990024
+      }
+    },
+    {
+      "name": "blk.1.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6331616267417037
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.07865328531942875
+      }
+    },
+    {
+      "name": "blk.1.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6352647832916607
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.055371915487738725
+      }
+    },
+    {
+      "name": "blk.1.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6327118292096443
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10484229503258079
+      }
+    },
+    {
+      "name": "blk.1.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6349911298017905
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10439973806749918
+      }
+    },
+    {
+      "name": "blk.1.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.634516062371563
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.0058534512508188865
+      }
+    },
+    {
+      "name": "blk.1.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6314376604542293
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005331911765412491
+      }
+    },
+    {
+      "name": "blk.1.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6385533653260285
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.058001980038250404
+      }
+    },
+    {
+      "name": "blk.10.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6259577629662625
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.060951544708593555
+      }
+    },
+    {
+      "name": "blk.10.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6280007909726029
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.07876359504912107
+      }
+    },
+    {
+      "name": "blk.10.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6366783462556596
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05611320006351472
+      }
+    },
+    {
+      "name": "blk.10.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6311550830761095
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.1036070495229268
+      }
+    },
+    {
+      "name": "blk.10.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6335175443960763
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10604809784178186
+      }
+    },
+    {
+      "name": "blk.10.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6404753053651444
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005172889364474207
+      }
+    },
+    {
+      "name": "blk.10.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6337506321468982
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.0054336819995180466
+      }
+    },
+    {
+      "name": "blk.10.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6309775999476928
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05740648081844984
+      }
+    },
+    {
+      "name": "blk.11.attn_k.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6317911734418014
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.02569507953527803
+      }
+    },
+    {
+      "name": "blk.11.attn_output.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6329579594958905
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05692471942403817
+      }
+    },
+    {
+      "name": "blk.11.attn_q.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6314821350757278
+      },
+      "B": {
+        "nonzero": 98304,
+        "l2": 0.08836828875937375
+      }
+    },
+    {
+      "name": "blk.11.attn_v.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.630334121579812
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.025673870749290405
+      }
+    },
+    {
+      "name": "blk.11.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6388683544172853
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05652925151895124
+      }
+    },
+    {
+      "name": "blk.11.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6280002918342584
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10596007943168315
+      }
+    },
+    {
+      "name": "blk.11.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6343291639085762
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.1043637798511751
+      }
+    },
+    {
+      "name": "blk.12.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6331954552010925
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06239222647626625
+      }
+    },
+    {
+      "name": "blk.12.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.639928846742618
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08053396275139157
+      }
+    },
+    {
+      "name": "blk.12.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.637155586763423
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05562371239210012
+      }
+    },
+    {
+      "name": "blk.12.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6369461398387954
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10506355280830514
+      }
+    },
+    {
+      "name": "blk.12.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6374812988492973
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10477719488879216
+      }
+    },
+    {
+      "name": "blk.12.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.634255855442531
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005487208732058504
+      }
+    },
+    {
+      "name": "blk.12.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6313878837124316
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.00536904472141942
+      }
+    },
+    {
+      "name": "blk.12.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6370561243637676
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.057095975680773466
+      }
+    },
+    {
+      "name": "blk.13.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6366606418461256
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06126700441758584
+      }
+    },
+    {
+      "name": "blk.13.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.634160796093306
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08002104646638507
+      }
+    },
+    {
+      "name": "blk.13.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6362150168702638
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05682821221480943
+      }
+    },
+    {
+      "name": "blk.13.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6359338262421423
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10380746684275084
+      }
+    },
+    {
+      "name": "blk.13.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6345107059772892
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10485472803181708
+      }
+    },
+    {
+      "name": "blk.13.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6341385116245255
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005608537315262137
+      }
+    },
+    {
+      "name": "blk.13.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6372866926319707
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005542118010383083
+      }
+    },
+    {
+      "name": "blk.13.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6363757316113532
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05730695563338512
+      }
+    },
+    {
+      "name": "blk.14.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6370837844289667
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.061366221844568476
+      }
+    },
+    {
+      "name": "blk.14.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6413851499557466
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.07907220197721947
+      }
+    },
+    {
+      "name": "blk.14.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6361176105785442
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05607008851076355
+      }
+    },
+    {
+      "name": "blk.14.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6345934934045567
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10514012484260421
+      }
+    },
+    {
+      "name": "blk.14.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.633866184216745
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10459648919741173
+      }
+    },
+    {
+      "name": "blk.14.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6376788649671863
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005702663251004894
+      }
+    },
+    {
+      "name": "blk.14.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.625254105697
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.00554688948819489
+      }
+    },
+    {
+      "name": "blk.14.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.637936833851074
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05670826304212985
+      }
+    },
+    {
+      "name": "blk.15.attn_k.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6357682877414506
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.025948220943203624
+      }
+    },
+    {
+      "name": "blk.15.attn_output.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6337780758763376
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05745172454960411
+      }
+    },
+    {
+      "name": "blk.15.attn_q.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6310222197578523
+      },
+      "B": {
+        "nonzero": 98304,
+        "l2": 0.0881767561297002
+      }
+    },
+    {
+      "name": "blk.15.attn_v.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6323491677676991
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.025123602509129445
+      }
+    },
+    {
+      "name": "blk.15.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6356719994663307
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.057034517286298096
+      }
+    },
+    {
+      "name": "blk.15.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.629379287650572
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10630663404196374
+      }
+    },
+    {
+      "name": "blk.15.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6322457260248444
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10459144820359521
+      }
+    },
+    {
+      "name": "blk.16.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.636334409619112
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06124366777614325
+      }
+    },
+    {
+      "name": "blk.16.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6337907996713221
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.0781826884522242
+      }
+    },
+    {
+      "name": "blk.16.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6348341792152423
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05747199602679941
+      }
+    },
+    {
+      "name": "blk.16.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6299993115798324
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10476585419409486
+      }
+    },
+    {
+      "name": "blk.16.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6394401588437633
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.1055935234381906
+      }
+    },
+    {
+      "name": "blk.16.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6374670306341195
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.00529372263887585
+      }
+    },
+    {
+      "name": "blk.16.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6332977583132346
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005556710405213806
+      }
+    },
+    {
+      "name": "blk.16.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6363406470008606
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05734316389441177
+      }
+    },
+    {
+      "name": "blk.17.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6329504670019197
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06210011200162008
+      }
+    },
+    {
+      "name": "blk.17.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6385934088650969
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08099142098046533
+      }
+    },
+    {
+      "name": "blk.17.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6365403926982633
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05708962799153598
+      }
+    },
+    {
+      "name": "blk.17.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6289655573999424
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10583233930474291
+      }
+    },
+    {
+      "name": "blk.17.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6361950478393532
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10688493785221934
+      }
+    },
+    {
+      "name": "blk.17.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6278587235998656
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005213319277383374
+      }
+    },
+    {
+      "name": "blk.17.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6362081572894447
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005333624947361593
+      }
+    },
+    {
+      "name": "blk.17.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6350446416240791
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05758627392932635
+      }
+    },
+    {
+      "name": "blk.18.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6352375122799205
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.062094499024145544
+      }
+    },
+    {
+      "name": "blk.18.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6401779459436696
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08002065528223172
+      }
+    },
+    {
+      "name": "blk.18.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6365453925920892
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05626533491849725
+      }
+    },
+    {
+      "name": "blk.18.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.636268763297408
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10663491233701529
+      }
+    },
+    {
+      "name": "blk.18.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6365725863639942
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10665753285607296
+      }
+    },
+    {
+      "name": "blk.18.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6347632830219583
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005814344236340767
+      }
+    },
+    {
+      "name": "blk.18.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.635560467031808
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005350423696723847
+      }
+    },
+    {
+      "name": "blk.18.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6328007363063364
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.058107089531238554
+      }
+    },
+    {
+      "name": "blk.19.attn_k.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.633473635975615
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.02625758575254827
+      }
+    },
+    {
+      "name": "blk.19.attn_output.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6392002220565076
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05833978567982804
+      }
+    },
+    {
+      "name": "blk.19.attn_q.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6392134700179526
+      },
+      "B": {
+        "nonzero": 98304,
+        "l2": 0.08918314592323215
+      }
+    },
+    {
+      "name": "blk.19.attn_v.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.630807278260483
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.025771036648497118
+      }
+    },
+    {
+      "name": "blk.19.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6371803869250279
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05748725130904773
+      }
+    },
+    {
+      "name": "blk.19.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6329721019926655
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10647485294306015
+      }
+    },
+    {
+      "name": "blk.19.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6344424855646322
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10569246123121231
+      }
+    },
+    {
+      "name": "blk.2.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6240509469764808
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06215628300908668
+      }
+    },
+    {
+      "name": "blk.2.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6265676783690515
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.07950889173935376
+      }
+    },
+    {
+      "name": "blk.2.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6367982840617108
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.0561848112765485
+      }
+    },
+    {
+      "name": "blk.2.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.627635324008289
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10464841338473861
+      }
+    },
+    {
+      "name": "blk.2.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6314348038100557
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10476239413413832
+      }
+    },
+    {
+      "name": "blk.2.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6307096451090142
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.00593190816818957
+      }
+    },
+    {
+      "name": "blk.2.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.632926250410175
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005492130448146184
+      }
+    },
+    {
+      "name": "blk.2.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.635935538364969
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05706923772648158
+      }
+    },
+    {
+      "name": "blk.20.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6375564361108073
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06262871353189778
+      }
+    },
+    {
+      "name": "blk.20.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6325456146104724
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08151046468495211
+      }
+    },
+    {
+      "name": "blk.20.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6364482138713865
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05652051202642226
+      }
+    },
+    {
+      "name": "blk.20.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6321705818889125
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10533185732031146
+      }
+    },
+    {
+      "name": "blk.20.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.628772367825782
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.1070783358144612
+      }
+    },
+    {
+      "name": "blk.20.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6355287153756655
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005592136736743833
+      }
+    },
+    {
+      "name": "blk.20.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6277050488728346
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005415045391825476
+      }
+    },
+    {
+      "name": "blk.20.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6298309184478743
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05874150922399397
+      }
+    },
+    {
+      "name": "blk.21.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6354938180898828
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06311018149071616
+      }
+    },
+    {
+      "name": "blk.21.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6342415715697614
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08110730410116877
+      }
+    },
+    {
+      "name": "blk.21.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6361537770217212
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.057541118280666964
+      }
+    },
+    {
+      "name": "blk.21.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6287786776078716
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10745602972688226
+      }
+    },
+    {
+      "name": "blk.21.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6334876683963362
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10748483631520021
+      }
+    },
+    {
+      "name": "blk.21.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6325309098930443
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005715250306721988
+      }
+    },
+    {
+      "name": "blk.21.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6251033489316005
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.0054787132998319185
+      }
+    },
+    {
+      "name": "blk.21.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6363085269124695
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05943725062148361
+      }
+    },
+    {
+      "name": "blk.22.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.632903631383591
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06294823124163444
+      }
+    },
+    {
+      "name": "blk.22.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6328031965492456
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08021710067494496
+      }
+    },
+    {
+      "name": "blk.22.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6367011383838614
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05747746465924827
+      }
+    },
+    {
+      "name": "blk.22.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.633402338437131
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.1075272341094627
+      }
+    },
+    {
+      "name": "blk.22.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6331810398633229
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10717247167006241
+      }
+    },
+    {
+      "name": "blk.22.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.634139444529694
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005472261871788894
+      }
+    },
+    {
+      "name": "blk.22.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6338753472803678
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005359684135966765
+      }
+    },
+    {
+      "name": "blk.22.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.633170740951346
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05855789844569604
+      }
+    },
+    {
+      "name": "blk.23.attn_k.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6352632514233663
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.025850796496670204
+      }
+    },
+    {
+      "name": "blk.23.attn_output.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6313373550984256
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.0580999454169095
+      }
+    },
+    {
+      "name": "blk.23.attn_q.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6335406055204094
+      },
+      "B": {
+        "nonzero": 98304,
+        "l2": 0.08854783860275803
+      }
+    },
+    {
+      "name": "blk.23.attn_v.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6249279501407268
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.025920154928725746
+      }
+    },
+    {
+      "name": "blk.23.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6312526396389602
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05741568213296507
+      }
+    },
+    {
+      "name": "blk.23.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6337117812367243
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10732568243044527
+      }
+    },
+    {
+      "name": "blk.23.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6373926970044785
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10669502481240879
+      }
+    },
+    {
+      "name": "blk.24.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6307149868604702
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06325552883239616
+      }
+    },
+    {
+      "name": "blk.24.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.63147330472894
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08180926972568255
+      }
+    },
+    {
+      "name": "blk.24.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6359019524206446
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.057280561712822906
+      }
+    },
+    {
+      "name": "blk.24.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6302622445754842
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10774777446109912
+      }
+    },
+    {
+      "name": "blk.24.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.634656972972408
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10635350447179187
+      }
+    },
+    {
+      "name": "blk.24.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6292278375637663
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005442159345281535
+      }
+    },
+    {
+      "name": "blk.24.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6341206790689737
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005861742423841072
+      }
+    },
+    {
+      "name": "blk.24.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6360961014340136
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05821809952344166
+      }
+    },
+    {
+      "name": "blk.25.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.626237608414799
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06273937637212121
+      }
+    },
+    {
+      "name": "blk.25.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6360840083839732
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.07990278742640246
+      }
+    },
+    {
+      "name": "blk.25.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6340912403072692
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05713496870824716
+      }
+    },
+    {
+      "name": "blk.25.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6392714612315942
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10732751296807584
+      }
+    },
+    {
+      "name": "blk.25.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6304508105853308
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10755312245051515
+      }
+    },
+    {
+      "name": "blk.25.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6310456833016087
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.00551946841680772
+      }
+    },
+    {
+      "name": "blk.25.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6293847632611707
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005646993023331312
+      }
+    },
+    {
+      "name": "blk.25.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.637552683526498
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.059102356837796126
+      }
+    },
+    {
+      "name": "blk.26.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.630975648165146
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06278838377729641
+      }
+    },
+    {
+      "name": "blk.26.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6411743809389363
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08098074597207706
+      }
+    },
+    {
+      "name": "blk.26.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6345502624383337
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05741770146920876
+      }
+    },
+    {
+      "name": "blk.26.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6323036179319177
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10712742071461126
+      }
+    },
+    {
+      "name": "blk.26.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6381390228731043
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10736052406058676
+      }
+    },
+    {
+      "name": "blk.26.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.630894434890441
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.0050497384378056604
+      }
+    },
+    {
+      "name": "blk.26.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6399744740937134
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005368955424363598
+      }
+    },
+    {
+      "name": "blk.26.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6351353063464376
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05865536825388459
+      }
+    },
+    {
+      "name": "blk.27.attn_k.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6381230173019021
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.02492029215533208
+      }
+    },
+    {
+      "name": "blk.27.attn_output.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6334365975256588
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05819109255451861
+      }
+    },
+    {
+      "name": "blk.27.attn_q.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.638644844853219
+      },
+      "B": {
+        "nonzero": 98304,
+        "l2": 0.08628631375239944
+      }
+    },
+    {
+      "name": "blk.27.attn_v.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6350408440186872
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.025991856778215347
+      }
+    },
+    {
+      "name": "blk.27.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6321247083764754
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05717754290665214
+      }
+    },
+    {
+      "name": "blk.27.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6287533731949644
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10707012963290856
+      }
+    },
+    {
+      "name": "blk.27.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6335922608990499
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10583671728518698
+      }
+    },
+    {
+      "name": "blk.28.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6288456050534996
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06302017690129685
+      }
+    },
+    {
+      "name": "blk.28.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.636704822724118
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08081813776920577
+      }
+    },
+    {
+      "name": "blk.28.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6371462870751257
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.058015228696389455
+      }
+    },
+    {
+      "name": "blk.28.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6310792016850595
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10697378795800364
+      }
+    },
+    {
+      "name": "blk.28.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6344602608301728
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10769507448813578
+      }
+    },
+    {
+      "name": "blk.28.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.635592136273092
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.0054975981894869125
+      }
+    },
+    {
+      "name": "blk.28.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6368000476937328
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005626701337339767
+      }
+    },
+    {
+      "name": "blk.28.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6367894110616223
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05892633174222165
+      }
+    },
+    {
+      "name": "blk.29.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6324129852751417
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06298194809807434
+      }
+    },
+    {
+      "name": "blk.29.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6384016271650483
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08027111998883178
+      }
+    },
+    {
+      "name": "blk.29.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6315841515319722
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05817900335045564
+      }
+    },
+    {
+      "name": "blk.29.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6431530027953931
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10720155924171447
+      }
+    },
+    {
+      "name": "blk.29.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6353659755489016
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10698580665985714
+      }
+    },
+    {
+      "name": "blk.29.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6360293249017606
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005746044829136126
+      }
+    },
+    {
+      "name": "blk.29.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6321401908350164
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005768697795792694
+      }
+    },
+    {
+      "name": "blk.29.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6437705133650296
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.0591200090184841
+      }
+    },
+    {
+      "name": "blk.3.attn_k.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.632586367082928
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.02595138209626251
+      }
+    },
+    {
+      "name": "blk.3.attn_output.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.631703537598737
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05741342498981253
+      }
+    },
+    {
+      "name": "blk.3.attn_q.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6322040613621032
+      },
+      "B": {
+        "nonzero": 98304,
+        "l2": 0.08808628030984636
+      }
+    },
+    {
+      "name": "blk.3.attn_v.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6310181319283537
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.02588613225420552
+      }
+    },
+    {
+      "name": "blk.3.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.636232861256315
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05537751619126331
+      }
+    },
+    {
+      "name": "blk.3.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.636555145400887
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10554806484351453
+      }
+    },
+    {
+      "name": "blk.3.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.633857739200248
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10506517626913253
+      }
+    },
+    {
+      "name": "blk.30.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.632567396184906
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.0632030117239318
+      }
+    },
+    {
+      "name": "blk.30.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6398647365468317
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08151895007158438
+      }
+    },
+    {
+      "name": "blk.30.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6352761916991576
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05764682071791007
+      }
+    },
+    {
+      "name": "blk.30.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6395080916073432
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10673967121721431
+      }
+    },
+    {
+      "name": "blk.30.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6343870201690378
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.1072889077316935
+      }
+    },
+    {
+      "name": "blk.30.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6359589643311012
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005740517296086288
+      }
+    },
+    {
+      "name": "blk.30.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6282600947185373
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.0057332066258065535
+      }
+    },
+    {
+      "name": "blk.30.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6307098741069477
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05901281519717711
+      }
+    },
+    {
+      "name": "blk.31.attn_k.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6342321690198303
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.025724464654983164
+      }
+    },
+    {
+      "name": "blk.31.attn_output.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6375551580512264
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.058606195760458384
+      }
+    },
+    {
+      "name": "blk.31.attn_q.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6380746137179383
+      },
+      "B": {
+        "nonzero": 98304,
+        "l2": 0.08983043446763532
+      }
+    },
+    {
+      "name": "blk.31.attn_v.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6313145636472586
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.025967154410178047
+      }
+    },
+    {
+      "name": "blk.31.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6384706998396128
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.058431921876875056
+      }
+    },
+    {
+      "name": "blk.31.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6345148029992644
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10806005689032348
+      }
+    },
+    {
+      "name": "blk.31.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6399103304761082
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10798408934314424
+      }
+    },
+    {
+      "name": "blk.32.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6392205149057582
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06330305218930787
+      }
+    },
+    {
+      "name": "blk.32.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.635331442411778
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08250411013144868
+      }
+    },
+    {
+      "name": "blk.32.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6363267576463596
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05780304682923632
+      }
+    },
+    {
+      "name": "blk.32.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.632819126582002
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10893462139608523
+      }
+    },
+    {
+      "name": "blk.32.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6406289019669624
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11007408462111162
+      }
+    },
+    {
+      "name": "blk.32.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.633162217877922
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005817671132202884
+      }
+    },
+    {
+      "name": "blk.32.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.636325986513317
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005575876058544322
+      }
+    },
+    {
+      "name": "blk.32.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6354777189417993
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06001908100558533
+      }
+    },
+    {
+      "name": "blk.33.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.624369751266938
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06446787389332435
+      }
+    },
+    {
+      "name": "blk.33.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6319557735926302
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08379201003958209
+      }
+    },
+    {
+      "name": "blk.33.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6396362556714659
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05919618139216105
+      }
+    },
+    {
+      "name": "blk.33.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6330680082611846
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10913021919706854
+      }
+    },
+    {
+      "name": "blk.33.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6288027737463573
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11022267540878022
+      }
+    },
+    {
+      "name": "blk.33.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6347015073709912
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005801968139066981
+      }
+    },
+    {
+      "name": "blk.33.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.635646331265212
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005796278184820518
+      }
+    },
+    {
+      "name": "blk.33.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6333862197079976
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.0601170469567799
+      }
+    },
+    {
+      "name": "blk.34.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6332267518950183
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06471670459518009
+      }
+    },
+    {
+      "name": "blk.34.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6346070947537916
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.0834169132414984
+      }
+    },
+    {
+      "name": "blk.34.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.63219911771496
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.057708514877758986
+      }
+    },
+    {
+      "name": "blk.34.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6332500711735276
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11025818267713033
+      }
+    },
+    {
+      "name": "blk.34.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6313368601397895
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11026615467823153
+      }
+    },
+    {
+      "name": "blk.34.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.630895816216919
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005598517024234889
+      }
+    },
+    {
+      "name": "blk.34.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.624749834280986
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005427817381715621
+      }
+    },
+    {
+      "name": "blk.34.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6332745761159078
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.060298907943356336
+      }
+    },
+    {
+      "name": "blk.35.attn_k.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6386107391201312
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.02545545402213253
+      }
+    },
+    {
+      "name": "blk.35.attn_output.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6414215997243902
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05984118750070267
+      }
+    },
+    {
+      "name": "blk.35.attn_q.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6341454964540563
+      },
+      "B": {
+        "nonzero": 98304,
+        "l2": 0.0912248625355159
+      }
+    },
+    {
+      "name": "blk.35.attn_v.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.635437925288191
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.026915216999321465
+      }
+    },
+    {
+      "name": "blk.35.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6365904646160543
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05956560670709263
+      }
+    },
+    {
+      "name": "blk.35.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.644377437829602
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11065442071559249
+      }
+    },
+    {
+      "name": "blk.35.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6270172112290868
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10935093969063751
+      }
+    },
+    {
+      "name": "blk.36.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.62841866041687
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06498741143840041
+      }
+    },
+    {
+      "name": "blk.36.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6353642951272502
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08420221621504416
+      }
+    },
+    {
+      "name": "blk.36.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.636831641599198
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.0593382864873773
+      }
+    },
+    {
+      "name": "blk.36.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6391802289070787
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11060279449640109
+      }
+    },
+    {
+      "name": "blk.36.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6379929566018938
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11120573577271409
+      }
+    },
+    {
+      "name": "blk.36.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6379506913813324
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.0059637098091778985
+      }
+    },
+    {
+      "name": "blk.36.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6297080056275643
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005637696766164746
+      }
+    },
+    {
+      "name": "blk.36.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6366291265086677
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06118709133576143
+      }
+    },
+    {
+      "name": "blk.37.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6318647652553409
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06538878391856273
+      }
+    },
+    {
+      "name": "blk.37.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6351846412107407
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08455175819787587
+      }
+    },
+    {
+      "name": "blk.37.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6311903369333176
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.059014115850900675
+      }
+    },
+    {
+      "name": "blk.37.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.63450960809621
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10925303385857295
+      }
+    },
+    {
+      "name": "blk.37.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.62559380608602
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11118525585558948
+      }
+    },
+    {
+      "name": "blk.37.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6350414353114675
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005480688118656992
+      }
+    },
+    {
+      "name": "blk.37.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6371787490129954
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.006035484453938
+      }
+    },
+    {
+      "name": "blk.37.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.633582460531983
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06015518224142444
+      }
+    },
+    {
+      "name": "blk.38.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6312754715473323
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06515015484762199
+      }
+    },
+    {
+      "name": "blk.38.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.626829784961469
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08419208504403329
+      }
+    },
+    {
+      "name": "blk.38.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6379315202911726
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.058582417983931684
+      }
+    },
+    {
+      "name": "blk.38.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6370064421244255
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11101008195641851
+      }
+    },
+    {
+      "name": "blk.38.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6301862503442488
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11061156629168728
+      }
+    },
+    {
+      "name": "blk.38.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.634160221795744
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005950841019491963
+      }
+    },
+    {
+      "name": "blk.38.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6315599595100037
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005755312875873942
+      }
+    },
+    {
+      "name": "blk.38.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6356528492583435
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06097468510931218
+      }
+    },
+    {
+      "name": "blk.39.attn_k.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6316427111489789
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.026475532673632216
+      }
+    },
+    {
+      "name": "blk.39.attn_output.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.634469677763875
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05998446354898144
+      }
+    },
+    {
+      "name": "blk.39.attn_q.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6349116291273258
+      },
+      "B": {
+        "nonzero": 98304,
+        "l2": 0.09221581825277919
+      }
+    },
+    {
+      "name": "blk.39.attn_v.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6354830644510576
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.02667153474415062
+      }
+    },
+    {
+      "name": "blk.39.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6356585078066985
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05924099946847529
+      }
+    },
+    {
+      "name": "blk.39.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6349328516058823
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10971439218700622
+      }
+    },
+    {
+      "name": "blk.39.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6318941038910328
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11133434449970414
+      }
+    },
+    {
+      "name": "blk.4.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6357487605676484
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06176359863568463
+      }
+    },
+    {
+      "name": "blk.4.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.629486083080204
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.0792648577609467
+      }
+    },
+    {
+      "name": "blk.4.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6398980202647175
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05564543559110932
+      }
+    },
+    {
+      "name": "blk.4.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6392479182305062
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.1044196819613413
+      }
+    },
+    {
+      "name": "blk.4.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6324832332430308
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10409189488815641
+      }
+    },
+    {
+      "name": "blk.4.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6337957127472238
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005414605379518642
+      }
+    },
+    {
+      "name": "blk.4.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6312851417869976
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005496854443524153
+      }
+    },
+    {
+      "name": "blk.4.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6360088296981037
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.057449017372432055
+      }
+    },
+    {
+      "name": "blk.40.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6377574029863946
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06541379341217456
+      }
+    },
+    {
+      "name": "blk.40.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6328184372461072
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.0843796577376688
+      }
+    },
+    {
+      "name": "blk.40.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6401500979500678
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05948102080841901
+      }
+    },
+    {
+      "name": "blk.40.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6337793561041845
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11038511885664815
+      }
+    },
+    {
+      "name": "blk.40.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6348494970644118
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11078653722742196
+      }
+    },
+    {
+      "name": "blk.40.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6354307907102237
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.0056827991395879945
+      }
+    },
+    {
+      "name": "blk.40.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6373114044666126
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005912263176408005
+      }
+    },
+    {
+      "name": "blk.40.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.628904559546102
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.060425005498311195
+      }
+    },
+    {
+      "name": "blk.41.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6335738908709512
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06559157672293588
+      }
+    },
+    {
+      "name": "blk.41.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6331693383481563
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.0842652948178306
+      }
+    },
+    {
+      "name": "blk.41.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.637780257955559
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05918618820609127
+      }
+    },
+    {
+      "name": "blk.41.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.634025788617868
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11071766502546314
+      }
+    },
+    {
+      "name": "blk.41.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6408550469622745
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11009469283105006
+      }
+    },
+    {
+      "name": "blk.41.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.632043076992258
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005684475207841195
+      }
+    },
+    {
+      "name": "blk.41.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6247655917361332
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005787766066690232
+      }
+    },
+    {
+      "name": "blk.41.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6454837930746806
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06038753637504358
+      }
+    },
+    {
+      "name": "blk.42.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6321341765426385
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06587720071627765
+      }
+    },
+    {
+      "name": "blk.42.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6362609006714661
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08489399075633662
+      }
+    },
+    {
+      "name": "blk.42.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.636878815925651
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05971928943017757
+      }
+    },
+    {
+      "name": "blk.42.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.632783654838044
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10976578024182743
+      }
+    },
+    {
+      "name": "blk.42.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6332252615479494
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11010877152894281
+      }
+    },
+    {
+      "name": "blk.42.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6400196457207405
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005596022506765216
+      }
+    },
+    {
+      "name": "blk.42.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6345619273769456
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005959756211127908
+      }
+    },
+    {
+      "name": "blk.42.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.635647391030673
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.059652098967122036
+      }
+    },
+    {
+      "name": "blk.43.attn_k.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6286538586498394
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.026535166787663378
+      }
+    },
+    {
+      "name": "blk.43.attn_output.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6365562935586955
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.060825318465625805
+      }
+    },
+    {
+      "name": "blk.43.attn_q.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.636954811359742
+      },
+      "B": {
+        "nonzero": 98304,
+        "l2": 0.09387577026387026
+      }
+    },
+    {
+      "name": "blk.43.attn_v.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.628411691025546
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.027198126570200133
+      }
+    },
+    {
+      "name": "blk.43.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6352586867688392
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05905968709192559
+      }
+    },
+    {
+      "name": "blk.43.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6335949249882697
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11064498052540943
+      }
+    },
+    {
+      "name": "blk.43.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.636680365614494
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.1107106646915562
+      }
+    },
+    {
+      "name": "blk.44.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6313574039146144
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.0650641708792457
+      }
+    },
+    {
+      "name": "blk.44.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6295273769137357
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08580084563350918
+      }
+    },
+    {
+      "name": "blk.44.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6368127186357715
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.059716715159840214
+      }
+    },
+    {
+      "name": "blk.44.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6386916059373189
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11091118295396808
+      }
+    },
+    {
+      "name": "blk.44.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6317458991082325
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11133508557735314
+      }
+    },
+    {
+      "name": "blk.44.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6367317462685234
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005740172641983472
+      }
+    },
+    {
+      "name": "blk.44.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6332150835699855
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005984316769160032
+      }
+    },
+    {
+      "name": "blk.44.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.636898033674717
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.060908676313916735
+      }
+    },
+    {
+      "name": "blk.45.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6384552517884483
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06552305682473472
+      }
+    },
+    {
+      "name": "blk.45.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.640122375251685
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08489629874080279
+      }
+    },
+    {
+      "name": "blk.45.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6322635394951472
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.059326099603248486
+      }
+    },
+    {
+      "name": "blk.45.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6344232158110124
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11131152840084522
+      }
+    },
+    {
+      "name": "blk.45.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6321312955845826
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11165346383336516
+      }
+    },
+    {
+      "name": "blk.45.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6263468470837423
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005668956917931995
+      }
+    },
+    {
+      "name": "blk.45.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.632644958244336
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005803981035252483
+      }
+    },
+    {
+      "name": "blk.45.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.637957434834162
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.0610254587939509
+      }
+    },
+    {
+      "name": "blk.46.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.63429436872765
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06521650637308414
+      }
+    },
+    {
+      "name": "blk.46.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.633934121514171
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08497488983972519
+      }
+    },
+    {
+      "name": "blk.46.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6376082227033237
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06028205218010265
+      }
+    },
+    {
+      "name": "blk.46.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.633760690803317
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11097274537291475
+      }
+    },
+    {
+      "name": "blk.46.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6342969712713904
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11180997358219875
+      }
+    },
+    {
+      "name": "blk.46.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6321233974660134
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005514332936016866
+      }
+    },
+    {
+      "name": "blk.46.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6298126080503632
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005850268601384615
+      }
+    },
+    {
+      "name": "blk.46.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6293964816779245
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06135719599542791
+      }
+    },
+    {
+      "name": "blk.47.attn_k.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6308782618219126
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.02642059251540686
+      }
+    },
+    {
+      "name": "blk.47.attn_output.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.636789674047932
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06086543359555645
+      }
+    },
+    {
+      "name": "blk.47.attn_q.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6298439230598352
+      },
+      "B": {
+        "nonzero": 98304,
+        "l2": 0.09449256945880226
+      }
+    },
+    {
+      "name": "blk.47.attn_v.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6354147184892245
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.0272655184400058
+      }
+    },
+    {
+      "name": "blk.47.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6330468965773572
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.059629485842614585
+      }
+    },
+    {
+      "name": "blk.47.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6320177435876486
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11178452162407022
+      }
+    },
+    {
+      "name": "blk.47.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6343346568887307
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11105964897811185
+      }
+    },
+    {
+      "name": "blk.48.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6285683637425756
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06595611797832203
+      }
+    },
+    {
+      "name": "blk.48.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6328101152157088
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08548897176845299
+      }
+    },
+    {
+      "name": "blk.48.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6348244295320378
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06022979819457234
+      }
+    },
+    {
+      "name": "blk.48.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6327437801781393
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11169269314452854
+      }
+    },
+    {
+      "name": "blk.48.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.628430745649914
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11174049031483768
+      }
+    },
+    {
+      "name": "blk.48.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6316656142891965
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.006173782519801202
+      }
+    },
+    {
+      "name": "blk.48.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6345687540123381
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005988034907807512
+      }
+    },
+    {
+      "name": "blk.48.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6327105113358007
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.0606946941382542
+      }
+    },
+    {
+      "name": "blk.49.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6368660834755158
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06624706197627464
+      }
+    },
+    {
+      "name": "blk.49.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6331459750706885
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08565455713623832
+      }
+    },
+    {
+      "name": "blk.49.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6371382170434723
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.059736559694828724
+      }
+    },
+    {
+      "name": "blk.49.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6334131586205367
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11176170825954798
+      }
+    },
+    {
+      "name": "blk.49.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6331767508042074
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11329622036017963
+      }
+    },
+    {
+      "name": "blk.49.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6352950968389188
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005646629497512492
+      }
+    },
+    {
+      "name": "blk.49.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6312082148459355
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005854580716184922
+      }
+    },
+    {
+      "name": "blk.49.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6359486683041227
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.061383404261798995
+      }
+    },
+    {
+      "name": "blk.5.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6347584154946164
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06138077235555095
+      }
+    },
+    {
+      "name": "blk.5.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6358777330485132
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.07986817122844381
+      }
+    },
+    {
+      "name": "blk.5.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.637402345568128
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05522605169469253
+      }
+    },
+    {
+      "name": "blk.5.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6346542377554942
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10451488754618876
+      }
+    },
+    {
+      "name": "blk.5.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6293828271966808
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10478085856269105
+      }
+    },
+    {
+      "name": "blk.5.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6309618279388243
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005571384820677618
+      }
+    },
+    {
+      "name": "blk.5.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6246000104383054
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005215474178943374
+      }
+    },
+    {
+      "name": "blk.5.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6294508388769757
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05633569020386707
+      }
+    },
+    {
+      "name": "blk.50.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6316601188958237
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06637135220216575
+      }
+    },
+    {
+      "name": "blk.50.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6368804852774272
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08619240856411027
+      }
+    },
+    {
+      "name": "blk.50.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6367988032300382
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06026758363778487
+      }
+    },
+    {
+      "name": "blk.50.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.633454194928294
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11267728697096602
+      }
+    },
+    {
+      "name": "blk.50.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.631739131519147
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11321184135637419
+      }
+    },
+    {
+      "name": "blk.50.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6335439910732212
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.006107823810239732
+      }
+    },
+    {
+      "name": "blk.50.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.632145791712104
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.0058176512800656825
+      }
+    },
+    {
+      "name": "blk.50.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.631120646731746
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06206780867970507
+      }
+    },
+    {
+      "name": "blk.51.attn_k.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.634098961452612
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.026129078229490326
+      }
+    },
+    {
+      "name": "blk.51.attn_output.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6341550015469748
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.061842525010987685
+      }
+    },
+    {
+      "name": "blk.51.attn_q.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6302940923845715
+      },
+      "B": {
+        "nonzero": 98304,
+        "l2": 0.09551540118032324
+      }
+    },
+    {
+      "name": "blk.51.attn_v.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.631685393415603
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.027361113197448144
+      }
+    },
+    {
+      "name": "blk.51.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6358030244075328
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06204202574042936
+      }
+    },
+    {
+      "name": "blk.51.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6367636896185407
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11259229646548606
+      }
+    },
+    {
+      "name": "blk.51.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6287359469042053
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11306205454787177
+      }
+    },
+    {
+      "name": "blk.52.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.63296980150622
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06733395702039661
+      }
+    },
+    {
+      "name": "blk.52.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6355517547050413
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08663857106358802
+      }
+    },
+    {
+      "name": "blk.52.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6349483373449583
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.060463930977335816
+      }
+    },
+    {
+      "name": "blk.52.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.629509986073439
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.1118844675555621
+      }
+    },
+    {
+      "name": "blk.52.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6375225111424112
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11236430990095596
+      }
+    },
+    {
+      "name": "blk.52.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6342873378860094
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005878632211665894
+      }
+    },
+    {
+      "name": "blk.52.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6356856685459922
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.00571685311091966
+      }
+    },
+    {
+      "name": "blk.52.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6325704102090006
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.061915662118143484
+      }
+    },
+    {
+      "name": "blk.53.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6349776740248645
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06663509864475256
+      }
+    },
+    {
+      "name": "blk.53.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6376010372678387
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08688348464448478
+      }
+    },
+    {
+      "name": "blk.53.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6360768860259531
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.061403799969555875
+      }
+    },
+    {
+      "name": "blk.53.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6367626714846522
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11322212918382141
+      }
+    },
+    {
+      "name": "blk.53.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6321950513416663
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11371899173882882
+      }
+    },
+    {
+      "name": "blk.53.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6346829617466174
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.006226318220684472
+      }
+    },
+    {
+      "name": "blk.53.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6417340573345334
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.006056716285275428
+      }
+    },
+    {
+      "name": "blk.53.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6327563635790459
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06235655546516466
+      }
+    },
+    {
+      "name": "blk.54.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.636709035271626
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06655932603775531
+      }
+    },
+    {
+      "name": "blk.54.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.637919129500377
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.0865354551015635
+      }
+    },
+    {
+      "name": "blk.54.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6361275234787556
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06116806751775271
+      }
+    },
+    {
+      "name": "blk.54.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6301948516241096
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11253811025272081
+      }
+    },
+    {
+      "name": "blk.54.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.638441179919525
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11499977263552381
+      }
+    },
+    {
+      "name": "blk.54.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6350263309864281
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.006032713754898905
+      }
+    },
+    {
+      "name": "blk.54.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6352527447619565
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.0058608245043593205
+      }
+    },
+    {
+      "name": "blk.54.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6329394929071148
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.0621347120109793
+      }
+    },
+    {
+      "name": "blk.55.attn_k.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.631506610221046
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.028893287388209617
+      }
+    },
+    {
+      "name": "blk.55.attn_output.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6297882659676954
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.0622825819284421
+      }
+    },
+    {
+      "name": "blk.55.attn_q.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6346286426889391
+      },
+      "B": {
+        "nonzero": 98304,
+        "l2": 0.09682446603676133
+      }
+    },
+    {
+      "name": "blk.55.attn_v.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.636908096652198
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.027775638460862444
+      }
+    },
+    {
+      "name": "blk.55.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6362359019441426
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.061663511228922004
+      }
+    },
+    {
+      "name": "blk.55.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6372286560870661
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11253449005561827
+      }
+    },
+    {
+      "name": "blk.55.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6365468947469475
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11376872017963391
+      }
+    },
+    {
+      "name": "blk.56.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6295664373349863
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.0660562698957701
+      }
+    },
+    {
+      "name": "blk.56.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6398197531836929
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08667287351017162
+      }
+    },
+    {
+      "name": "blk.56.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.633624003155775
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.0601784416679685
+      }
+    },
+    {
+      "name": "blk.56.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6370819837390822
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.112672296462788
+      }
+    },
+    {
+      "name": "blk.56.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6319656871660213
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11213480413169624
+      }
+    },
+    {
+      "name": "blk.56.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.628836567846324
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005949174752016381
+      }
+    },
+    {
+      "name": "blk.56.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6352721966193196
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005938019549983877
+      }
+    },
+    {
+      "name": "blk.56.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6313154106789147
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06193108511683867
+      }
+    },
+    {
+      "name": "blk.57.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6350398017842156
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06692281966638743
+      }
+    },
+    {
+      "name": "blk.57.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6354490272870363
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.0852333519258575
+      }
+    },
+    {
+      "name": "blk.57.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6357850063110573
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06176985473279319
+      }
+    },
+    {
+      "name": "blk.57.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6316854676743475
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.1126289775708793
+      }
+    },
+    {
+      "name": "blk.57.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6320294276572955
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11430418540053086
+      }
+    },
+    {
+      "name": "blk.57.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6344268236949784
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.00605758937520338
+      }
+    },
+    {
+      "name": "blk.57.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.635423690509211
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005850486640302893
+      }
+    },
+    {
+      "name": "blk.57.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6352313021847902
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06234393250595707
+      }
+    },
+    {
+      "name": "blk.58.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.635630047495943
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.0671413360805202
+      }
+    },
+    {
+      "name": "blk.58.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6340821436521231
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08601033481615983
+      }
+    },
+    {
+      "name": "blk.58.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.63265407852978
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06165561284440165
+      }
+    },
+    {
+      "name": "blk.58.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6326693355614563
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11211666919760345
+      }
+    },
+    {
+      "name": "blk.58.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6375771055974195
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11458883064763165
+      }
+    },
+    {
+      "name": "blk.58.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6329867223981684
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005996961886950079
+      }
+    },
+    {
+      "name": "blk.58.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.632797683709799
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005773103097660035
+      }
+    },
+    {
+      "name": "blk.58.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6309527022851495
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06165632805235393
+      }
+    },
+    {
+      "name": "blk.59.attn_k.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6381122143890998
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.028400334678200342
+      }
+    },
+    {
+      "name": "blk.59.attn_output.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6348949964926984
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06242669447188172
+      }
+    },
+    {
+      "name": "blk.59.attn_q.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.631510329238122
+      },
+      "B": {
+        "nonzero": 98304,
+        "l2": 0.09559267656041383
+      }
+    },
+    {
+      "name": "blk.59.attn_v.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.629744370932501
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.028056932700025468
+      }
+    },
+    {
+      "name": "blk.59.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6343692053693397
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.060871440058416396
+      }
+    },
+    {
+      "name": "blk.59.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.639443884583165
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.1130443825095476
+      }
+    },
+    {
+      "name": "blk.59.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.629670411170596
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11351044146260177
+      }
+    },
+    {
+      "name": "blk.6.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6348891435492747
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06143516874885391
+      }
+    },
+    {
+      "name": "blk.6.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6260450550082062
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.07891412238241655
+      }
+    },
+    {
+      "name": "blk.6.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6353911503096905
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05700297929712944
+      }
+    },
+    {
+      "name": "blk.6.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6366830775854426
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10319158428461833
+      }
+    },
+    {
+      "name": "blk.6.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6311174478367054
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10274943473172904
+      }
+    },
+    {
+      "name": "blk.6.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6312814126448263
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005619603804923564
+      }
+    },
+    {
+      "name": "blk.6.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6283538855851416
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005580403779860291
+      }
+    },
+    {
+      "name": "blk.6.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6304702008261807
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05677418569428552
+      }
+    },
+    {
+      "name": "blk.60.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.627954824820752
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06631027632947699
+      }
+    },
+    {
+      "name": "blk.60.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6291093631181952
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08682208828998884
+      }
+    },
+    {
+      "name": "blk.60.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6358095983390901
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06092407271298063
+      }
+    },
+    {
+      "name": "blk.60.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6341049374074095
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11338416519603126
+      }
+    },
+    {
+      "name": "blk.60.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6278019301090452
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11460818542403935
+      }
+    },
+    {
+      "name": "blk.60.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6307065876113769
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005801174944839516
+      }
+    },
+    {
+      "name": "blk.60.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6316410480003187
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005744214418165404
+      }
+    },
+    {
+      "name": "blk.60.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6324187063657858
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06133390843965238
+      }
+    },
+    {
+      "name": "blk.61.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.637928492020257
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06688535529307912
+      }
+    },
+    {
+      "name": "blk.61.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6340938286973163
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.0864824926749888
+      }
+    },
+    {
+      "name": "blk.61.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6371865379948363
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.0620708937292095
+      }
+    },
+    {
+      "name": "blk.61.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.635598921204608
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11291815642155413
+      }
+    },
+    {
+      "name": "blk.61.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6341393616194668
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11420586683067857
+      }
+    },
+    {
+      "name": "blk.61.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.64373289510881
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.0058262099719489
+      }
+    },
+    {
+      "name": "blk.61.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.632547464198684
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005958588421230669
+      }
+    },
+    {
+      "name": "blk.61.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6324430101592338
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06295408958196352
+      }
+    },
+    {
+      "name": "blk.62.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.633379285375513
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06743537341426784
+      }
+    },
+    {
+      "name": "blk.62.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6314801421205363
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.08736891753862926
+      }
+    },
+    {
+      "name": "blk.62.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6347481489511075
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.062026186362599565
+      }
+    },
+    {
+      "name": "blk.62.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.632345347287807
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11423890816131102
+      }
+    },
+    {
+      "name": "blk.62.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6369376722215054
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11407180098158892
+      }
+    },
+    {
+      "name": "blk.62.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6426371844209764
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.00579960608662254
+      }
+    },
+    {
+      "name": "blk.62.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6346846852221606
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005762387768882543
+      }
+    },
+    {
+      "name": "blk.62.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6335103400045212
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.061998797912021446
+      }
+    },
+    {
+      "name": "blk.63.attn_k.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6272617163352252
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.027880036445272868
+      }
+    },
+    {
+      "name": "blk.63.attn_output.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6344636481216064
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06359656056634157
+      }
+    },
+    {
+      "name": "blk.63.attn_q.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.629318570300287
+      },
+      "B": {
+        "nonzero": 98304,
+        "l2": 0.09562570185827492
+      }
+    },
+    {
+      "name": "blk.63.attn_v.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.629696226574812
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.027970256723500467
+      }
+    },
+    {
+      "name": "blk.63.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6344610209273027
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.06278960483318848
+      }
+    },
+    {
+      "name": "blk.63.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6359051773063271
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11007930218752066
+      }
+    },
+    {
+      "name": "blk.63.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6350601260851014
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.11324872970267437
+      }
+    },
+    {
+      "name": "blk.7.attn_k.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6345389858596926
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.02549574055753012
+      }
+    },
+    {
+      "name": "blk.7.attn_output.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6356627988181394
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05794862684547842
+      }
+    },
+    {
+      "name": "blk.7.attn_q.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6331576824484146
+      },
+      "B": {
+        "nonzero": 98304,
+        "l2": 0.08931299899661399
+      }
+    },
+    {
+      "name": "blk.7.attn_v.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6339602741824741
+      },
+      "B": {
+        "nonzero": 8192,
+        "l2": 0.025147765930060982
+      }
+    },
+    {
+      "name": "blk.7.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6381678960510289
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.0551510564638434
+      }
+    },
+    {
+      "name": "blk.7.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6413146084460706
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10367375492916875
+      }
+    },
+    {
+      "name": "blk.7.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6326511000118196
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10444482478080111
+      }
+    },
+    {
+      "name": "blk.8.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6370919429360125
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.0617895144898992
+      }
+    },
+    {
+      "name": "blk.8.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6385868463971078
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.07813171381768425
+      }
+    },
+    {
+      "name": "blk.8.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6345760202971837
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05586622315564793
+      }
+    },
+    {
+      "name": "blk.8.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6338878069725542
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10296671626037004
+      }
+    },
+    {
+      "name": "blk.8.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6364297410265896
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10227585238609811
+      }
+    },
+    {
+      "name": "blk.8.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.634636606946433
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005596009176823681
+      }
+    },
+    {
+      "name": "blk.8.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6401245474636978
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005333752049986157
+      }
+    },
+    {
+      "name": "blk.8.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6328571288073932
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.056765393166755745
+      }
+    },
+    {
+      "name": "blk.9.attn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6308820940588564
+      },
+      "B": {
+        "nonzero": 49152,
+        "l2": 0.06073953762372429
+      }
+    },
+    {
+      "name": "blk.9.attn_qkv.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.634534172255973
+      },
+      "B": {
+        "nonzero": 81920,
+        "l2": 0.07870578629080162
+      }
+    },
+    {
+      "name": "blk.9.ffn_down.weight",
+      "A": {
+        "nonzero": 139264,
+        "l2": 1.6329298053968762
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.055305455188185915
+      }
+    },
+    {
+      "name": "blk.9.ffn_gate.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.63772056381587
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10318573239956765
+      }
+    },
+    {
+      "name": "blk.9.ffn_up.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6286419342094236
+      },
+      "B": {
+        "nonzero": 139264,
+        "l2": 0.10337524861644799
+      }
+    },
+    {
+      "name": "blk.9.ssm_alpha.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.636683992816613
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005460006511334606
+      }
+    },
+    {
+      "name": "blk.9.ssm_beta.weight",
+      "A": {
+        "nonzero": 40960,
+        "l2": 1.6343663570761386
+      },
+      "B": {
+        "nonzero": 384,
+        "l2": 0.005210596192733631
+      }
+    },
+    {
+      "name": "blk.9.ssm_out.weight",
+      "A": {
+        "nonzero": 49152,
+        "l2": 1.6350248981354973
+      },
+      "B": {
+        "nonzero": 40960,
+        "l2": 0.05793137799595159
+      }
+    }
+  ],
+  "limits": [
+    "Short repeated smoke sample only; no model-quality claim.",
+    "Context12 including EOS on actual model; longer training contexts not measured.",
+    "NNtrain adapters only; no PEFT or merged GGUF export.",
+    "One sequence/update, FP32 AdamW; no shuffle, accumulation or dropout.",
+    "Sample generation must preserve training prefixes including trailing assistant newline."
+  ],
+  "build_note": "Steps1-3 ran from publication checkout before lifecycle guards; step4, generation and132tests ran final normal-checkout build."
+}

@@ -8,7 +8,7 @@ internal static class QwenGgufCommand
     {
         try
         {
-            string? modelPath = null, prompt = null;
+            string? modelPath = null, prompt = null, adapterPath = null;
             int device = 0, maxNewTokens = 16;
             bool stream = true;
             int[]? devices = null;
@@ -23,6 +23,7 @@ internal static class QwenGgufCommand
                 switch (option)
                 {
                     case "--model": modelPath = Path.GetFullPath(value); break;
+                    case "--adapter": adapterPath = Path.GetFullPath(value); break;
                     case "--prompt": prompt = value; break;
                     case "--device": device = int.Parse(value); explicitDevice = true; break;
                     case "--devices": devices = value.Split(',').Select(int.Parse).ToArray(); break;
@@ -33,7 +34,7 @@ internal static class QwenGgufCommand
             if (modelPath is null || prompt is null)
                 throw new ArgumentException(
                     "Usage: qwen-gguf --model <model.gguf> --prompt <text> " +
-                    "[--device 0 | --devices 0,1] [--max-new-tokens 16] [--no-stream]");
+                    "[--device 0 | --devices 0,1] [--max-new-tokens 16] [--no-stream] [--adapter <qwen35.adapter.bin>]");
             if (!File.Exists(modelPath)) throw new FileNotFoundException("GGUF model not found.", modelPath);
             if (device < 0 || maxNewTokens < 0)
                 throw new ArgumentOutOfRangeException("Device and max-new-tokens must be nonnegative.");
@@ -45,8 +46,17 @@ internal static class QwenGgufCommand
                 architecture = gguf.Metadata.TryGetValue("general.architecture", out object? value)
                     ? value as string ?? "" : "";
             if (architecture == "qwen35")
+            {
+                if (adapterPath is not null)
+                {
+                    QwenLoraCommand.ValidateDistinctPaths(modelPath, adapterPath);
+                    if (!File.Exists(adapterPath)) throw new FileNotFoundException("LoRA adapter not found.", adapterPath);
+                }
                 return RunQwen35(modelPath, prompt, maxNewTokens,
-                    devices ?? (explicitDevice ? [device] : null), stream, output, error);
+                    devices ?? (explicitDevice ? [device] : null), stream, output, error, adapterPath);
+            }
+            if (adapterPath is not null)
+                throw new NotSupportedException("--adapter currently supports qwen35 GGUF models only.");
             if (devices is not null)
             {
                 if (devices.Length != 1 || devices[0] < 0)
@@ -139,7 +149,7 @@ internal static class QwenGgufCommand
         double? DecodeTokensPerSecond);
 
     private static int RunQwen35(string path, string prompt, int maxNewTokens,
-        int[]? devices, bool stream, TextWriter output, TextWriter error)
+        int[]? devices, bool stream, TextWriter output, TextWriter error, string? adapterPath = null)
     {
         Qwen35GgufDescriptor d = Qwen35Gguf.Inspect(path);
         Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(path);
@@ -149,7 +159,7 @@ internal static class QwenGgufCommand
         output.WriteLine($"Qwen3.5 GGUF: layers={d.LayerCount}, width={d.EmbeddingLength}, " +
             $"heads={d.HeadCount}/{d.KvHeadCount}, head-width={d.HeadWidth}, vocab={d.VocabularySize}");
         output.WriteLine($"token ids: {string.Join(',', promptIds)}");
-        if (maxNewTokens == 0)
+        if (maxNewTokens == 0 && adapterPath is null)
         {
             output.WriteLine("generated:");
             output.WriteLine(tokenizer.Decode(promptIds));
@@ -159,6 +169,11 @@ internal static class QwenGgufCommand
         output.WriteLine("GPU KV cache and Gated DeltaNet state reuse: enabled.");
         var loadTimer = Stopwatch.StartNew();
         using Qwen35QuantizedModel model = Qwen35QuantizedModel.Load(path, devices, output.WriteLine);
+        if (adapterPath is not null)
+        {
+            model.LoadLora(adapterPath);
+            output.WriteLine($"LoRA adapter = {adapterPath}, step {model.LoraStep}, parameters={model.LoraParameterCount}");
+        }
         loadTimer.Stop();
         int[] generated = [];
         GenerationTiming timing = WriteGeneration(prompt, tokenizer, stream, onToken =>

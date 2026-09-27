@@ -418,3 +418,28 @@ __kernel void qwen_embedding_q6_k(
     int block_index = token_ids[position] * (width / 256) + column / 256;
     output[i] = qwen_q6_k_value(weight + block_index * 210, column & 255);
 }
+
+#ifdef ARC_QWEN35_TRAINING
+__kernel void q35t_xpose_q4_k(__global const float* dy,__global const uchar* w,
+    __global float* partial,int rows,int input,int output,int splits,int tile) {
+    int i=get_global_id(0);if(i>=rows*splits*input)return;
+    int j=i%input, split=(i/input)%splits, row=i/(input*splits);float sum=0;
+    int end=min(output,(split+1)*tile),blocks=input/256;
+    for(int o=split*tile;o<end;o++) {
+        __global const uchar* block=w+((size_t)o*blocks+j/256)*144;
+        sum=fma(dy[row*output+o],qwen_q4_k_value(block, j & 255),sum);
+    }
+    partial[i]=sum;
+}
+__kernel void q35t_xpose_q6_k(__global const float* dy,__global const uchar* w,
+    __global float* partial,int rows,int input,int output,int splits,int tile) {
+    int i=get_global_id(0);if(i>=rows*splits*input)return;
+    int j=i%input, split=(i/input)%splits, row=i/(input*splits);float sum=0;
+    int end=min(output,(split+1)*tile),blocks=input/256;
+    for(int o=split*tile;o<end;o++) {
+        __global const uchar* block=w+((size_t)o*blocks+j/256)*210;
+        sum=fma(dy[row*output+o],qwen_q6_k_value(block, j & 255),sum);
+    }
+    partial[i]=sum;
+}
+#endif

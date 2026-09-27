@@ -661,3 +661,39 @@ __kernel void q35l_iq3_s_sg16(
 #undef Q35I_EMBEDDING
 #undef Q35I_SCALE
 #undef Q35I_MIN
+
+#ifdef ARC_QWEN35_TRAINING
+__kernel void q35t_xpose_q5_k(__global const float* dy,__global const uchar* w,
+    __global float* partial,int rows,int input,int output,int splits,int tile) {
+    int i=get_global_id(0);if(i>=rows*splits*input)return;
+    int j=i%input, split=(i/input)%splits, row=i/(input*splits);float sum=0;
+    int end=min(output,(split+1)*tile),blocks=input/256;
+    for(int o=split*tile;o<end;o++) {
+        __global const uchar* block=w+((size_t)o*blocks+j/256)*176;
+        sum=fma(dy[row*output+o],q35l_q5_value(block, j & 255, q35l_half_to_float((ushort)block[0] | ((ushort)block[1]<<8)), q35l_half_to_float((ushort)block[2] | ((ushort)block[3]<<8))),sum);
+    }
+    partial[i]=sum;
+}
+__kernel void q35t_xpose_iq2_s(__global const float* dy,__global const uchar* w,
+    __global float* partial,int rows,int input,int output,int splits,int tile) {
+    int i=get_global_id(0);if(i>=rows*splits*input)return;
+    int j=i%input, split=(i/input)%splits, row=i/(input*splits);float sum=0;
+    int end=min(output,(split+1)*tile),blocks=input/256;
+    for(int o=split*tile;o<end;o++) {
+        __global const uchar* block=w+((size_t)o*blocks+j/256)*82;
+        sum=fma(dy[row*output+o],q35l_iq2_s_value(block, j & 255, q35l_half_to_float((ushort)block[0] | ((ushort)block[1]<<8)), 0.0f),sum);
+    }
+    partial[i]=sum;
+}
+__kernel void q35t_xpose_iq3_s(__global const float* dy,__global const uchar* w,
+    __global float* partial,int rows,int input,int output,int splits,int tile) {
+    int i=get_global_id(0);if(i>=rows*splits*input)return;
+    int j=i%input, split=(i/input)%splits, row=i/(input*splits);float sum=0;
+    int end=min(output,(split+1)*tile),blocks=input/256;
+    for(int o=split*tile;o<end;o++) {
+        __global const uchar* block=w+((size_t)o*blocks+j/256)*110;
+        sum=fma(dy[row*output+o],q35l_iq3_s_value(block, j & 255, q35l_half_to_float((ushort)block[0] | ((ushort)block[1]<<8)), 0.0f),sum);
+    }
+    partial[i]=sum;
+}
+#endif

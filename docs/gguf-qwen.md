@@ -30,8 +30,8 @@ the GPT generation KV cache is not a Qwen KV cache.
 - The first GQA kernel supports at most 4096 tokens per forward call and rejects
   longer inputs explicitly. A larger GGUF context value does not remove this
   kernel limit. No-grad inference avoids the quadratic saved-probability buffer.
-- Quantized Qwen training is unsupported. The dense model exposes LoRA building
-  blocks; this does not add a Qwen LoRA CLI.
+- Quantized Qwen2 training is unsupported. For Qwen3.5 Attention/MLP LoRA,
+  see [the LoRA guide](qwen35-lora.md).
 
 ## Integration corrections
 
@@ -111,8 +111,8 @@ uploading. It does not expand the large weight matrices to Float32.
   replacing buffers; the advertised full context is not preallocated.
 - Tokenization uses the `qwen35` BPE split, including combining marks. Prompts
   are raw text; the embedded chat template is not applied automatically.
-- Dense text `qwen35` only: no MoE, vision input, MTP, scaled RoPE, training or
-  LoRA. Unsupported tensor directories are rejected before payload loading.
+- Dense text `qwen35` only: no MoE, vision input, MTP or scaled RoPE.
+  Unsupported tensor directories are rejected before payload loading.
 - `GenerateTokenIds` resets GPU sequence state and downloads only an 8-byte
   token/status result for each generated token. `ForwardToken` advances state
   and optionally downloads full logits for inspection. `Reset` zeroes recurrent
@@ -214,3 +214,9 @@ chat templates are not inserted automatically.
 Qwen3.5 also accepts the Q5_K, IQ2_S and IQ3_S tensors used by the tested
 `Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf`. See the
 [format support and validation report](qwen35-iq-validation.md).
+
+### Qwen3.5 LoRA training
+
+`qwen-lora` trains Attention, Gated DeltaNet and MLP adapters on the frozen
+quantized GPU base. See [configuration, data and resume commands](qwen35-lora.md)
+and [the 27B training validation](qwen35-lora-validation.md).

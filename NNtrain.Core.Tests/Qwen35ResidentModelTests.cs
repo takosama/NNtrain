@@ -312,7 +312,7 @@ public sealed class Qwen35ResidentModelTests
             "The fixture must produce nonconstant logits to exercise real projections.");
     }
 
-    private static TemporaryQwenGguf CreateFixture(bool tiedOutput, uint contextLength = 8,
+    internal static TemporaryQwenGguf CreateFixture(bool tiedOutput, uint contextLength = 8,
         bool nonFiniteOutputNorm = false)
     {
         var metadata = new Dictionary<string, object>

@@ -8,7 +8,7 @@ namespace NNtrain;
 /// recurrent state stay on their owning Arc device. Host staging is used only
 /// between different OpenCL contexts. Instances own one sequence and are not thread safe.
 /// </summary>
-public sealed class Qwen35QuantizedModel : IDisposable
+public sealed partial class Qwen35QuantizedModel : IDisposable
 {
     private const long WorkspaceReserveBytes = 64L * 1024 * 1024;
     private readonly List<ArcExecutionLane> _lanes = [];
@@ -69,7 +69,13 @@ public sealed class Qwen35QuantizedModel : IDisposable
                     throw new NotSupportedException($"Tensor '{tensor.Name}' exceeds Arc {device.Index}'s allocation limit.");
         }
 
-        var model = new Qwen35QuantizedModel(d, options);
+        var model = new Qwen35QuantizedModel(d, options)
+        {
+            _modelPath = Path.GetFullPath(path),
+            // Keep the same base snapshot protected from writes/deletion while
+            // resident weights and adapter identity refer to it.
+            _modelSource = File.OpenRead(path)
+        };
         try
         {
             foreach (int index in selected)
@@ -78,6 +84,7 @@ public sealed class Qwen35QuantizedModel : IDisposable
                 model._lanes.Add(new ArcExecutionLane(index, new ArcExecutionOptions
                 {
                     Qwen35InferenceKernelsOnly = true,
+                    Qwen35TrainingKernels = options.LoraTraining,
                     BufferPoolBytes = WorkspaceReserveBytes,
                     DeferredReleaseBytes = 0,
                     QueuedKernelLimit = options.QueuedKernelLimit,
@@ -259,6 +266,8 @@ public sealed class Qwen35QuantizedModel : IDisposable
             hidden!.Dispose(); hidden = finalNorm;
             MoveToLane(ref hidden, ref lane, OutputMatrix.Lane, d.EmbeddingLength);
             ArcBuffer logits = OutputMatrix.Forward(hidden!, _zeroBias[lane]);
+            try { ApplyLora("output.weight", hidden!, logits, 1); }
+            catch { logits.Dispose(); throw; }
             _position++;
             return logits;
         }
@@ -281,7 +290,9 @@ public sealed class Qwen35QuantizedModel : IDisposable
     private ArcBuffer Project(string name, ArcBuffer input)
     {
         Matrix matrix = _matrices[name];
-        return matrix.Forward(input, _zeroBias[matrix.Lane]);
+        ArcBuffer output = matrix.Forward(input, _zeroBias[matrix.Lane]);
+        try { ApplyLora(name, input, output, 1); return output; }
+        catch { output.Dispose(); throw; }
     }
 
     private ArcBuffer RecurrentAttention(ArcBuffer input, string p, LayerState state)
@@ -353,11 +364,14 @@ public sealed class Qwen35QuantizedModel : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        foreach (var adapter in _lora.Values) adapter.Dispose();
+        _lora.Clear();
         foreach (LayerState state in _states) state.Dispose();
         foreach (Matrix matrix in _matrices.Values) matrix.Dispose();
         foreach (ArcBuffer buffer in _dense.Values) buffer.Dispose();
         foreach (ArcBuffer buffer in _zeroBias.Values) buffer.Dispose();
         foreach (ArcExecutionLane lane in _lanes) lane.Dispose();
+        _modelSource?.Dispose();
         _states.Clear(); _matrices.Clear(); _dense.Clear(); _zeroBias.Clear();
     }
 
@@ -425,7 +439,7 @@ public sealed class Qwen35QuantizedModel : IDisposable
         private readonly ArcBuffer _encoded;
         private readonly uint _type;
         private readonly string _quantization;
-        private readonly int _inputWidth;
+        internal readonly int _inputWidth;
         private readonly Qwen35QuantizedKernel _kernel;
         internal Matrix(ArcExecutionLane lane, GgufTensorInfo info, byte[] payload, Qwen35QuantizedKernel kernel)
         {
@@ -447,25 +461,35 @@ public sealed class Qwen35QuantizedModel : IDisposable
                 throw new NotSupportedException("The Qwen3.5 subgroup kernel requires Intel SG16 support.");
             _encoded = lane.UploadRaw(payload);
         }
-        internal ArcBuffer Forward(ArcBuffer input, ArcBuffer zeroBias)
+        internal ArcBuffer Forward(ArcBuffer input, ArcBuffer zeroBias, int rows = 1)
         {
-            if (input.ByteLength < 4L * _inputWidth) throw new ArgumentException("Qwen3.5 projection width mismatch.");
-            ArcBuffer output = Lane.Allocate(OutputWidth);
+            if (input.ByteLength < 4L * rows * _inputWidth) throw new ArgumentException("Qwen3.5 projection width mismatch.");
+            ArcBuffer output = Lane.Allocate(checked(rows * OutputWidth));
             try
             {
                 if (_kernel == Qwen35QuantizedKernel.Subgroup)
                     Lane.Run($"q35l_{_quantization}_sg16",
-                        ((long)OutputWidth + 1) / 2 * 32, 32, input, _encoded, zeroBias, output, 1, _inputWidth, OutputWidth);
+                        ((long)rows * OutputWidth + 1) / 2 * 32, 32, input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
                 else if (_kernel == Qwen35QuantizedKernel.Cooperative)
                     Lane.Run2D($"q35l_{_quantization}_coop64",
-                        (long)OutputWidth * 64, 1, 64, 1, input, _encoded, zeroBias, output, 1, _inputWidth, OutputWidth);
+                        (long)OutputWidth * 64, rows, 64, 1, input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
                 else
                     Lane.Run(_type is Qwen2Gguf.Q4KType or Qwen2Gguf.Q6KType
                         ? $"qwen_linear_{_quantization}" : $"q35l_{_quantization}_reference",
-                        OutputWidth, 0, input, _encoded, zeroBias, output, 1, _inputWidth, OutputWidth);
+                        (long)rows * OutputWidth, 0, input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
                 return output;
             }
             catch { output.Dispose(); throw; }
+        }
+        internal void BackwardInput(ArcBuffer dy, ArcBuffer dx, int rows)
+        {
+            const int tile = 1024;
+            int splits = (OutputWidth + tile - 1) / tile;
+            using ArcBuffer partial = Lane.Allocate(checked(rows * splits * _inputWidth));
+            Lane.Run("q35t_xpose_" + _quantization, (long)rows * splits * _inputWidth, 0,
+                dy, _encoded, partial, rows, _inputWidth, OutputWidth, splits, tile);
+            Lane.Run("q35t_xpose_reduce", (long)rows * _inputWidth, 0,
+                partial, dx, rows, _inputWidth, splits);
         }
         internal ArcBuffer Embedding(int tokenId)
         {

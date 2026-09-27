@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "dataPath": "qwen-lora.example.jsonl",
+  "adapterPath": "checkpoints/qwen35.adapter.bin",
+  "devices": [0, 1],
+  "contextLength": 64,
+  "maxSteps": 10,
+  "saveEverySteps": 1,
+  "rank": 8,
+  "alpha": 16,
+  "learningRate": 0.0001,
+  "weightDecay": 0,
+  "gradientClip": 1,
+  "seed": 1,
+  "layers": null,
+  "targets": [
+    "attn_q", "attn_k", "attn_v", "attn_output",
+    "attn_qkv", "attn_gate", "ssm_alpha", "ssm_beta", "ssm_out",
+    "ffn_gate", "ffn_up", "ffn_down"
+  ],
+  "includeOutput": false,
+  "promptPrefix": "<|im_start|>user\n",
+  "responsePrefix": "<|im_end|>\n<|im_start|>assistant\n"
+}

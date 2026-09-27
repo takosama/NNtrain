@@ -14,8 +14,11 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
     private static readonly string[] Qwen35KernelResourceSuffixes =
     [
         ".qwen.cl", ".qwen35_attention.cl", ".qwen35_delta.cl",
-        ".qwen35_delta_fused.cl", ".qwen35_linear_fast.cl", ".qwen35_iq.cl"
+        ".qwen35_delta_fused.cl", ".qwen35_linear_fast.cl", ".qwen35_iq.cl", ".qwen35_lora.cl"
     ];
+
+    private static readonly string[] Qwen35TrainingResourceSuffixes =
+        [".qwen35_train.cl", ".qwen35_train_attention.cl", ".qwen35_train_delta.cl"];
 
     private readonly object _sync = new();
     private readonly Dictionary<string, nint> _kernels = [];
@@ -139,7 +142,8 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
             foreach (string resourceName in assembly.GetManifestResourceNames().Where(n => n.EndsWith(".cl", StringComparison.Ordinal)).Order())
             {
                 if (Options.Qwen35InferenceKernelsOnly
-                    && !Qwen35KernelResourceSuffixes.Any(suffix => resourceName.EndsWith(suffix, StringComparison.Ordinal)))
+                    && !Qwen35KernelResourceSuffixes.Any(suffix => resourceName.EndsWith(suffix, StringComparison.Ordinal))
+                    && !(Options.Qwen35TrainingKernels && Qwen35TrainingResourceSuffixes.Any(suffix => resourceName.EndsWith(suffix, StringComparison.Ordinal))))
                     continue;
                 // Flash has its own compiler policy; never change GEMM/codec
                 // register allocation to accommodate a different kernel group.
@@ -151,7 +155,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
                 resourceCount++;
             }
             if (sourceText.Length == 0) throw new InvalidOperationException("Arc OpenCL kernels are missing.");
-            if (Options.Qwen35InferenceKernelsOnly && resourceCount != Qwen35KernelResourceSuffixes.Length)
+            if (Options.Qwen35InferenceKernelsOnly && resourceCount != Qwen35KernelResourceSuffixes.Length + (Options.Qwen35TrainingKernels ? Qwen35TrainingResourceSuffixes.Length : 0))
                 throw new InvalidOperationException("The dedicated Qwen3.5 OpenCL kernel resources are incomplete.");
             byte[] source = Encoding.UTF8.GetBytes(sourceText.ToString());
             GCHandle pin = GCHandle.Alloc(source, GCHandleType.Pinned);
@@ -159,6 +163,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
             finally { pin.Free(); }
             OpenClNative.Check(error, "create program");
             string buildOptions = "-cl-std=CL1.2 -cl-fp32-correctly-rounded-divide-sqrt";
+            if (Options.Qwen35TrainingKernels || !Options.Qwen35InferenceKernelsOnly) buildOptions += " -DARC_QWEN35_TRAINING=1";
             if (Options.ExperimentalOptimizationKernels) buildOptions += " -DARC_OPTIMIZATION_PROBES=1";
             if (Options.Mix8_16Int8Linear) buildOptions += " -DARC_INT8_LINEAR=1";
             if (Device.SupportsXmx && Options.XmxMatrices)
@@ -182,7 +187,8 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
         if (!Options.Qwen35InferenceKernelsOnly) return ProgramForKernel(name);
         // Do not silently compile standalone training programs when a caller
         // requests a kernel outside the explicitly selected inference workload.
-        if (name.StartsWith("qwen_", StringComparison.Ordinal)
+        if ((Options.Qwen35TrainingKernels && name.StartsWith("q35t_", StringComparison.Ordinal))
+            || name.StartsWith("qwen_", StringComparison.Ordinal)
             || name.StartsWith("q35a_", StringComparison.Ordinal)
             || name.StartsWith("q35d_", StringComparison.Ordinal)
             || name.StartsWith("q35l_", StringComparison.Ordinal)) return _program;
