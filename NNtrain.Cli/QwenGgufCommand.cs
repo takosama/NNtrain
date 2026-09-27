@@ -10,11 +10,13 @@ internal static class QwenGgufCommand
         {
             string? modelPath = null, prompt = null;
             int device = 0, maxNewTokens = 16;
+            bool stream = true;
             int[]? devices = null;
             bool explicitDevice = false;
             for (int i = 1; i < args.Length; ++i)
             {
                 string option = args[i];
+                if (option == "--no-stream") { stream = false; continue; }
                 if (i + 1 >= args.Length)
                     throw new ArgumentException($"Missing value for {option}.");
                 string value = args[++i];
@@ -31,7 +33,7 @@ internal static class QwenGgufCommand
             if (modelPath is null || prompt is null)
                 throw new ArgumentException(
                     "Usage: qwen-gguf --model <model.gguf> --prompt <text> " +
-                    "[--device 0 | --devices 0,1] [--max-new-tokens 16]");
+                    "[--device 0 | --devices 0,1] [--max-new-tokens 16] [--no-stream]");
             if (!File.Exists(modelPath)) throw new FileNotFoundException("GGUF model not found.", modelPath);
             if (device < 0 || maxNewTokens < 0)
                 throw new ArgumentOutOfRangeException("Device and max-new-tokens must be nonnegative.");
@@ -44,7 +46,7 @@ internal static class QwenGgufCommand
                     ? value as string ?? "" : "";
             if (architecture == "qwen35")
                 return RunQwen35(modelPath, prompt, maxNewTokens,
-                    devices ?? (explicitDevice ? [device] : null), output);
+                    devices ?? (explicitDevice ? [device] : null), stream, output, error);
             if (devices is not null)
             {
                 if (devices.Length != 1 || devices[0] < 0)
@@ -81,8 +83,63 @@ internal static class QwenGgufCommand
         }
     }
 
+    // The delegate is the model's single generation call. Keeping display
+    // separate lets tests verify output occurs while that call is still active.
+    internal static GenerationTiming WriteGeneration(
+        string prompt, Qwen2GgufTokenizer tokenizer, bool stream,
+        Func<Action<int>, string> generate, TextWriter output)
+    {
+        Qwen2GgufTokenizer.StreamingDecoder decoder = tokenizer.CreateStreamingDecoder();
+        if (stream)
+        {
+            output.WriteLine("generated:");
+            output.Write(tokenizer.Decode(tokenizer.Encode(prompt)));
+            output.Flush();
+        }
+        int count = 0;
+        double? first = null;
+        double last = 0;
+        long started = Stopwatch.GetTimestamp();
+        string generated = generate(token =>
+        {
+            last = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            first ??= last;
+            ++count;
+            if (!stream) return;
+            WriteChunk(decoder.Append(token));
+        });
+        double total = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        if (stream)
+        {
+            WriteChunk(decoder.Complete());
+            output.WriteLine();
+        }
+        else
+        {
+            output.WriteLine("generated:");
+            output.WriteLine(generated);
+        }
+        output.Flush();
+        double? decodeRate = count > 1 && last > first.GetValueOrDefault()
+            ? (count - 1) * 1000.0 / (last - first!.Value) : null;
+        return new GenerationTiming(count, total, first, decodeRate);
+
+        void WriteChunk(string text)
+        {
+            if (text.Length == 0) return;
+            output.Write(text);
+            output.Flush();
+        }
+    }
+
+    internal sealed record GenerationTiming(
+        int GeneratedTokens,
+        double TotalMilliseconds,
+        double? FirstTokenMilliseconds,
+        double? DecodeTokensPerSecond);
+
     private static int RunQwen35(string path, string prompt, int maxNewTokens,
-        int[]? devices, TextWriter output)
+        int[]? devices, bool stream, TextWriter output, TextWriter error)
     {
         Qwen35GgufDescriptor d = Qwen35Gguf.Inspect(path);
         Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(path);
@@ -103,24 +160,21 @@ internal static class QwenGgufCommand
         var loadTimer = Stopwatch.StartNew();
         using Qwen35QuantizedModel model = Qwen35QuantizedModel.Load(path, devices, output.WriteLine);
         loadTimer.Stop();
-        var generationTimer = Stopwatch.StartNew();
-        double firstTokenSeconds = 0, lastTokenSeconds = 0;
-        int emitted = 0;
-        int[] generated = model.GenerateTokenIds(promptIds, maxNewTokens, tokenizer.EosTokenId, _ =>
+        int[] generated = [];
+        GenerationTiming timing = WriteGeneration(prompt, tokenizer, stream, onToken =>
         {
-            lastTokenSeconds = generationTimer.Elapsed.TotalSeconds;
-            if (++emitted == 1) firstTokenSeconds = lastTokenSeconds;
-        });
-        generationTimer.Stop();
-        output.WriteLine($"generated token ids: {string.Join(',', generated.Skip(promptIds.Length))}");
-        output.WriteLine("generated:");
-        output.WriteLine(tokenizer.Decode(generated));
-        double decodeSeconds = lastTokenSeconds - firstTokenSeconds;
-        string decode = emitted > 1 && decodeSeconds > 0
-            ? FormattableString.Invariant($"{(emitted - 1) / decodeSeconds:F2} tok/s") : "n/a";
-        string firstToken = emitted > 0 ? FormattableString.Invariant($"{firstTokenSeconds:F3} s") : "n/a";
-        output.WriteLine(FormattableString.Invariant(
-            $"timing: load={loadTimer.Elapsed.TotalSeconds:F3} s, prefill/first-token={firstToken}, decode={decode}, generated={emitted}, total-generation={generationTimer.Elapsed.TotalSeconds:F3} s"));
+            generated = model.GenerateTokenIds(promptIds, maxNewTokens, tokenizer.EosTokenId, onToken);
+            return tokenizer.Decode(generated);
+        }, output);
+        if (!stream)
+            output.WriteLine($"generated token ids: {string.Join(',', generated.Skip(promptIds.Length))}");
+        string decode = timing.DecodeTokensPerSecond.HasValue
+            ? FormattableString.Invariant($"{timing.DecodeTokensPerSecond.Value:F2} tok/s") : "n/a";
+        string firstToken = timing.FirstTokenMilliseconds.HasValue
+            ? FormattableString.Invariant($"{timing.FirstTokenMilliseconds.Value / 1000:F3} s") : "n/a";
+        error.WriteLine(FormattableString.Invariant(
+            $"timing: load={loadTimer.Elapsed.TotalSeconds:F3} s, prefill/first-token={firstToken}, decode={decode}, generated={timing.GeneratedTokens}, total-generation={timing.TotalMilliseconds / 1000:F3} s"));
+        error.Flush();
         return 0;
     }
 }

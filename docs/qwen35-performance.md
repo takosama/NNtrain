@@ -12,8 +12,9 @@ and driver caches were not flushed.
 
 Decode speed is 23 divided by the time between the first and last output-token
 callbacks. First-token time includes reset, prompt processing, the output head
-and argmax. It measures token computation; the CLI prints the completed text
-after generation. The comparison baseline already has GPU KV and DeltaNet state.
+and argmax. It measures token computation. The CLI now streams complete UTF-8 characters
+as tokens arrive; `--no-stream` buffers the text until generation completes.
+The recorded benchmarks below predate this display-only change. The comparison baseline already has GPU KV and DeltaNet state.
 
 ## Local comparison (2026-09-27)
 

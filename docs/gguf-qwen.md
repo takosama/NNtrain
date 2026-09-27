@@ -198,3 +198,12 @@ decode rate improved from about 0.26 to 10 tokens/second. Qwen2's separate route
 is unchanged by these Qwen3.5 optimizations. See the
 [performance report and reproduction commands](qwen35-performance.md) for
 measurement conditions, numerical checks and the candidate comparisons.
+
+### Qwen3.5 streaming output
+
+Qwen3.5 generation streams text by default, flushing each completed UTF-8 chunk
+as tokens arrive. Japanese characters and emoji split over multiple tokens are
+buffered until complete. The final text is not printed a second time. Add
+`--no-stream` to print the result after generation and include generated token IDs.
+Timing is written to stderr. The prompt is still passed exactly as supplied;
+chat templates are not inserted automatically.
