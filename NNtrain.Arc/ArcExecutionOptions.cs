@@ -3,6 +3,10 @@ namespace NNtrain.Arc;
 /// <summary>Immutable switches allow numerical/performance A/B checks in separate sessions.</summary>
 public sealed record ArcExecutionOptions
 {
+    // Dedicated Qwen3.5 inference lanes can skip compiling unrelated training
+    // kernels. General Arc sessions keep the complete program by default.
+    public bool Qwen35InferenceKernelsOnly { get; init; } = false;
+
     // Measured one-sequence generation paths; matrix/normalization dispatch
     // remains unchanged while recording gradients. Each switch permits A/B.
     public bool InferenceKvCache { get; init; } = true;

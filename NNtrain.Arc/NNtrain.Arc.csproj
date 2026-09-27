@@ -13,6 +13,8 @@
     <EmbeddedResource Include="Kernels\qwen.cl" />
     <EmbeddedResource Include="Kernels\qwen35_attention.cl" />
     <EmbeddedResource Include="Kernels\qwen35_delta.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_linear_fast.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_delta_fused.cl" />
     <EmbeddedResource Include="Kernels\mix8_16_state.cl" />
     <EmbeddedResource Include="Kernels\loss_head_cached_bf16.cl" />
     <EmbeddedResource Include="Kernels\tiled.cl" />

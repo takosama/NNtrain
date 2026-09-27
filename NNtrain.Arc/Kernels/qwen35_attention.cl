@@ -1,5 +1,11 @@
 // Qwen3.5 single-token inference. All activations and KV storage stay on device.
 // Reduction kernels are launched with exactly 128 work-items per row/head.
+__kernel void q35a_zero(__global float* values, int length)
+{
+    int i = get_global_id(0);
+    if (i < length) values[i] = 0.0f;
+}
+
 inline float q35a_sigmoid(float x)
 {
     if (x >= 0.0f) return 1.0f / (1.0f + exp(-x));

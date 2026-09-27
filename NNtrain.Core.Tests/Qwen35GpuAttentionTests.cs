@@ -131,7 +131,11 @@ public sealed class Qwen35GpuAttentionTests
     private static ArcExecutionLane CreateLane()
     {
         Assert.SkipWhen(ArcDevices.Enumerate().Count == 0, "Intel Arc GPU is required.");
-        return new ArcExecutionLane(0, new ArcExecutionOptions { BufferPoolBytes = 4 * 1024 * 1024 });
+        return new ArcExecutionLane(0, new ArcExecutionOptions
+        {
+            BufferPoolBytes = 4 * 1024 * 1024,
+            Qwen35InferenceKernelsOnly = true
+        });
     }
 
     private static float[] Values(int length, int seed)

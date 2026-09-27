@@ -189,3 +189,12 @@ compared to NNtrain's own Float32 baseline, independently of that CPU backend's
 Q8_K activation arithmetic.
 GPU migration regression run: the same focused command now passes **124 tests**
 with zero failures/skips; the Release solution build has zero warnings/errors.
+
+### Generation performance
+
+The default Qwen3.5 route now uses optimized quantized projections, fused
+DeltaNet operations and GPU sequence-cache reuse. The measured two-B580 27B
+decode rate improved from about 0.26 to 10 tokens/second. Qwen2's separate route
+is unchanged by these Qwen3.5 optimizations. See the
+[performance report and reproduction commands](qwen35-performance.md) for
+measurement conditions, numerical checks and the candidate comparisons.

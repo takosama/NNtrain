@@ -14,7 +14,7 @@ public sealed class Qwen35GpuDeltaTests
         int keyHeads, int valueHeads, int headWidth, int convKernel)
     {
         Assert.SkipWhen(ArcDevices.Enumerate().Count == 0, "Intel Arc is required.");
-        using var lane = new ArcExecutionLane();
+        using var lane = new ArcExecutionLane(0, new() { Qwen35InferenceKernelsOnly = true });
         const float eps = 1e-6f;
         int valueSize = valueHeads * headWidth;
         int channels = (2 * keyHeads + valueHeads) * headWidth;
@@ -49,8 +49,8 @@ public sealed class Qwen35GpuDeltaTests
             if (pass == 1)
             {
                 // Reset persistent memory on the GPU, without uploading host state.
-                lane.Run("resident_zero", convCpu.Length, 0, convGpu, convCpu.Length);
-                lane.Run("resident_zero", stateCpu.Length, 0, stateGpu, stateCpu.Length);
+                lane.Run("q35a_zero", convCpu.Length, 0, convGpu, convCpu.Length);
+                lane.Run("q35a_zero", stateCpu.Length, 0, stateGpu, stateCpu.Length);
                 Array.Clear(convCpu);
                 Array.Clear(stateCpu);
             }
@@ -92,7 +92,7 @@ public sealed class Qwen35GpuDeltaTests
     public void InvalidDeltaBufferIsRejectedBeforeDispatchOrStateMutation()
     {
         Assert.SkipWhen(ArcDevices.Enumerate().Count == 0, "Intel Arc is required.");
-        using var lane = new ArcExecutionLane();
+        using var lane = new ArcExecutionLane(0, new() { Qwen35InferenceKernelsOnly = true });
         using ArcBuffer qkv = lane.Upload(new float[5]); // Shape requires six values.
         using ArcBuffer gate = lane.Upload(new float[2]);
         using ArcBuffer head = lane.Upload(new float[1]);

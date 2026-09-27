@@ -19,8 +19,10 @@ public sealed class Qwen35QuantizedModel : IDisposable
     private readonly List<LayerState> _states = [];
     private int _position;
     private bool _disposed, _faulted;
+    private readonly Qwen35ExecutionOptions _options;
 
-    private Qwen35QuantizedModel(Qwen35GgufDescriptor descriptor) => Descriptor = descriptor;
+    private Qwen35QuantizedModel(Qwen35GgufDescriptor descriptor, Qwen35ExecutionOptions options)
+        => (Descriptor, _options) = (descriptor, options);
 
     public Qwen35GgufDescriptor Descriptor { get; }
     public IReadOnlyList<long> ResidentWeightBytes => _lanes.Select(lane =>
@@ -33,10 +35,17 @@ public sealed class Qwen35QuantizedModel : IDisposable
     public IReadOnlyList<long> DownloadedBytes => _lanes.Select(lane => lane.D2HBytes).ToArray();
     public IReadOnlyList<long> LiveDeviceBytes => _lanes.Select(lane => lane.AllocatedBytes).ToArray();
     public IReadOnlyList<long> PeakDeviceBytes => _lanes.Select(lane => lane.PeakAllocatedBytes).ToArray();
+    public IReadOnlyDictionary<string, double> KernelMilliseconds => _lanes
+        .SelectMany(lane => lane.KernelTimings).GroupBy(pair => pair.Key)
+        .ToDictionary(group => group.Key, group => group.Sum(pair => pair.Value));
 
     public static Qwen35QuantizedModel Load(
-        string path, IReadOnlyList<int>? devices = null, Action<string>? progress = null)
+        string path, IReadOnlyList<int>? devices = null, Action<string>? progress = null,
+        Qwen35ExecutionOptions? options = null)
     {
+        options ??= new Qwen35ExecutionOptions();
+        if (!Enum.IsDefined(options.QuantizedKernel) || options.QueuedKernelLimit is < 16 or > 4096)
+            throw new ArgumentException("Invalid Qwen3.5 execution options.", nameof(options));
         Qwen35GgufDescriptor d = Qwen35Gguf.Inspect(path);
         ArcDeviceInfo[] available = ArcDevices.Enumerate().ToArray();
         if (available.Length == 0)
@@ -60,16 +69,21 @@ public sealed class Qwen35QuantizedModel : IDisposable
                     throw new NotSupportedException($"Tensor '{tensor.Name}' exceeds Arc {device.Index}'s allocation limit.");
         }
 
-        var model = new Qwen35QuantizedModel(d);
+        var model = new Qwen35QuantizedModel(d, options);
         try
         {
             foreach (int index in selected)
+            {
+                progress?.Invoke($"Preparing Arc {index}: {available[index].Name}");
                 model._lanes.Add(new ArcExecutionLane(index, new ArcExecutionOptions
                 {
+                    Qwen35InferenceKernelsOnly = true,
                     BufferPoolBytes = WorkspaceReserveBytes,
                     DeferredReleaseBytes = 0,
+                    QueuedKernelLimit = options.QueuedKernelLimit,
                     PhysicalBufferBudgetBytes = DeviceBudget(available[index])
                 }));
+            }
             using var gguf = new GgufReader(path);
             int loaded = 0;
             foreach (GgufTensorInfo tensor in d.Tensors)
@@ -79,7 +93,7 @@ public sealed class Qwen35QuantizedModel : IDisposable
                 {
                     // UploadRaw is blocking; no model-sized host payload is retained.
                     model._matrices.Add(tensor.Name, new Matrix(lane, tensor,
-                        gguf.ReadTensorBytes(tensor, EncodedBytes(tensor))));
+                        gguf.ReadTensorBytes(tensor, EncodedBytes(tensor)), options.QuantizedKernel));
                 }
                 else
                 {
@@ -94,7 +108,7 @@ public sealed class Qwen35QuantizedModel : IDisposable
                     .Max(matrix => matrix.OutputWidth);
                 ArcBuffer zeroBias = lane.Allocate(width);
                 model._zeroBias.Add(lane, zeroBias);
-                lane.Run("resident_zero", width, 0, zeroBias, width);
+                lane.Run("q35a_zero", width, 0, zeroBias, width);
             }
             for (int layer = 0; layer < d.LayerCount; layer++)
             {
@@ -277,7 +291,11 @@ public sealed class Qwen35QuantizedModel : IDisposable
         using ArcBuffer gate = Project(p + "attn_gate.weight", input);
         using ArcBuffer alpha = Project(p + "ssm_alpha.weight", input);
         using ArcBuffer beta = Project(p + "ssm_beta.weight", input);
-        using ArcBuffer delta = Qwen35Gpu.DeltaStep(state.Lane, qkv, gate, alpha, beta,
+        using ArcBuffer delta = _options.FusedDelta ? Qwen35Gpu.DeltaStepFused(state.Lane, qkv, gate, alpha, beta,
+            _dense[p + "ssm_conv1d.weight"], _dense[p + "ssm_dt.bias"], _dense[p + "ssm_a"],
+            _dense[p + "ssm_norm.weight"], state.Convolution!, state.Recurrent!,
+            d.LinearKeyHeads, d.LinearValueHeads, d.LinearHeadWidth, d.ConvKernel, d.RmsEpsilon)
+            : Qwen35Gpu.DeltaStep(state.Lane, qkv, gate, alpha, beta,
             _dense[p + "ssm_conv1d.weight"], _dense[p + "ssm_dt.bias"], _dense[p + "ssm_a"],
             _dense[p + "ssm_norm.weight"], state.Convolution!, state.Recurrent!,
             d.LinearKeyHeads, d.LinearValueHeads, d.LinearHeadWidth, d.ConvKernel, d.RmsEpsilon);
@@ -300,7 +318,8 @@ public sealed class Qwen35QuantizedModel : IDisposable
     /// Starts a new sequence and samples greedily on the GPU. Only the selected
     /// token/status is downloaded. The final emitted token has not yet been forwarded.
     /// </summary>
-    public int[] GenerateTokenIds(IReadOnlyList<int> prompt, int maxNewTokens, int? eosTokenId = null)
+    public int[] GenerateTokenIds(IReadOnlyList<int> prompt, int maxNewTokens,
+        int? eosTokenId = null, Action<int>? onToken = null)
     {
         ArgumentNullException.ThrowIfNull(prompt);
         ArgumentOutOfRangeException.ThrowIfNegative(maxNewTokens);
@@ -320,6 +339,7 @@ public sealed class Qwen35QuantizedModel : IDisposable
                 int next = Qwen35Gpu.ArgMax(OutputMatrix.Lane, logits!, Descriptor.VocabularySize);
                 logits!.Dispose(); logits = null;
                 result.Add(next);
+                onToken?.Invoke(next);
                 if (next == eosTokenId || generated + 1 == maxNewTokens || result.Count == Descriptor.ContextLength) break;
                 logits = ForwardTokenDevice(next, true);
             }
@@ -368,7 +388,7 @@ public sealed class Qwen35QuantizedModel : IDisposable
         private void Zero(ArcBuffer buffer)
         {
             int length = checked((int)(buffer.ByteLength / 4));
-            Lane.Run("resident_zero", length, 0, buffer, length);
+            Lane.Run("q35a_zero", length, 0, buffer, length);
         }
         internal void EnsureCapacity(int required)
         {
@@ -405,10 +425,18 @@ public sealed class Qwen35QuantizedModel : IDisposable
         private readonly ArcBuffer _encoded;
         private readonly uint _type;
         private readonly int _inputWidth;
-        internal Matrix(ArcExecutionLane lane, GgufTensorInfo info, byte[] payload)
+        private readonly Qwen35QuantizedKernel _kernel;
+        internal Matrix(ArcExecutionLane lane, GgufTensorInfo info, byte[] payload, Qwen35QuantizedKernel kernel)
         {
             Lane = lane; StorageBytes = payload.Length; _type = info.Type;
             _inputWidth = checked((int)info.Shape[0]); OutputWidth = checked((int)info.Shape[1]);
+            bool subgroup = lane.Options.XmxMatrices && lane.Device.SupportsXmx
+                && lane.Device.MinimumSubgroupSize == 16
+                && lane.Device.Extensions.Split(' ').Contains("cl_intel_subgroups");
+            _kernel = kernel == Qwen35QuantizedKernel.Auto
+                ? (subgroup ? Qwen35QuantizedKernel.Subgroup : Qwen35QuantizedKernel.Cooperative) : kernel;
+            if (_kernel == Qwen35QuantizedKernel.Subgroup && !subgroup)
+                throw new NotSupportedException("The Qwen3.5 subgroup kernel requires Intel SG16 support.");
             _encoded = lane.UploadRaw(payload);
         }
         internal ArcBuffer Forward(ArcBuffer input, ArcBuffer zeroBias)
@@ -417,8 +445,15 @@ public sealed class Qwen35QuantizedModel : IDisposable
             ArcBuffer output = Lane.Allocate(OutputWidth);
             try
             {
-                Lane.Run(_type == Qwen2Gguf.Q4KType ? "qwen_linear_q4_k" : "qwen_linear_q6_k",
-                    OutputWidth, 0, input, _encoded, zeroBias, output, 1, _inputWidth, OutputWidth);
+                if (_kernel == Qwen35QuantizedKernel.Subgroup)
+                    Lane.Run(_type == Qwen2Gguf.Q4KType ? "q35l_q4_k_sg16" : "q35l_q6_k_sg16",
+                        ((long)OutputWidth + 1) / 2 * 32, 32, input, _encoded, zeroBias, output, 1, _inputWidth, OutputWidth);
+                else if (_kernel == Qwen35QuantizedKernel.Cooperative)
+                    Lane.Run2D(_type == Qwen2Gguf.Q4KType ? "q35l_q4_k_coop64" : "q35l_q6_k_coop64",
+                        (long)OutputWidth * 64, 1, 64, 1, input, _encoded, zeroBias, output, 1, _inputWidth, OutputWidth);
+                else
+                    Lane.Run(_type == Qwen2Gguf.Q4KType ? "qwen_linear_q4_k" : "qwen_linear_q6_k",
+                        OutputWidth, 0, input, _encoded, zeroBias, output, 1, _inputWidth, OutputWidth);
                 return output;
             }
             catch { output.Dispose(); throw; }

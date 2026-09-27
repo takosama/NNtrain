@@ -1,0 +1,1091 @@
+{
+  "schema_version": 1,
+  "purpose": "Local candidate comparison for GPU Qwen3.5 27B generation; final integrated default verification is recorded separately.",
+  "model_file": "Qwen.Qwen3.8-27B.f16.gguf.Q4_K_M.gguf",
+  "hardware": {
+    "device_indices": [
+      0,
+      1
+    ],
+    "devices": [
+      "Intel Arc B580",
+      "Intel Arc B580"
+    ],
+    "placement": "Contiguous layer split across separate OpenCL contexts; host staging only at GPU boundaries."
+  },
+  "workload": {
+    "prompt": "国会議事堂への行き方を教えて",
+    "prompt_token_ids": [
+      120683,
+      98358,
+      95924,
+      97131,
+      170872,
+      184700,
+      180014,
+      162066
+    ],
+    "prompt_token_count": 8,
+    "requested_new_tokens": 24,
+    "measured_runs_per_candidate": 2,
+    "batch_size": 1,
+    "prompt_format": "raw text; no chat template",
+    "sampling": "greedy GPU argmax",
+    "eos_stopping": false,
+    "gpu_kv_cache_enabled_for_all_candidates": true,
+    "gpu_gated_deltanet_state_enabled_for_all_candidates": true,
+    "sequence_state_reset_before_each_run": true,
+    "model_loaded_once_per_candidate_process": true,
+    "first_run": "No generation warmup after process-local load.",
+    "subsequent_run": "Reuses model weights and allocation capacity; sequence state is reset.",
+    "common_generated_token_ids": [
+      179749,
+      30031,
+      10992,
+      59,
+      77,
+      1639,
+      115197,
+      158369,
+      96702,
+      95949,
+      97511,
+      96116,
+      160277,
+      35814,
+      5205,
+      96702,
+      95949,
+      97511,
+      174016,
+      28452,
+      96192,
+      97257,
+      1710,
+      120683
+    ],
+    "all_16_runs_match_common_generated_token_ids": true
+  },
+  "methodology": {
+    "first_token": "Measured through the first output callback; includes reset, all prompt computation, first output projection and argmax.",
+    "prefill_throughput": "Prompt token count divided by first-token time; includes first output head/argmax.",
+    "decode_throughput": "23 generated tokens divided by the interval from first to last output callback; excludes the first generated token.",
+    "total_generation": "Wall time of generation including cleanup; excludes model load, tokenization and JSON export.",
+    "averages": "Arithmetic mean of the two runs. Ratios use candidate arithmetic mean divided by baseline arithmetic mean.",
+    "os_and_driver_caches_flushed": false,
+    "kernel_times": "Milliseconds summed from completed events across both GPUs; diagnostic values must not be added to wall time.",
+    "memory": "Backend allocation counters after both runs, in device-index order. Peak includes cached/retired allocations and is cumulative over model lifetime; not driver-reported dedicated VRAM.",
+    "build_scope": "Incremental local candidate builds; rejected ILP and WG128 variants were removed from the final source. Historical numeric enum values are not used as stable candidate identifiers.",
+    "statistical_limit": "Two runs of one 8-token prompt and 24-token continuation are descriptive measurements, not confidence intervals or evidence of a universal optimum.",
+    "quality_limit": "All recorded output IDs match for this prompt. FP32 reduction/FMA order changes between projection kernels; bitwise logit equality and long-context quality are not established."
+  },
+  "selected_default": {
+    "quantized_kernel": "Auto",
+    "on_measured_sg16_capable_devices": "Subgroup: two SG16 outputs per WG32",
+    "fallback": "Cooperative WG64 when the selected SG16 capability is unavailable",
+    "fused_delta": true,
+    "queued_kernel_limit": 512,
+    "measurement_label": "subgroup-queue512",
+    "rejected_code_removed": [
+      "SubgroupIlp",
+      "SubgroupWide WG128"
+    ],
+    "numerical_note": "ILP altered summation order. SG16/cooperative projection kernels also reorder FP32 reductions and may use fused multiply-add; measured token equality does not imply bitwise arithmetic equality.",
+    "final_integrated_verification": {
+      "artifact": "qwen35-performance-validation.json",
+      "binary_sha256": {
+        "NNtrain.Core": "f4edc84b2ea5441c524b85ef2ab643057117203fedb6febd8838fd3134ecee7a",
+        "NNtrain.Arc": "d0e302c694ca41fd16a8ccc53cc7a807df5775cd8023562b14f0146333b34722",
+        "NNtrain.Benchmarks": "24acea480529383affbd773a3f0da04b2b27862e4ff2047fe2b2ac6d686f243f"
+      },
+      "short_load_seconds": 12.6394332,
+      "short_decode_tokens_per_second": [
+        9.89156862473565,
+        10.213440025592217
+      ],
+      "long_decode_tokens_per_second": [
+        10.104371620719215,
+        10.138224835714341
+      ],
+      "checks": {
+        "both_runs_identical_at_24_and_256_tokens": true,
+        "all_24_token_prefixes_match_reference_baseline": true,
+        "all_256_tokens_match_before_kernel_program_restriction": true,
+        "encoded_resident_weight_bytes_unchanged": true,
+        "state_live_and_peak_device_bytes_stable_after_second_256_token_run": true,
+        "short_and_long_binary_hashes_identical": true
+      }
+    }
+  },
+  "candidates": [
+    {
+      "label": "baseline",
+      "source_artifact": {
+        "file": "qwen35-speed-baseline.json",
+        "sha256": "2f648b917747cc80f2b1a1c39d1888449cc2c517e1775f998a58b11c03008867",
+        "last_write_utc": "2026-09-27T01:21:59.5736824Z"
+      },
+      "description": "Reference projection: one work item per output. GPU attention, KV cache and recurrent state already enabled.",
+      "options": {
+        "quantized_kernel": "Reference",
+        "fused_delta": false,
+        "queued_kernel_limit": 128
+      },
+      "decision": "retained_reference",
+      "decision_reason": "Comparison baseline; not the production default.",
+      "load_seconds_excluded_from_generation": 11.2259756,
+      "means": {
+        "first_token_seconds": 27.32668735,
+        "prefill_tokens_per_second": 0.292754109,
+        "decode_tokens_per_second": 0.258940177,
+        "total_generation_seconds": 116.1502962
+      },
+      "relative_to_baseline": {
+        "decode_throughput_ratio": 1,
+        "first_token_time_ratio": 1,
+        "total_generation_time_ratio": 1,
+        "first_token_time_reduction_percent": 0,
+        "total_generation_time_reduction_percent": 0
+      },
+      "all_generated_ids_match_baseline": true,
+      "memory_after_runs_bytes": {
+        "encoded_weights_per_device": [
+          8099020800,
+          8426803200
+        ],
+        "gpu_state_per_device": [
+          80543744,
+          80543744
+        ],
+        "live_allocations_per_device": [
+          8185838592,
+          8513641472
+        ],
+        "lifetime_peak_allocations_per_device": [
+          8187463364,
+          8516259528
+        ]
+      },
+      "mean_kernel_milliseconds": {
+        "qwen_linear_q4_k": 88088.2275965,
+        "qwen_linear_q6_k": 30157.0771225,
+        "q35d_recurrent": 100.063024,
+        "q35d_gated_rmsnorm": 98.1915415,
+        "q35a_rms_norm": 78.655026,
+        "q35d_normalize_qk": 57.824916,
+        "q35a_argmax": 16.8140005,
+        "q35a_scores": 9.1134495,
+        "q35a_add_in_place": 7.7725235,
+        "q35d_convolution": 4.9352815,
+        "q35a_attend": 3.392767,
+        "q35a_silu_multiply": 3.1011165,
+        "q35a_rope": 1.457556,
+        "q35a_softmax": 0.876237,
+        "resident_zero": 0.211568,
+        "qwen_embedding_q4_k": 0.1465995
+      },
+      "runs": [
+        {
+          "run_index": 0,
+          "first_token_seconds": 27.3275573,
+          "prefill_tokens_per_second": 0.29274478915830504,
+          "decode_tokens_per_second": 0.2589439881152725,
+          "decode_seconds": 88.8222977,
+          "total_generation_seconds": 116.1498592,
+          "generated_ids_match_baseline": true,
+          "kernel_milliseconds": {
+            "qwen_linear_q4_k": 88091.688927,
+            "qwen_linear_q6_k": 30150.367909,
+            "q35d_recurrent": 100.06928,
+            "q35d_gated_rmsnorm": 98.192166,
+            "q35a_rms_norm": 78.668102,
+            "q35d_normalize_qk": 57.828191,
+            "q35a_argmax": 16.818219,
+            "q35a_scores": 9.113967,
+            "q35a_add_in_place": 7.773629,
+            "q35d_convolution": 4.932103,
+            "q35a_attend": 3.393656,
+            "q35a_silu_multiply": 3.104811,
+            "q35a_rope": 1.457964,
+            "q35a_softmax": 0.87561,
+            "resident_zero": 0.206933,
+            "qwen_embedding_q4_k": 0.146235
+          }
+        },
+        {
+          "run_index": 1,
+          "first_token_seconds": 27.3258174,
+          "prefill_tokens_per_second": 0.29276342891759205,
+          "decode_tokens_per_second": 0.2589363668606843,
+          "decode_seconds": 88.824912,
+          "total_generation_seconds": 116.1507332,
+          "generated_ids_match_baseline": true,
+          "kernel_milliseconds": {
+            "qwen_linear_q4_k": 88084.766266,
+            "qwen_linear_q6_k": 30163.786336,
+            "q35d_recurrent": 100.056768,
+            "q35d_gated_rmsnorm": 98.190917,
+            "q35a_rms_norm": 78.64195,
+            "q35d_normalize_qk": 57.821641,
+            "q35a_argmax": 16.809782,
+            "q35a_scores": 9.112932,
+            "q35a_add_in_place": 7.771418,
+            "q35d_convolution": 4.93846,
+            "q35a_attend": 3.391878,
+            "q35a_silu_multiply": 3.097422,
+            "q35a_rope": 1.457148,
+            "q35a_softmax": 0.876864,
+            "resident_zero": 0.216203,
+            "qwen_embedding_q4_k": 0.146964
+          }
+        }
+      ]
+    },
+    {
+      "label": "cooperative",
+      "source_artifact": {
+        "file": "qwen35-speed-cooperative.json",
+        "sha256": "8fc87e7b4f66e29a7364a9ac9f4042633dacb4c14db0edf4b5fdcb07da5b17ae",
+        "last_write_utc": "2026-09-27T01:28:39.2374276Z"
+      },
+      "description": "64 work items cooperate on each Q4_K/Q6_K output with local reduction.",
+      "options": {
+        "quantized_kernel": "Cooperative",
+        "fused_delta": false,
+        "queued_kernel_limit": 128
+      },
+      "decision": "retained_fallback",
+      "decision_reason": "Faster than reference; retained for devices without the selected SG16 capability.",
+      "load_seconds_excluded_from_generation": 43.8480685,
+      "means": {
+        "first_token_seconds": 3.72675805,
+        "prefill_tokens_per_second": 2.146639004,
+        "decode_tokens_per_second": 1.937085881,
+        "total_generation_seconds": 15.6002795
+      },
+      "relative_to_baseline": {
+        "decode_throughput_ratio": 7.480823963,
+        "first_token_time_ratio": 0.136377966,
+        "total_generation_time_ratio": 0.134311147,
+        "first_token_time_reduction_percent": 86.362203357,
+        "total_generation_time_reduction_percent": 86.568885306
+      },
+      "all_generated_ids_match_baseline": true,
+      "memory_after_runs_bytes": {
+        "encoded_weights_per_device": [
+          8099020800,
+          8426803200
+        ],
+        "gpu_state_per_device": [
+          80543744,
+          80543744
+        ],
+        "live_allocations_per_device": [
+          8185838592,
+          8513641472
+        ],
+        "lifetime_peak_allocations_per_device": [
+          8187463364,
+          8516259528
+        ]
+      },
+      "mean_kernel_milliseconds": {
+        "q35l_q4_k_coop64": 14197.732264,
+        "q35l_q6_k_coop64": 1145.561196,
+        "q35d_recurrent": 100.49474,
+        "q35d_gated_rmsnorm": 98.6585365,
+        "q35a_rms_norm": 78.8719775,
+        "q35d_normalize_qk": 56.148891,
+        "q35a_argmax": 17.3263455,
+        "q35a_scores": 9.086899,
+        "q35d_convolution": 4.08996,
+        "q35a_add_in_place": 3.513317,
+        "q35a_attend": 3.4433885,
+        "q35a_silu_multiply": 3.216224,
+        "q35a_rope": 1.5691,
+        "q35a_softmax": 0.880821,
+        "resident_zero": 0.2106285,
+        "qwen_embedding_q4_k": 0.1495185
+      },
+      "runs": [
+        {
+          "run_index": 0,
+          "first_token_seconds": 3.7294548,
+          "prefill_tokens_per_second": 2.1450856570241847,
+          "decode_tokens_per_second": 1.9351769079411865,
+          "decode_seconds": 11.8852183,
+          "total_generation_seconds": 15.6146766,
+          "generated_ids_match_baseline": true,
+          "kernel_milliseconds": {
+            "q35l_q4_k_coop64": 14197.970349,
+            "q35l_q6_k_coop64": 1145.701655,
+            "q35d_recurrent": 100.490526,
+            "q35d_gated_rmsnorm": 98.677497,
+            "q35a_rms_norm": 78.867649,
+            "q35d_normalize_qk": 56.141339,
+            "q35a_argmax": 17.323637,
+            "q35a_scores": 9.09158,
+            "q35d_convolution": 4.09163,
+            "q35a_add_in_place": 3.505515,
+            "q35a_attend": 3.445309,
+            "q35a_silu_multiply": 3.218256,
+            "q35a_rope": 1.568634,
+            "q35a_softmax": 0.879255,
+            "resident_zero": 0.205052,
+            "qwen_embedding_q4_k": 0.149466
+          }
+        },
+        {
+          "run_index": 1,
+          "first_token_seconds": 3.7240613,
+          "prefill_tokens_per_second": 2.148192351183908,
+          "decode_tokens_per_second": 1.9389948549108742,
+          "decode_seconds": 11.8618159,
+          "total_generation_seconds": 15.5858824,
+          "generated_ids_match_baseline": true,
+          "kernel_milliseconds": {
+            "q35l_q4_k_coop64": 14197.494179,
+            "q35l_q6_k_coop64": 1145.420737,
+            "q35d_recurrent": 100.498954,
+            "q35d_gated_rmsnorm": 98.639576,
+            "q35a_rms_norm": 78.876306,
+            "q35d_normalize_qk": 56.156443,
+            "q35a_argmax": 17.329054,
+            "q35a_scores": 9.082218,
+            "q35d_convolution": 4.08829,
+            "q35a_add_in_place": 3.521119,
+            "q35a_attend": 3.441468,
+            "q35a_silu_multiply": 3.214192,
+            "q35a_rope": 1.569566,
+            "q35a_softmax": 0.882387,
+            "resident_zero": 0.216205,
+            "qwen_embedding_q4_k": 0.149571
+          }
+        }
+      ]
+    },
+    {
+      "label": "subgroup",
+      "source_artifact": {
+        "file": "qwen35-speed-subgroup.json",
+        "sha256": "cc825de4e0717d208f9d7645f5799793edc43bbe97bd3add4f481ff05fe2c941",
+        "last_write_utc": "2026-09-27T01:29:50.6301960Z"
+      },
+      "description": "Two SG16 output groups per 32-work-item group reuse packed quantization bytes.",
+      "options": {
+        "quantized_kernel": "Subgroup",
+        "fused_delta": false,
+        "queued_kernel_limit": 128
+      },
+      "decision": "accepted_component",
+      "decision_reason": "Selected projection geometry; final default also enables fused Delta and a larger queue limit.",
+      "load_seconds_excluded_from_generation": 42.4148763,
+      "means": {
+        "first_token_seconds": 0.72727805,
+        "prefill_tokens_per_second": 11.005140799,
+        "decode_tokens_per_second": 9.772790194,
+        "total_generation_seconds": 3.0809566
+      },
+      "relative_to_baseline": {
+        "decode_throughput_ratio": 37.741498084,
+        "first_token_time_ratio": 0.026614205,
+        "total_generation_time_ratio": 0.026525603,
+        "first_token_time_reduction_percent": 97.338579533,
+        "total_generation_time_reduction_percent": 97.347439739
+      },
+      "all_generated_ids_match_baseline": true,
+      "memory_after_runs_bytes": {
+        "encoded_weights_per_device": [
+          8099020800,
+          8426803200
+        ],
+        "gpu_state_per_device": [
+          80543744,
+          80543744
+        ],
+        "live_allocations_per_device": [
+          8185838592,
+          8513641472
+        ],
+        "lifetime_peak_allocations_per_device": [
+          8187463364,
+          8516259528
+        ]
+      },
+      "mean_kernel_milliseconds": {
+        "q35l_q4_k_sg16": 2080.804104,
+        "q35l_q6_k_sg16": 525.757083,
+        "q35d_recurrent": 100.2604745,
+        "q35d_gated_rmsnorm": 98.7387265,
+        "q35a_rms_norm": 78.7839115,
+        "q35d_normalize_qk": 56.0126045,
+        "q35a_argmax": 17.316134,
+        "q35a_scores": 9.088039,
+        "q35d_convolution": 4.071527,
+        "q35a_add_in_place": 3.57621,
+        "q35a_attend": 3.4443365,
+        "q35a_silu_multiply": 3.2262635,
+        "q35a_rope": 1.5700905,
+        "q35a_softmax": 0.878169,
+        "resident_zero": 0.2079725,
+        "qwen_embedding_q4_k": 0.147383
+      },
+      "runs": [
+        {
+          "run_index": 0,
+          "first_token_seconds": 0.7431194,
+          "prefill_tokens_per_second": 10.765430158329872,
+          "decode_tokens_per_second": 9.863254552374418,
+          "decode_seconds": 2.3318875,
+          "total_generation_seconds": 3.0750108,
+          "generated_ids_match_baseline": true,
+          "kernel_milliseconds": {
+            "q35l_q4_k_sg16": 2080.778331,
+            "q35l_q6_k_sg16": 525.858662,
+            "q35d_recurrent": 100.26928,
+            "q35d_gated_rmsnorm": 98.723151,
+            "q35a_rms_norm": 78.768105,
+            "q35d_normalize_qk": 56.030521,
+            "q35a_argmax": 17.31509,
+            "q35a_scores": 9.090535,
+            "q35d_convolution": 4.074442,
+            "q35a_add_in_place": 3.575278,
+            "q35a_attend": 3.443865,
+            "q35a_silu_multiply": 3.225216,
+            "q35a_rope": 1.569665,
+            "q35a_softmax": 0.87832,
+            "resident_zero": 0.205469,
+            "qwen_embedding_q4_k": 0.146966
+          }
+        },
+        {
+          "run_index": 1,
+          "first_token_seconds": 0.7114367,
+          "prefill_tokens_per_second": 11.244851439348011,
+          "decode_tokens_per_second": 9.682325836111987,
+          "decode_seconds": 2.3754623,
+          "total_generation_seconds": 3.0869024,
+          "generated_ids_match_baseline": true,
+          "kernel_milliseconds": {
+            "q35l_q4_k_sg16": 2080.829877,
+            "q35l_q6_k_sg16": 525.655504,
+            "q35d_recurrent": 100.251669,
+            "q35d_gated_rmsnorm": 98.754302,
+            "q35a_rms_norm": 78.799718,
+            "q35d_normalize_qk": 55.994688,
+            "q35a_argmax": 17.317178,
+            "q35a_scores": 9.085543,
+            "q35d_convolution": 4.068612,
+            "q35a_add_in_place": 3.577142,
+            "q35a_attend": 3.444808,
+            "q35a_silu_multiply": 3.227311,
+            "q35a_rope": 1.570516,
+            "q35a_softmax": 0.878018,
+            "resident_zero": 0.210476,
+            "qwen_embedding_q4_k": 0.1478
+          }
+        }
+      ]
+    },
+    {
+      "label": "subgroup-fused",
+      "source_artifact": {
+        "file": "qwen35-speed-subgroup-fused.json",
+        "sha256": "16dc93cb2f7b742ee0655d2f50e4a12be96c01359965234485f8be4c029b4761",
+        "last_write_utc": "2026-09-27T01:31:54.9882186Z"
+      },
+      "description": "SG16/WG32 projections plus fused recurrent update and gated RMSNorm for width-128 heads.",
+      "options": {
+        "quantized_kernel": "Subgroup",
+        "fused_delta": true,
+        "queued_kernel_limit": 128
+      },
+      "decision": "accepted_component",
+      "decision_reason": "Fusion retained; the final default uses queue limit 512.",
+      "load_seconds_excluded_from_generation": 74.8414225,
+      "means": {
+        "first_token_seconds": 0.71126805,
+        "prefill_tokens_per_second": 11.255586225,
+        "decode_tokens_per_second": 10.141206968,
+        "total_generation_seconds": 2.9795262
+      },
+      "relative_to_baseline": {
+        "decode_throughput_ratio": 39.164285301,
+        "first_token_time_ratio": 0.026028331,
+        "total_generation_time_ratio": 0.025652334,
+        "first_token_time_reduction_percent": 97.397166949,
+        "total_generation_time_reduction_percent": 97.434766593
+      },
+      "all_generated_ids_match_baseline": true,
+      "memory_after_runs_bytes": {
+        "encoded_weights_per_device": [
+          8099020800,
+          8426803200
+        ],
+        "gpu_state_per_device": [
+          80543744,
+          80543744
+        ],
+        "live_allocations_per_device": [
+          8185838592,
+          8513641472
+        ],
+        "lifetime_peak_allocations_per_device": [
+          8187438788,
+          8516234952
+        ]
+      },
+      "mean_kernel_milliseconds": {
+        "q35l_q4_k_sg16": 2081.7389255,
+        "q35l_q6_k_sg16": 524.886146,
+        "q35d_recurrent_gated_rmsnorm_fused128": 79.672607,
+        "q35a_rms_norm": 78.7544975,
+        "q35d_normalize_qk": 56.0379795,
+        "q35a_argmax": 17.3129595,
+        "q35a_scores": 9.1383555,
+        "q35d_convolution": 4.0299755,
+        "q35a_add_in_place": 3.571211,
+        "q35a_attend": 3.457242,
+        "q35a_silu_multiply": 3.212206,
+        "q35a_rope": 1.5777125,
+        "q35a_softmax": 0.973524,
+        "resident_zero": 0.2093255,
+        "qwen_embedding_q4_k": 0.147174
+      },
+      "runs": [
+        {
+          "run_index": 0,
+          "first_token_seconds": 0.7303115,
+          "prefill_tokens_per_second": 10.954229804679237,
+          "decode_tokens_per_second": 10.253977651678621,
+          "decode_seconds": 2.243032,
+          "total_generation_seconds": 2.9733467,
+          "generated_ids_match_baseline": true,
+          "kernel_milliseconds": {
+            "q35l_q4_k_sg16": 2081.729372,
+            "q35l_q6_k_sg16": 524.876971,
+            "q35d_recurrent_gated_rmsnorm_fused128": 79.688232,
+            "q35a_rms_norm": 78.753809,
+            "q35d_normalize_qk": 56.020792,
+            "q35a_argmax": 17.312179,
+            "q35a_scores": 9.139292,
+            "q35d_convolution": 4.031068,
+            "q35a_add_in_place": 3.571782,
+            "q35a_attend": 3.459688,
+            "q35a_silu_multiply": 3.212987,
+            "q35a_rope": 1.57615,
+            "q35a_softmax": 0.973056,
+            "resident_zero": 0.205782,
+            "qwen_embedding_q4_k": 0.146133
+          }
+        },
+        {
+          "run_index": 1,
+          "first_token_seconds": 0.6922246,
+          "prefill_tokens_per_second": 11.556942645493963,
+          "decode_tokens_per_second": 10.028436285114896,
+          "decode_seconds": 2.2934782,
+          "total_generation_seconds": 2.9857057,
+          "generated_ids_match_baseline": true,
+          "kernel_milliseconds": {
+            "q35l_q4_k_sg16": 2081.748479,
+            "q35l_q6_k_sg16": 524.895321,
+            "q35d_recurrent_gated_rmsnorm_fused128": 79.656982,
+            "q35a_rms_norm": 78.755186,
+            "q35d_normalize_qk": 56.055167,
+            "q35a_argmax": 17.31374,
+            "q35a_scores": 9.137419,
+            "q35d_convolution": 4.028883,
+            "q35a_add_in_place": 3.57064,
+            "q35a_attend": 3.454796,
+            "q35a_silu_multiply": 3.211425,
+            "q35a_rope": 1.579275,
+            "q35a_softmax": 0.973992,
+            "resident_zero": 0.212869,
+            "qwen_embedding_q4_k": 0.148215
+          }
+        }
+      ]
+    },
+    {
+      "label": "subgroup-ilp",
+      "source_artifact": {
+        "file": "qwen35-speed-subgroup-ilp.json",
+        "sha256": "20b635fbdc3b74d9f0f92d86100bc207ac6f8d235c45a532f385d59cca062c83",
+        "last_write_utc": "2026-09-27T01:33:59.2085834Z"
+      },
+      "description": "Four independent accumulators per lane shorten dependency chains and change FP32 summation order.",
+      "options": {
+        "quantized_kernel": "SubgroupIlp (removed candidate)",
+        "fused_delta": true,
+        "queued_kernel_limit": 128
+      },
+      "decision": "rejected_removed",
+      "decision_reason": "No improvement over the same-queue fused SG16 candidate in these two runs. Candidate implementation removed.",
+      "load_seconds_excluded_from_generation": 42.278679,
+      "means": {
+        "first_token_seconds": 0.72014955,
+        "prefill_tokens_per_second": 11.114669339,
+        "decode_tokens_per_second": 10.014047045,
+        "total_generation_seconds": 3.01725825
+      },
+      "relative_to_baseline": {
+        "decode_throughput_ratio": 38.67320692,
+        "first_token_time_ratio": 0.026353342,
+        "total_generation_time_ratio": 0.025977189,
+        "first_token_time_reduction_percent": 97.364665754,
+        "total_generation_time_reduction_percent": 97.402281054
+      },
+      "all_generated_ids_match_baseline": true,
+      "memory_after_runs_bytes": {
+        "encoded_weights_per_device": [
+          8099020800,
+          8426803200
+        ],
+        "gpu_state_per_device": [
+          80543744,
+          80543744
+        ],
+        "live_allocations_per_device": [
+          8185838592,
+          8513641472
+        ],
+        "lifetime_peak_allocations_per_device": [
+          8187438788,
+          8516234952
+        ]
+      },
+      "mean_kernel_milliseconds": {
+        "q35l_q4_k_sg16_ilp": 2130.508054,
+        "q35l_q6_k_sg16_ilp": 519.506563,
+        "q35d_recurrent_gated_rmsnorm_fused128": 79.6593345,
+        "q35a_rms_norm": 78.815783,
+        "q35d_normalize_qk": 56.01845,
+        "q35a_argmax": 17.319676,
+        "q35a_scores": 9.143873,
+        "q35d_convolution": 4.0451995,
+        "q35a_add_in_place": 3.5625575,
+        "q35a_attend": 3.462245,
+        "q35a_silu_multiply": 3.213204,
+        "q35a_rope": 1.5817845,
+        "q35a_softmax": 0.9678015,
+        "resident_zero": 0.209583,
+        "qwen_embedding_q4_k": 0.148319
+      },
+      "runs": [
+        {
+          "run_index": 0,
+          "first_token_seconds": 0.7366932,
+          "prefill_tokens_per_second": 10.85933737409277,
+          "decode_tokens_per_second": 10.13445245888695,
+          "decode_seconds": 2.2694862,
+          "total_generation_seconds": 3.0061821,
+          "generated_ids_match_baseline": true,
+          "kernel_milliseconds": {
+            "q35l_q4_k_sg16_ilp": 2130.444152,
+            "q35l_q6_k_sg16_ilp": 519.537716,
+            "q35d_recurrent_gated_rmsnorm_fused128": 79.641261,
+            "q35a_rms_norm": 78.792246,
+            "q35d_normalize_qk": 56.018398,
+            "q35a_argmax": 17.319156,
+            "q35a_scores": 9.141376,
+            "q35d_convolution": 4.054528,
+            "q35a_add_in_place": 3.561775,
+            "q35a_attend": 3.46479,
+            "q35a_silu_multiply": 3.212891,
+            "q35a_rope": 1.582199,
+            "q35a_softmax": 0.967021,
+            "resident_zero": 0.204734,
+            "qwen_embedding_q4_k": 0.148214
+          }
+        },
+        {
+          "run_index": 1,
+          "first_token_seconds": 0.7036059,
+          "prefill_tokens_per_second": 11.370001303286399,
+          "decode_tokens_per_second": 9.893641631824558,
+          "decode_seconds": 2.3247254,
+          "total_generation_seconds": 3.0283344,
+          "generated_ids_match_baseline": true,
+          "kernel_milliseconds": {
+            "q35l_q4_k_sg16_ilp": 2130.571956,
+            "q35l_q6_k_sg16_ilp": 519.47541,
+            "q35d_recurrent_gated_rmsnorm_fused128": 79.677408,
+            "q35a_rms_norm": 78.83932,
+            "q35d_normalize_qk": 56.018502,
+            "q35a_argmax": 17.320196,
+            "q35a_scores": 9.14637,
+            "q35d_convolution": 4.035871,
+            "q35a_add_in_place": 3.56334,
+            "q35a_attend": 3.4597,
+            "q35a_silu_multiply": 3.213517,
+            "q35a_rope": 1.58137,
+            "q35a_softmax": 0.968582,
+            "resident_zero": 0.214432,
+            "qwen_embedding_q4_k": 0.148424
+          }
+        }
+      ]
+    },
+    {
+      "label": "subgroup-queue512",
+      "source_artifact": {
+        "file": "qwen35-speed-subgroup-queue512.json",
+        "sha256": "1a008e8a5ae2220e98ebfa7db21afb0cb35e8366b61ec406d580ee047b8a6027",
+        "last_write_utc": "2026-09-27T01:36:15.0626195Z"
+      },
+      "description": "Selected SG16/WG32 projection and fused Delta, with queued-kernel limit 512.",
+      "options": {
+        "quantized_kernel": "Subgroup",
+        "fused_delta": true,
+        "queued_kernel_limit": 512
+      },
+      "decision": "selected_default",
+      "decision_reason": "Chosen balance of first-token latency and decode throughput. Auto resolves to this subgroup kernel on the measured Arc B580s.",
+      "load_seconds_excluded_from_generation": 75.5171433,
+      "means": {
+        "first_token_seconds": 0.6020456,
+        "prefill_tokens_per_second": 13.290698393,
+        "decode_tokens_per_second": 10.074202811,
+        "total_generation_seconds": 2.88529745
+      },
+      "relative_to_baseline": {
+        "decode_throughput_ratio": 38.905522224,
+        "first_token_time_ratio": 0.022031415,
+        "total_generation_time_ratio": 0.024841068,
+        "first_token_time_reduction_percent": 97.796858462,
+        "total_generation_time_reduction_percent": 97.515893162
+      },
+      "all_generated_ids_match_baseline": true,
+      "memory_after_runs_bytes": {
+        "encoded_weights_per_device": [
+          8099020800,
+          8426803200
+        ],
+        "gpu_state_per_device": [
+          80543744,
+          80543744
+        ],
+        "live_allocations_per_device": [
+          8185838592,
+          8513641472
+        ],
+        "lifetime_peak_allocations_per_device": [
+          8187438788,
+          8516234952
+        ]
+      },
+      "mean_kernel_milliseconds": {
+        "q35l_q4_k_sg16": 2080.616909,
+        "q35l_q6_k_sg16": 524.629784,
+        "q35d_recurrent_gated_rmsnorm_fused128": 79.656156,
+        "q35a_rms_norm": 78.6117605,
+        "q35d_normalize_qk": 56.064717,
+        "q35a_argmax": 17.3156675,
+        "q35a_scores": 9.1554985,
+        "q35d_convolution": 4.0775845,
+        "q35a_add_in_place": 3.6125335,
+        "q35a_attend": 3.48121,
+        "q35a_silu_multiply": 3.272061,
+        "q35a_rope": 1.6000455,
+        "q35a_softmax": 0.9786665,
+        "resident_zero": 0.213596,
+        "qwen_embedding_q4_k": 0.147487
+      },
+      "runs": [
+        {
+          "run_index": 0,
+          "first_token_seconds": 0.6105762,
+          "prefill_tokens_per_second": 13.102377721241018,
+          "decode_tokens_per_second": 10.16574810292776,
+          "decode_seconds": 2.2624995,
+          "total_generation_seconds": 2.8730808,
+          "generated_ids_match_baseline": true,
+          "kernel_milliseconds": {
+            "q35l_q4_k_sg16": 2080.656794,
+            "q35l_q6_k_sg16": 524.692079,
+            "q35d_recurrent_gated_rmsnorm_fused128": 79.634281,
+            "q35a_rms_norm": 78.618759,
+            "q35d_normalize_qk": 56.035916,
+            "q35a_argmax": 17.315303,
+            "q35a_scores": 9.152838,
+            "q35d_convolution": 4.076862,
+            "q35a_add_in_place": 3.606965,
+            "q35a_attend": 3.481368,
+            "q35a_silu_multiply": 3.263101,
+            "q35a_rope": 1.597695,
+            "q35a_softmax": 0.976274,
+            "resident_zero": 0.205261,
+            "qwen_embedding_q4_k": 0.147174
+          }
+        },
+        {
+          "run_index": 1,
+          "first_token_seconds": 0.593515,
+          "prefill_tokens_per_second": 13.47901906438759,
+          "decode_tokens_per_second": 9.982657519716724,
+          "decode_seconds": 2.3039957,
+          "total_generation_seconds": 2.8975141,
+          "generated_ids_match_baseline": true,
+          "kernel_milliseconds": {
+            "q35l_q4_k_sg16": 2080.577024,
+            "q35l_q6_k_sg16": 524.567489,
+            "q35d_recurrent_gated_rmsnorm_fused128": 79.678031,
+            "q35a_rms_norm": 78.604762,
+            "q35d_normalize_qk": 56.093518,
+            "q35a_argmax": 17.316032,
+            "q35a_scores": 9.158159,
+            "q35d_convolution": 4.078307,
+            "q35a_add_in_place": 3.618102,
+            "q35a_attend": 3.481052,
+            "q35a_silu_multiply": 3.281021,
+            "q35a_rope": 1.602396,
+            "q35a_softmax": 0.981059,
+            "resident_zero": 0.221931,
+            "qwen_embedding_q4_k": 0.1478
+          }
+        }
+      ]
+    },
+    {
+      "label": "subgroup-wide",
+      "source_artifact": {
+        "file": "qwen35-speed-subgroup-wide.json",
+        "sha256": "e16cd0b6cc6425e14479f40dea2ab8fa92a7a2c11f46da53be9c7bba50696fec",
+        "last_write_utc": "2026-09-27T01:38:29.2607035Z"
+      },
+      "description": "Eight SG16 output groups per 128-work-item group, with fused Delta and queue limit 512.",
+      "options": {
+        "quantized_kernel": "SubgroupWide (removed candidate)",
+        "fused_delta": true,
+        "queued_kernel_limit": 512
+      },
+      "decision": "rejected_removed",
+      "decision_reason": "No improvement over WG32 at queue 512 in these two runs. Candidate implementation removed.",
+      "load_seconds_excluded_from_generation": 42.2816073,
+      "means": {
+        "first_token_seconds": 0.60656,
+        "prefill_tokens_per_second": 13.192754279,
+        "decode_tokens_per_second": 9.974711825,
+        "total_generation_seconds": 2.9126522
+      },
+      "relative_to_baseline": {
+        "decode_throughput_ratio": 38.521298396,
+        "first_token_time_ratio": 0.022196617,
+        "total_generation_time_ratio": 0.02507658,
+        "first_token_time_reduction_percent": 97.780338348,
+        "total_generation_time_reduction_percent": 97.492341995
+      },
+      "all_generated_ids_match_baseline": true,
+      "memory_after_runs_bytes": {
+        "encoded_weights_per_device": [
+          8099020800,
+          8426803200
+        ],
+        "gpu_state_per_device": [
+          80543744,
+          80543744
+        ],
+        "live_allocations_per_device": [
+          8185838592,
+          8513641472
+        ],
+        "lifetime_peak_allocations_per_device": [
+          8187438788,
+          8516234952
+        ]
+      },
+      "mean_kernel_milliseconds": {
+        "q35l_q4_k_sg16_wide": 2084.7794245,
+        "q35l_q6_k_sg16_wide": 530.106306,
+        "q35d_recurrent_gated_rmsnorm_fused128": 79.635055,
+        "q35a_rms_norm": 78.5861835,
+        "q35d_normalize_qk": 55.076358,
+        "q35a_argmax": 17.311399,
+        "q35a_scores": 9.1891015,
+        "q35d_convolution": 4.03935,
+        "q35a_add_in_place": 3.5954165,
+        "q35a_attend": 3.4796385,
+        "q35a_silu_multiply": 3.2715495,
+        "q35a_rope": 1.5765285,
+        "q35a_softmax": 0.984752,
+        "resident_zero": 0.2135975,
+        "qwen_embedding_q4_k": 0.1465495
+      },
+      "runs": [
+        {
+          "run_index": 0,
+          "first_token_seconds": 0.6166105,
+          "prefill_tokens_per_second": 12.974154673006705,
+          "decode_tokens_per_second": 9.86928390921821,
+          "decode_seconds": 2.3304629,
+          "total_generation_seconds": 2.947078,
+          "generated_ids_match_baseline": true,
+          "kernel_milliseconds": {
+            "q35l_q4_k_sg16_wide": 2084.485227,
+            "q35l_q6_k_sg16_wide": 530.176552,
+            "q35d_recurrent_gated_rmsnorm_fused128": 79.600307,
+            "q35a_rms_norm": 78.544376,
+            "q35d_normalize_qk": 55.090061,
+            "q35a_argmax": 17.315826,
+            "q35a_scores": 9.189151,
+            "q35d_convolution": 4.041178,
+            "q35a_add_in_place": 3.584696,
+            "q35a_attend": 3.476879,
+            "q35a_silu_multiply": 3.266345,
+            "q35a_rope": 1.574446,
+            "q35a_softmax": 0.982304,
+            "resident_zero": 0.20578,
+            "qwen_embedding_q4_k": 0.146029
+          }
+        },
+        {
+          "run_index": 1,
+          "first_token_seconds": 0.5965095,
+          "prefill_tokens_per_second": 13.41135388455674,
+          "decode_tokens_per_second": 10.080139740538955,
+          "decode_seconds": 2.2817144,
+          "total_generation_seconds": 2.8782264,
+          "generated_ids_match_baseline": true,
+          "kernel_milliseconds": {
+            "q35l_q4_k_sg16_wide": 2085.073622,
+            "q35l_q6_k_sg16_wide": 530.03606,
+            "q35d_recurrent_gated_rmsnorm_fused128": 79.669803,
+            "q35a_rms_norm": 78.627991,
+            "q35d_normalize_qk": 55.062655,
+            "q35a_argmax": 17.306972,
+            "q35a_scores": 9.189052,
+            "q35d_convolution": 4.037522,
+            "q35a_add_in_place": 3.606137,
+            "q35a_attend": 3.482398,
+            "q35a_silu_multiply": 3.276754,
+            "q35a_rope": 1.578611,
+            "q35a_softmax": 0.9872,
+            "resident_zero": 0.221415,
+            "qwen_embedding_q4_k": 0.14707
+          }
+        }
+      ]
+    },
+    {
+      "label": "subgroup-queue1024",
+      "source_artifact": {
+        "file": "qwen35-speed-subgroup-queue1024.json",
+        "sha256": "a351808c52bbc9faa80e80889e38ab56b2435d52b7d2691665b9eeba382a81d4",
+        "last_write_utc": "2026-09-27T01:39:35.9442609Z"
+      },
+      "description": "Selected SG16/WG32 projection and fused Delta, with queued-kernel limit 1024.",
+      "options": {
+        "quantized_kernel": "Subgroup",
+        "fused_delta": true,
+        "queued_kernel_limit": 1024
+      },
+      "decision": "not_default_configurable",
+      "decision_reason": "Lower first-token and total latency than queue 512 in this short test, but lower mean decode throughput; queue 512 selected.",
+      "load_seconds_excluded_from_generation": 42.4706353,
+      "means": {
+        "first_token_seconds": 0.48385785,
+        "prefill_tokens_per_second": 16.546087876,
+        "decode_tokens_per_second": 9.82139198,
+        "total_generation_seconds": 2.82591375
+      },
+      "relative_to_baseline": {
+        "decode_throughput_ratio": 37.92919312,
+        "first_token_time_ratio": 0.017706422,
+        "total_generation_time_ratio": 0.024329802,
+        "first_token_time_reduction_percent": 98.22935783,
+        "total_generation_time_reduction_percent": 97.567019765
+      },
+      "all_generated_ids_match_baseline": true,
+      "memory_after_runs_bytes": {
+        "encoded_weights_per_device": [
+          8099020800,
+          8426803200
+        ],
+        "gpu_state_per_device": [
+          80543744,
+          80543744
+        ],
+        "live_allocations_per_device": [
+          8185838592,
+          8513641472
+        ],
+        "lifetime_peak_allocations_per_device": [
+          8187438788,
+          8516234952
+        ]
+      },
+      "mean_kernel_milliseconds": {
+        "q35l_q4_k_sg16": 2078.4811525,
+        "q35l_q6_k_sg16": 524.0846835,
+        "q35d_recurrent_gated_rmsnorm_fused128": 79.5452145,
+        "q35a_rms_norm": 78.41382,
+        "q35d_normalize_qk": 56.040653,
+        "q35a_argmax": 17.30973,
+        "q35a_scores": 9.152374,
+        "q35d_convolution": 4.018892,
+        "q35a_add_in_place": 3.5862415,
+        "q35a_attend": 3.474897,
+        "q35a_silu_multiply": 3.243622,
+        "q35a_rope": 1.595891,
+        "q35a_softmax": 0.9727335,
+        "resident_zero": 0.2113595,
+        "qwen_embedding_q4_k": 0.149311
+      },
+      "runs": [
+        {
+          "run_index": 0,
+          "first_token_seconds": 0.4970536,
+          "prefill_tokens_per_second": 16.09484369492546,
+          "decode_tokens_per_second": 9.725086189633432,
+          "decode_seconds": 2.3650176,
+          "total_generation_seconds": 2.8620747,
+          "generated_ids_match_baseline": true,
+          "kernel_milliseconds": {
+            "q35l_q4_k_sg16": 2078.251548,
+            "q35l_q6_k_sg16": 523.896045,
+            "q35d_recurrent_gated_rmsnorm_fused128": 79.54992,
+            "q35a_rms_norm": 78.378576,
+            "q35d_normalize_qk": 56.027894,
+            "q35a_argmax": 17.307387,
+            "q35a_scores": 9.151282,
+            "q35d_convolution": 4.009839,
+            "q35a_add_in_place": 3.588115,
+            "q35a_attend": 3.47792,
+            "q35a_silu_multiply": 3.238511,
+            "q35a_rope": 1.595686,
+            "q35a_softmax": 0.972427,
+            "resident_zero": 0.205888,
+            "qwen_embedding_q4_k": 0.149051
+          }
+        },
+        {
+          "run_index": 1,
+          "first_token_seconds": 0.4706621,
+          "prefill_tokens_per_second": 16.997332056267116,
+          "decode_tokens_per_second": 9.917697769458028,
+          "decode_seconds": 2.3190866,
+          "total_generation_seconds": 2.7897528,
+          "generated_ids_match_baseline": true,
+          "kernel_milliseconds": {
+            "q35l_q4_k_sg16": 2078.710757,
+            "q35l_q6_k_sg16": 524.273322,
+            "q35d_recurrent_gated_rmsnorm_fused128": 79.540509,
+            "q35a_rms_norm": 78.449064,
+            "q35d_normalize_qk": 56.053412,
+            "q35a_argmax": 17.312073,
+            "q35a_scores": 9.153466,
+            "q35d_convolution": 4.027945,
+            "q35a_add_in_place": 3.584368,
+            "q35a_attend": 3.471874,
+            "q35a_silu_multiply": 3.248733,
+            "q35a_rope": 1.596096,
+            "q35a_softmax": 0.97304,
+            "resident_zero": 0.216831,
+            "qwen_embedding_q4_k": 0.149571
+          }
+        }
+      ]
+    }
+  ]
+}

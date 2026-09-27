@@ -11,6 +11,12 @@ namespace NNtrain.Arc;
 /// </summary>
 public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryManager, IKernelCapabilitySet
 {
+    private static readonly string[] Qwen35KernelResourceSuffixes =
+    [
+        ".qwen.cl", ".qwen35_attention.cl", ".qwen35_delta.cl",
+        ".qwen35_delta_fused.cl", ".qwen35_linear_fast.cl"
+    ];
+
     private readonly object _sync = new();
     private readonly Dictionary<string, nint> _kernels = [];
     private readonly HashSet<ArcBuffer> _buffers = [];
@@ -82,7 +88,8 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
                 if (_numericStatus is null)
                 {
                     _numericStatus = Allocate(1);
-                    Run("resident_zero", 1, 0, _numericStatus, 1);
+                    Run(Options.Qwen35InferenceKernelsOnly ? "q35a_zero" : "resident_zero",
+                        1, 0, _numericStatus, 1);
                 }
                 return _numericStatus;
             }
@@ -95,7 +102,9 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
         var status = new int[1]; ReadRaw(_numericStatus, status);
         if (status[0] != 0) throw new ArithmeticException("Arc BFP8 publication encountered non-finite values. The optimizer must not commit this step.");
     }
-    public bool Supports(string feature) => feature is "transformer" or "float32" or "mix16_32" or "mix8_32" or "mix8_16";
+    public bool Supports(string feature) => Options.Qwen35InferenceKernelsOnly
+        ? feature is "qwen35-inference" or "float32"
+        : feature is "transformer" or "float32" or "mix16_32" or "mix8_32" or "mix8_16";
 
     public ArcExecutionLane(int deviceIndex = 0, ArcExecutionOptions? options = null)
     {
@@ -126,8 +135,12 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
             OpenClNative.Check(error, "create queue");
             var sourceText = new StringBuilder();
             var assembly = typeof(ArcExecutionLane).Assembly;
+            int resourceCount = 0;
             foreach (string resourceName in assembly.GetManifestResourceNames().Where(n => n.EndsWith(".cl", StringComparison.Ordinal)).Order())
             {
+                if (Options.Qwen35InferenceKernelsOnly
+                    && !Qwen35KernelResourceSuffixes.Any(suffix => resourceName.EndsWith(suffix, StringComparison.Ordinal)))
+                    continue;
                 // Flash has its own compiler policy; never change GEMM/codec
                 // register allocation to accommodate a different kernel group.
                 if (resourceName.EndsWith(".attention_flash.cl", StringComparison.Ordinal)
@@ -135,8 +148,11 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
                 using Stream resource = assembly.GetManifestResourceStream(resourceName)!;
                 using var reader = new StreamReader(resource);
                 sourceText.AppendLine(reader.ReadToEnd());
+                resourceCount++;
             }
-            if (sourceText.Length == 0) throw new InvalidOperationException("Arc training kernels are missing.");
+            if (sourceText.Length == 0) throw new InvalidOperationException("Arc OpenCL kernels are missing.");
+            if (Options.Qwen35InferenceKernelsOnly && resourceCount != Qwen35KernelResourceSuffixes.Length)
+                throw new InvalidOperationException("The dedicated Qwen3.5 OpenCL kernel resources are incomplete.");
             byte[] source = Encoding.UTF8.GetBytes(sourceText.ToString());
             GCHandle pin = GCHandle.Alloc(source, GCHandleType.Pinned);
             try { _program = OpenClNative.clCreateProgramWithSource(_context, 1, [pin.AddrOfPinnedObject()], [(nuint)source.Length], out error); }
@@ -161,6 +177,18 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
         catch { Dispose(); throw; }
     }
 
+    private nint ProgramForRequestedKernel(string name)
+    {
+        if (!Options.Qwen35InferenceKernelsOnly) return ProgramForKernel(name);
+        // Do not silently compile standalone training programs when a caller
+        // requests a kernel outside the explicitly selected inference workload.
+        if (name.StartsWith("qwen_", StringComparison.Ordinal)
+            || name.StartsWith("q35a_", StringComparison.Ordinal)
+            || name.StartsWith("q35d_", StringComparison.Ordinal)
+            || name.StartsWith("q35l_", StringComparison.Ordinal)) return _program;
+        throw new NotSupportedException("This Arc lane only contains Qwen3.5 inference kernels.");
+    }
+
     public ArcBuffer Allocate(int elements)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(elements);
@@ -175,7 +203,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_kernels.TryGetValue(name, out nint kernel))
             {
-                kernel = OpenClNative.clCreateKernel(ProgramForKernel(name), name, out int error);
+                kernel = OpenClNative.clCreateKernel(ProgramForRequestedKernel(name), name, out int error);
                 OpenClNative.Check(error, $"create kernel {name}");
                 _kernels.Add(name, kernel);
             }
@@ -371,7 +399,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
             if (!_kernels.TryGetValue(name, out nint kernel))
             {
                 using var compilation = Timeline?.Host("kernel-create-compile", name);
-                kernel = OpenClNative.clCreateKernel(ProgramForKernel(name), name, out int error);
+                kernel = OpenClNative.clCreateKernel(ProgramForRequestedKernel(name), name, out int error);
                 OpenClNative.Check(error, $"create kernel {name}");
                 _kernels.Add(name, kernel);
             }

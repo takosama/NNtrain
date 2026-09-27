@@ -124,6 +124,77 @@ public sealed class Qwen35ResidentModelTests
             split.DownloadedBytes[1] - downloadedBeforeGeneration[1]);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OptimizedHybridModelMatchesReferenceThroughKvGrowthAndStreamingGeneration(bool tiedOutput)
+    {
+        RequireArcDevices(1);
+        using TemporaryQwenGguf file = CreateFixture(tiedOutput, contextLength: 40);
+        using Qwen35QuantizedModel reference = Qwen35QuantizedModel.Load(file.Path, [0], options: new()
+        {
+            QuantizedKernel = Qwen35QuantizedKernel.Reference,
+            FusedDelta = false
+        });
+        using Qwen35QuantizedModel optimized = Qwen35QuantizedModel.Load(file.Path, [0], options: new()
+        {
+            QuantizedKernel = Qwen35QuantizedKernel.Auto,
+            FusedDelta = true
+        });
+        long[] encodedBytes = optimized.ResidentWeightBytes.ToArray();
+        Assert.Equal(reference.ResidentWeightBytes, encodedBytes);
+        Assert.Equal(reference.ResidentAuxiliaryWeightBytes, optimized.ResidentAuxiliaryWeightBytes);
+        long initialStateBytes = Assert.Single(optimized.ResidentStateBytes);
+        long uploadedBefore = Assert.Single(optimized.UploadedBytes);
+        long downloadedBefore = Assert.Single(optimized.DownloadedBytes);
+        const int steps = 20;
+        const float absoluteTolerance = 2e-4f, relativeTolerance = 2e-4f;
+        for (int position = 0; position < steps; position++)
+        {
+            int token = (position * 3 + 1) % 4;
+            float[] expected = reference.ForwardToken(token);
+            float[] actual = optimized.ForwardToken(token);
+            AssertMeaningfulLogits(expected);
+            AssertMeaningfulLogits(actual);
+            for (int index = 0; index < expected.Length; index++)
+            {
+                float error = MathF.Abs(expected[index] - actual[index]);
+                float limit = absoluteTolerance + relativeTolerance * MathF.Abs(expected[index]);
+                Assert.True(error <= limit,
+                    $"Position {position}, logit {index}: reference={expected[index]:R}, optimized={actual[index]:R}, error={error:R}, limit={limit:R}.");
+            }
+        }
+        // The hybrid model has one full-attention layer. Both routes grow its
+        // K/V allocation from 16 to 32 slots while keeping weights encoded.
+        Assert.Equal(initialStateBytes + 2L * 16 * 128 * sizeof(float),
+            Assert.Single(optimized.ResidentStateBytes));
+        Assert.Equal(reference.ResidentStateBytes, optimized.ResidentStateBytes);
+        Assert.Equal(encodedBytes, optimized.ResidentWeightBytes);
+        Assert.Equal(steps * sizeof(int), Assert.Single(optimized.UploadedBytes) - uploadedBefore);
+        Assert.Equal(steps * 4 * sizeof(float), Assert.Single(optimized.DownloadedBytes) - downloadedBefore);
+        Assert.Contains(optimized.KernelMilliseconds.Keys,
+            kernel => kernel.StartsWith("q35l_", StringComparison.Ordinal));
+        Assert.Contains("q35d_recurrent_gated_rmsnorm_fused128", optimized.KernelMilliseconds.Keys);
+        Assert.DoesNotContain("q35d_recurrent_gated_rmsnorm_fused128", reference.KernelMilliseconds.Keys);
+
+        int[] prompt = [1, 2, 0];
+        var referenceCallbacks = new List<int>();
+        var optimizedCallbacks = new List<int>();
+        int[] referenceIds = reference.GenerateTokenIds(prompt, steps, onToken: referenceCallbacks.Add);
+        uploadedBefore = Assert.Single(optimized.UploadedBytes);
+        downloadedBefore = Assert.Single(optimized.DownloadedBytes);
+        int[] optimizedIds = optimized.GenerateTokenIds(prompt, steps, onToken: optimizedCallbacks.Add);
+        Assert.Equal(prompt.Length + steps, optimizedIds.Length);
+        Assert.Equal(referenceIds, optimizedIds);
+        Assert.Equal(referenceIds.Skip(prompt.Length), referenceCallbacks);
+        Assert.Equal(optimizedIds.Skip(prompt.Length), optimizedCallbacks);
+        Assert.Equal(referenceCallbacks, optimizedCallbacks);
+        Assert.Equal((prompt.Length + steps - 1) * sizeof(int),
+            Assert.Single(optimized.UploadedBytes) - uploadedBefore);
+        Assert.Equal(steps * 8, Assert.Single(optimized.DownloadedBytes) - downloadedBefore);
+        Assert.Equal(encodedBytes, optimized.ResidentWeightBytes);
+    }
+
     [Fact]
     public void KvGrowthStaysOnDeviceAndResetReusesStateWithoutHostTransfers()
     {

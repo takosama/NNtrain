@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace NNtrain;
 
 internal static class QwenGgufCommand
@@ -97,11 +99,28 @@ internal static class QwenGgufCommand
             return 0;
         }
         output.WriteLine("Text inference: quantized weights, attention, recurrent state and greedy sampling on Arc (Float32).");
+        output.WriteLine("GPU KV cache and Gated DeltaNet state reuse: enabled.");
+        var loadTimer = Stopwatch.StartNew();
         using Qwen35QuantizedModel model = Qwen35QuantizedModel.Load(path, devices, output.WriteLine);
-        int[] generated = model.GenerateTokenIds(promptIds, maxNewTokens, tokenizer.EosTokenId);
+        loadTimer.Stop();
+        var generationTimer = Stopwatch.StartNew();
+        double firstTokenSeconds = 0, lastTokenSeconds = 0;
+        int emitted = 0;
+        int[] generated = model.GenerateTokenIds(promptIds, maxNewTokens, tokenizer.EosTokenId, _ =>
+        {
+            lastTokenSeconds = generationTimer.Elapsed.TotalSeconds;
+            if (++emitted == 1) firstTokenSeconds = lastTokenSeconds;
+        });
+        generationTimer.Stop();
         output.WriteLine($"generated token ids: {string.Join(',', generated.Skip(promptIds.Length))}");
         output.WriteLine("generated:");
         output.WriteLine(tokenizer.Decode(generated));
+        double decodeSeconds = lastTokenSeconds - firstTokenSeconds;
+        string decode = emitted > 1 && decodeSeconds > 0
+            ? FormattableString.Invariant($"{(emitted - 1) / decodeSeconds:F2} tok/s") : "n/a";
+        string firstToken = emitted > 0 ? FormattableString.Invariant($"{firstTokenSeconds:F3} s") : "n/a";
+        output.WriteLine(FormattableString.Invariant(
+            $"timing: load={loadTimer.Elapsed.TotalSeconds:F3} s, prefill/first-token={firstToken}, decode={decode}, generated={emitted}, total-generation={generationTimer.Elapsed.TotalSeconds:F3} s"));
         return 0;
     }
 }
