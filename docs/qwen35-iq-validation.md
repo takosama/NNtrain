@@ -1,5 +1,8 @@
 # Qwen3.5 mixed IQ2_M GGUF validation
 
+This report records the initial 4.4 token/s implementation. The subsequent
+[IQ performance update](qwen35-iq-performance.md) reaches about 14.8 token/s.
+
 ## Failure and supported storage
 
 The local `Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf` failed at

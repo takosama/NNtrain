@@ -495,30 +495,165 @@ Q35I_EMBEDDING(q35l_iq3_s_embedding, 110, q35l_iq3_s_value)
 
 #if defined(ARC_XMX) && ARC_SG == 16
 #pragma OPENCL EXTENSION cl_intel_subgroups : enable
-#define Q35I_SUBGROUP(NAME, BYTES, VALUE) \
-__attribute__((intel_reqd_sub_group_size(16))) \
-__attribute__((reqd_work_group_size(32, 1, 1))) \
-__kernel void NAME(__global const float* x, __global const uchar* weight, \
-    __global const float* bias, __global float* y, int rows, int input_width, int output_width) { \
-    int lane = get_sub_group_local_id(); \
-    int flat = get_group_id(0) * 2 + get_sub_group_id(); \
-    if (flat >= rows * output_width) return; \
-    int row = flat / output_width, output = flat % output_width, blocks = input_width >> 8; \
-    __global const uchar* rowWeight = weight + (size_t)output * blocks * BYTES; \
-    float sum = 0.0f; \
-    for (int b = 0; b < blocks; ++b) { \
-        __global const uchar* block = rowWeight + b * BYTES; \
-        float d = Q35I_SCALE(block), dmin = Q35I_MIN(block, BYTES); \
-        for (int i = lane; i < 256; i += 16) \
-            sum = fma(x[row * input_width + b * 256 + i], VALUE(block, i, d, dmin), sum); \
-    } \
-    float total = sub_group_reduce_add(sum); \
-    if (lane == 0) y[flat] = bias[output] + total; \
+// Packed Q5_K projection: reuse high bits and low-nibble pairs while
+// preserving the original per-lane accumulation order.
+// Q5_K stays packed in its original 176-byte GGUF block layout.
+
+inline void q35l_q5_fast_scale_min(
+    __global const uchar* block, int group, float d, float dmin,
+    float* multiplier, float* minimum) {
+    __global const uchar* packed = block + 4;
+    int scale, minValue;
+    if (group < 4) {
+        scale = packed[group] & 63;
+        minValue = packed[group + 4] & 63;
+    } else {
+        scale = (packed[group + 4] & 15)
+            | ((packed[group - 4] >> 6) << 4);
+        minValue = (packed[group + 4] >> 4)
+            | ((packed[group] >> 6) << 4);
+    }
+    *multiplier = d * (float)scale;
+    *minimum = dmin * (float)minValue;
 }
-Q35I_SUBGROUP(q35l_q5_k_sg16, 176, q35l_q5_value)
-Q35I_SUBGROUP(q35l_iq2_s_sg16, 82, q35l_iq2_s_value)
-Q35I_SUBGROUP(q35l_iq3_s_sg16, 110, q35l_iq3_s_value)
-#undef Q35I_SUBGROUP
+
+__attribute__((intel_reqd_sub_group_size(16)))
+__attribute__((reqd_work_group_size(32, 1, 1)))
+__kernel void q35l_q5_k_sg16(
+    __global const float* x, __global const uchar* weight,
+    __global const float* bias, __global float* y,
+    int rows, int input_width, int output_width) {
+    int lane = get_sub_group_local_id();
+    int flatOutput = get_group_id(0) * 2 + get_sub_group_id();
+    if (flatOutput >= rows * output_width) return;
+    int row = rows == 1 ? 0 : flatOutput / output_width;
+    int output = flatOutput - row * output_width;
+    x += (size_t)row * input_width;
+
+    int blocksPerRow = input_width >> 8;
+    __global const uchar* rowWeight =
+        weight + (size_t)output * blocksPerRow * 176;
+    float partial = 0.0f;
+    for (int blockIndex = 0; blockIndex < blocksPerRow; ++blockIndex) {
+        __global const uchar* block = rowWeight + (size_t)blockIndex * 176;
+        float d = q35l_half_to_float(
+            (ushort)block[0] | ((ushort)block[1] << 8));
+        float dmin = q35l_half_to_float(
+            (ushort)block[2] | ((ushort)block[3] << 8));
+
+        // Each high byte supplies one bit for all eight 32-value groups.
+        // Keep it in a register across the four low/high-nibble pairs.
+        uint high0 = block[16 + lane];
+        uint high1 = block[32 + lane];
+        #pragma unroll
+        for (int pair = 0; pair < 4; ++pair) {
+            int evenGroup = pair * 2;
+            float evenMultiplier, evenMinimum, oddMultiplier, oddMinimum;
+            q35l_q5_fast_scale_min(block, evenGroup, d, dmin,
+                &evenMultiplier, &evenMinimum);
+            q35l_q5_fast_scale_min(block, evenGroup + 1, d, dmin,
+                &oddMultiplier, &oddMinimum);
+
+            int packedBase = 48 + pair * 32;
+            uint low0 = block[packedBase + lane];
+            uint low1 = block[packedBase + lane + 16];
+            uint q0 = (low0 & 15) | (((high0 >> evenGroup) & 1) << 4);
+            uint q1 = (low1 & 15) | (((high1 >> evenGroup) & 1) << 4);
+            uint q2 = (low0 >> 4) | (((high0 >> (evenGroup + 1)) & 1) << 4);
+            uint q3 = (low1 >> 4) | (((high1 >> (evenGroup + 1)) & 1) << 4);
+
+            // Match the current Q5 decoder's multiply/subtract expression.
+            float w0 = evenMultiplier * (float)q0 - evenMinimum;
+            float w1 = evenMultiplier * (float)q1 - evenMinimum;
+            float w2 = oddMultiplier * (float)q2 - oddMinimum;
+            float w3 = oddMultiplier * (float)q3 - oddMinimum;
+            int inputBase = blockIndex * 256 + pair * 64 + lane;
+            partial = fma(x[inputBase], w0, partial);
+            partial = fma(x[inputBase + 16], w1, partial);
+            partial = fma(x[inputBase + 32], w2, partial);
+            partial = fma(x[inputBase + 48], w3, partial);
+        }
+    }
+
+    float total = sub_group_reduce_add(partial);
+    if (lane == 0) y[flatOutput] = bias[output] + total;
+}
+
+
+
+// Each lane decodes one octet once and keeps eight independent accumulators.
+// The packed codebook value is reinterpreted as bytes instead of repeatedly
+// shifting a 64-bit integer for each scalar output weight.
+__attribute__((intel_reqd_sub_group_size(16)))
+__attribute__((reqd_work_group_size(32, 1, 1)))
+__kernel void q35l_iq2_s_sg16(
+    __global const float* x, __global const uchar* weight,
+    __global const float* bias, __global float* y,
+    int rows, int input_width, int output_width) {
+    int lane = get_sub_group_local_id();
+    int flat = get_group_id(0) * 2 + get_sub_group_id();
+    if (flat >= rows * output_width) return;
+    int row = flat / output_width, output = flat % output_width, blocks = input_width >> 8;
+    __global const uchar* rowWeight = weight + (size_t)output * blocks * 82;
+    x += row * input_width;
+    float8 sums = (float8)(0.0f);
+    for (int b = 0; b < blocks; ++b) {
+        __global const uchar* block = rowWeight + b * 82;
+        float d = Q35I_SCALE(block);
+        #pragma unroll
+        for (int halfIndex = 0; halfIndex < 2; ++halfIndex) {
+            int octet = halfIndex * 16 + lane, group = octet >> 2, part = octet & 3;
+            int gridIndex = block[2 + octet] | (((block[66 + group] >> (part * 2)) & 3) << 8);
+            float8 grid = convert_float8(as_uchar8(q35l_iq2s_grid[gridIndex]));
+            int signs = block[34 + octet];
+            int scale = (block[74 + group] >> ((part >> 1) * 4)) & 15;
+            float multiplier = d * (0.5f + (float)scale) * 0.25f;
+            grid = select(grid, -grid, ((int8)(signs) & (int8)(1,2,4,8,16,32,64,128)) != (int8)(0));
+            float8 input = vload8(0, x + b * 256 + octet * 8);
+            sums = fma(input, multiplier * grid, sums);
+        }
+    }
+    float partial = dot(sums.lo, (float4)(1.0f)) + dot(sums.hi, (float4)(1.0f));
+    float total = sub_group_reduce_add(partial);
+    if (lane == 0) y[flat] = bias[output] + total;
+}
+
+__attribute__((intel_reqd_sub_group_size(16)))
+__attribute__((reqd_work_group_size(32, 1, 1)))
+__kernel void q35l_iq3_s_sg16(
+    __global const float* x, __global const uchar* weight,
+    __global const float* bias, __global float* y,
+    int rows, int input_width, int output_width) {
+    int lane = get_sub_group_local_id();
+    int flat = get_group_id(0) * 2 + get_sub_group_id();
+    if (flat >= rows * output_width) return;
+    int row = flat / output_width, output = flat % output_width, blocks = input_width >> 8;
+    __global const uchar* rowWeight = weight + (size_t)output * blocks * 110;
+    x += row * input_width;
+    float8 sums = (float8)(0.0f);
+    for (int b = 0; b < blocks; ++b) {
+        __global const uchar* block = rowWeight + b * 110;
+        float d = Q35I_SCALE(block);
+        #pragma unroll
+        for (int halfIndex = 0; halfIndex < 2; ++halfIndex) {
+            int octet = halfIndex * 16 + lane, group = octet >> 2, pair = (octet & 3) * 2;
+            int high = block[66 + group];
+            int grid0 = block[2 + octet * 2] | (((high >> pair) & 1) << 8);
+            int grid1 = block[3 + octet * 2] | (((high >> (pair + 1)) & 1) << 8);
+            float8 grid = convert_float8(as_uchar8((uint2)(q35l_iq3s_grid[grid0], q35l_iq3s_grid[grid1])));
+            int signs = block[74 + octet];
+            int scale = (block[106 + (group >> 1)] >> ((group & 1) * 4)) & 15;
+            float multiplier = d * (float)(1 + 2 * scale);
+            grid = select(grid, -grid, ((int8)(signs) & (int8)(1,2,4,8,16,32,64,128)) != (int8)(0));
+            float8 input = vload8(0, x + b * 256 + octet * 8);
+            sums = fma(input, multiplier * grid, sums);
+        }
+    }
+    float partial = dot(sums.lo, (float4)(1.0f)) + dot(sums.hi, (float4)(1.0f));
+    float total = sub_group_reduce_add(partial);
+    if (lane == 0) y[flat] = bias[output] + total;
+}
+
 #endif
 
 #undef Q35I_COOPERATIVE
