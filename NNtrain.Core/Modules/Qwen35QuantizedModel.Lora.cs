@@ -21,6 +21,8 @@ public sealed partial class Qwen35QuantizedModel
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(options); options.Validate();
+        if (_prism is not null)
+            throw new NotSupportedException("LoRA adapters for Prism Hadamard-folded models are not supported yet.");
         if (_lora.Count != 0) throw new InvalidOperationException("A LoRA adapter is already attached.");
         if (options.Layers?.Any(layer => layer >= Descriptor.LayerCount) == true)
             throw new ArgumentException("A selected LoRA layer is outside this model.");

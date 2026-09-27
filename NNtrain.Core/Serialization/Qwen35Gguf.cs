@@ -4,9 +4,21 @@ namespace NNtrain;
 public static class Qwen35Gguf
 {
     public const uint Q5KType = 13, IQ3SType = 21, IQ2SType = 22;
+    public const uint PQ20Type = 142, PTQ10Type = 143;
 
     internal static bool IsSupportedQuantization(uint type)
-        => type is Qwen2Gguf.Q4KType or Q5KType or Qwen2Gguf.Q6KType or IQ2SType or IQ3SType;
+        => type is Qwen2Gguf.Q4KType or Q5KType or Qwen2Gguf.Q6KType or IQ2SType or IQ3SType or PQ20Type or PTQ10Type;
+
+    internal static bool IsSupportedMatrixStorage(uint type)
+        => IsSupportedQuantization(type) || type == Qwen2Gguf.BF16Type;
+
+    internal static int QuantizedBlockElements(uint type) => type switch
+    {
+        PQ20Type or PTQ10Type => 128,
+        Qwen2Gguf.BF16Type => 1,
+        _ when IsSupportedQuantization(type) => 256,
+        _ => throw new NotSupportedException($"Unsupported Qwen3.5 matrix type {type}.")
+    };
 
     internal static int QuantizedBlockBytes(uint type) => type switch
     {
@@ -15,6 +27,9 @@ public static class Qwen35Gguf
         Qwen2Gguf.Q6KType => GgufQ6K.BlockBytes,
         IQ2SType => 82,
         IQ3SType => 110,
+        PQ20Type => 34,
+        PTQ10Type => 28,
+        Qwen2Gguf.BF16Type => 2,
         _ => throw new NotSupportedException($"Unsupported Qwen3.5 quantization type {type}.")
     };
 
@@ -76,6 +91,7 @@ public static class Qwen35Gguf
         ValidateRecurrentPattern(gguf, descriptor, "qwen35.recurrent_layers");
         ValidateRecurrentPattern(gguf, descriptor, "qwen35.attention.recurrent_layers");
         ValidateDirectory(gguf, descriptor);
+        _ = Qwen35PrismMetadata.Read(gguf);
         return descriptor;
     }
 
@@ -142,11 +158,12 @@ public static class Qwen35Gguf
         void Matrix(string name, int inputWidth, int outputWidth)
         {
             GgufTensorInfo tensor = Shape(name, [inputWidth, outputWidth]);
-            if (!IsSupportedQuantization(tensor.Type))
-                throw new NotSupportedException($"Qwen3.5 matrix '{name}' requires Q4_K/Q5_K/Q6_K/IQ2_S/IQ3_S storage; got type {tensor.Type}.");
-            if (inputWidth % GgufQ4K.BlockElements != 0)
-                throw new InvalidDataException($"Qwen3.5 matrix '{name}' requires a quantized row width divisible by 256.");
-            long bytes = (long)outputWidth * (inputWidth / GgufQ4K.BlockElements)
+            if (!IsSupportedMatrixStorage(tensor.Type))
+                throw new NotSupportedException($"Qwen3.5 matrix '{name}' requires Q4_K/Q5_K/Q6_K/IQ2_S/IQ3_S/PQ2_0/PTQ1_0/BF16 storage; got type {tensor.Type}.");
+            int blockElements = QuantizedBlockElements(tensor.Type);
+            if (inputWidth % blockElements != 0)
+                throw new InvalidDataException($"Qwen3.5 matrix '{name}' requires a row width divisible by {blockElements}.");
+            long bytes = (long)outputWidth * (inputWidth / blockElements)
                 * QuantizedBlockBytes(tensor.Type);
             if (bytes > int.MaxValue)
                 throw new NotSupportedException($"Qwen3.5 matrix '{name}' exceeds the managed payload limit.");

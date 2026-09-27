@@ -1,0 +1,40 @@
+{
+  "PQ2": {
+    "PromptTokenIdsIdentical": true,
+    "PromptTokens": 20,
+    "GeneratedTokens": 8,
+    "GeneratedTextIdentical": true,
+    "GeneratedText": "こんにちは！\n私は、あなたの質問や",
+    "NNtrainGeneratedTokenIds": [
+      85951,
+      6115,
+      198,
+      173382,
+      5205,
+      183779,
+      247222,
+      67813
+    ],
+    "Reference": "PrismML-Eng/llama.cpp adfffbe41b2cabcd51fff326ab045662265062bb, official Windows CPU completion binary",
+    "Comparison": "Exact prompt IDs; first 8 generated tokens decoded to the same text (outer console whitespace ignored)."
+  },
+  "PTQ1": {
+    "PromptTokenIdsIdentical": true,
+    "PromptTokens": 20,
+    "GeneratedTokens": 8,
+    "GeneratedTextIdentical": true,
+    "GeneratedText": "こんにちは！私はAIアシスタントです",
+    "NNtrainGeneratedTokenIds": [
+      85951,
+      6115,
+      173382,
+      15015,
+      214151,
+      149673,
+      49588,
+      36298
+    ],
+    "Reference": "PrismML-Eng/llama.cpp adfffbe41b2cabcd51fff326ab045662265062bb, official Windows CPU completion binary",
+    "Comparison": "Exact prompt IDs; first 8 generated tokens decoded to the same text (outer console whitespace ignored)."
+  }
+}

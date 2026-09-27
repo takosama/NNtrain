@@ -1,0 +1,93 @@
+{
+  "PQ2": {
+    "model": "Ternary-Bonsai-2-27B-Abliterated-PQ2_0.gguf",
+    "sha256": "41a362f422b70a8c2dc74a3cc14447ad0ea702c440f0dbe41dc1796da7b7e342",
+    "speeds": [
+      7.6024635602155834,
+      7.614348018127226,
+      7.615402540870596
+    ],
+    "warmMedianTokensPerSecond": 7.614875279498911,
+    "warmMedianFirstTokenMs": 1411.79145,
+    "residentWeightBytes": [
+      3592232960,
+      3592232960
+    ],
+    "peakDeviceGiB": [
+      3.4400539435446262,
+      3.4409987665712833
+    ],
+    "first32IdsMatchBaseline": true,
+    "all3Runs64IdsMatch": true,
+    "first8DecodedTextMatchesAuthor": true,
+    "logits": {
+      "maxAbs": 9.059906005859375e-06,
+      "relativeL2": 7.458911108475778e-07,
+      "top1Matches": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "finite": true
+    }
+  },
+  "PTQ1": {
+    "model": "Ternary-Bonsai-2-27B-PTQ1_0.gguf",
+    "sha256": "53107f530aa52eb00912263ab1ee29bd199261c87cd7b4ad4ca1318c1fe33ee3",
+    "speeds": [
+      13.637349835190463,
+      13.624154388744525,
+      13.662623672226113
+    ],
+    "warmMedianTokensPerSecond": 13.64338903048532,
+    "warmMedianFirstTokenMs": 828.8656000000001,
+    "residentWeightBytes": [
+      2962472960,
+      2962472960
+    ],
+    "peakDeviceGiB": [
+      2.8535442389547825,
+      2.8544890619814396
+    ],
+    "first32IdsMatchBaseline": true,
+    "all3Runs64IdsMatch": true,
+    "first8DecodedTextMatchesAuthor": true,
+    "logits": {
+      "maxAbs": 0.0,
+      "relativeL2": 0.0,
+      "top1Matches": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "finite": true
+    }
+  },
+  "tests": {
+    "qwen35-normal-final": {
+      "Passed": 208,
+      "Failed": 0,
+      "NotExecuted": 0,
+      "failures": []
+    },
+    "integration-normal-final": {
+      "Passed": 491,
+      "Failed": 1,
+      "NotExecuted": 6,
+      "failures": [
+        "WikiDTypeCheckpointTests.V8Bfp8CheckpointUsesPrecisionArtifactsAndResumes(mode: Mix8_16, blockSize: 4)"
+      ]
+    },
+    "integration-pre-prism-repro": {
+      "Passed": 2,
+      "Failed": 1,
+      "NotExecuted": 0,
+      "failures": [
+        "WikiDTypeCheckpointTests.V8Bfp8CheckpointUsesPrecisionArtifactsAndResumes(mode: Mix8_16, blockSize: 4)"
+      ]
+    }
+  },
+  "installedSourceHashesVerified": 18
+}

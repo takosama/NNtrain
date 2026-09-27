@@ -14,7 +14,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
     private static readonly string[] Qwen35KernelResourceSuffixes =
     [
         ".qwen.cl", ".qwen35_attention.cl", ".qwen35_delta.cl",
-        ".qwen35_delta_fused.cl", ".qwen35_linear_fast.cl", ".qwen35_iq.cl", ".qwen35_lora.cl"
+        ".qwen35_delta_fused.cl", ".qwen35_linear_fast.cl", ".qwen35_iq.cl", ".qwen35_lora.cl", ".qwen35_prism.cl"
     ];
 
     private static readonly string[] Qwen35TrainingResourceSuffixes =

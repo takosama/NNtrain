@@ -50,6 +50,18 @@ public sealed class Qwen35TokenizerTests
     }
 
     [Fact]
+    public void UserDefinedThinkMarkersRemainAtomicWithoutBpeMerges()
+    {
+        using TemporaryQwenGguf file = CreateFixture("qwen35", [], out _, ["<think>", "</think>", "考え"]);
+        var tokenizer = Qwen2GgufTokenizer.Load(file.Path);
+        int[] ids = tokenizer.Encode("<think>\n考え\n</think>");
+        Assert.Equal(new[] { 256, (int)'\n', 258, (int)'\n', 257 }, ids);
+        Assert.Equal("<think>\n考え\n</think>", tokenizer.Decode(ids));
+        var decoder = tokenizer.CreateStreamingDecoder();
+        Assert.Equal("<think>\n考え\n</think>", string.Concat(ids.Select(decoder.Append)) + decoder.Complete());
+    }
+
+    [Fact]
     public void UnsupportedPreTokenizerFailsInsteadOfUsingQwen2Boundaries()
     {
         using TemporaryQwenGguf file = CreateFixture("not-qwen", [], out _);
@@ -60,7 +72,7 @@ public sealed class Qwen35TokenizerTests
     }
 
     private static TemporaryQwenGguf CreateFixture(
-        string? preTokenizer, string[] mergedTexts, out Dictionary<string, int> textIds)
+        string? preTokenizer, string[] mergedTexts, out Dictionary<string, int> textIds, string[]? userDefined = null)
     {
         int escaped = 256;
         var tokens = new List<string>();
@@ -96,6 +108,11 @@ public sealed class Qwen35TokenizerTests
             ["tokenizer.ggml.tokens"] = tokens.ToArray(),
             ["tokenizer.ggml.merges"] = merges.ToArray()
         };
+        if (userDefined is not null)
+        {
+            metadata["tokenizer.ggml.tokens"] = tokens.Concat(userDefined).ToArray();
+            metadata["tokenizer.ggml.token_type"] = Enumerable.Repeat(1, tokens.Count).Concat(Enumerable.Repeat(4, userDefined.Length)).ToArray();
+        }
         if (preTokenizer is not null) metadata["tokenizer.ggml.pre"] = preTokenizer;
         return new TemporaryQwenGguf(metadata);
     }

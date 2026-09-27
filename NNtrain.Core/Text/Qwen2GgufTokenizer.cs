@@ -60,7 +60,9 @@ public sealed class Qwen2GgufTokenizer
         if (tokenTypes is not null)
         {
             for (int i = 0; i < Math.Min(tokenTypes.Count, tokens.Length); ++i)
-                if (tokenTypes[i] == 3) _specialTokens.Add(tokens[i]);
+                // GGML CONTROL (3) and USER_DEFINED (4) are atomic when
+                // parsing special tokens. Qwen3.5 marks <think> as type 4.
+                if (tokenTypes[i] is 3 or 4) _specialTokens.Add(tokens[i]);
         }
 
         BosTokenId = bosTokenId;

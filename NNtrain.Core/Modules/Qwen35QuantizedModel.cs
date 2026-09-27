@@ -20,6 +20,8 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
     private int _position;
     private bool _disposed, _faulted;
     private readonly Qwen35ExecutionOptions _options;
+    private Qwen35PrismMetadata? _prism;
+    private readonly Dictionary<(ArcExecutionLane Lane, int Width), ArcBuffer> _prismSigns = [];
 
     private Qwen35QuantizedModel(Qwen35GgufDescriptor descriptor, Qwen35ExecutionOptions options)
         => (Descriptor, _options) = (descriptor, options);
@@ -53,6 +55,10 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
             || options.TrainingBufferPoolMiB is < 0 or > 2048)
             throw new ArgumentException("Invalid Qwen3.5 execution options.", nameof(options));
         Qwen35GgufDescriptor d = Qwen35Gguf.Inspect(path);
+        using var gguf = new GgufReader(path);
+        Qwen35PrismMetadata? prism = Qwen35PrismMetadata.Read(gguf);
+        if (options.LoraTraining && (prism is not null || d.Tensors.Any(t => t.Type == Qwen2Gguf.BF16Type && IsQuantized(t))))
+            throw new NotSupportedException("PQ2_0/PTQ1_0 and BF16 matrix backpropagation are not implemented; load this model for generation.");
         ArcDeviceInfo[] available = ArcDevices.Enumerate().ToArray();
         if (available.Length == 0)
             throw new NotSupportedException("Qwen3.5 quantized inference requires Intel Arc.");
@@ -77,6 +83,7 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
 
         var model = new Qwen35QuantizedModel(d, options)
         {
+            _prism = prism,
             _modelPath = Path.GetFullPath(path),
             // Keep the same base snapshot protected from writes/deletion while
             // resident weights and adapter identity refer to it.
@@ -107,7 +114,16 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                     PhysicalBufferBudgetBytes = DeviceBudget(available[index])
                 }));
             }
-            using var gguf = new GgufReader(path);
+            if (model._prism is not null)
+            {
+                foreach (ArcExecutionLane lane in model._lanes)
+                foreach (var pair in model._prism.Signs)
+                {
+                    model._prismSigns.Add((lane, pair.Key), lane.Upload(pair.Value));
+                    model._auxiliaryBytes[lane] = model._auxiliaryBytes.GetValueOrDefault(lane) + 4L * pair.Value.Length;
+                }
+                progress?.Invoke($"Prism: GPU Hadamard 1024, {model._prism.ForwardWeights.Count} projections, {model._prism.InverseWeights.Count} inverse embeddings, grouped GDN={model._prism.GroupedValueHeads}");
+            }
             int loaded = 0;
             foreach (GgufTensorInfo tensor in d.Tensors)
             {
@@ -211,9 +227,10 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
     }
 
     private static bool IsQuantized(GgufTensorInfo tensor)
-        => Qwen35Gguf.IsSupportedQuantization(tensor.Type);
+        => tensor.Shape.Count == 2 && !tensor.Name.EndsWith(".ssm_conv1d.weight", StringComparison.Ordinal)
+            && Qwen35Gguf.IsSupportedMatrixStorage(tensor.Type);
     private static int EncodedBytes(GgufTensorInfo tensor)
-        => checked((int)(tensor.Shape[0] / 256 * tensor.Shape[1]
+        => checked((int)(tensor.Shape[0] / (ulong)Qwen35Gguf.QuantizedBlockElements(tensor.Type) * tensor.Shape[1]
             * (ulong)Qwen35Gguf.QuantizedBlockBytes(tensor.Type)));
     private static long DenseBytes(GgufTensorInfo tensor)
         => checked(tensor.Shape.Aggregate(1L, (count, dimension) => checked(count * (long)dimension)) * 4);
@@ -261,6 +278,11 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         try
         {
             hidden = _matrices["token_embd.weight"].Embedding(tokenId);
+            if (_prism?.InverseWeights.Contains("token_embd.weight") == true)
+            {
+                ArcBuffer restored = PrismTransform("token_embd.weight", _matrices["token_embd.weight"], hidden, inverse: true);
+                hidden.Dispose(); hidden = restored;
+            }
             for (int layer = 0; layer < d.LayerCount; layer++)
             {
                 LayerState state = _states[layer];
@@ -308,6 +330,11 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
     private ArcBuffer ProjectMatrix(string name, Matrix matrix, ArcBuffer input)
     {
         if (_loraFaulted) throw new InvalidOperationException("LoRA optimizer state is invalid; reload the last saved checkpoint in a new model.");
+        if (_prism?.ForwardWeights.Contains(name) == true)
+        {
+            using ArcBuffer transformed = PrismTransform(name, matrix, input, inverse: false);
+            return matrix.Forward(transformed, _zeroBias[matrix.Lane]);
+        }
         if (_options.InferenceFusedLora && !_options.LoraTraining && matrix.SupportsFusedLora
             && _lora.TryGetValue(name, out var adapter))
         {
@@ -316,6 +343,20 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         }
         ArcBuffer output = matrix.Forward(input, _zeroBias[matrix.Lane]);
         try { ApplyLora(name, input, output, 1); return output; }
+        catch { output.Dispose(); throw; }
+    }
+
+    private ArcBuffer PrismTransform(string name, Matrix matrix, ArcBuffer input, bool inverse)
+    {
+        ArcBuffer output = matrix.Lane.Allocate(matrix._inputWidth);
+        try
+        {
+            bool grouped = !inverse && _prism!.GroupedValueHeads && name.EndsWith(".ssm_out.weight", StringComparison.Ordinal);
+            matrix.Lane.Run("q35l_prism_hadamard", (long)matrix._inputWidth / 1024 * 256, 256,
+                input, _prismSigns[(matrix.Lane, matrix._inputWidth)], output, matrix._inputWidth, 1, inverse ? 1 : 0,
+                grouped ? Descriptor.LinearKeyHeads : 0, grouped ? Descriptor.LinearValueHeads : 0, Descriptor.LinearHeadWidth);
+            return output;
+        }
         catch { output.Dispose(); throw; }
     }
 
@@ -394,9 +435,10 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         foreach (Matrix matrix in _matrices.Values) matrix.Dispose();
         foreach (ArcBuffer buffer in _dense.Values) buffer.Dispose();
         foreach (ArcBuffer buffer in _zeroBias.Values) buffer.Dispose();
+        foreach (ArcBuffer buffer in _prismSigns.Values) buffer.Dispose();
         foreach (ArcExecutionLane lane in _lanes) lane.Dispose();
         _modelSource?.Dispose();
-        _states.Clear(); _matrices.Clear(); _dense.Clear(); _zeroBias.Clear();
+        _states.Clear(); _matrices.Clear(); _dense.Clear(); _zeroBias.Clear(); _prismSigns.Clear();
     }
 
     private sealed class LayerState(ArcExecutionLane lane, Qwen35GgufDescriptor d, bool recurrent) : IDisposable
@@ -467,7 +509,8 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         private readonly Qwen35QuantizedKernel _kernel;
         private readonly int _transposeRows;
         private readonly int _forwardRows;
-        internal bool SupportsFusedLora => _kernel == Qwen35QuantizedKernel.Subgroup;
+        internal bool SupportsFusedLora => _kernel == Qwen35QuantizedKernel.Subgroup
+            && _type is not (Qwen35Gguf.PQ20Type or Qwen35Gguf.PTQ10Type or Qwen2Gguf.BF16Type);
         internal Matrix(ArcExecutionLane lane, GgufTensorInfo info, byte[] payload, Qwen35QuantizedKernel kernel, int transposeRows, int forwardRows)
         {
             _transposeRows = transposeRows;
@@ -478,6 +521,8 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                 Qwen2Gguf.Q4KType => "q4_k", Qwen35Gguf.Q5KType => "q5_k",
                 Qwen2Gguf.Q6KType => "q6_k", Qwen35Gguf.IQ2SType => "iq2_s",
                 Qwen35Gguf.IQ3SType => "iq3_s",
+                Qwen35Gguf.PQ20Type => "pq2_0", Qwen35Gguf.PTQ10Type => "ptq1_0",
+                Qwen2Gguf.BF16Type => "bf16",
                 _ => throw new NotSupportedException($"Unsupported matrix storage type {_type}.")
             };
             _inputWidth = checked((int)info.Shape[0]); OutputWidth = checked((int)info.Shape[1]);
@@ -485,7 +530,10 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                 && lane.Device.MinimumSubgroupSize == 16
                 && lane.Device.Extensions.Split(' ').Contains("cl_intel_subgroups");
             _kernel = kernel == Qwen35QuantizedKernel.Auto
-                ? (subgroup ? Qwen35QuantizedKernel.Subgroup : Qwen35QuantizedKernel.Cooperative) : kernel;
+                // PQ2's cooperative reduction is faster on the measured Arc
+                // workload; PTQ1 benefits from its dedicated SG16 block loop.
+                ? (subgroup && _type != Qwen35Gguf.PQ20Type
+                    ? Qwen35QuantizedKernel.Subgroup : Qwen35QuantizedKernel.Cooperative) : kernel;
             if (_kernel == Qwen35QuantizedKernel.Subgroup && !subgroup)
                 throw new NotSupportedException("The Qwen3.5 subgroup kernel requires Intel SG16 support.");
             _encoded = lane.UploadRaw(payload);

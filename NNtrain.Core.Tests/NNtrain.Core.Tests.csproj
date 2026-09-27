@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Fixtures\IqQuantReference\iq-quant-blocks.json" />
+    <EmbeddedResource Include="Fixtures\PrismQuantReference\prism-quant-blocks.json" />
   </ItemGroup>
 
 </Project>
