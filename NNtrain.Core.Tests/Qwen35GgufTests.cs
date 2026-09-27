@@ -26,6 +26,9 @@ public sealed class Qwen35GgufTests
     [Theory]
     [InlineData(Qwen2Gguf.Q4KType)]
     [InlineData(Qwen2Gguf.Q6KType)]
+    [InlineData(Qwen35Gguf.Q5KType)]
+    [InlineData(Qwen35Gguf.IQ2SType)]
+    [InlineData(Qwen35Gguf.IQ3SType)]
     public void InspectAcceptsQuantizedTiedOutput(uint type)
     {
         GgufTensorInfo[] tensors = Directory().Where(t => t.Name != "output.weight")
@@ -33,6 +36,18 @@ public sealed class Qwen35GgufTests
         using var file = new TemporaryQwenGguf(Metadata(), tensors);
 
         Assert.Equal(4, Qwen35Gguf.Inspect(file.Path).VocabularySize);
+    }
+
+    [Fact]
+    public void InspectAcceptsMixedIq2ModelStorage()
+    {
+        GgufTensorInfo[] tensors = Directory().Select(t =>
+            t.Name == "output.weight" ? t with { Type = Qwen35Gguf.Q5KType } :
+            t.Name.Contains("ffn_down") ? t with { Type = Qwen35Gguf.IQ3SType } :
+            t.Type == Qwen2Gguf.Q4KType && t.Name != "token_embd.weight"
+                ? t with { Type = Qwen35Gguf.IQ2SType } : t).ToArray();
+        using var file = new TemporaryQwenGguf(Metadata(), tensors);
+        Assert.Equal(tensors.Length, Qwen35Gguf.Inspect(file.Path).Tensors.Count);
     }
 
     public static TheoryData<string, ulong[]> WrongShapes => new()

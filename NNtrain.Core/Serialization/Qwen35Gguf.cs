@@ -3,6 +3,21 @@ namespace NNtrain;
 /// <summary>Validates the dense Qwen3.5 text architecture without reading tensor payloads.</summary>
 public static class Qwen35Gguf
 {
+    public const uint Q5KType = 13, IQ3SType = 21, IQ2SType = 22;
+
+    internal static bool IsSupportedQuantization(uint type)
+        => type is Qwen2Gguf.Q4KType or Q5KType or Qwen2Gguf.Q6KType or IQ2SType or IQ3SType;
+
+    internal static int QuantizedBlockBytes(uint type) => type switch
+    {
+        Qwen2Gguf.Q4KType => GgufQ4K.BlockBytes,
+        Q5KType => 176,
+        Qwen2Gguf.Q6KType => GgufQ6K.BlockBytes,
+        IQ2SType => 82,
+        IQ3SType => 110,
+        _ => throw new NotSupportedException($"Unsupported Qwen3.5 quantization type {type}.")
+    };
+
     public static Qwen35GgufDescriptor Inspect(string path)
     {
         using var gguf = new GgufReader(path);
@@ -127,12 +142,12 @@ public static class Qwen35Gguf
         void Matrix(string name, int inputWidth, int outputWidth)
         {
             GgufTensorInfo tensor = Shape(name, [inputWidth, outputWidth]);
-            if (tensor.Type is not (Qwen2Gguf.Q4KType or Qwen2Gguf.Q6KType))
-                throw new NotSupportedException($"Qwen3.5 matrix '{name}' requires Q4_K/Q6_K storage; got type {tensor.Type}.");
+            if (!IsSupportedQuantization(tensor.Type))
+                throw new NotSupportedException($"Qwen3.5 matrix '{name}' requires Q4_K/Q5_K/Q6_K/IQ2_S/IQ3_S storage; got type {tensor.Type}.");
             if (inputWidth % GgufQ4K.BlockElements != 0)
                 throw new InvalidDataException($"Qwen3.5 matrix '{name}' requires a quantized row width divisible by 256.");
             long bytes = (long)outputWidth * (inputWidth / GgufQ4K.BlockElements)
-                * (tensor.Type == Qwen2Gguf.Q4KType ? GgufQ4K.BlockBytes : GgufQ6K.BlockBytes);
+                * QuantizedBlockBytes(tensor.Type);
             if (bytes > int.MaxValue)
                 throw new NotSupportedException($"Qwen3.5 matrix '{name}' exceeds the managed payload limit.");
         }

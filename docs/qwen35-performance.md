@@ -47,7 +47,8 @@ and includes OpenCL compilation; the table starts after the model is loaded.
 - Encoded weights remain unchanged in VRAM. There is no full-weight Float32
   expansion or per-token weight upload.
 - CLI timing output separates loading, first-token generation and decode speed.
-- Qwen3.5 lanes compile only their five required OpenCL resources. General Arc
+- At measurement time Qwen3.5 lanes compiled five required OpenCL resources
+  (six after adding Q5/IQ support). General Arc
   sessions retain the complete kernel set. The measured model load fell from
   74.41 to 12.64 seconds after this change (warm OS caches, compilation included).
 

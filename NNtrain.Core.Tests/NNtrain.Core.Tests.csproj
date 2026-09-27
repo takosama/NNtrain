@@ -23,4 +23,8 @@
     <ProjectReference Include="..\NNtrain.Training\NNtrain.Training.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Fixtures\IqQuantReference\iq-quant-blocks.json" />
+  </ItemGroup>
+
 </Project>

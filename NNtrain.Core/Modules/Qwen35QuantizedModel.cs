@@ -187,10 +187,10 @@ public sealed class Qwen35QuantizedModel : IDisposable
     }
 
     private static bool IsQuantized(GgufTensorInfo tensor)
-        => tensor.Type is Qwen2Gguf.Q4KType or Qwen2Gguf.Q6KType;
+        => Qwen35Gguf.IsSupportedQuantization(tensor.Type);
     private static int EncodedBytes(GgufTensorInfo tensor)
         => checked((int)(tensor.Shape[0] / 256 * tensor.Shape[1]
-            * (tensor.Type == Qwen2Gguf.Q4KType ? 144UL : 210UL)));
+            * (ulong)Qwen35Gguf.QuantizedBlockBytes(tensor.Type)));
     private static long DenseBytes(GgufTensorInfo tensor)
         => checked(tensor.Shape.Aggregate(1L, (count, dimension) => checked(count * (long)dimension)) * 4);
 
@@ -424,11 +424,19 @@ public sealed class Qwen35QuantizedModel : IDisposable
         internal readonly int StorageBytes, OutputWidth;
         private readonly ArcBuffer _encoded;
         private readonly uint _type;
+        private readonly string _quantization;
         private readonly int _inputWidth;
         private readonly Qwen35QuantizedKernel _kernel;
         internal Matrix(ArcExecutionLane lane, GgufTensorInfo info, byte[] payload, Qwen35QuantizedKernel kernel)
         {
             Lane = lane; StorageBytes = payload.Length; _type = info.Type;
+            _quantization = _type switch
+            {
+                Qwen2Gguf.Q4KType => "q4_k", Qwen35Gguf.Q5KType => "q5_k",
+                Qwen2Gguf.Q6KType => "q6_k", Qwen35Gguf.IQ2SType => "iq2_s",
+                Qwen35Gguf.IQ3SType => "iq3_s",
+                _ => throw new NotSupportedException($"Unsupported matrix storage type {_type}.")
+            };
             _inputWidth = checked((int)info.Shape[0]); OutputWidth = checked((int)info.Shape[1]);
             bool subgroup = lane.Options.XmxMatrices && lane.Device.SupportsXmx
                 && lane.Device.MinimumSubgroupSize == 16
@@ -446,13 +454,14 @@ public sealed class Qwen35QuantizedModel : IDisposable
             try
             {
                 if (_kernel == Qwen35QuantizedKernel.Subgroup)
-                    Lane.Run(_type == Qwen2Gguf.Q4KType ? "q35l_q4_k_sg16" : "q35l_q6_k_sg16",
+                    Lane.Run($"q35l_{_quantization}_sg16",
                         ((long)OutputWidth + 1) / 2 * 32, 32, input, _encoded, zeroBias, output, 1, _inputWidth, OutputWidth);
                 else if (_kernel == Qwen35QuantizedKernel.Cooperative)
-                    Lane.Run2D(_type == Qwen2Gguf.Q4KType ? "q35l_q4_k_coop64" : "q35l_q6_k_coop64",
+                    Lane.Run2D($"q35l_{_quantization}_coop64",
                         (long)OutputWidth * 64, 1, 64, 1, input, _encoded, zeroBias, output, 1, _inputWidth, OutputWidth);
                 else
-                    Lane.Run(_type == Qwen2Gguf.Q4KType ? "qwen_linear_q4_k" : "qwen_linear_q6_k",
+                    Lane.Run(_type is Qwen2Gguf.Q4KType or Qwen2Gguf.Q6KType
+                        ? $"qwen_linear_{_quantization}" : $"q35l_{_quantization}_reference",
                         OutputWidth, 0, input, _encoded, zeroBias, output, 1, _inputWidth, OutputWidth);
                 return output;
             }
@@ -464,7 +473,8 @@ public sealed class Qwen35QuantizedModel : IDisposable
             try
             {
                 using ArcBuffer id = Lane.UploadRaw(new[] { tokenId });
-                Lane.Run(_type == Qwen2Gguf.Q4KType ? "qwen_embedding_q4_k" : "qwen_embedding_q6_k",
+                Lane.Run(_type is Qwen2Gguf.Q4KType or Qwen2Gguf.Q6KType
+                    ? $"qwen_embedding_{_quantization}" : $"q35l_{_quantization}_embedding",
                     _inputWidth, 0, _encoded, id, output, _inputWidth);
                 return output;
             }

@@ -95,7 +95,8 @@ uploading. It does not expand the large weight matrices to Float32.
 
 ### Execution and supported scope
 
-- Q4_K/Q6_K embedding and projection matrices stay encoded in Arc VRAM. Encoded
+- Q4_K/Q5_K/Q6_K/IQ2_S/IQ3_S embedding and projection matrices stay encoded
+  in Arc VRAM. Encoded
   host payloads are discarded after each blocking upload. Loading reports both
   resident weight bytes, GPU state bytes and actual live device allocations.
 - RMSNorm, gated full attention, partial RoPE, softmax, Gated DeltaNet,
@@ -207,3 +208,9 @@ buffered until complete. The final text is not printed a second time. Add
 `--no-stream` to print the result after generation and include generated token IDs.
 Timing is written to stderr. The prompt is still passed exactly as supplied;
 chat templates are not inserted automatically.
+
+### Mixed IQ2_M checkpoint
+
+Qwen3.5 also accepts the Q5_K, IQ2_S and IQ3_S tensors used by the tested
+`Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf`. See the
+[format support and validation report](qwen35-iq-validation.md).
