@@ -5,17 +5,24 @@ using System.Text.RegularExpressions;
 namespace NNtrain;
 
 /// <summary>
-/// Qwen2 byte-level BPE reconstructed directly from GGUF tokenizer metadata.
+/// Qwen2 / Qwen3.5 byte-level BPE reconstructed directly from GGUF tokenizer metadata.
 /// Token ids are exactly the GGUF vocabulary indices.
 /// </summary>
 public sealed class Qwen2GgufTokenizer
 {
     // Equivalent to Qwen2's Unicode-property split, expressed without a
     // dependency on a third-party regex engine.
-    private static readonly Regex SplitRegex = new(
+    private static readonly Regex Qwen2SplitRegex = new(
         @"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    // Qwen3.5 keeps combining marks with letter runs. Matches the qwen35
+    // pre-tokenizer in llama.cpp/src/llama-vocab.cpp.
+    private static readonly Regex Qwen35SplitRegex = new(
+        @"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+|\p{N}| ?[^\s\p{L}\p{M}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private readonly Regex _splitRegex;
     private readonly string[] _tokens;
     private readonly Dictionary<string, int> _vocabulary;
     private readonly Dictionary<(string Left, string Right), int> _mergeRanks;
@@ -29,8 +36,10 @@ public sealed class Qwen2GgufTokenizer
         int? eosTokenId,
         int? padTokenId,
         int? unknownTokenId,
-        IReadOnlyList<int>? tokenTypes)
+        IReadOnlyList<int>? tokenTypes,
+        Regex splitRegex)
     {
+        _splitRegex = splitRegex;
         _tokens = tokens;
         _vocabulary = tokens
             .Select((token, id) => (token, id))
@@ -51,7 +60,9 @@ public sealed class Qwen2GgufTokenizer
         if (tokenTypes is not null)
         {
             for (int i = 0; i < Math.Min(tokenTypes.Count, tokens.Length); ++i)
-                if (tokenTypes[i] == 3) _specialTokens.Add(tokens[i]);
+                // GGML CONTROL (3) and USER_DEFINED (4) are atomic when
+                // parsing special tokens. Qwen3.5 marks <think> as type 4.
+                if (tokenTypes[i] is 3 or 4) _specialTokens.Add(tokens[i]);
         }
 
         BosTokenId = bosTokenId;
@@ -69,9 +80,24 @@ public sealed class Qwen2GgufTokenizer
     public static Qwen2GgufTokenizer Load(string path)
     {
         using var gguf = new GgufReader(path);
+        return Load(gguf);
+    }
+
+    internal static Qwen2GgufTokenizer Load(GgufReader gguf)
+    {
+        ArgumentNullException.ThrowIfNull(gguf);
         string model = StringValue(gguf, "tokenizer.ggml.model");
         if (!string.Equals(model, "gpt2", StringComparison.Ordinal))
             throw new NotSupportedException($"Qwen GGUF tokenizer model '{model}' is not GPT-2 BPE.");
+
+        string preTokenizer = gguf.Metadata.ContainsKey("tokenizer.ggml.pre")
+            ? StringValue(gguf, "tokenizer.ggml.pre") : "qwen2";
+        Regex splitRegex = preTokenizer switch
+        {
+            "qwen2" => Qwen2SplitRegex,
+            "qwen35" => Qwen35SplitRegex,
+            _ => throw new NotSupportedException($"Qwen GGUF pre-tokenizer '{preTokenizer}' is not supported.")
+        };
 
         string[] tokens = StringArray(gguf, "tokenizer.ggml.tokens");
         string[] merges = StringArray(gguf, "tokenizer.ggml.merges");
@@ -82,7 +108,7 @@ public sealed class Qwen2GgufTokenizer
             OptionalInt(gguf, "tokenizer.ggml.eos_token_id"),
             OptionalInt(gguf, "tokenizer.ggml.padding_token_id"),
             OptionalInt(gguf, "tokenizer.ggml.unknown_token_id"),
-            tokenTypes);
+            tokenTypes, splitRegex);
     }
 
     public int[] Encode(string text)
@@ -96,7 +122,7 @@ public sealed class Qwen2GgufTokenizer
                 ids.Add(special);
                 continue;
             }
-            foreach (Match match in SplitRegex.Matches(piece))
+            foreach (Match match in _splitRegex.Matches(piece))
                 EncodePiece(match.Value, ids);
         }
         return ids.ToArray();
@@ -135,6 +161,69 @@ public sealed class Qwen2GgufTokenizer
         }
         FlushBytes();
         return text.ToString();
+    }
+
+    /// <summary>
+    /// Creates a decoder for one generated sequence. Append each token once,
+    /// then call Complete to flush any final incomplete UTF-8 sequence.
+    /// </summary>
+    public StreamingDecoder CreateStreamingDecoder() => new(this);
+
+    public sealed class StreamingDecoder
+    {
+        private readonly Qwen2GgufTokenizer _tokenizer;
+        private readonly Decoder _decoder = Encoding.UTF8.GetDecoder();
+        private byte[] _bytes = new byte[64];
+        private char[] _characters = new char[128];
+        private bool _completed;
+
+        internal StreamingDecoder(Qwen2GgufTokenizer tokenizer) => _tokenizer = tokenizer;
+
+        /// <summary>
+        /// Returns only complete characters. A token containing the beginning
+        /// of a multibyte character may return an empty string.
+        /// </summary>
+        public string Append(int tokenId)
+        {
+            if (_completed) throw new InvalidOperationException("The streaming decoder is complete.");
+            if ((uint)tokenId >= (uint)_tokenizer._tokens.Length)
+                throw new ArgumentOutOfRangeException(nameof(tokenId), tokenId,
+                    "Qwen token id is outside the vocabulary.");
+            string token = _tokenizer._tokens[tokenId];
+            if (_tokenizer._specialTokens.Contains(token))
+            {
+                // Match Decode: special tokens are literal text and terminate
+                // the preceding ordinary byte sequence.
+                string pending = DecodeBytes(0, flush: true);
+                _decoder.Reset();
+                return pending + token;
+            }
+            if (_bytes.Length < token.Length) Array.Resize(ref _bytes, token.Length);
+            for (int i = 0; i < token.Length; ++i)
+            {
+                if (!_tokenizer._byteDecoder.TryGetValue(token[i], out _bytes[i]))
+                    throw new InvalidDataException(
+                        $"Token {tokenId} contains byte-alphabet character U+{(int)token[i]:X4} not present in GPT-2 mapping.");
+            }
+            return DecodeBytes(token.Length, flush: false);
+        }
+
+        /// <summary>Flushes the sequence once; repeated calls return no text.</summary>
+        public string Complete()
+        {
+            if (_completed) return string.Empty;
+            _completed = true;
+            return DecodeBytes(0, flush: true);
+        }
+
+        private string DecodeBytes(int count, bool flush)
+        {
+            int capacity = Encoding.UTF8.GetMaxCharCount(count);
+            if (_characters.Length < capacity) Array.Resize(ref _characters, capacity);
+            int written = _decoder.GetChars(
+                _bytes.AsSpan(0, count), _characters.AsSpan(), flush);
+            return written == 0 ? string.Empty : new string(_characters, 0, written);
+        }
     }
 
     private void EncodePiece(string piece, List<int> destination)

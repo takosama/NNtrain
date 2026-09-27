@@ -1,0 +1,780 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-27",
+  "model_tensor_count": 851,
+  "tensor_type_counts": {
+    "0": 353,
+    "12": 65,
+    "13": 1,
+    "21": 24,
+    "22": 408
+  },
+  "single_gpu_cli": {
+    "prompt": "manual ChatML user message: /think + 国会議事堂への行き方を教えて",
+    "generated_tokens": 64,
+    "load_seconds": 9.625,
+    "first_token_seconds": 3.761,
+    "decode_tokens_per_second": 4.4,
+    "generation_seconds": 18.075,
+    "resident_encoded_weight_bytes": 10151874560,
+    "exit_code": 0
+  },
+  "build": {
+    "configuration": "Release",
+    "warnings": 0,
+    "errors": 0
+  },
+  "tests": {
+    "new_quantization_and_directory": 42,
+    "q4_q6_and_resident_model_regressions": 14,
+    "failed": 0,
+    "skipped": 0
+  },
+  "two_gpu_probe": {
+    "SchemaVersion": 1,
+    "StartedUtc": "2026-09-27T03:24:14.6278674+00:00",
+    "CompletedUtc": "2026-09-27T03:25:06.2572093+00:00",
+    "CommandArguments": [
+      "--model",
+      "Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf",
+      "--output",
+      "qwen35-iq2-two-gpu.json",
+      "--tokens",
+      "24",
+      "--runs",
+      "2",
+      "--devices",
+      "0,1",
+      "--kernel",
+      "auto"
+    ],
+    "Model": {
+      "Path": "Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf",
+      "Bytes": 10173451200,
+      "LastWriteUtc": "2026-09-20T21:37:56.9527558Z",
+      "Sha256": "676db8ccd38035117e705858fd591964005cb0a921b39255b0691d8339a8dfe2"
+    },
+    "BinarySha256": {
+      "NNtrain.Core": "9f3a220da9a7417c77b2fca207b78f9d8916d182ba2b8ad04ab17c059a08f9fc",
+      "NNtrain.Arc": "f979b67041dd481064523713b20d12b9d98e73495fc1c20e03c4bb6e17be31b8",
+      "NNtrain.Benchmarks": "a19f18bd782e50a1fc292f929be70e1c5ead48a43a1bae5191c826887bfb1b74"
+    },
+    "Runtime": {
+      "Framework": ".NET 10.0.11",
+      "OperatingSystem": "Microsoft Windows 10.0.26200",
+      "Architecture": "X64"
+    },
+    "Devices": [
+      {
+        "Index": 0,
+        "Name": "Intel(R) Arc(TM) B580 Graphics",
+        "DriverVersion": "32.0.101.9030",
+        "GlobalMemoryBytes": 12452507648,
+        "MaximumAllocationBytes": 12452507648,
+        "MinimumSubgroupSize": 16
+      },
+      {
+        "Index": 1,
+        "Name": "Intel(R) Arc(TM) B580 Graphics",
+        "DriverVersion": "32.0.101.9030",
+        "GlobalMemoryBytes": 12452507648,
+        "MaximumAllocationBytes": 12452507648,
+        "MinimumSubgroupSize": 16
+      }
+    ],
+    "Options": {
+      "QuantizedKernel": "Auto",
+      "FusedDelta": true,
+      "QueuedKernelLimit": 512
+    },
+    "Shape": {
+      "LayerCount": 64,
+      "EmbeddingLength": 5120,
+      "FeedForwardLength": 17408,
+      "ContextLength": 262144,
+      "VocabularySize": 248320,
+      "HeadCount": 24,
+      "KvHeadCount": 4,
+      "HeadWidth": 256,
+      "LinearKeyHeads": 16,
+      "LinearValueHeads": 48,
+      "LinearHeadWidth": 128,
+      "ConvKernel": 4,
+      "FullAttentionInterval": 4
+    },
+    "Prompt": "国会議事堂への行き方を教えて",
+    "PromptTokenIds": [
+      120683,
+      98358,
+      95924,
+      97131,
+      170872,
+      184700,
+      180014,
+      162066
+    ],
+    "RequestedNewTokens": 24,
+    "MeasuredRuns": 2,
+    "Sampling": {
+      "Method": "GPU greedy argmax",
+      "Temperature": 0,
+      "EosTokenId": null,
+      "Policy": "Emit exactly the requested count, including tokens after EOS; no early EOS stop."
+    },
+    "InspectionMilliseconds": 112.6676,
+    "TokenizerLoadAndEncodeMilliseconds": 240.6168,
+    "LoadMilliseconds": 16715.9254,
+    "AfterLoad": {
+      "ResidentWeightBytes": [
+        5035468800,
+        5116405760
+      ],
+      "ResidentAuxiliaryWeightBytes": [
+        5280768,
+        5301248
+      ],
+      "ResidentStateBytes": [
+        79495168,
+        79495168
+      ],
+      "LiveDeviceBytes": [
+        5121238016,
+        5202195456
+      ],
+      "PeakDeviceBytes": [
+        5121238016,
+        5202195456
+      ],
+      "UploadedBytes": [
+        5040749568,
+        5121707008
+      ],
+      "DownloadedBytes": [
+        0,
+        0
+      ]
+    },
+    "RunsHaveIdenticalGeneratedTokenIds": true,
+    "Samples": [
+      {
+        "RunIndex": 0,
+        "Kind": "first run after process-local model load",
+        "StartedUtc": "2026-09-27T03:24:31.8253245+00:00",
+        "TotalMilliseconds": 17297.9888,
+        "PrefillThroughFirstTokenMilliseconds": 12066.9048,
+        "PrefillTokensPerSecond": 0.6629703418228674,
+        "DecodeMilliseconds": 5231.0818,
+        "DecodeTokensPerSecond": 4.396796089099582,
+        "OverallGeneratedTokensPerSecond": 1.3874445334361647,
+        "AllTokenIds": [
+          120683,
+          98358,
+          95924,
+          97131,
+          170872,
+          184700,
+          180014,
+          162066,
+          179749,
+          30031,
+          10992,
+          59,
+          77,
+          1639,
+          115197,
+          158369,
+          5205,
+          115197,
+          158369,
+          96702,
+          95949,
+          97511,
+          96116,
+          160277,
+          35814,
+          5205,
+          96702,
+          95949,
+          97511,
+          174016,
+          28452,
+          96192
+        ],
+        "GeneratedTokenIds": [
+          179749,
+          30031,
+          10992,
+          59,
+          77,
+          1639,
+          115197,
+          158369,
+          5205,
+          115197,
+          158369,
+          96702,
+          95949,
+          97511,
+          96116,
+          160277,
+          35814,
+          5205,
+          96702,
+          95949,
+          97511,
+          174016,
+          28452,
+          96192
+        ],
+        "GeneratedText": "いただけますか？\\n\\n東京駅、東京駅八重洲口を出て、八重洲通りを直",
+        "MatchesFirstRunTokenIds": true,
+        "Tokens": [
+          {
+            "GeneratedIndex": 0,
+            "TokenId": 179749,
+            "ElapsedMilliseconds": 12066.9048,
+            "SincePreviousTokenMilliseconds": null
+          },
+          {
+            "GeneratedIndex": 1,
+            "TokenId": 30031,
+            "ElapsedMilliseconds": 12293.4095,
+            "SincePreviousTokenMilliseconds": 226.5046999999995
+          },
+          {
+            "GeneratedIndex": 2,
+            "TokenId": 10992,
+            "ElapsedMilliseconds": 12519.9841,
+            "SincePreviousTokenMilliseconds": 226.57459999999992
+          },
+          {
+            "GeneratedIndex": 3,
+            "TokenId": 59,
+            "ElapsedMilliseconds": 12746.5374,
+            "SincePreviousTokenMilliseconds": 226.55329999999958
+          },
+          {
+            "GeneratedIndex": 4,
+            "TokenId": 77,
+            "ElapsedMilliseconds": 12973.0677,
+            "SincePreviousTokenMilliseconds": 226.53030000000035
+          },
+          {
+            "GeneratedIndex": 5,
+            "TokenId": 1639,
+            "ElapsedMilliseconds": 13199.5881,
+            "SincePreviousTokenMilliseconds": 226.52040000000125
+          },
+          {
+            "GeneratedIndex": 6,
+            "TokenId": 115197,
+            "ElapsedMilliseconds": 13426.2536,
+            "SincePreviousTokenMilliseconds": 226.66549999999916
+          },
+          {
+            "GeneratedIndex": 7,
+            "TokenId": 158369,
+            "ElapsedMilliseconds": 13652.6717,
+            "SincePreviousTokenMilliseconds": 226.41810000000078
+          },
+          {
+            "GeneratedIndex": 8,
+            "TokenId": 5205,
+            "ElapsedMilliseconds": 13879.1462,
+            "SincePreviousTokenMilliseconds": 226.47449999999844
+          },
+          {
+            "GeneratedIndex": 9,
+            "TokenId": 115197,
+            "ElapsedMilliseconds": 14125.165,
+            "SincePreviousTokenMilliseconds": 246.01880000000165
+          },
+          {
+            "GeneratedIndex": 10,
+            "TokenId": 158369,
+            "ElapsedMilliseconds": 14351.7188,
+            "SincePreviousTokenMilliseconds": 226.55379999999968
+          },
+          {
+            "GeneratedIndex": 11,
+            "TokenId": 96702,
+            "ElapsedMilliseconds": 14578.1822,
+            "SincePreviousTokenMilliseconds": 226.46339999999873
+          },
+          {
+            "GeneratedIndex": 12,
+            "TokenId": 95949,
+            "ElapsedMilliseconds": 14806.2492,
+            "SincePreviousTokenMilliseconds": 228.06700000000092
+          },
+          {
+            "GeneratedIndex": 13,
+            "TokenId": 97511,
+            "ElapsedMilliseconds": 15032.7089,
+            "SincePreviousTokenMilliseconds": 226.45969999999943
+          },
+          {
+            "GeneratedIndex": 14,
+            "TokenId": 96116,
+            "ElapsedMilliseconds": 15259.3752,
+            "SincePreviousTokenMilliseconds": 226.66630000000077
+          },
+          {
+            "GeneratedIndex": 15,
+            "TokenId": 160277,
+            "ElapsedMilliseconds": 15485.93,
+            "SincePreviousTokenMilliseconds": 226.5547999999999
+          },
+          {
+            "GeneratedIndex": 16,
+            "TokenId": 35814,
+            "ElapsedMilliseconds": 15712.4905,
+            "SincePreviousTokenMilliseconds": 226.5604999999996
+          },
+          {
+            "GeneratedIndex": 17,
+            "TokenId": 5205,
+            "ElapsedMilliseconds": 15938.9804,
+            "SincePreviousTokenMilliseconds": 226.4899000000005
+          },
+          {
+            "GeneratedIndex": 18,
+            "TokenId": 96702,
+            "ElapsedMilliseconds": 16165.4112,
+            "SincePreviousTokenMilliseconds": 226.4308000000001
+          },
+          {
+            "GeneratedIndex": 19,
+            "TokenId": 95949,
+            "ElapsedMilliseconds": 16391.904,
+            "SincePreviousTokenMilliseconds": 226.49279999999817
+          },
+          {
+            "GeneratedIndex": 20,
+            "TokenId": 97511,
+            "ElapsedMilliseconds": 16618.4434,
+            "SincePreviousTokenMilliseconds": 226.53940000000148
+          },
+          {
+            "GeneratedIndex": 21,
+            "TokenId": 174016,
+            "ElapsedMilliseconds": 16845.0757,
+            "SincePreviousTokenMilliseconds": 226.63230000000112
+          },
+          {
+            "GeneratedIndex": 22,
+            "TokenId": 28452,
+            "ElapsedMilliseconds": 17071.4975,
+            "SincePreviousTokenMilliseconds": 226.42180000000008
+          },
+          {
+            "GeneratedIndex": 23,
+            "TokenId": 96192,
+            "ElapsedMilliseconds": 17297.9866,
+            "SincePreviousTokenMilliseconds": 226.48909999999887
+          }
+        ],
+        "UploadedBytes": [
+          124,
+          634880
+        ],
+        "DownloadedBytes": [
+          634880,
+          192
+        ],
+        "Before": {
+          "ResidentWeightBytes": [
+            5035468800,
+            5116405760
+          ],
+          "ResidentAuxiliaryWeightBytes": [
+            5280768,
+            5301248
+          ],
+          "ResidentStateBytes": [
+            79495168,
+            79495168
+          ],
+          "LiveDeviceBytes": [
+            5121238016,
+            5202195456
+          ],
+          "PeakDeviceBytes": [
+            5121238016,
+            5202195456
+          ],
+          "UploadedBytes": [
+            5040749568,
+            5121707008
+          ],
+          "DownloadedBytes": [
+            0,
+            0
+          ]
+        },
+        "After": {
+          "ResidentWeightBytes": [
+            5035468800,
+            5116405760
+          ],
+          "ResidentAuxiliaryWeightBytes": [
+            5280768,
+            5301248
+          ],
+          "ResidentStateBytes": [
+            80543744,
+            80543744
+          ],
+          "LiveDeviceBytes": [
+            5122286592,
+            5203244032
+          ],
+          "PeakDeviceBytes": [
+            5123886788,
+            5205837512
+          ],
+          "UploadedBytes": [
+            5040749692,
+            5122341888
+          ],
+          "DownloadedBytes": [
+            634880,
+            192
+          ]
+        },
+        "KernelMilliseconds": {
+          "q35l_iq2_s_sg16": 5189.628115999933,
+          "q35l_q5_k_sg16": 715.6076979999998,
+          "q35l_iq3_s_sg16": 366.1163459999995,
+          "q35l_q4_k_sg16": 266.1591270000001,
+          "q35d_recurrent_gated_rmsnorm_fused128": 80.54826400000051,
+          "q35a_rms_norm": 78.18915799999863,
+          "q35d_normalize_qk": 59.086212999999475,
+          "q35a_argmax": 17.271237999999997,
+          "q35a_scores": 10.851259999999986,
+          "q35a_zero": 4.520991999999998,
+          "q35d_convolution": 3.93444199999999,
+          "q35a_add_in_place": 3.448614999999993,
+          "q35a_attend": 3.436261000000006,
+          "q35a_silu_multiply": 3.194991999999992,
+          "q35a_rope": 1.534996999999986,
+          "q35a_softmax": 0.9431600000000018,
+          "qwen_embedding_q4_k": 0.15113199999999996
+        }
+      },
+      {
+        "RunIndex": 1,
+        "Kind": "reused model with sequence state reset",
+        "StartedUtc": "2026-09-27T03:24:49.1395895+00:00",
+        "TotalMilliseconds": 6467.1231,
+        "PrefillThroughFirstTokenMilliseconds": 1256.2613,
+        "PrefillTokensPerSecond": 6.368101922744894,
+        "DecodeMilliseconds": 5210.8591,
+        "DecodeTokensPerSecond": 4.413859511188856,
+        "OverallGeneratedTokensPerSecond": 3.7110782690992847,
+        "AllTokenIds": [
+          120683,
+          98358,
+          95924,
+          97131,
+          170872,
+          184700,
+          180014,
+          162066,
+          179749,
+          30031,
+          10992,
+          59,
+          77,
+          1639,
+          115197,
+          158369,
+          5205,
+          115197,
+          158369,
+          96702,
+          95949,
+          97511,
+          96116,
+          160277,
+          35814,
+          5205,
+          96702,
+          95949,
+          97511,
+          174016,
+          28452,
+          96192
+        ],
+        "GeneratedTokenIds": [
+          179749,
+          30031,
+          10992,
+          59,
+          77,
+          1639,
+          115197,
+          158369,
+          5205,
+          115197,
+          158369,
+          96702,
+          95949,
+          97511,
+          96116,
+          160277,
+          35814,
+          5205,
+          96702,
+          95949,
+          97511,
+          174016,
+          28452,
+          96192
+        ],
+        "GeneratedText": "いただけますか？\\n\\n東京駅、東京駅八重洲口を出て、八重洲通りを直",
+        "MatchesFirstRunTokenIds": true,
+        "Tokens": [
+          {
+            "GeneratedIndex": 0,
+            "TokenId": 179749,
+            "ElapsedMilliseconds": 1256.2613,
+            "SincePreviousTokenMilliseconds": null
+          },
+          {
+            "GeneratedIndex": 1,
+            "TokenId": 30031,
+            "ElapsedMilliseconds": 1482.8171,
+            "SincePreviousTokenMilliseconds": 226.5558000000001
+          },
+          {
+            "GeneratedIndex": 2,
+            "TokenId": 10992,
+            "ElapsedMilliseconds": 1709.1806,
+            "SincePreviousTokenMilliseconds": 226.36349999999993
+          },
+          {
+            "GeneratedIndex": 3,
+            "TokenId": 59,
+            "ElapsedMilliseconds": 1935.4563,
+            "SincePreviousTokenMilliseconds": 226.27570000000014
+          },
+          {
+            "GeneratedIndex": 4,
+            "TokenId": 77,
+            "ElapsedMilliseconds": 2162.0022,
+            "SincePreviousTokenMilliseconds": 226.54589999999985
+          },
+          {
+            "GeneratedIndex": 5,
+            "TokenId": 1639,
+            "ElapsedMilliseconds": 2388.7095,
+            "SincePreviousTokenMilliseconds": 226.70730000000003
+          },
+          {
+            "GeneratedIndex": 6,
+            "TokenId": 115197,
+            "ElapsedMilliseconds": 2615.1444,
+            "SincePreviousTokenMilliseconds": 226.4349000000002
+          },
+          {
+            "GeneratedIndex": 7,
+            "TokenId": 158369,
+            "ElapsedMilliseconds": 2841.4962,
+            "SincePreviousTokenMilliseconds": 226.3517999999999
+          },
+          {
+            "GeneratedIndex": 8,
+            "TokenId": 5205,
+            "ElapsedMilliseconds": 3067.9819,
+            "SincePreviousTokenMilliseconds": 226.48570000000018
+          },
+          {
+            "GeneratedIndex": 9,
+            "TokenId": 115197,
+            "ElapsedMilliseconds": 3294.555,
+            "SincePreviousTokenMilliseconds": 226.5730999999996
+          },
+          {
+            "GeneratedIndex": 10,
+            "TokenId": 158369,
+            "ElapsedMilliseconds": 3521.2403,
+            "SincePreviousTokenMilliseconds": 226.6853000000001
+          },
+          {
+            "GeneratedIndex": 11,
+            "TokenId": 96702,
+            "ElapsedMilliseconds": 3747.5857,
+            "SincePreviousTokenMilliseconds": 226.34540000000015
+          },
+          {
+            "GeneratedIndex": 12,
+            "TokenId": 95949,
+            "ElapsedMilliseconds": 3974.0935,
+            "SincePreviousTokenMilliseconds": 226.50779999999986
+          },
+          {
+            "GeneratedIndex": 13,
+            "TokenId": 97511,
+            "ElapsedMilliseconds": 4200.6818,
+            "SincePreviousTokenMilliseconds": 226.58830000000034
+          },
+          {
+            "GeneratedIndex": 14,
+            "TokenId": 96116,
+            "ElapsedMilliseconds": 4427.3212,
+            "SincePreviousTokenMilliseconds": 226.63940000000002
+          },
+          {
+            "GeneratedIndex": 15,
+            "TokenId": 160277,
+            "ElapsedMilliseconds": 4653.7422,
+            "SincePreviousTokenMilliseconds": 226.42099999999937
+          },
+          {
+            "GeneratedIndex": 16,
+            "TokenId": 35814,
+            "ElapsedMilliseconds": 4880.19,
+            "SincePreviousTokenMilliseconds": 226.44779999999992
+          },
+          {
+            "GeneratedIndex": 17,
+            "TokenId": 5205,
+            "ElapsedMilliseconds": 5106.8847,
+            "SincePreviousTokenMilliseconds": 226.6947
+          },
+          {
+            "GeneratedIndex": 18,
+            "TokenId": 96702,
+            "ElapsedMilliseconds": 5333.4403,
+            "SincePreviousTokenMilliseconds": 226.5556000000006
+          },
+          {
+            "GeneratedIndex": 19,
+            "TokenId": 95949,
+            "ElapsedMilliseconds": 5560.2642,
+            "SincePreviousTokenMilliseconds": 226.8238999999994
+          },
+          {
+            "GeneratedIndex": 20,
+            "TokenId": 97511,
+            "ElapsedMilliseconds": 5787.0197,
+            "SincePreviousTokenMilliseconds": 226.7555000000002
+          },
+          {
+            "GeneratedIndex": 21,
+            "TokenId": 174016,
+            "ElapsedMilliseconds": 6013.5032,
+            "SincePreviousTokenMilliseconds": 226.48350000000028
+          },
+          {
+            "GeneratedIndex": 22,
+            "TokenId": 28452,
+            "ElapsedMilliseconds": 6240.1207,
+            "SincePreviousTokenMilliseconds": 226.6175000000003
+          },
+          {
+            "GeneratedIndex": 23,
+            "TokenId": 96192,
+            "ElapsedMilliseconds": 6467.1204,
+            "SincePreviousTokenMilliseconds": 226.9996999999994
+          }
+        ],
+        "UploadedBytes": [
+          124,
+          634880
+        ],
+        "DownloadedBytes": [
+          634880,
+          192
+        ],
+        "Before": {
+          "ResidentWeightBytes": [
+            5035468800,
+            5116405760
+          ],
+          "ResidentAuxiliaryWeightBytes": [
+            5280768,
+            5301248
+          ],
+          "ResidentStateBytes": [
+            80543744,
+            80543744
+          ],
+          "LiveDeviceBytes": [
+            5122286592,
+            5203244032
+          ],
+          "PeakDeviceBytes": [
+            5123886788,
+            5205837512
+          ],
+          "UploadedBytes": [
+            5040749692,
+            5122341888
+          ],
+          "DownloadedBytes": [
+            634880,
+            192
+          ]
+        },
+        "After": {
+          "ResidentWeightBytes": [
+            5035468800,
+            5116405760
+          ],
+          "ResidentAuxiliaryWeightBytes": [
+            5280768,
+            5301248
+          ],
+          "ResidentStateBytes": [
+            80543744,
+            80543744
+          ],
+          "LiveDeviceBytes": [
+            5122286592,
+            5203244032
+          ],
+          "PeakDeviceBytes": [
+            5123886788,
+            5205837512
+          ],
+          "UploadedBytes": [
+            5040749816,
+            5122976768
+          ],
+          "DownloadedBytes": [
+            1269760,
+            384
+          ]
+        },
+        "KernelMilliseconds": {
+          "q35l_iq2_s_sg16": 5111.330019000185,
+          "q35l_q5_k_sg16": 715.6479069999998,
+          "q35l_iq3_s_sg16": 356.5767639999994,
+          "q35l_q4_k_sg16": 259.70118800000273,
+          "q35d_recurrent_gated_rmsnorm_fused128": 79.3647910000005,
+          "q35a_rms_norm": 77.27900799999668,
+          "q35d_normalize_qk": 55.70038500000314,
+          "q35a_argmax": 17.274679,
+          "q35a_scores": 9.100643999999978,
+          "q35d_convolution": 3.8929049999999634,
+          "q35a_add_in_place": 3.434200000000194,
+          "q35a_attend": 3.428646000000002,
+          "q35a_silu_multiply": 3.1646569999999805,
+          "q35a_rope": 1.4605409999999908,
+          "q35a_softmax": 0.9372309999999846,
+          "q35a_zero": 0.2086029999999992,
+          "qwen_embedding_q4_k": 0.14967199999999994
+        }
+      }
+    ],
+    "Notes": "The model is loaded once per process. The first run has no generation warmup; later runs reuse weights and allocation capacity, and GenerateTokenIds resets sequence state. OS file caches and GPU driver caches are not flushed. PrefillThroughFirstTokenMilliseconds and PrefillTokensPerSecond include state reset, the full prompt, first head projection and argmax. Decode timing spans the first to last output callback and excludes the first generated token. Total includes generation cleanup; tokenization, loading, snapshots, console output, model hashing and JSON export are outside timed runs. Callback bookkeeping is included. Kernel durations are sums of completed per-device events and must not be added to wall-clock durations. Memory counters are backend allocation bytes; peaks are cumulative across the model lifetime and include cached or retired buffers. They are not driver-reported VRAM measurements. Upload/download differences include cross-context transport. A model SHA256 is computed after all runs. Generated IDs are retained because different kernel reduction orders can change greedy continuations. No equality across kernel modes is assumed."
+  },
+  "checks": {
+    "both_runs_have_identical_token_ids": true,
+    "resident_weights_state_and_live_bytes_stable_after_second_run": true,
+    "no_per_token_weight_uploads": true
+  },
+  "limits": "Text-only dense qwen35. IQ2_XXS/IQ2_XS and other IQ types are not implied by IQ2_M filename support. Full-model logits parity against llama.cpp and long-context behavior for this GGUF were not established. The performance result is for this file, not the earlier Q4_K_M model."
+}

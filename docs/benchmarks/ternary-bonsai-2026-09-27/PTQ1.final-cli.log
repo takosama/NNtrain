@@ -1,0 +1,30 @@
+Qwen3.5 GGUF: layers=64, width=5120, heads=24/4, head-width=256, vocab=248320
+token ids: 248045,846,198,85951,1710,247359,15685,96115,151279,172808,1710,248046,198,248045,74455,198,248068,271,248069,198
+Text inference: quantized weights, attention, recurrent state and greedy sampling on Arc (Float32).
+GPU KV cache and Gated DeltaNet state reuse: enabled.
+Preparing Arc 0: Intel(R) Arc(TM) B580 Graphics
+Preparing Arc 1: Intel(R) Arc(TM) B580 Graphics
+Prism: GPU Hadamard 1024, 401 projections, 1 inverse embeddings, grouped GDN=True
+Loading tensors: 100/851
+Loading tensors: 200/851
+Loading tensors: 300/851
+Loading tensors: 400/851
+Loading tensors: 500/851
+Loading tensors: 600/851
+Loading tensors: 700/851
+Loading tensors: 800/851
+Arc 0: quantized weights = 2962472960 bytes (2.76 GiB), GPU state = 79495168 bytes, live device allocation = 3048356864 bytes
+Arc 1: quantized weights = 2962472960 bytes (2.76 GiB), GPU state = 79495168 bytes, live device allocation = 3048377344 bytes
+generated:
+<|im_start|>user
+こんにちは。日本語で自己紹介してください。<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+こんにちは！私はAIアシスタントです。
+
+あなたの質問に答えることや、文章の作成、翻訳、アイデア出し、プログラミングのサポートなど、さまざまなタスクでお手伝いできます。
+
+何かお手伝いできることはありますか？お気軽にお聞きください。<|im_end|>
+timing: load=4.339 s, prefill/first-token=0.898 s, decode=13.61 tok/s, generated=54, total-generation=4.793 s

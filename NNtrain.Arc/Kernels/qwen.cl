@@ -292,6 +292,9 @@ __kernel void qwen_gqa_dkv(
 
 
 inline float qwen_half_to_float(ushort h) {
+#if Q35_NATIVE_HALF
+    return vload_half(0, (__private const half*)&h);
+#else
     uint sign = ((uint)h & 0x8000u) << 16;
     uint exponent = ((uint)h >> 10) & 0x1fu;
     uint mantissa = (uint)h & 0x03ffu;
@@ -312,6 +315,7 @@ inline float qwen_half_to_float(ushort h) {
         bits = sign | ((exponent + 112u) << 23) | (mantissa << 13);
     }
     return as_float(bits);
+#endif
 }
 
 inline void qwen_q4_scale_min(
@@ -418,3 +422,118 @@ __kernel void qwen_embedding_q6_k(
     int block_index = token_ids[position] * (width / 256) + column / 256;
     output[i] = qwen_q6_k_value(weight + block_index * 210, column & 255);
 }
+
+#ifdef ARC_QWEN35_TRAINING
+__kernel void q35t_xpose_q4_k(__global const float* dy,__global const uchar* w,
+    __global float* partial,int rows,int input,int output,int splits,int tile) {
+    int i=get_global_id(0);if(i>=rows*splits*input)return;
+    int j=i%input, split=(i/input)%splits, row=i/(input*splits);float sum=0;
+    int end=min(output,(split+1)*tile),blocks=input/256;
+    for(int o=split*tile;o<end;o++) {
+        __global const uchar* block=w+((size_t)o*blocks+j/256)*144;
+        sum=fma(dy[row*output+o],qwen_q4_k_value(block, j & 255),sum);
+    }
+    partial[i]=sum;
+}
+__kernel void q35t_xpose_q6_k(__global const float* dy,__global const uchar* w,
+    __global float* partial,int rows,int input,int output,int splits,int tile) {
+    int i=get_global_id(0);if(i>=rows*splits*input)return;
+    int j=i%input, split=(i/input)%splits, row=i/(input*splits);float sum=0;
+    int end=min(output,(split+1)*tile),blocks=input/256;
+    for(int o=split*tile;o<end;o++) {
+        __global const uchar* block=w+((size_t)o*blocks+j/256)*210;
+        sum=fma(dy[row*output+o],qwen_q6_k_value(block, j & 255),sum);
+    }
+    partial[i]=sum;
+}
+
+// Share each register-decoded weight across several sequence rows. The output
+// split and each row's FMA order match the scalar transpose exactly; only the
+// repeated decode/load work is removed. Tail rows never read or write padding.
+#define Q35T_K_XPOSE_ROWS(NAME,BYTES,VALUE,ROWS) \
+__kernel void NAME(__global const float* dy,__global const uchar* w, \
+    __global float* partial,int rows,int input,int output,int splits,int tile) { \
+    int i=get_global_id(0), row_tiles=(rows+ROWS-1)/ROWS; \
+    if(i>=row_tiles*splits*input)return; \
+    int j=i%input, split=(i/input)%splits, row=(i/(input*splits))*ROWS; \
+    float s0=0,s1=0,s2=0,s3=0,s4=0,s5=0,s6=0,s7=0,s8=0,s9=0,s10=0,s11=0,s12=0,s13=0,s14=0,s15=0,s16=0,s17=0,s18=0,s19=0,s20=0,s21=0,s22=0,s23=0,s24=0,s25=0,s26=0,s27=0,s28=0,s29=0,s30=0,s31=0; \
+    int end=min(output,(split+1)*tile),blocks=input/256; \
+    for(int o=split*tile;o<end;o++) { \
+        __global const uchar* block=w+((size_t)o*blocks+j/256)*BYTES; \
+        float weight=VALUE(block,j & 255); \
+        s0=fma(dy[row*output+o],weight,s0); \
+        if(row+1<rows)s1=fma(dy[(row+1)*output+o],weight,s1); \
+        if(row+2<rows)s2=fma(dy[(row+2)*output+o],weight,s2); \
+        if(row+3<rows)s3=fma(dy[(row+3)*output+o],weight,s3); \
+        if(ROWS>4&&row+4<rows)s4=fma(dy[(row+4)*output+o],weight,s4); \
+        if(ROWS>4&&row+5<rows)s5=fma(dy[(row+5)*output+o],weight,s5); \
+        if(ROWS>4&&row+6<rows)s6=fma(dy[(row+6)*output+o],weight,s6); \
+        if(ROWS>4&&row+7<rows)s7=fma(dy[(row+7)*output+o],weight,s7); \
+        if(ROWS>8&&row+8<rows)s8=fma(dy[(row+8)*output+o],weight,s8); \
+        if(ROWS>8&&row+9<rows)s9=fma(dy[(row+9)*output+o],weight,s9); \
+        if(ROWS>8&&row+10<rows)s10=fma(dy[(row+10)*output+o],weight,s10); \
+        if(ROWS>8&&row+11<rows)s11=fma(dy[(row+11)*output+o],weight,s11); \
+        if(ROWS>8&&row+12<rows)s12=fma(dy[(row+12)*output+o],weight,s12); \
+        if(ROWS>8&&row+13<rows)s13=fma(dy[(row+13)*output+o],weight,s13); \
+        if(ROWS>8&&row+14<rows)s14=fma(dy[(row+14)*output+o],weight,s14); \
+        if(ROWS>8&&row+15<rows)s15=fma(dy[(row+15)*output+o],weight,s15); \
+        if(ROWS>16&&row+16<rows)s16=fma(dy[(row+16)*output+o],weight,s16); \
+        if(ROWS>16&&row+17<rows)s17=fma(dy[(row+17)*output+o],weight,s17); \
+        if(ROWS>16&&row+18<rows)s18=fma(dy[(row+18)*output+o],weight,s18); \
+        if(ROWS>16&&row+19<rows)s19=fma(dy[(row+19)*output+o],weight,s19); \
+        if(ROWS>16&&row+20<rows)s20=fma(dy[(row+20)*output+o],weight,s20); \
+        if(ROWS>16&&row+21<rows)s21=fma(dy[(row+21)*output+o],weight,s21); \
+        if(ROWS>16&&row+22<rows)s22=fma(dy[(row+22)*output+o],weight,s22); \
+        if(ROWS>16&&row+23<rows)s23=fma(dy[(row+23)*output+o],weight,s23); \
+        if(ROWS>16&&row+24<rows)s24=fma(dy[(row+24)*output+o],weight,s24); \
+        if(ROWS>16&&row+25<rows)s25=fma(dy[(row+25)*output+o],weight,s25); \
+        if(ROWS>16&&row+26<rows)s26=fma(dy[(row+26)*output+o],weight,s26); \
+        if(ROWS>16&&row+27<rows)s27=fma(dy[(row+27)*output+o],weight,s27); \
+        if(ROWS>16&&row+28<rows)s28=fma(dy[(row+28)*output+o],weight,s28); \
+        if(ROWS>16&&row+29<rows)s29=fma(dy[(row+29)*output+o],weight,s29); \
+        if(ROWS>16&&row+30<rows)s30=fma(dy[(row+30)*output+o],weight,s30); \
+        if(ROWS>16&&row+31<rows)s31=fma(dy[(row+31)*output+o],weight,s31); \
+    } \
+    partial[(row*splits+split)*input+j]=s0; \
+    if(row+1<rows)partial[((row+1)*splits+split)*input+j]=s1; \
+    if(row+2<rows)partial[((row+2)*splits+split)*input+j]=s2; \
+    if(row+3<rows)partial[((row+3)*splits+split)*input+j]=s3; \
+    if(ROWS>4&&row+4<rows)partial[((row+4)*splits+split)*input+j]=s4; \
+    if(ROWS>4&&row+5<rows)partial[((row+5)*splits+split)*input+j]=s5; \
+    if(ROWS>4&&row+6<rows)partial[((row+6)*splits+split)*input+j]=s6; \
+    if(ROWS>4&&row+7<rows)partial[((row+7)*splits+split)*input+j]=s7; \
+    if(ROWS>8&&row+8<rows)partial[((row+8)*splits+split)*input+j]=s8; \
+    if(ROWS>8&&row+9<rows)partial[((row+9)*splits+split)*input+j]=s9; \
+    if(ROWS>8&&row+10<rows)partial[((row+10)*splits+split)*input+j]=s10; \
+    if(ROWS>8&&row+11<rows)partial[((row+11)*splits+split)*input+j]=s11; \
+    if(ROWS>8&&row+12<rows)partial[((row+12)*splits+split)*input+j]=s12; \
+    if(ROWS>8&&row+13<rows)partial[((row+13)*splits+split)*input+j]=s13; \
+    if(ROWS>8&&row+14<rows)partial[((row+14)*splits+split)*input+j]=s14; \
+    if(ROWS>8&&row+15<rows)partial[((row+15)*splits+split)*input+j]=s15; \
+    if(ROWS>16&&row+16<rows)partial[((row+16)*splits+split)*input+j]=s16; \
+    if(ROWS>16&&row+17<rows)partial[((row+17)*splits+split)*input+j]=s17; \
+    if(ROWS>16&&row+18<rows)partial[((row+18)*splits+split)*input+j]=s18; \
+    if(ROWS>16&&row+19<rows)partial[((row+19)*splits+split)*input+j]=s19; \
+    if(ROWS>16&&row+20<rows)partial[((row+20)*splits+split)*input+j]=s20; \
+    if(ROWS>16&&row+21<rows)partial[((row+21)*splits+split)*input+j]=s21; \
+    if(ROWS>16&&row+22<rows)partial[((row+22)*splits+split)*input+j]=s22; \
+    if(ROWS>16&&row+23<rows)partial[((row+23)*splits+split)*input+j]=s23; \
+    if(ROWS>16&&row+24<rows)partial[((row+24)*splits+split)*input+j]=s24; \
+    if(ROWS>16&&row+25<rows)partial[((row+25)*splits+split)*input+j]=s25; \
+    if(ROWS>16&&row+26<rows)partial[((row+26)*splits+split)*input+j]=s26; \
+    if(ROWS>16&&row+27<rows)partial[((row+27)*splits+split)*input+j]=s27; \
+    if(ROWS>16&&row+28<rows)partial[((row+28)*splits+split)*input+j]=s28; \
+    if(ROWS>16&&row+29<rows)partial[((row+29)*splits+split)*input+j]=s29; \
+    if(ROWS>16&&row+30<rows)partial[((row+30)*splits+split)*input+j]=s30; \
+    if(ROWS>16&&row+31<rows)partial[((row+31)*splits+split)*input+j]=s31; \
+}
+Q35T_K_XPOSE_ROWS(q35t_xpose_q4_k_rows4,144,qwen_q4_k_value,4)
+Q35T_K_XPOSE_ROWS(q35t_xpose_q6_k_rows4,210,qwen_q6_k_value,4)
+Q35T_K_XPOSE_ROWS(q35t_xpose_q4_k_rows8,144,qwen_q4_k_value,8)
+Q35T_K_XPOSE_ROWS(q35t_xpose_q6_k_rows8,210,qwen_q6_k_value,8)
+Q35T_K_XPOSE_ROWS(q35t_xpose_q4_k_rows16,144,qwen_q4_k_value,16)
+Q35T_K_XPOSE_ROWS(q35t_xpose_q6_k_rows16,210,qwen_q6_k_value,16)
+Q35T_K_XPOSE_ROWS(q35t_xpose_q4_k_rows32,144,qwen_q4_k_value,32)
+Q35T_K_XPOSE_ROWS(q35t_xpose_q6_k_rows32,210,qwen_q6_k_value,32)
+#undef Q35T_K_XPOSE_ROWS
+#endif

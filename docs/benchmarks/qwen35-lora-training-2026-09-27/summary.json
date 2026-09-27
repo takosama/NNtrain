@@ -1,0 +1,86 @@
+{
+  "model": "676db8ccd38035117e705858fd591964005cb0a921b39255b0691d8339a8dfe2",
+  "dataset": "690f7853b4b6bec9d97fad3437d23503e772b9e1463d35765ef3d917543578b5",
+  "selectedExamples": [
+    1,
+    2,
+    3,
+    1,
+    241,
+    174,
+    257,
+    512
+  ],
+  "secondsFor8Updates": {
+    "baseline": 33.11984495,
+    "final": 18.31976655
+  },
+  "speedup": 1.8078748361561408,
+  "timeReductionPercent": 44.68643625096439,
+  "peakDeviceGiB": {
+    "baseline": [
+      7.596601400524378,
+      7.73676098883152
+    ],
+    "final": [
+      9.096196241676807,
+      9.217820480465889
+    ]
+  },
+  "allLossesAndNormsExactlyEqual": true,
+  "fullCheckpointSha256": "d70b31afea8ebb923b8b5899855f0be0926e74159673320e60856b6ad35a50ab",
+  "state": {
+    "matrixCount": 496,
+    "tensorCount": 2976,
+    "aggregate": {
+      "elements": 175091712,
+      "baselineNonFinite": 0,
+      "finalNonFinite": 0,
+      "unequalBits": 0,
+      "baselineNegative": 58368533,
+      "finalNegative": 58368533,
+      "maximumAbsoluteDifference": 0.0,
+      "baselineMaximumAbsoluteValue": 0.014590974897146225,
+      "finalMaximumAbsoluteValue": 0.014590974897146225,
+      "differenceSquaredL2": 0.0,
+      "baselineSquaredL2": 1330.4681929469687,
+      "finalSquaredL2": 1330.4681929469687,
+      "relativeL2Difference": 0.0,
+      "absoluteL2Difference": 0.0,
+      "allFinite": true
+    },
+    "headerBytesEqual": true,
+    "adamSecondMomentsNonnegative": true
+  },
+  "resumedCheckpointSha256": "941ceadb6078330e0d46eaa500926de895850ac942be9f97f1116f7aa1f5c948",
+  "warmSaveSeconds": {
+    "baseline": 1.5922142,
+    "final": 1.0573374
+  },
+  "tests": {
+    "final-core": {
+      "Passed": 244,
+      "Failed": 0,
+      "NotExecuted": 0
+    },
+    "final-integration": {
+      "Passed": 43,
+      "Failed": 0,
+      "NotExecuted": 6
+    },
+    "normal-core": {
+      "Passed": 244,
+      "Failed": 0,
+      "NotExecuted": 0
+    }
+  },
+  "normalCliSmoke": {
+    "WallSeconds": 33.927407,
+    "HtmlExists": true,
+    "ExitCode": 0,
+    "AdapterBytes": 700397479
+  },
+  "normalHtmlLossPoints": 3,
+  "protectedArtifactsUnchanged": true,
+  "installedSourceFiles": 21
+}

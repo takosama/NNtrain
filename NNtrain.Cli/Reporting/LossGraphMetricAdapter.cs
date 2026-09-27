@@ -61,7 +61,7 @@ internal static class LossGraphMetricAdapter
             }
         }
 
-        graph.Write();
+        graph.Write(atomically: true);
     }
 
     internal static MetricJournal LoadSidecarOrImportLegacy(

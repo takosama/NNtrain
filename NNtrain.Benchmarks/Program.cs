@@ -2,7 +2,15 @@ using BenchmarkDotNet.Running;
 using NNtrain;
 using NNtrain.Benchmarks;
 
-if (args.Length == 2 && args[0] == "--probe-arc-bfp8-epilogue")
+if (args.Length > 0 && args[0] == "--qwen35-lora-training-probe")
+{
+    Qwen35LoraTrainingProbe.Run(args[1..]);
+}
+else if (args.Length > 0 && args[0] == "--qwen35-generation-probe")
+{
+    Qwen35GenerationProbe.Run(args[1..]);
+}
+else if (args.Length == 2 && args[0] == "--probe-arc-bfp8-epilogue")
 {
     ArcBfp8EpilogueProbe.Run(args[1]);
 }

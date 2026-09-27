@@ -1,0 +1,24 @@
+Qwen3.5 GGUF: layers=64, width=5120, heads=24/4, head-width=256, vocab=248320
+token ids: 248045,846,198,85951,1710,96115,151279,172097,68798,1710,248046,198,248045,74455,198
+Text inference: quantized weights, attention, recurrent state and greedy sampling on Arc (Float32).
+GPU KV cache and Gated DeltaNet state reuse: enabled.
+Preparing Arc 0: Intel(R) Arc(TM) B580 Graphics
+Preparing Arc 1: Intel(R) Arc(TM) B580 Graphics
+Loading tensors: 100/851
+Loading tensors: 200/851
+Loading tensors: 300/851
+Loading tensors: 400/851
+Loading tensors: 500/851
+Loading tensors: 600/851
+Loading tensors: 700/851
+Loading tensors: 800/851
+Arc 0: quantized weights = 5035468800 bytes (4.69 GiB), GPU state = 79495168 bytes, live device allocation = 5121238016 bytes
+Arc 1: quantized weights = 5116405760 bytes (4.77 GiB), GPU state = 79495168 bytes, live device allocation = 5202195456 bytes
+LoRA adapter = C:\Users\takos\source\repos\NNtrain\checkpoints\tuku-qwen35\adapter.bin, step 1536, parameters=58363904
+generated:
+<|im_start|>user
+こんにちは。自己紹介をしてください。<|im_end|>
+<|im_start|>assistant
+私はつくよみちゃんです！　あなたの頼みには何でもお応えいたします！
+<|im_end|>
+timing: load=8.360 s, prefill/first-token=0.582 s, decode=16.29 tok/s, generated=20, total-generation=1.749 s
