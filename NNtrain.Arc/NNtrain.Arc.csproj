@@ -16,6 +16,8 @@
     <EmbeddedResource Include="Kernels\qwen35_linear_fast.cl" />
     <EmbeddedResource Include="Kernels\qwen35_iq.cl" />
     <EmbeddedResource Include="Kernels\qwen35_prism.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_projection_pair.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_norm_fast.cl" />
     <EmbeddedResource Include="Kernels\qwen35_lora.cl" />
     <EmbeddedResource Include="Kernels\qwen35_train.cl" />
     <EmbeddedResource Include="Kernels\qwen35_train_attention.cl" />

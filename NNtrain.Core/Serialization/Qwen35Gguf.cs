@@ -36,6 +36,12 @@ public static class Qwen35Gguf
     public static Qwen35GgufDescriptor Inspect(string path)
     {
         using var gguf = new GgufReader(path);
+        return Inspect(gguf);
+    }
+
+    internal static Qwen35GgufDescriptor Inspect(GgufReader gguf)
+    {
+        ArgumentNullException.ThrowIfNull(gguf);
         if (!gguf.Metadata.TryGetValue("general.architecture", out object? architecture)
             || architecture is not string name || name != "qwen35")
             throw new InvalidDataException($"Expected qwen35 GGUF, got '{architecture}'.");

@@ -1,0 +1,541 @@
+[
+  {
+    "name": "baseline-base-2",
+    "load_s": 6.7635058,
+    "adapter_s": 0.0,
+    "ready_s": 7.1456954999999995,
+    "tok_s": [
+      17.07648214824556,
+      17.117463687549552,
+      17.129400285992467
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "baseline-base",
+    "load_s": 6.375356,
+    "adapter_s": 0.0,
+    "ready_s": 6.7535364,
+    "tok_s": [
+      17.086479685723486,
+      17.099904940622558,
+      17.123183612132898
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "baseline-lora-2",
+    "load_s": 6.3737522,
+    "adapter_s": 11.525364600000001,
+    "ready_s": 18.2627831,
+    "tok_s": [
+      16.121389740419644,
+      16.155292937084585,
+      16.15127801294285
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "baseline-lora",
+    "load_s": 6.225651399999999,
+    "adapter_s": 11.4383176,
+    "ready_s": 18.021002199999998,
+    "tok_s": [
+      16.117108961535422,
+      16.13784162101999,
+      16.139250312455886
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "baseline-profile",
+    "load_s": 6.203378300000001,
+    "adapter_s": 0.0,
+    "ready_s": 6.570584800000001,
+    "tok_s": [
+      16.262117245580402
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "bound-base",
+    "load_s": 6.248068,
+    "adapter_s": 0.0,
+    "ready_s": 6.502748400000001,
+    "tok_s": [
+      17.253956006053176,
+      17.280261070728518
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "cache-first-base",
+    "load_s": 6.0680914,
+    "adapter_s": 0.0,
+    "ready_s": 6.311404400000001,
+    "tok_s": [
+      17.222364566647475,
+      17.256636651079802
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "cache-warm-base",
+    "load_s": 3.8618461,
+    "adapter_s": 0.0,
+    "ready_s": 4.098194500000001,
+    "tok_s": [
+      17.2297509827504,
+      17.25518369155253
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "final-base-1",
+    "load_s": 4.2739674,
+    "adapter_s": 0.0,
+    "ready_s": 4.508247600000001,
+    "tok_s": [
+      17.286885077533714,
+      17.284003837455536,
+      17.26928128461348
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "final-base-2",
+    "load_s": 4.0279489,
+    "adapter_s": 0.0,
+    "ready_s": 4.2659180999999995,
+    "tok_s": [
+      17.26769333689892,
+      17.270478022314354,
+      17.27007320418312
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "final-lora-1",
+    "load_s": 6.7602888000000005,
+    "adapter_s": 0.974429,
+    "ready_s": 7.976518700000001,
+    "tok_s": [
+      16.1751234821613,
+      16.177609085142247,
+      16.179285466665604
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "final-lora-2",
+    "load_s": 6.898176,
+    "adapter_s": 0.9429837,
+    "ready_s": 8.1108252,
+    "tok_s": [
+      16.169962514031962,
+      16.179398182222407,
+      16.17544504263143
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "fused-base",
+    "load_s": 3.7979222,
+    "adapter_s": 0.0,
+    "ready_s": 4.0245871,
+    "tok_s": [
+      17.137451809350573,
+      17.18014884935074
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "fused-iq2-base",
+    "load_s": 3.99034,
+    "adapter_s": 0.0,
+    "ready_s": 4.229955,
+    "tok_s": [
+      17.25148920763815,
+      17.276418824195503
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "fused-iq2-lora",
+    "load_s": 6.6672286000000005,
+    "adapter_s": 0.9395107,
+    "ready_s": 7.8438144,
+    "tok_s": [
+      16.080409136255387,
+      16.11228849227624
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "fused-iq23-base",
+    "load_s": 3.7662370000000003,
+    "adapter_s": 0.0,
+    "ready_s": 3.9914714,
+    "tok_s": [
+      17.259813053120947,
+      17.294268168871312
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "fused-iq23-lora",
+    "load_s": 6.7848518,
+    "adapter_s": 1.2494706000000002,
+    "ready_s": 8.2826247,
+    "tok_s": [
+      15.625010380789375,
+      16.14294257879059
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "fused-lora",
+    "load_s": 6.649462000000001,
+    "adapter_s": 0.9036925,
+    "ready_s": 7.8262294,
+    "tok_s": [
+      16.16038615738987,
+      16.15629873087948
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "host-base",
+    "load_s": 6.6612527,
+    "adapter_s": 0.0,
+    "ready_s": 6.8909161999999995,
+    "tok_s": [
+      17.203331361452275,
+      17.2331803311878
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "host-lora",
+    "load_s": 11.3144925,
+    "adapter_s": 0.9213151,
+    "ready_s": 12.461681,
+    "tok_s": [
+      16.228170634741897,
+      16.258345363868813
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "nocacheargs-base",
+    "load_s": 4.049631199999999,
+    "adapter_s": 0.0,
+    "ready_s": 4.2788009,
+    "tok_s": [
+      17.242094648944438,
+      17.280274707928662
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "pair-base",
+    "load_s": 3.780729,
+    "adapter_s": 0.0,
+    "ready_s": 4.0255299,
+    "tok_s": [
+      17.273702192070893,
+      17.312149006402606
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "pair-iq2-base",
+    "load_s": 6.6606491,
+    "adapter_s": 0.0,
+    "ready_s": 6.8907107,
+    "tok_s": [
+      17.35820882201304,
+      17.38676105204526
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "pair-iq3-base",
+    "load_s": 3.7644632000000002,
+    "adapter_s": 0.0,
+    "ready_s": 3.9996486,
+    "tok_s": [
+      17.282036909314268,
+      17.309519269263518
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "pair-lora",
+    "load_s": 11.347691999999999,
+    "adapter_s": 0.9224012,
+    "ready_s": 12.501200999999998,
+    "tok_s": [
+      16.138351674506474,
+      16.17358376459494
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "pair-q4-base",
+    "load_s": 4.0252289,
+    "adapter_s": 0.0,
+    "ready_s": 4.274953,
+    "tok_s": [
+      17.19006698373542,
+      17.224110304178872
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "repack-base",
+    "load_s": 6.3528522,
+    "adapter_s": 0.0,
+    "ready_s": 6.5930929,
+    "tok_s": [
+      15.340862056671586,
+      15.369618323605717
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "repack-lora",
+    "load_s": 6.6096463000000005,
+    "adapter_s": 0.9004911,
+    "ready_s": 7.7447495,
+    "tok_s": [
+      14.655779138377746,
+      14.677177729423732
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "repack-pair-base",
+    "load_s": 3.6619078,
+    "adapter_s": 0.0,
+    "ready_s": 3.8872635,
+    "tok_s": [
+      15.31728686320973,
+      15.347600801410627
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "rms-base",
+    "load_s": 3.6872523999999998,
+    "adapter_s": 0.0,
+    "ready_s": 3.9256496,
+    "tok_s": [
+      17.229699791338838,
+      17.281093449621938
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "rms-lora",
+    "load_s": 6.7532103999999995,
+    "adapter_s": 0.9438751,
+    "ready_s": 7.935446600000001,
+    "tok_s": [
+      16.26104680450392,
+      16.286034887943938
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "rms-pair-base",
+    "load_s": 3.7267044,
+    "adapter_s": 0.0,
+    "ready_s": 3.97814,
+    "tok_s": [
+      17.29952506673939,
+      17.35094347531228
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "serial-base",
+    "load_s": 5.4099200000000005,
+    "adapter_s": 0.0,
+    "ready_s": 5.627835,
+    "tok_s": [
+      17.262390634769773,
+      17.286189638429263
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "single-base",
+    "load_s": 6.2952554,
+    "adapter_s": 0.0,
+    "ready_s": 6.5384478,
+    "tok_s": [
+      17.515392478639463,
+      17.549533731689326
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "single-lora",
+    "load_s": 6.4865577000000005,
+    "adapter_s": 0.9711028,
+    "ready_s": 7.6979856,
+    "tok_s": [
+      16.34243532346106,
+      16.408453593947467
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "specialized-base",
+    "load_s": 4.0811242000000005,
+    "adapter_s": 0.0,
+    "ready_s": 4.31621,
+    "tok_s": [
+      16.757395648959374,
+      16.786515780474776
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "specialized16-base",
+    "load_s": 4.0995748,
+    "adapter_s": 0.0,
+    "ready_s": 4.363192800000001,
+    "tok_s": [
+      16.750111899320377,
+      16.789996017994646
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  },
+  {
+    "name": "wg16-base",
+    "load_s": 6.8646888,
+    "adapter_s": 0.0,
+    "ready_s": 7.092321699999999,
+    "tok_s": [
+      17.247216577644323,
+      17.266558810042063
+    ],
+    "ids_match": true,
+    "logits_exact": true,
+    "max_abs": 0.0,
+    "finite": true
+  }
+]

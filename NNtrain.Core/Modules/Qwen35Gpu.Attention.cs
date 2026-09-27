@@ -25,7 +25,10 @@ internal static partial class Qwen35Gpu
         ArcBuffer output = lane.Allocate(checked(rows * width));
         try
         {
-            lane.Run("q35a_rms_norm", (long)rows * AttentionReductionSize, AttentionReductionSize,
+            bool fast = lane.Options.Qwen35FastRmsNorm && lane.Options.XmxMatrices
+                && lane.Device.SupportsXmx && lane.Device.MinimumSubgroupSize == 16
+                && lane.Device.Extensions.Split(' ').Contains("cl_intel_subgroups");
+            lane.Run(fast ? "q35a_rms_norm_sg16_exact" : "q35a_rms_norm", (long)rows * AttentionReductionSize, AttentionReductionSize,
                 input, weight, output, width, inputStride, eps);
             return output;
         }

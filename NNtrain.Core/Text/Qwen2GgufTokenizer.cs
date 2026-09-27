@@ -80,6 +80,12 @@ public sealed class Qwen2GgufTokenizer
     public static Qwen2GgufTokenizer Load(string path)
     {
         using var gguf = new GgufReader(path);
+        return Load(gguf);
+    }
+
+    internal static Qwen2GgufTokenizer Load(GgufReader gguf)
+    {
+        ArgumentNullException.ThrowIfNull(gguf);
         string model = StringValue(gguf, "tokenizer.ggml.model");
         if (!string.Equals(model, "gpt2", StringComparison.Ordinal))
             throw new NotSupportedException($"Qwen GGUF tokenizer model '{model}' is not GPT-2 BPE.");

@@ -17,6 +17,9 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
     private readonly Dictionary<ArcExecutionLane, ArcBuffer> _zeroBias = [];
     private readonly Dictionary<ArcExecutionLane, long> _auxiliaryBytes = [];
     private readonly List<LayerState> _states = [];
+    private readonly List<LayerBindings> _layerBindings = [];
+    private Matrix _embedding = null!;
+    private ArcBuffer _outputNorm = null!;
     private int _position;
     private bool _disposed, _faulted;
     private readonly Qwen35ExecutionOptions _options;
@@ -45,9 +48,27 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         string path, IReadOnlyList<int>? devices = null, Action<string>? progress = null,
         Qwen35ExecutionOptions? options = null)
     {
+        using var reader = new GgufReader(path);
+        return Load(reader, devices, progress, options);
+    }
+
+    /// <summary>Loads from an already parsed GGUF. The caller retains ownership of the reader.</summary>
+    public static Qwen35QuantizedModel Load(
+        GgufReader gguf, IReadOnlyList<int>? devices = null, Action<string>? progress = null,
+        Qwen35ExecutionOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(gguf);
+        string path = gguf.FilePath;
+        if (progress is not null)
+        {
+            Action<string> callback = progress;
+            var callbackLock = new object();
+            progress = message => { lock (callbackLock) callback(message); };
+        }
         options ??= new Qwen35ExecutionOptions();
         if (!Enum.IsDefined(options.QuantizedKernel) || options.QueuedKernelLimit is < 16 or > 4096
             || options.ProjectionWorkgroupSize is not (32 or 64 or 128)
+            || options.InferencePairedProjectionTypes is < 0 or > 7
             || options.LoraReductionSize is not (16 or 128 or 256 or 512 or 1024)
             || options.TrainingTransposeRows is not (1 or 4 or 8 or 16 or 32)
             || options.TrainingTransposeOctetRows is not (0 or 4 or 8 or 16)
@@ -57,8 +78,7 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
             || options.TrainingForwardRows is not (1 or 2 or 4 or 8 or 16)
             || options.TrainingBufferPoolMiB is < 0 or > 2048)
             throw new ArgumentException("Invalid Qwen3.5 execution options.", nameof(options));
-        Qwen35GgufDescriptor d = Qwen35Gguf.Inspect(path);
-        using var gguf = new GgufReader(path);
+        Qwen35GgufDescriptor d = Qwen35Gguf.Inspect(gguf);
         Qwen35PrismMetadata? prism = Qwen35PrismMetadata.Read(gguf);
         if (options.LoraTraining && (prism is not null || d.Tensors.Any(t => t.Type == Qwen2Gguf.BF16Type && IsQuantized(t))))
             throw new NotSupportedException("PQ2_0/PTQ1_0 and BF16 matrix backpropagation are not implemented; load this model for generation.");
@@ -92,17 +112,25 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
             // resident weights and adapter identity refer to it.
             _modelSource = File.OpenRead(path)
         };
+        Task<string>? fingerprint = options.ComputeModelFingerprintOnLoad
+            ? Task.Run(model.ModelFingerprint) : null;
         try
         {
-            foreach (int index in selected)
+            ArcExecutionLane CreateLane(int index)
             {
                 progress?.Invoke($"Preparing Arc {index}: {available[index].Name}");
-                model._lanes.Add(new ArcExecutionLane(index, new ArcExecutionOptions
+                return new ArcExecutionLane(index, new ArcExecutionOptions
                 {
                     Qwen35InferenceKernelsOnly = true,
                     Qwen35TrainingKernels = options.LoraTraining,
                     Qwen35CooperativeLora = options.LoraTraining ? options.TrainingCooperativeLora : options.InferenceCooperativeLora,
                     Qwen35ProjectionWorkgroupSize = options.LoraTraining ? 32 : options.ProjectionWorkgroupSize,
+                    Qwen35PairedProjection = !options.LoraTraining && options.InferencePairedProjection,
+                    Qwen35PairedProjectionTypes = options.LoraTraining ? 0 : options.InferencePairedProjectionTypes,
+                    Qwen35PairedLoraProjection = !options.LoraTraining && options.InferencePairedLoraProjection,
+                    CacheKernelArguments = !options.LoraTraining && options.CacheKernelArguments,
+                    CacheProgramBinary = options.CacheProgramBinary,
+                    Qwen35FastRmsNorm = !options.LoraTraining && options.InferenceFastRmsNorm,
                     Qwen35ParallelArgmax = !options.LoraTraining && options.ParallelArgmax,
                     Qwen35ParallelDeltaNorm = !options.LoraTraining && options.ParallelDeltaNorm,
                     Qwen35LoraReductionSize = options.LoraTraining ? 128 : options.LoraReductionSize,
@@ -115,8 +143,21 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                     DeferredReleaseBytes = 0,
                     QueuedKernelLimit = options.QueuedKernelLimit,
                     PhysicalBufferBudgetBytes = DeviceBudget(available[index])
-                }));
+                });
             }
+            if (options.ParallelModelLoad && selected.Length > 1)
+            {
+                Task<ArcExecutionLane>[] creating = selected.Select(index => Task.Run(() => CreateLane(index))).ToArray();
+                try { Task.WhenAll(creating).GetAwaiter().GetResult(); }
+                finally
+                {
+                    // Even if another device fails, completed lanes must be owned
+                    // by the model so the outer failure path disposes them.
+                    foreach (var task in creating)
+                        if (task.IsCompletedSuccessfully) model._lanes.Add(task.Result);
+                }
+            }
+            else foreach (int index in selected) model._lanes.Add(CreateLane(index));
             if (model._prism is not null)
             {
                 foreach (ArcExecutionLane lane in model._lanes)
@@ -128,28 +169,43 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                 progress?.Invoke($"Prism: GPU Hadamard 1024, {model._prism.ForwardWeights.Count} projections, {model._prism.InverseWeights.Count} inverse embeddings, grouped GDN={model._prism.GroupedValueHeads}");
             }
             int loaded = 0;
-            foreach (GgufTensorInfo tensor in d.Tensors)
+            void LoadTensor(GgufTensorInfo tensor)
             {
                 var lane = model._lanes[DeviceSlot(tensor.Name, d.LayerCount, selected.Length)];
                 if (IsQuantized(tensor))
                 {
                     // UploadRaw is blocking; no model-sized host payload is retained.
-                    model._matrices.Add(tensor.Name, new Matrix(lane, tensor,
+                    var matrix = new Matrix(lane, tensor,
                         gguf.ReadTensorBytes(tensor, EncodedBytes(tensor)), options.QuantizedKernel,
                         options.TrainingTransposeRows, options.LoraTraining ? options.TrainingForwardRows : 1,
                         tensor.Type switch {
                             Qwen35Gguf.IQ2SType => options.TrainingTransposeOctetRows,
                             Qwen2Gguf.Q4KType => options.TrainingQ4TransposeOctetRows,
                             Qwen35Gguf.IQ3SType => options.TrainingIQ3TransposeOctetRows,
-                            _ => 0 }));
+                            _ => 0 });
+                    lock (model._matrices) model._matrices.Add(tensor.Name, matrix);
                 }
                 else
                 {
                     model._dense.Add(tensor.Name, lane.Upload(Qwen2Gguf.ReadTensor(gguf, tensor)));
                     model._auxiliaryBytes[lane] = model._auxiliaryBytes.GetValueOrDefault(lane) + DenseBytes(tensor);
                 }
-                if (++loaded % 100 == 0) progress?.Invoke($"Loading tensors: {loaded}/{d.Tensors.Count}");
+                int count = Interlocked.Increment(ref loaded);
+                if (count % 100 == 0) progress?.Invoke($"Loading tensors: {count}/{d.Tensors.Count}");
             }
+            if (options.ParallelModelLoad && selected.Length > 1)
+            {
+                // Dense conversion uses the reader's sequential stream. Packed
+                // reads are positional and each worker owns one device queue.
+                foreach (var tensor in d.Tensors.Where(t => !IsQuantized(t))) LoadTensor(tensor);
+                Parallel.For(0, selected.Length, slot =>
+                {
+                    foreach (var tensor in d.Tensors.Where(t => IsQuantized(t)
+                        && DeviceSlot(t.Name, d.LayerCount, selected.Length) == slot).OrderBy(t => t.Offset))
+                        LoadTensor(tensor);
+                });
+            }
+            else foreach (var tensor in d.Tensors) LoadTensor(tensor);
             foreach (ArcExecutionLane lane in model._lanes)
             {
                 int width = model._matrices.Values.Where(matrix => ReferenceEquals(matrix.Lane, lane))
@@ -158,12 +214,15 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                 model._zeroBias.Add(lane, zeroBias);
                 lane.Run("q35a_zero", width, 0, zeroBias, width);
             }
+            model._embedding = model._matrices["token_embd.weight"];
+            model._outputNorm = model._dense["output_norm.weight"];
             for (int layer = 0; layer < d.LayerCount; layer++)
             {
                 var lane = model._lanes[DeviceSlot($"blk.{layer}.", d.LayerCount, selected.Length)];
                 var state = new LayerState(lane, d, d.IsRecurrent(layer));
                 model._states.Add(state);
                 state.Initialize();
+                model._layerBindings.Add(new LayerBindings(model, layer, state));
             }
             for (int slot = 0; slot < selected.Length; slot++)
             {
@@ -173,9 +232,16 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                     $"GPU state = {model.ResidentStateBytes[slot]} bytes, " +
                     $"live device allocation = {model._lanes[slot].AllocatedBytes} bytes");
             }
+            if (fingerprint is not null) fingerprint.GetAwaiter().GetResult();
             return model;
         }
-        catch { model.Dispose(); throw; }
+        catch
+        {
+            // The fingerprint reads the protected source handle: join it before
+            // disposing that handle, without masking the original load error.
+            try { fingerprint?.GetAwaiter().GetResult(); } catch { }
+            model.Dispose(); throw;
+        }
     }
 
     internal static long[] PlanWeightBytes(Qwen35GgufDescriptor d, int deviceCount)
@@ -281,35 +347,36 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         // Grow caches before mutating any layer's sequence state. Replacement
         // uses D2D copies and keeps old buffers alive until the copy succeeds.
         foreach (LayerState state in _states) state.EnsureCapacity(_position + 1);
-        ArcExecutionLane lane = _matrices["token_embd.weight"].Lane;
+        ArcExecutionLane lane = _embedding.Lane;
         ArcBuffer? hidden = null;
         try
         {
-            hidden = _matrices["token_embd.weight"].Embedding(tokenId);
+            hidden = _embedding.Embedding(tokenId);
             if (_prism?.InverseWeights.Contains("token_embd.weight") == true)
             {
-                ArcBuffer restored = PrismTransform("token_embd.weight", _matrices["token_embd.weight"], hidden, inverse: true);
+                ArcBuffer restored = PrismTransform("token_embd.weight", _embedding, hidden, inverse: true);
                 hidden.Dispose(); hidden = restored;
             }
             for (int layer = 0; layer < d.LayerCount; layer++)
             {
-                LayerState state = _states[layer];
+                LayerBindings bindings = _layerBindings[layer];
+                LayerState state = bindings.State;
                 MoveToLane(ref hidden, ref lane, state.Lane, d.EmbeddingLength);
-                string p = $"blk.{layer}.";
-                using ArcBuffer normalized = Qwen35Gpu.RmsNorm(lane, hidden!, _dense[p + "attn_norm.weight"], 1, d.EmbeddingLength, d.RmsEpsilon);
-                using ArcBuffer attention = d.IsRecurrent(layer)
-                    ? RecurrentAttention(normalized, p, state)
-                    : FullAttention(normalized, p, state);
+                using ArcBuffer normalized = Qwen35Gpu.RmsNorm(lane, hidden!, bindings.AttentionNorm, 1, d.EmbeddingLength, d.RmsEpsilon);
+                using ArcBuffer attention = bindings.Recurrent
+                    ? RecurrentAttention(normalized, bindings)
+                    : FullAttention(normalized, bindings);
                 Qwen35Gpu.AddInPlace(lane, hidden!, attention, d.EmbeddingLength);
-                using ArcBuffer postNorm = Qwen35Gpu.RmsNorm(lane, hidden!, _dense[p + "post_attention_norm.weight"], 1, d.EmbeddingLength, d.RmsEpsilon);
-                using ArcBuffer gate = Project(p + "ffn_gate.weight", postNorm);
-                using ArcBuffer up = Project(p + "ffn_up.weight", postNorm);
+                using ArcBuffer postNorm = Qwen35Gpu.RmsNorm(lane, hidden!, bindings.PostAttentionNorm,
+                    1, d.EmbeddingLength, d.RmsEpsilon);
+                using ArcBuffer gate = Project(bindings.FfnGate, postNorm);
+                using ArcBuffer up = Project(bindings.FfnUp, postNorm);
                 using ArcBuffer activated = Qwen35Gpu.SiluMultiply(lane, gate, up, d.FeedForwardLength);
-                using ArcBuffer down = Project(p + "ffn_down.weight", activated);
+                using ArcBuffer down = Project(bindings.FfnDown, activated);
                 Qwen35Gpu.AddInPlace(lane, hidden!, down, d.EmbeddingLength);
             }
             if (!returnLogits) { _position++; return null; }
-            ArcBuffer finalNorm = Qwen35Gpu.RmsNorm(lane, hidden!, _dense["output_norm.weight"], 1, d.EmbeddingLength, d.RmsEpsilon);
+            ArcBuffer finalNorm = Qwen35Gpu.RmsNorm(lane, hidden!, _outputNorm, 1, d.EmbeddingLength, d.RmsEpsilon);
             hidden!.Dispose(); hidden = finalNorm;
             MoveToLane(ref hidden, ref lane, OutputMatrix.Lane, d.EmbeddingLength);
             ArcBuffer logits = ProjectMatrix("output.weight", OutputMatrix, hidden!);
@@ -334,6 +401,9 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
 
     private ArcBuffer Project(string name, ArcBuffer input)
         => ProjectMatrix(name, _matrices[name], input);
+
+    private ArcBuffer Project(Matrix matrix, ArcBuffer input)
+        => ProjectMatrix(matrix.Name, matrix, input);
 
     private ArcBuffer ProjectMatrix(string name, Matrix matrix, ArcBuffer input)
     {
@@ -368,34 +438,36 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         catch { output.Dispose(); throw; }
     }
 
-    private ArcBuffer RecurrentAttention(ArcBuffer input, string p, LayerState state)
+    private ArcBuffer RecurrentAttention(ArcBuffer input, LayerBindings bindings)
     {
         Qwen35GgufDescriptor d = Descriptor;
-        using ArcBuffer qkv = Project(p + "attn_qkv.weight", input);
-        using ArcBuffer gate = Project(p + "attn_gate.weight", input);
-        using ArcBuffer alpha = Project(p + "ssm_alpha.weight", input);
-        using ArcBuffer beta = Project(p + "ssm_beta.weight", input);
+        LayerState state = bindings.State;
+        using ArcBuffer qkv = Project(bindings.Qkv!, input);
+        using ArcBuffer gate = Project(bindings.RecurrentGate!, input);
+        using ArcBuffer alpha = Project(bindings.Alpha!, input);
+        using ArcBuffer beta = Project(bindings.Beta!, input);
         using ArcBuffer delta = _options.FusedDelta ? Qwen35Gpu.DeltaStepFused(state.Lane, qkv, gate, alpha, beta,
-            _dense[p + "ssm_conv1d.weight"], _dense[p + "ssm_dt.bias"], _dense[p + "ssm_a"],
-            _dense[p + "ssm_norm.weight"], state.Convolution!, state.Recurrent!,
+            bindings.Convolution!, bindings.DtBias!, bindings.A!,
+            bindings.RecurrentNorm!, state.Convolution!, state.Recurrent!,
             d.LinearKeyHeads, d.LinearValueHeads, d.LinearHeadWidth, d.ConvKernel, d.RmsEpsilon)
             : Qwen35Gpu.DeltaStep(state.Lane, qkv, gate, alpha, beta,
-            _dense[p + "ssm_conv1d.weight"], _dense[p + "ssm_dt.bias"], _dense[p + "ssm_a"],
-            _dense[p + "ssm_norm.weight"], state.Convolution!, state.Recurrent!,
+            bindings.Convolution!, bindings.DtBias!, bindings.A!,
+            bindings.RecurrentNorm!, state.Convolution!, state.Recurrent!,
             d.LinearKeyHeads, d.LinearValueHeads, d.LinearHeadWidth, d.ConvKernel, d.RmsEpsilon);
-        return Project(p + "ssm_out.weight", delta);
+        return Project(bindings.AttentionOutput, delta);
     }
 
-    private ArcBuffer FullAttention(ArcBuffer input, string p, LayerState state)
+    private ArcBuffer FullAttention(ArcBuffer input, LayerBindings bindings)
     {
         Qwen35GgufDescriptor d = Descriptor;
-        using ArcBuffer qAndGate = Project(p + "attn_q.weight", input);
-        using ArcBuffer key = Project(p + "attn_k.weight", input);
-        using ArcBuffer value = Project(p + "attn_v.weight", input);
+        LayerState state = bindings.State;
+        using ArcBuffer qAndGate = Project(bindings.Query!, input);
+        using ArcBuffer key = Project(bindings.Key!, input);
+        using ArcBuffer value = Project(bindings.Value!, input);
         using ArcBuffer attention = Qwen35Gpu.AttentionStep(state.Lane, qAndGate, key, value,
-            _dense[p + "attn_q_norm.weight"], _dense[p + "attn_k_norm.weight"], state.Keys!, state.Values!,
+            bindings.QueryNorm!, bindings.KeyNorm!, state.Keys!, state.Values!,
             _position, d.HeadCount, d.KvHeadCount, d.HeadWidth, d.RopeDimensionCount, d.RopeTheta, d.RmsEpsilon);
-        return Project(p + "attn_output.weight", attention);
+        return Project(bindings.AttentionOutput, attention);
     }
 
     /// <summary>
@@ -447,6 +519,54 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         foreach (ArcExecutionLane lane in _lanes) lane.Dispose();
         _modelSource?.Dispose();
         _states.Clear(); _matrices.Clear(); _dense.Clear(); _zeroBias.Clear(); _prismSigns.Clear();
+        _layerBindings.Clear(); _embedding = null!; _outputNorm = null!;
+    }
+
+    // Non-owning references resolved once after the validated tensor directory
+    // is loaded. LoRA attachment remains dynamic, keyed by each matrix's name.
+    private sealed class LayerBindings
+    {
+        internal readonly LayerState State;
+        internal readonly bool Recurrent;
+        internal readonly ArcBuffer AttentionNorm, PostAttentionNorm;
+        internal readonly Matrix FfnGate, FfnUp, FfnDown, AttentionOutput;
+        internal readonly Matrix? Qkv, RecurrentGate, Alpha, Beta, Query, Key, Value;
+        internal readonly ArcBuffer? Convolution, DtBias, A, RecurrentNorm, QueryNorm, KeyNorm;
+
+        internal LayerBindings(Qwen35QuantizedModel model, int layer, LayerState state)
+        {
+            State = state;
+            Recurrent = model.Descriptor.IsRecurrent(layer);
+            string prefix = $"blk.{layer}.";
+            Matrix GetMatrix(string suffix) => model._matrices[prefix + suffix];
+            ArcBuffer GetDense(string suffix) => model._dense[prefix + suffix];
+            AttentionNorm = GetDense("attn_norm.weight");
+            PostAttentionNorm = GetDense("post_attention_norm.weight");
+            FfnGate = GetMatrix("ffn_gate.weight");
+            FfnUp = GetMatrix("ffn_up.weight");
+            FfnDown = GetMatrix("ffn_down.weight");
+            if (Recurrent)
+            {
+                Qkv = GetMatrix("attn_qkv.weight");
+                RecurrentGate = GetMatrix("attn_gate.weight");
+                Alpha = GetMatrix("ssm_alpha.weight");
+                Beta = GetMatrix("ssm_beta.weight");
+                AttentionOutput = GetMatrix("ssm_out.weight");
+                Convolution = GetDense("ssm_conv1d.weight");
+                DtBias = GetDense("ssm_dt.bias");
+                A = GetDense("ssm_a");
+                RecurrentNorm = GetDense("ssm_norm.weight");
+            }
+            else
+            {
+                Query = GetMatrix("attn_q.weight");
+                Key = GetMatrix("attn_k.weight");
+                Value = GetMatrix("attn_v.weight");
+                AttentionOutput = GetMatrix("attn_output.weight");
+                QueryNorm = GetDense("attn_q_norm.weight");
+                KeyNorm = GetDense("attn_k_norm.weight");
+            }
+        }
     }
 
     private sealed class LayerState(ArcExecutionLane lane, Qwen35GgufDescriptor d, bool recurrent) : IDisposable
@@ -509,6 +629,7 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
     private sealed class Matrix : IDisposable
     {
         internal readonly ArcExecutionLane Lane;
+        internal readonly string Name;
         internal readonly int StorageBytes, OutputWidth;
         private readonly ArcBuffer _encoded;
         private readonly uint _type;
@@ -518,13 +639,16 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         private readonly int _transposeRows;
         private readonly int _transposeOctetRows;
         private readonly int _forwardRows;
+        private readonly string _projectionKernel, _fusedProjectionKernel;
+        private readonly bool PairedProjection;
+        private readonly bool PairedLoraProjection;
         internal bool SupportsFusedLora => _kernel == Qwen35QuantizedKernel.Subgroup
             && _type is not (Qwen35Gguf.PQ20Type or Qwen35Gguf.PTQ10Type or Qwen2Gguf.BF16Type);
         internal Matrix(ArcExecutionLane lane, GgufTensorInfo info, byte[] payload, Qwen35QuantizedKernel kernel, int transposeRows, int forwardRows, int transposeOctetRows)
         {
             _transposeRows = transposeRows;
             _forwardRows = forwardRows;
-            Lane = lane; StorageBytes = payload.Length; _type = info.Type;
+            Lane = lane; Name = info.Name; StorageBytes = payload.Length; _type = info.Type;
             _quantization = _type switch
             {
                 Qwen2Gguf.Q4KType => "q4_k", Qwen35Gguf.Q5KType => "q5_k",
@@ -546,6 +670,13 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                     ? Qwen35QuantizedKernel.Subgroup : Qwen35QuantizedKernel.Cooperative) : kernel;
             if (_kernel == Qwen35QuantizedKernel.Subgroup && !subgroup)
                 throw new NotSupportedException("The Qwen3.5 subgroup kernel requires Intel SG16 support.");
+            PairedProjection = (lane.Options.Qwen35PairedProjection
+                || (lane.Options.Qwen35PairedProjectionTypes & (_type switch {
+                    Qwen35Gguf.IQ2SType => 1, Qwen2Gguf.Q4KType => 2, Qwen35Gguf.IQ3SType => 4, _ => 0 })) != 0)
+                && _type is Qwen2Gguf.Q4KType or Qwen35Gguf.IQ2SType or Qwen35Gguf.IQ3SType;
+            _projectionKernel = $"q35l_{_quantization}_sg16" + (PairedProjection ? "_pair" : "");
+            PairedLoraProjection = PairedProjection && lane.Options.Qwen35PairedLoraProjection;
+            _fusedProjectionKernel = $"q35l_{_quantization}_sg16" + (PairedLoraProjection ? "_pair" : "") + "_lora";
             _encoded = lane.UploadRaw(payload);
         }
         internal ArcBuffer Forward(ArcBuffer input, ArcBuffer zeroBias, int rows = 1)
@@ -559,8 +690,11 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                     Lane.Run($"q35t_linear_{_quantization}_rows{_forwardRows}",
                         ((((long)rows + _forwardRows - 1) / _forwardRows * OutputWidth + 1) / 2) * 32, 32,
                         input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
+                else if (_kernel == Qwen35QuantizedKernel.Subgroup && PairedProjection)
+                    Lane.Run(_projectionKernel, ((long)rows * ((OutputWidth + 1) / 2) + 1) / 2 * 32,
+                        32, input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
                 else if (_kernel == Qwen35QuantizedKernel.Subgroup)
-                    Lane.Run($"q35l_{_quantization}_sg16",
+                    Lane.Run(_projectionKernel,
                         ((long)rows * OutputWidth + Lane.Options.Qwen35ProjectionWorkgroupSize / 16 - 1)
                             / (Lane.Options.Qwen35ProjectionWorkgroupSize / 16) * Lane.Options.Qwen35ProjectionWorkgroupSize,
                         Lane.Options.Qwen35ProjectionWorkgroupSize, input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
@@ -580,8 +714,10 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
             ArcBuffer output = Lane.Allocate(OutputWidth);
             try
             {
-                int group = Lane.Options.Qwen35ProjectionWorkgroupSize;
-                Lane.Run($"q35l_{_quantization}_sg16_lora", ((long)OutputWidth + group / 16 - 1) / (group / 16) * group,
+                int group = PairedLoraProjection ? 32 : Lane.Options.Qwen35ProjectionWorkgroupSize;
+                long work = PairedLoraProjection ? ((long)(OutputWidth + 1) / 2 + 1) / 2 * 32
+                    : ((long)OutputWidth + group / 16 - 1) / (group / 16) * group;
+                Lane.Run(_fusedProjectionKernel, work,
                     group, input, _encoded, zeroBias, output, 1, _inputWidth, OutputWidth,
                     z, adapter.B, adapter.Rank, adapter.Scale);
                 return output;

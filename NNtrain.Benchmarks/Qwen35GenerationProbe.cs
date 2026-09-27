@@ -91,6 +91,7 @@ internal static class Qwen35GenerationProbe
         } : defaults.FusedDelta;
         var options = defaults with
         {
+            ComputeModelFingerprintOnLoad = adapterPath is not null || defaults.ComputeModelFingerprintOnLoad,
             QuantizedKernel = kernel,
             FusedDelta = fusedDelta,
             QueuedKernelLimit = queue,
@@ -102,10 +103,11 @@ internal static class Qwen35GenerationProbe
         long modelBytes = modelFile.Length;
         DateTime modelLastWriteUtc = modelFile.LastWriteTimeUtc;
         long inspectionStart = Stopwatch.GetTimestamp();
-        Qwen35GgufDescriptor descriptor = Qwen35Gguf.Inspect(modelPath);
+        using var gguf = new GgufReader(modelPath);
+        Qwen35GgufDescriptor descriptor = Qwen35Gguf.Inspect(gguf);
         double inspectionMilliseconds = Stopwatch.GetElapsedTime(inspectionStart).TotalMilliseconds;
         long tokenizerStart = Stopwatch.GetTimestamp();
-        Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(modelPath);
+        Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(gguf);
         int[] promptIds = tokenizer.Encode(prompt);
         double tokenizerMilliseconds = Stopwatch.GetElapsedTime(tokenizerStart).TotalMilliseconds;
         if (promptIds.Length == 0 || (long)promptIds.Length + tokens > descriptor.ContextLength)
@@ -134,8 +136,13 @@ internal static class Qwen35GenerationProbe
         MemorySnapshot afterLoad;
         MemorySnapshot afterAdapter;
         var logitSnapshots = new List<object>();
+        var loadProgress = new List<object>();
         long loadStart = Stopwatch.GetTimestamp();
-        using (Qwen35QuantizedModel model = Qwen35QuantizedModel.Load(modelPath, devices, Console.WriteLine, options))
+        using (Qwen35QuantizedModel model = Qwen35QuantizedModel.Load(gguf, devices, message =>
+        {
+            loadProgress.Add(new { Milliseconds = Stopwatch.GetElapsedTime(loadStart).TotalMilliseconds, Message = message });
+            Console.WriteLine(message);
+        }, options))
         {
             loadMilliseconds = Stopwatch.GetElapsedTime(loadStart).TotalMilliseconds;
             afterLoad = Snapshot(model);
@@ -257,6 +264,8 @@ internal static class Qwen35GenerationProbe
             TokenizerLoadAndEncodeMilliseconds = tokenizerMilliseconds,
             LoadMilliseconds = loadMilliseconds,
             AdapterLoadMilliseconds = adapterLoadMilliseconds,
+            LoadProgress = loadProgress,
+            ReadyMilliseconds = inspectionMilliseconds + tokenizerMilliseconds + loadMilliseconds + adapterLoadMilliseconds,
             AfterLoad = afterLoad,
             AfterAdapter = afterAdapter,
             RunsHaveIdenticalGeneratedTokenIds = samples.All(sample => sample.MatchesFirstRunTokenIds),
@@ -299,6 +308,7 @@ internal static class Qwen35GenerationProbe
             lane.CachedBytes, lane.RetiredBytes, lane.PoolHits, lane.RetiredReuseCount,
             lane.H2DBytes, lane.D2HBytes, lane.PeakAllocatedBytes, lane.KernelMilliseconds,
             lane.TransferMilliseconds, lane.AllocationMilliseconds,
+            lane.ProgramBinaryCacheHit, lane.KernelArgumentSetCount, lane.KernelArgumentCacheHitCount,
             lane.DetailedProfiler?.Snapshot().ToArray() ?? [])).ToArray();
     }
 
@@ -308,7 +318,7 @@ internal static class Qwen35GenerationProbe
     private static string HashFile(string path)
     {
         using FileStream stream = File.OpenRead(path);
-        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        return Qwen35QuantizedModel.ComputeModelFingerprint(stream).ToLowerInvariant();
     }
 
     private sealed record MemorySnapshot(long[] ResidentWeightBytes, long[] ResidentAuxiliaryWeightBytes,
@@ -319,7 +329,8 @@ internal static class Qwen35GenerationProbe
         long NativeAllocatedBytes, long NativeReleasedBytes, long NativeReleaseCount, long AllocatedBytes,
         long KernelLaunchCount, long CachedBytes, long RetiredBytes, long PoolHits, long RetiredReuseCount,
         long H2DBytes, long D2HBytes, long PeakAllocatedBytes, double KernelMilliseconds,
-        double TransferMilliseconds, double AllocationMilliseconds, ArcProfileEntry[] ProfileEntries);
+        double TransferMilliseconds, double AllocationMilliseconds, bool ProgramBinaryCacheHit,
+        long KernelArgumentSetCount, long KernelArgumentCacheHitCount, ArcProfileEntry[] ProfileEntries);
 
     private sealed record TokenSample(int GeneratedIndex, int TokenId, double ElapsedMilliseconds,
         double? SincePreviousTokenMilliseconds);

@@ -1,0 +1,407 @@
+{
+  "baseline_commit": "6c003b7b4b7a252e9930854b05adde37eee7b244",
+  "statistics": {
+    "base": {
+      "before": {
+        "ready_s": 6.94961595,
+        "decode_tok_s": 17.120323649841225,
+        "first_ms": 516.74835,
+        "load_s": 6.5694309,
+        "adapter_s": 0.0
+      },
+      "after": {
+        "ready_s": 4.3870828500000005,
+        "decode_tok_s": 17.270275613248735,
+        "first_ms": 509.94505000000004,
+        "load_s": 4.15095815,
+        "adapter_s": 0.0
+      }
+    },
+    "lora": {
+      "before": {
+        "ready_s": 18.14189265,
+        "decode_tok_s": 16.14526416269937,
+        "first_ms": 569.8923,
+        "load_s": 6.299701799999999,
+        "adapter_s": 11.4818411
+      },
+      "after": {
+        "ready_s": 8.04367195,
+        "decode_tok_s": 16.178447275903928,
+        "first_ms": 566.09265,
+        "load_s": 6.8292324,
+        "adapter_s": 0.9587063499999999
+      }
+    }
+  },
+  "tests": [
+    {
+      "name": "core-final",
+      "counters": {
+        "total": "327",
+        "executed": "327",
+        "passed": "327",
+        "failed": "0",
+        "error": "0",
+        "timeout": "0",
+        "aborted": "0",
+        "inconclusive": "0",
+        "passedButRunAborted": "0",
+        "notRunnable": "0",
+        "notExecuted": "0",
+        "disconnected": "0",
+        "warning": "0",
+        "completed": "0",
+        "inProgress": "0",
+        "pending": "0"
+      },
+      "trx_sha256": "cc4d253e739801f65400179607beb97cbcbd1068d3c17ca05fe4e60cc22bedf3"
+    },
+    {
+      "name": "integration-final",
+      "counters": {
+        "total": "54",
+        "executed": "48",
+        "passed": "48",
+        "failed": "0",
+        "error": "0",
+        "timeout": "0",
+        "aborted": "0",
+        "inconclusive": "0",
+        "passedButRunAborted": "0",
+        "notRunnable": "0",
+        "notExecuted": "0",
+        "disconnected": "0",
+        "warning": "0",
+        "completed": "0",
+        "inProgress": "0",
+        "pending": "0"
+      },
+      "trx_sha256": "fb0f172e3e18465fa1b8481471a309cddee4f72d91aa992484220092ac2b81bd"
+    },
+    {
+      "name": "normal-integration",
+      "counters": {
+        "total": "67",
+        "executed": "61",
+        "passed": "61",
+        "failed": "0",
+        "error": "0",
+        "timeout": "0",
+        "aborted": "0",
+        "inconclusive": "0",
+        "passedButRunAborted": "0",
+        "notRunnable": "0",
+        "notExecuted": "0",
+        "disconnected": "0",
+        "warning": "0",
+        "completed": "0",
+        "inProgress": "0",
+        "pending": "0"
+      },
+      "trx_sha256": "c932f7427aa6671893899d1c34528ef22d7ce43417ecf3186f66b3b2feeefce8"
+    }
+  ],
+  "protected_and_installed_artifacts": [
+    {
+      "path": "NNtrain.Arc/ArcExecutionLane.cs",
+      "sha256": "48b44acde920a1fdbc0af5504d8915c8d3711b590a11465b19c53a98b6bdbad9",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Arc/ArcExecutionOptions.cs",
+      "sha256": "8a5d0147fe015228b8be1d105d2973199a07086064bfb126c10964174df7e450",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Arc/NNtrain.Arc.csproj",
+      "sha256": "f73494fee26f6e125040e22fab7c5c996dd1be4c7cabd41aec30bb69de683d44",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Arc/OpenClNative.cs",
+      "sha256": "f11b519a2860fc5c430b6a2283b36641ee2c8c20d55086fabb59cc2bcf94e4d6",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Benchmarks/Qwen35GenerationProbe.cs",
+      "sha256": "c28a6f9f9783b74502eff5634fbaa5775941073756fd1fe78511deebc33d9fcb",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Cli/QwenGgufCommand.cs",
+      "sha256": "7c6a94c1a61e23d60938b891087601bd3f4b83122319f268224fb7c2400552a9",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Core/Modules/Qwen35ExecutionOptions.cs",
+      "sha256": "4e1239411c334b95be12735f46b2a48a85345b159680e153395993efb5cfc8b4",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Core/Modules/Qwen35Gpu.Attention.cs",
+      "sha256": "98e02bcf0533986009ca66c683a81626861fb44794539e33266d2048f49dd339",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Core/Modules/Qwen35QuantizedModel.LoraCheckpoint.cs",
+      "sha256": "e714f991312d1cbf937223ce10fdabd7e7ec348a34d3d708453ecd1861716115",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Core/Modules/Qwen35QuantizedModel.cs",
+      "sha256": "6b69965dce5245acf4b71bde1ff0565b0c3eb7008d8d012a2f26e06e9f18a6d0",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Core/Serialization/GgufReader.cs",
+      "sha256": "581f8eec32173d486aba9c30f1456884d8f8033bafb0dc85ff3bdc57cb1179ce",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Core/Serialization/Qwen35Gguf.cs",
+      "sha256": "d4b81f680fa56c0799ec257fc745caf1396831eff15bd2139e54e78a87c03cf2",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Core/Text/Qwen2GgufTokenizer.cs",
+      "sha256": "e186231f4b68629cbe2bfb8a5ee9544cf4c17c366f29745786c174111d031489",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Arc/ArcExecutionLane.KernelArguments.cs",
+      "sha256": "b6c23f8e59204cfe1882f753a85d8836f37f43a16948e79d926ead522c81de25",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Arc/ArcExecutionLane.ProgramCache.cs",
+      "sha256": "0a8328a145a1df055c34202e2a47e20dfb7c1b85a115599436eee83aea60f867",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Arc/Kernels/qwen35_norm_fast.cl",
+      "sha256": "b2f4a41592b5b5d474cf47e1f83e4f490241bb2433a1d4aabc3cf5ec02df1ae4",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Arc/Kernels/qwen35_projection_pair.cl",
+      "sha256": "6236976fa6b0c790a717742f08978ee6ebfd1fbd0b7ed9415d2d1a0307c5b30c",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Core.Tests/ArcKernelArgumentCacheTests.cs",
+      "sha256": "48a1c451590459a65b95c3ad7f7127e8dd3c6bc486d696560b8007d86c94b663",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Core.Tests/ArcProgramBinaryCacheTests.cs",
+      "sha256": "15fb1e2d0858c1da0805e2bd54b16fa73475a3b5efd9477769f1e0b0032781cd",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Core.Tests/GgufStartupReadTests.cs",
+      "sha256": "09e4947892798998de44fc69f3790cc30c6a6529b4470392f27f62a2e2ac4f83",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Core.Tests/Qwen35ExactRmsNormTests.cs",
+      "sha256": "315674492b2acd4f61b934fda2365e1cc7c047f2df9ad77e1c6ab74828d5f686",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Core.Tests/Qwen35InferencePairProjectionTests.cs",
+      "sha256": "90c922b0c23e33bd4e0334015896d205a2c465ee567612c8bdc80462628bba3c",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Core.Tests/Qwen35LoraCheckpointReadTests.cs",
+      "sha256": "d8b0fcc221835d7855a57f10dba1a6cdb6806f488ac07d73627992eb129194ad",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Core.Tests/Qwen35ModelFingerprintTests.cs",
+      "sha256": "5b412be37d335ef49a3794457a36cc3210cbc2397cced2fd4b5b56a5cac83269",
+      "installed": true
+    },
+    {
+      "path": "NNtrain.Core.Tests/Qwen35ParallelLoadingTests.cs",
+      "sha256": "ae52ae3211bfc102f476e37e8a0c0b2eb9afc0b7c83931eca8a46506bfcc81d2",
+      "installed": true
+    },
+    {
+      "path": "checkpoints/tuku-qwen35/adapter.bin",
+      "sha256": "723b5caf1484f6bac85c454bf33ea302e2d51607d1a47f602352f6daa738ba0a",
+      "unchanged": true
+    },
+    {
+      "path": "models/lora_tuku_Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf",
+      "sha256": "50f47c0ba515824b855c5dede6516f34255366ca9bd82d2195ba70311b484af9",
+      "unchanged": true
+    },
+    {
+      "path": "traning.tuku-lora.json",
+      "sha256": "5599397c866d592dbae404174506b92a328045b64116a60ab4cd4f89d3c645f0",
+      "unchanged": true
+    }
+  ],
+  "logits": [
+    {
+      "name": "baseline-base-2",
+      "load_s": 6.7635058,
+      "adapter_s": 0.0,
+      "ready_s": 7.1456954999999995,
+      "tok_s": [
+        17.07648214824556,
+        17.117463687549552,
+        17.129400285992467
+      ],
+      "ids_match": true,
+      "logits_exact": true,
+      "max_abs": 0.0,
+      "finite": true,
+      "logits_sha256": "6cd90b1e37350b4fcbf213fbc31febb62b846d6b9e3b3104d94db73e0b6a291f"
+    },
+    {
+      "name": "baseline-base",
+      "load_s": 6.375356,
+      "adapter_s": 0.0,
+      "ready_s": 6.7535364,
+      "tok_s": [
+        17.086479685723486,
+        17.099904940622558,
+        17.123183612132898
+      ],
+      "ids_match": true,
+      "logits_exact": true,
+      "max_abs": 0.0,
+      "finite": true,
+      "logits_sha256": "6cd90b1e37350b4fcbf213fbc31febb62b846d6b9e3b3104d94db73e0b6a291f"
+    },
+    {
+      "name": "baseline-lora-2",
+      "load_s": 6.3737522,
+      "adapter_s": 11.525364600000001,
+      "ready_s": 18.2627831,
+      "tok_s": [
+        16.121389740419644,
+        16.155292937084585,
+        16.15127801294285
+      ],
+      "ids_match": true,
+      "logits_exact": true,
+      "max_abs": 0.0,
+      "finite": true,
+      "logits_sha256": "7c5aac4c8a5e013135462ec39a61887638db523ff3f0652e5ee03335784b9681"
+    },
+    {
+      "name": "baseline-lora",
+      "load_s": 6.225651399999999,
+      "adapter_s": 11.4383176,
+      "ready_s": 18.021002199999998,
+      "tok_s": [
+        16.117108961535422,
+        16.13784162101999,
+        16.139250312455886
+      ],
+      "ids_match": true,
+      "logits_exact": true,
+      "max_abs": 0.0,
+      "finite": true,
+      "logits_sha256": "7c5aac4c8a5e013135462ec39a61887638db523ff3f0652e5ee03335784b9681"
+    },
+    {
+      "name": "final-base-1",
+      "load_s": 4.2739674,
+      "adapter_s": 0.0,
+      "ready_s": 4.508247600000001,
+      "tok_s": [
+        17.286885077533714,
+        17.284003837455536,
+        17.26928128461348
+      ],
+      "ids_match": true,
+      "logits_exact": true,
+      "max_abs": 0.0,
+      "finite": true,
+      "logits_sha256": "6cd90b1e37350b4fcbf213fbc31febb62b846d6b9e3b3104d94db73e0b6a291f"
+    },
+    {
+      "name": "final-base-2",
+      "load_s": 4.0279489,
+      "adapter_s": 0.0,
+      "ready_s": 4.2659180999999995,
+      "tok_s": [
+        17.26769333689892,
+        17.270478022314354,
+        17.27007320418312
+      ],
+      "ids_match": true,
+      "logits_exact": true,
+      "max_abs": 0.0,
+      "finite": true,
+      "logits_sha256": "6cd90b1e37350b4fcbf213fbc31febb62b846d6b9e3b3104d94db73e0b6a291f"
+    },
+    {
+      "name": "final-lora-1",
+      "load_s": 6.7602888000000005,
+      "adapter_s": 0.974429,
+      "ready_s": 7.976518700000001,
+      "tok_s": [
+        16.1751234821613,
+        16.177609085142247,
+        16.179285466665604
+      ],
+      "ids_match": true,
+      "logits_exact": true,
+      "max_abs": 0.0,
+      "finite": true,
+      "logits_sha256": "7c5aac4c8a5e013135462ec39a61887638db523ff3f0652e5ee03335784b9681"
+    },
+    {
+      "name": "final-lora-2",
+      "load_s": 6.898176,
+      "adapter_s": 0.9429837,
+      "ready_s": 8.1108252,
+      "tok_s": [
+        16.169962514031962,
+        16.179398182222407,
+        16.17544504263143
+      ],
+      "ids_match": true,
+      "logits_exact": true,
+      "max_abs": 0.0,
+      "finite": true,
+      "logits_sha256": "7c5aac4c8a5e013135462ec39a61887638db523ff3f0652e5ee03335784b9681"
+    },
+    {
+      "name": "single-base",
+      "load_s": 6.2952554,
+      "adapter_s": 0.0,
+      "ready_s": 6.5384478,
+      "tok_s": [
+        17.515392478639463,
+        17.549533731689326
+      ],
+      "ids_match": true,
+      "logits_exact": true,
+      "max_abs": 0.0,
+      "finite": true,
+      "logits_sha256": "6cd90b1e37350b4fcbf213fbc31febb62b846d6b9e3b3104d94db73e0b6a291f"
+    },
+    {
+      "name": "single-lora",
+      "load_s": 6.4865577000000005,
+      "adapter_s": 0.9711028,
+      "ready_s": 7.6979856,
+      "tok_s": [
+        16.34243532346106,
+        16.408453593947467
+      ],
+      "ids_match": true,
+      "logits_exact": true,
+      "max_abs": 0.0,
+      "finite": true,
+      "logits_sha256": "7c5aac4c8a5e013135462ec39a61887638db523ff3f0652e5ee03335784b9681"
+    }
+  ]
+}

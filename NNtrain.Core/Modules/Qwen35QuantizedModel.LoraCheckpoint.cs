@@ -1,7 +1,7 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 
 namespace NNtrain;
@@ -47,65 +47,53 @@ public sealed partial class Qwen35QuantizedModel
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_lora.Count != 0) throw new InvalidOperationException("A LoRA adapter is already attached.");
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        if (stream.Length < 44) throw new InvalidDataException("Truncated LoRA checkpoint.");
-        long payloadEnd = stream.Length - 32;
-        byte[] digest = HashPrefix(stream, payloadEnd), savedDigest = new byte[32];
-        stream.ReadExactly(savedDigest);
-        if (!CryptographicOperations.FixedTimeEquals(digest, savedDigest))
-            throw new InvalidDataException("LoRA checkpoint checksum mismatch.");
-        stream.Position = 0;
-        using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
-        if (!reader.ReadBytes(8).SequenceEqual(LoraMagic)) throw new InvalidDataException("Not an NNtrain Qwen3.5 LoRA checkpoint.");
-        int length = reader.ReadInt32();
-        if (length < 1 || length > 1024 * 1024 || length > payloadEnd - stream.Position)
-            throw new InvalidDataException("Invalid LoRA header length.");
-        LoraHeader header = JsonSerializer.Deserialize<LoraHeader>(reader.ReadBytes(length))
-            ?? throw new InvalidDataException("Missing LoRA header.");
-        if (header.Version != 1 || header.Step < 0 || header.Options is null || header.Entries is null
-            || header.Entries.Length == 0 || header.ModelSha256 != ModelFingerprint())
-            throw new InvalidDataException("LoRA checkpoint base/version mismatch.");
-        if (expectedTrainingIdentity is not null && header.TrainingIdentity != expectedTrainingIdentity)
-            throw new InvalidDataException("LoRA training data/config identity mismatch.");
-        header.Options.Validate();
-        if (header.Options.Layers?.Any(layer => layer >= Descriptor.LayerCount) == true)
-            throw new InvalidDataException("Invalid LoRA layers.");
-        string[] expected = _matrices.Keys.Where(name =>
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize: 64 * 1024, options: FileOptions.SequentialScan);
+        LoraHeader? header = null;
+        var loaded = ReadLoraCheckpoint(stream, _options.LoraTraining, json =>
         {
-            if (!name.StartsWith("blk.", StringComparison.Ordinal)) return false;
-            string[] parts = name.Split('.');
-            return (header.Options.Layers is null || header.Options.Layers.Contains(int.Parse(parts[1])))
-                && header.Options.Targets.Contains(parts[2]);
-        }).Concat(header.Options.IncludeOutput ? ["output.weight"] : Array.Empty<string>())
-            .Order(StringComparer.Ordinal).ToArray();
-        if (!header.Entries.Select(entry => entry.Name).SequenceEqual(expected))
-            throw new InvalidDataException("LoRA target directory mismatch.");
-        var states = new Dictionary<string, float[][]>(StringComparer.Ordinal);
-        foreach (LoraEntry entry in header.Entries)
-        {
-            Matrix matrix = entry.Name == "output.weight" ? OutputMatrix : _matrices[entry.Name];
-            if (entry.Input != matrix._inputWidth || entry.Output != matrix.OutputWidth)
-                throw new InvalidDataException("LoRA matrix shape mismatch.");
-            var arrays = new float[6][];
-            for (int i = 0; i < arrays.Length; i++)
+            header = JsonSerializer.Deserialize<LoraHeader>(json)
+                ?? throw new InvalidDataException("Missing LoRA header.");
+            if (header.Version != 1 || header.Step < 0 || header.Options is null || header.Entries is null
+                || header.Entries.Length == 0)
+                throw new InvalidDataException("LoRA checkpoint base/version mismatch.");
+            if (expectedTrainingIdentity is not null && header.TrainingIdentity != expectedTrainingIdentity)
+                throw new InvalidDataException("LoRA training data/config identity mismatch.");
+            header.Options.Validate();
+            if (header.Options.Layers?.Any(layer => layer >= Descriptor.LayerCount) == true)
+                throw new InvalidDataException("Invalid LoRA layers.");
+            string[] expected = _matrices.Keys.Where(name =>
             {
-                int count = checked((i % 2 == 0 ? entry.Input : entry.Output) * header.Options.Rank);
-                if (4L * count > payloadEnd - stream.Position) throw new InvalidDataException("Truncated LoRA tensor.");
-                float[] values = new float[count];
-                if (BitConverter.IsLittleEndian) stream.ReadExactly(MemoryMarshal.AsBytes(values.AsSpan()));
-                else for (int j = 0; j < count; j++) values[j] = reader.ReadSingle();
-                if (values.Any(value => !float.IsFinite(value) || (i >= 4 && value < 0)))
-                    throw new InvalidDataException("Invalid LoRA parameter/optimizer state.");
-                arrays[i] = values;
+                if (!name.StartsWith("blk.", StringComparison.Ordinal)) return false;
+                string[] parts = name.Split('.');
+                return (header.Options.Layers is null || header.Options.Layers.Contains(int.Parse(parts[1])))
+                    && header.Options.Targets.Contains(parts[2]);
+            }).Concat(header.Options.IncludeOutput ? ["output.weight"] : Array.Empty<string>())
+                .Order(StringComparer.Ordinal).ToArray();
+            if (!header.Entries.Select(entry => entry.Name).SequenceEqual(expected))
+                throw new InvalidDataException("LoRA target directory mismatch.");
+            var shapes = new (int Input, int Output, int Rank)[header.Entries.Length];
+            for (int i = 0; i < header.Entries.Length; i++)
+            {
+                LoraEntry entry = header.Entries[i];
+                Matrix matrix = entry.Name == "output.weight" ? OutputMatrix : _matrices[entry.Name];
+                if (entry.Input != matrix._inputWidth || entry.Output != matrix.OutputWidth)
+                    throw new InvalidDataException("LoRA matrix shape mismatch.");
+                shapes[i] = (entry.Input, entry.Output, header.Options.Rank);
             }
-            states.Add(entry.Name, arrays);
-        }
-        if (stream.Position != payloadEnd) throw new InvalidDataException("Unexpected trailing LoRA tensor data.");
+            return shapes;
+        });
+        // The entire adapter has passed tensor and checksum validation. The
+        // protected base snapshot is still hashed in full before any attachment.
+        LoraHeader validatedHeader = header ?? throw new InvalidDataException("Missing LoRA header.");
+        if (validatedHeader.ModelSha256 != ModelFingerprint())
+            throw new InvalidDataException("LoRA checkpoint base/version mismatch.");
         try
         {
-            AttachLora(header.Options);
-            foreach (var pair in states) _lora[pair.Key].RestoreState(pair.Value, _options.LoraTraining);
-            LoraStep = header.Step; Reset();
+            AttachLora(validatedHeader.Options);
+            for (int i = 0; i < validatedHeader.Entries.Length; i++)
+                _lora[validatedHeader.Entries[i].Name].RestoreState(loaded.States[i], _options.LoraTraining);
+            LoraStep = validatedHeader.Step; Reset();
         }
         catch
         {
@@ -120,11 +108,30 @@ public sealed partial class Qwen35QuantizedModel
         if (_modelFingerprint is null)
         {
             FileStream stream = _modelSource ?? throw new InvalidOperationException("Base GGUF source is closed.");
-            stream.Position = 0;
-            _modelFingerprint = Convert.ToHexString(SHA256.HashData(stream));
+            _modelFingerprint = ComputeModelFingerprint(stream);
         }
         return _modelFingerprint;
     }
+
+    // Read the entire protected model snapshot with bounded storage. Large reads
+    // avoid a native SHA update and file read for every 4 KiB of a multi-GB model.
+    internal static string ComputeModelFingerprint(Stream stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        stream.Position = 0;
+        const int bufferBytes = 4 * 1024 * 1024;
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(bufferBytes);
+        try
+        {
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            int count;
+            while ((count = stream.Read(buffer.AsSpan(0, bufferBytes))) != 0)
+                hash.AppendData(buffer.AsSpan(0, count));
+            return Convert.ToHexString(hash.GetHashAndReset());
+        }
+        finally { ArrayPool<byte>.Shared.Return(buffer); }
+    }
+
     // Hash the same bytes as they are written; no second read of a large adapter
     // checkpoint is needed. The v1 little-endian payload and trailing digest stay
     // byte-for-byte compatible with BinaryWriter plus HashPrefix.
@@ -168,17 +175,87 @@ public sealed partial class Qwen35QuantizedModel
         stream.Write(bytes);
         hash.AppendData(bytes);
     }
-    private static byte[] HashPrefix(Stream stream, long length)
+    /// <summary>Consumes and verifies the checkpoint once; inference retains only A/B.</summary>
+    internal static (byte[] Header, float[][][] States) ReadLoraCheckpoint(Stream stream, bool training,
+        Func<byte[], (int Input, int Output, int Rank)[]> validateHeader)
     {
-        stream.Position = 0;
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(validateHeader);
+        if (stream.Position != 0) throw new ArgumentException("Read a LoRA checkpoint from its beginning.", nameof(stream));
+        if (stream.Length < 44) throw new InvalidDataException("Truncated LoRA checkpoint.");
+        long payloadEnd = stream.Length - 32, consumed = 0;
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[1024 * 1024]; long remaining = length;
-        while (remaining > 0)
+        Span<byte> prefix = stackalloc byte[12];
+        ReadPayload(prefix);
+        if (!prefix[..8].SequenceEqual(LoraMagic))
+            throw new InvalidDataException("Not an NNtrain Qwen3.5 LoRA checkpoint.");
+        int headerLength = BinaryPrimitives.ReadInt32LittleEndian(prefix[8..]);
+        if (headerLength < 1 || headerLength > 1024 * 1024 || headerLength > payloadEnd - consumed)
+            throw new InvalidDataException("Invalid LoRA header length.");
+        byte[] json = new byte[headerLength];
+        ReadPayload(json);
+        var shapes = validateHeader(json);
+        if (shapes is null || shapes.Length == 0) throw new InvalidDataException("Missing LoRA tensor directory.");
+        var states = new float[shapes.Length][][];
+        float[]? scratch = training ? null : ArrayPool<float>.Shared.Rent(16 * 1024);
+        try
         {
-            int read = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
-            if (read == 0) throw new EndOfStreamException();
-            hash.AppendData(buffer, 0, read); remaining -= read;
+            for (int entry = 0; entry < shapes.Length; entry++)
+            {
+                var shape = shapes[entry];
+                if (shape.Input < 1 || shape.Output < 1 || shape.Rank < 1)
+                    throw new InvalidDataException("Invalid LoRA tensor dimensions.");
+                var arrays = new float[6][];
+                for (int field = 0; field < arrays.Length; field++)
+                {
+                    int count = checked((field % 2 == 0 ? shape.Input : shape.Output) * shape.Rank);
+                    if (4L * count > payloadEnd - consumed) throw new InvalidDataException("Truncated LoRA tensor.");
+                    if (training || field < 2)
+                    {
+                        arrays[field] = new float[count];
+                        ReadValues(arrays[field], field >= 4);
+                    }
+                    else
+                    {
+                        // Validate every optimizer value, even though an
+                        // inference-only model cannot train or save a checkpoint.
+                        arrays[field] = [];
+                        for (int offset = 0; offset < count;)
+                        {
+                            int chunk = Math.Min(scratch!.Length, count - offset);
+                            ReadValues(scratch.AsSpan(0, chunk), field >= 4);
+                            offset += chunk;
+                        }
+                    }
+                }
+                states[entry] = arrays;
+            }
+            if (consumed != payloadEnd) throw new InvalidDataException("Unexpected trailing LoRA tensor data.");
+            Span<byte> savedDigest = stackalloc byte[32];
+            stream.ReadExactly(savedDigest);
+            if (!CryptographicOperations.FixedTimeEquals(hash.GetHashAndReset(), savedDigest))
+                throw new InvalidDataException("LoRA checkpoint checksum mismatch.");
+            return (json, states);
         }
-        return hash.GetHashAndReset();
+        finally { if (scratch is not null) ArrayPool<float>.Shared.Return(scratch); }
+
+        void ReadPayload(Span<byte> destination)
+        {
+            if (destination.Length > payloadEnd - consumed) throw new InvalidDataException("Truncated LoRA checkpoint.");
+            stream.ReadExactly(destination);
+            hash.AppendData(destination);
+            consumed += destination.Length;
+        }
+        void ReadValues(Span<float> values, bool nonnegative)
+        {
+            Span<byte> bytes = MemoryMarshal.AsBytes(values);
+            ReadPayload(bytes);
+            if (!BitConverter.IsLittleEndian)
+                for (int i = 0; i < values.Length; i++)
+                    values[i] = BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(i * sizeof(float), sizeof(float)));
+            foreach (float value in values)
+                if (!float.IsFinite(value) || (nonnegative && value < 0))
+                    throw new InvalidDataException("Invalid LoRA parameter/optimizer state.");
+        }
     }
 }

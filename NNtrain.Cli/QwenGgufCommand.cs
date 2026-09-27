@@ -41,10 +41,10 @@ internal static class QwenGgufCommand
             if (explicitDevice && devices is not null)
                 throw new ArgumentException("Use either --device or --devices.");
 
-            string architecture;
-            using (var gguf = new GgufReader(modelPath))
-                architecture = gguf.Metadata.TryGetValue("general.architecture", out object? value)
-                    ? value as string ?? "" : "";
+            long startupStarted = Stopwatch.GetTimestamp();
+            using var gguf = new GgufReader(modelPath);
+            string architecture = gguf.Metadata.TryGetValue("general.architecture", out object? architectureValue)
+                ? architectureValue as string ?? "" : "";
             if (architecture == "qwen35")
             {
                 if (adapterPath is not null)
@@ -52,8 +52,8 @@ internal static class QwenGgufCommand
                     QwenLoraCommand.ValidateDistinctPaths(modelPath, adapterPath);
                     if (!File.Exists(adapterPath)) throw new FileNotFoundException("LoRA adapter not found.", adapterPath);
                 }
-                return RunQwen35(modelPath, prompt, maxNewTokens,
-                    devices ?? (explicitDevice ? [device] : null), stream, output, error, adapterPath);
+                return RunQwen35(gguf, prompt, maxNewTokens,
+                    devices ?? (explicitDevice ? [device] : null), stream, output, error, startupStarted, adapterPath);
             }
             if (adapterPath is not null)
                 throw new NotSupportedException("--adapter currently supports qwen35 GGUF models only.");
@@ -65,7 +65,7 @@ internal static class QwenGgufCommand
             }
 
             Qwen2GgufDescriptor descriptor = Qwen2Gguf.Inspect(modelPath);
-            Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(modelPath);
+            Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(gguf);
             output.WriteLine(
                 $"Qwen GGUF: layers={descriptor.LayerCount}, width={descriptor.EmbeddingLength}, " +
                 $"heads={descriptor.HeadCount}/{descriptor.KvHeadCount}, vocab={descriptor.VocabularySize}");
@@ -148,11 +148,11 @@ internal static class QwenGgufCommand
         double? FirstTokenMilliseconds,
         double? DecodeTokensPerSecond);
 
-    private static int RunQwen35(string path, string prompt, int maxNewTokens,
-        int[]? devices, bool stream, TextWriter output, TextWriter error, string? adapterPath = null)
+    private static int RunQwen35(GgufReader gguf, string prompt, int maxNewTokens,
+        int[]? devices, bool stream, TextWriter output, TextWriter error, long startupStarted, string? adapterPath = null)
     {
-        Qwen35GgufDescriptor d = Qwen35Gguf.Inspect(path);
-        Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(path);
+        Qwen35GgufDescriptor d = Qwen35Gguf.Inspect(gguf);
+        Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(gguf);
         int[] promptIds = tokenizer.Encode(prompt);
         if (promptIds.Length == 0 || promptIds.Length > d.ContextLength)
             throw new ArgumentException("Prompt must contain 1..context-length tokens.");
@@ -167,14 +167,14 @@ internal static class QwenGgufCommand
         }
         output.WriteLine("Text inference: quantized weights, attention, recurrent state and greedy sampling on Arc (Float32).");
         output.WriteLine("GPU KV cache and Gated DeltaNet state reuse: enabled.");
-        var loadTimer = Stopwatch.StartNew();
-        using Qwen35QuantizedModel model = Qwen35QuantizedModel.Load(path, devices, output.WriteLine);
+        using Qwen35QuantizedModel model = Qwen35QuantizedModel.Load(gguf, devices, output.WriteLine,
+            new() { ComputeModelFingerprintOnLoad = adapterPath is not null });
         if (adapterPath is not null)
         {
             model.LoadLora(adapterPath);
             output.WriteLine($"LoRA adapter = {adapterPath}, step {model.LoraStep}, parameters={model.LoraParameterCount}");
         }
-        loadTimer.Stop();
+        double loadSeconds = Stopwatch.GetElapsedTime(startupStarted).TotalSeconds;
         int[] generated = [];
         GenerationTiming timing = WriteGeneration(prompt, tokenizer, stream, onToken =>
         {
@@ -188,7 +188,7 @@ internal static class QwenGgufCommand
         string firstToken = timing.FirstTokenMilliseconds.HasValue
             ? FormattableString.Invariant($"{timing.FirstTokenMilliseconds.Value / 1000:F3} s") : "n/a";
         error.WriteLine(FormattableString.Invariant(
-            $"timing: load={loadTimer.Elapsed.TotalSeconds:F3} s, prefill/first-token={firstToken}, decode={decode}, generated={timing.GeneratedTokens}, total-generation={timing.TotalMilliseconds / 1000:F3} s"));
+            $"timing: load={loadSeconds:F3} s, prefill/first-token={firstToken}, decode={decode}, generated={timing.GeneratedTokens}, total-generation={timing.TotalMilliseconds / 1000:F3} s"));
         error.Flush();
         return 0;
     }

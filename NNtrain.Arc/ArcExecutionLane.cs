@@ -14,7 +14,8 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
     private static readonly string[] Qwen35KernelResourceSuffixes =
     [
         ".qwen.cl", ".qwen35_attention.cl", ".qwen35_delta.cl",
-        ".qwen35_delta_fused.cl", ".qwen35_linear_fast.cl", ".qwen35_iq.cl", ".qwen35_lora.cl", ".qwen35_prism.cl"
+        ".qwen35_delta_fused.cl", ".qwen35_linear_fast.cl", ".qwen35_iq.cl", ".qwen35_lora.cl", ".qwen35_prism.cl",
+        ".qwen35_projection_pair.cl", ".qwen35_norm_fast.cl"
     ];
 
     private static readonly string[] Qwen35TrainingResourceSuffixes =
@@ -129,7 +130,8 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(Options.LossChunkRows);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(Options.LossLogitsWorkspaceMiB);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(Options.LossPanelWorkspaceMiB);
-        if (Options.Qwen35ProjectionWorkgroupSize is not (32 or 64 or 128))
+        if (Options.Qwen35ProjectionWorkgroupSize is not (32 or 64 or 128)
+            || Options.Qwen35PairedProjectionTypes is < 0 or > 7)
             throw new ArgumentOutOfRangeException(nameof(options));
         if (Options.Qwen35LoraReductionSize is not (16 or 128 or 256 or 512 or 1024))
             throw new ArgumentOutOfRangeException(nameof(options));
@@ -146,7 +148,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
             var sourceText = new StringBuilder();
             var assembly = typeof(ArcExecutionLane).Assembly;
             int resourceCount = 0;
-            foreach (string resourceName in assembly.GetManifestResourceNames().Where(n => n.EndsWith(".cl", StringComparison.Ordinal)).Order())
+            foreach (string resourceName in assembly.GetManifestResourceNames().Where(n => n.EndsWith(".cl", StringComparison.Ordinal)).Order(StringComparer.Ordinal))
             {
                 if (Options.Qwen35InferenceKernelsOnly
                     && !Qwen35KernelResourceSuffixes.Any(suffix => resourceName.EndsWith(suffix, StringComparison.Ordinal))
@@ -165,10 +167,6 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
             if (Options.Qwen35InferenceKernelsOnly && resourceCount != Qwen35KernelResourceSuffixes.Length + (Options.Qwen35TrainingKernels ? Qwen35TrainingResourceSuffixes.Length : 0))
                 throw new InvalidOperationException("The dedicated Qwen3.5 OpenCL kernel resources are incomplete.");
             byte[] source = Encoding.UTF8.GetBytes(sourceText.ToString());
-            GCHandle pin = GCHandle.Alloc(source, GCHandleType.Pinned);
-            try { _program = OpenClNative.clCreateProgramWithSource(_context, 1, [pin.AddrOfPinnedObject()], [(nuint)source.Length], out error); }
-            finally { pin.Free(); }
-            OpenClNative.Check(error, "create program");
             string buildOptions = "-cl-std=CL1.2 -cl-fp32-correctly-rounded-divide-sqrt";
             buildOptions += $" -DQ35_PROJECTION_WG={Options.Qwen35ProjectionWorkgroupSize}";
             if (Options.Qwen35UnrollQ4) buildOptions += " -DQ35_Q4_UNROLL=1";
@@ -180,13 +178,22 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
                 buildOptions += $" -DARC_XMX=1 -DARC_SG={Device.MinimumSubgroupSize}";
             if (Device.Extensions.Split(' ').Contains("cl_intel_subgroup_local_block_io"))
                 buildOptions += " -DARC_SLM_BLOCK_IO=1";
-            error = OpenClNative.clBuildProgram(_program, 1, [Device.NativeDevice], buildOptions, 0, 0);
-            if (error != 0)
+            string? cachePath = ProgramCachePath(source, buildOptions);
+            if (!TryLoadProgramCache(cachePath, buildOptions))
             {
-                OpenClNative.clGetProgramBuildInfo(_program, Device.NativeDevice, 0x1183, 0, null, out nuint length);
-                byte[] log = new byte[checked((int)length)];
-                OpenClNative.clGetProgramBuildInfo(_program, Device.NativeDevice, 0x1183, length, log, out _);
-                throw new InvalidOperationException($"Arc OpenCL kernel build failed ({error}): {Encoding.UTF8.GetString(log)}");
+                GCHandle pin = GCHandle.Alloc(source, GCHandleType.Pinned);
+                try { _program = OpenClNative.clCreateProgramWithSource(_context, 1, [pin.AddrOfPinnedObject()], [(nuint)source.Length], out error); }
+                finally { pin.Free(); }
+                OpenClNative.Check(error, "create program");
+                error = OpenClNative.clBuildProgram(_program, 1, [Device.NativeDevice], buildOptions, 0, 0);
+                if (error != 0)
+                {
+                    OpenClNative.clGetProgramBuildInfo(_program, Device.NativeDevice, 0x1183, 0, null, out nuint length);
+                    byte[] log = new byte[checked((int)length)];
+                    OpenClNative.clGetProgramBuildInfo(_program, Device.NativeDevice, 0x1183, length, log, out _);
+                    throw new InvalidOperationException($"Arc OpenCL kernel build failed ({error}): {Encoding.UTF8.GetString(log)}");
+                }
+                SaveProgramCache(cachePath);
             }
         }
         catch { Dispose(); throw; }
@@ -419,7 +426,8 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
                 OpenClNative.Check(error, $"create kernel {name}");
                 _kernels.Add(name, kernel);
             }
-            var temporary = new List<(ArcBuffer Buffer, HostArray Array)>();
+            List<(ArcBuffer Buffer, HostArray Array)>? temporary = null;
+            CachedKernelArguments? argumentCache = GetKernelArgumentCache(kernel, arguments.Length);
             nint kernelEvent = 0;
             long submitStart = Stopwatch.GetTimestamp();
             string? label = DetailedProfiler?.KernelLabel(name, arguments);
@@ -435,7 +443,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
                         if (host.Values is not float[] and not int[])
                             throw new ArgumentException("Only float[] and int[] staging arrays are supported.");
                         var allocation = AllocateCore(Math.Max(4, Buffer.ByteLength(host.Values)), host.Upload ? host.Values : null);
-                        temporary.Add((allocation, host));
+                        (temporary ??= []).Add((allocation, host));
                         argument = allocation;
                     }
                     int status;
@@ -444,26 +452,27 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
                         case ArcBuffer buffer:
                             if (buffer.Owner != this || buffer.Handle == 0) throw new ArgumentException("Arc buffer belongs to a different or disposed lane.");
                             nint handle = buffer.Handle;
-                            status = OpenClNative.clSetKernelArg(kernel, (uint)i, (nuint)sizeof(nint), (nint)(&handle)); break;
-                        case int value: status = OpenClNative.clSetKernelArg(kernel, (uint)i, 4, (nint)(&value)); break;
-                        case uint value: status = OpenClNative.clSetKernelArg(kernel, (uint)i, 4, (nint)(&value)); break;
-                        case float value: status = OpenClNative.clSetKernelArg(kernel, (uint)i, 4, (nint)(&value)); break;
-                        case LocalMemory local: status = OpenClNative.clSetKernelArg(kernel, (uint)i, checked((nuint)local.Bytes), 0); break;
+                            status = SetKernelArgument(kernel, (uint)i, (nuint)sizeof(nint), (nint)(&handle), argumentCache); break;
+                        case int value: status = SetKernelArgument(kernel, (uint)i, 4, (nint)(&value), argumentCache); break;
+                        case uint value: status = SetKernelArgument(kernel, (uint)i, 4, (nint)(&value), argumentCache); break;
+                        case float value: status = SetKernelArgument(kernel, (uint)i, 4, (nint)(&value), argumentCache); break;
+                        case LocalMemory local: status = SetKernelArgument(kernel, (uint)i, checked((nuint)local.Bytes), 0, argumentCache); break;
                         default: throw new ArgumentException($"Unsupported Arc kernel argument {argument.GetType()}.");
                     }
-                    OpenClNative.Check(status, $"set {name} argument {i}");
+                    if (status != 0) OpenClNative.Check(status, $"set {name} argument {i}");
                 }
                 // With timing disabled, retain one event at each half-window
                 // boundary. The existing partial wait therefore fences the
                 // same oldest commands without allocating an event per kernel.
                 bool eventRequired = CollectKernelEvents || (Options.BatchDispatch && Options.PipelineEventCollection
                     && (_pendingEvents.Count + 1) % (Options.QueuedKernelLimit / 2) == 0);
-                OpenClNative.Check(OpenClNative.clEnqueueNDRangeKernel(_queue, kernel, (uint)global.Length, 0,
-                    global, localSize, 0, 0, eventRequired ? (nint)(&kernelEvent) : 0), $"launch {name}");
+                int launchStatus = OpenClNative.clEnqueueNDRangeKernel(_queue, kernel, (uint)global.Length, 0,
+                    global, localSize, 0, 0, eventRequired ? (nint)(&kernelEvent) : 0);
+                if (launchStatus != 0) OpenClNative.Check(launchStatus, $"launch {name}");
                 KernelLaunchCount++;
                 }
                 if (label is not null) DetailedProfiler!.Add("host-submit", label, Stopwatch.GetElapsedTime(submitStart).TotalMilliseconds);
-                foreach (var (buffer, host) in temporary)
+                if (temporary is not null) foreach (var (buffer, host) in temporary)
                 {
                     if (!host.ReadBack || host.Values.Length == 0) continue;
                     GCHandle pin = GCHandle.Alloc(host.Values, GCHandleType.Pinned);
@@ -486,7 +495,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
                 kernelEvent = 0;
                 // Bound queued command/event resources. No per-kernel fence is
                 // necessary when all uses (including pooled reuse) share this queue.
-                if (!Options.BatchDispatch || temporary.Any(t => t.Array.ReadBack))
+                if (!Options.BatchDispatch || temporary?.Any(t => t.Array.ReadBack) == true)
                     SynchronizeCore(!Options.BatchDispatch ? "unbatched" : "host-result");
                 else if (_pendingEvents.Count >= Options.QueuedKernelLimit)
                 {
@@ -497,7 +506,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
             catch { if (_queue != 0) OpenClNative.clFinish(_queue); DrainCompletedEvents(); throw; }
             finally {
                 if (kernelEvent != 0) OpenClNative.clReleaseEvent(kernelEvent);
-                foreach (var entry in temporary) entry.Buffer.Dispose();
+                if (temporary is not null) foreach (var entry in temporary) entry.Buffer.Dispose();
             }
         }
     }
@@ -734,6 +743,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
 
     private void ReleaseNative(nint handle, long bytes)
     {
+        InvalidateKernelArgumentCaches();
         using var releaseScope = Timeline?.Host("native-free");
         int status = OpenClNative.clReleaseMemObject(handle);
         if (status == 0)

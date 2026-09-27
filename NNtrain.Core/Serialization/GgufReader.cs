@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 
 namespace NNtrain;
 
@@ -15,6 +16,7 @@ public sealed class GgufReader : IDisposable
     private const uint Magic = 0x46554747; // "GGUF" little-endian
     private readonly FileStream _stream;
     private readonly BinaryReader _reader;
+    private readonly SafeFileHandle _handle;
     private readonly Dictionary<string, object> _metadata = new(StringComparer.Ordinal);
     private readonly List<GgufTensorInfo> _tensors = [];
     private readonly long _dataOffset;
@@ -22,7 +24,8 @@ public sealed class GgufReader : IDisposable
     public GgufReader(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        _stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        FilePath = Path.GetFullPath(path);
+        _stream = File.Open(FilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
         _reader = new BinaryReader(_stream, Encoding.UTF8, leaveOpen: true);
 
         try
@@ -65,6 +68,9 @@ public sealed class GgufReader : IDisposable
                 throw new InvalidDataException($"Invalid GGUF alignment {alignment}.");
 
             _dataOffset = Align(_stream.Position, alignment);
+            // Obtain the handle once after buffered header reads finish. Later
+            // positional reads never touch FileStream's shared position/buffer.
+            _handle = _stream.SafeFileHandle;
         }
         catch
         {
@@ -73,6 +79,7 @@ public sealed class GgufReader : IDisposable
         }
     }
 
+    public string FilePath { get; }
     public uint Version { get; }
     public IReadOnlyDictionary<string, object> Metadata => _metadata;
     public IReadOnlyList<GgufTensorInfo> Tensors => _tensors;
@@ -84,13 +91,22 @@ public sealed class GgufReader : IDisposable
         return new NonOwningStream(_stream);
     }
 
+    /// <summary>Reads an exact byte range without moving the shared stream; concurrent calls are supported.</summary>
     public byte[] ReadTensorBytes(GgufTensorInfo tensor, int byteCount)
     {
         ArgumentNullException.ThrowIfNull(tensor);
         ArgumentOutOfRangeException.ThrowIfNegative(byteCount);
-        _stream.Position = checked(_dataOffset + (long)tensor.Offset);
-        byte[] payload = _reader.ReadBytes(byteCount);
-        if (payload.Length != byteCount) throw new EndOfStreamException();
+        long offset = checked(_dataOffset + (long)tensor.Offset);
+        long length = RandomAccess.GetLength(_handle);
+        if (offset > length || byteCount > length - offset) throw new EndOfStreamException();
+        byte[] payload = GC.AllocateUninitializedArray<byte>(byteCount);
+        int read = 0;
+        while (read < payload.Length)
+        {
+            int count = RandomAccess.Read(_handle, payload.AsSpan(read), checked(offset + read));
+            if (count == 0) throw new EndOfStreamException();
+            read += count;
+        }
         return payload;
     }
 

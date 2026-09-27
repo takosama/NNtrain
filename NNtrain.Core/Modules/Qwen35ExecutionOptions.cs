@@ -7,6 +7,15 @@ public sealed record Qwen35ExecutionOptions
 {
     public Qwen35QuantizedKernel QuantizedKernel { get; init; } = Qwen35QuantizedKernel.Auto;
     public bool LoraTraining { get; init; }
+    public bool ParallelModelLoad { get; init; } = true;
+    public bool ComputeModelFingerprintOnLoad { get; init; }
+    public bool InferencePairedProjection { get; init; }
+    // Bit 0: IQ2_S, bit 1: Q4_K, bit 2: IQ3_S. Q4 pairing was slower on Arc B580.
+    public int InferencePairedProjectionTypes { get; init; } = 5;
+    public bool InferencePairedLoraProjection { get; init; }
+    public bool CacheKernelArguments { get; init; } = true;
+    public bool CacheProgramBinary { get; init; } = true;
+    public bool InferenceFastRmsNorm { get; init; } = true;
     public bool InferenceCooperativeLora { get; init; } = true;
     public int ProjectionWorkgroupSize { get; init; } = 32;
     public bool ParallelArgmax { get; init; } = true;

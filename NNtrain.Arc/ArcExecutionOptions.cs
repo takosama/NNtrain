@@ -8,6 +8,13 @@ public sealed record ArcExecutionOptions
     public bool Qwen35TrainingKernels { get; init; }
     public bool Qwen35CooperativeLora { get; init; }
     public int Qwen35ProjectionWorkgroupSize { get; init; } = 32;
+    public bool Qwen35PairedProjection { get; init; }
+    public int Qwen35PairedProjectionTypes { get; init; }
+    public bool Qwen35PairedLoraProjection { get; init; }
+    public bool CacheKernelArguments { get; init; }
+    public bool CacheProgramBinary { get; init; }
+    public bool Qwen35FastRmsNorm { get; init; }
+    public string? ProgramCacheDirectory { get; init; }
     public bool Qwen35ParallelArgmax { get; init; }
     public bool Qwen35ParallelDeltaNorm { get; init; }
     public int Qwen35LoraReductionSize { get; init; } = 128;
