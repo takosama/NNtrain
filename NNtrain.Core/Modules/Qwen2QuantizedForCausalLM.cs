@@ -20,13 +20,15 @@ internal sealed class QwenQuantizedAttention : Module, IDisposable
     internal int KvHeads { get; }
     internal float RopeTheta { get; }
 
-    internal Tensor Forward(Tensor input)
+    internal Tensor Forward(Tensor input, ArcQwenKvCache? cache = null, int position = 0)
     {
         Tensor q = _q.Forward(input);
         Tensor k = _k.Forward(input);
         Tensor v = _v.Forward(input);
-        return _o.Forward(q.QwenGroupedQueryAttention(
-            k, v, QueryHeads, KvHeads, RopeTheta, causal: true));
+        Tensor attention = cache is null
+            ? q.QwenGroupedQueryAttention(k, v, QueryHeads, KvHeads, RopeTheta, causal: true)
+            : q.ArcQwenCachedAttention(k, v, cache, position, RopeTheta);
+        return _o.Forward(attention);
     }
 
     public void Dispose() { _q.Dispose(); _k.Dispose(); _v.Dispose(); _o.Dispose(); }
@@ -69,9 +71,9 @@ internal sealed class QwenQuantizedBlock : Module, IDisposable
         _mlp = RegisterModule(mlp);
     }
 
-    internal Tensor Forward(Tensor input)
+    internal Tensor Forward(Tensor input, ArcQwenKvCache? cache = null, int position = 0)
     {
-        Tensor h = input + _attention.Forward(_inputNorm.Forward(input));
+        Tensor h = input + _attention.Forward(_inputNorm.Forward(input), cache, position);
         return h + _mlp.Forward(_postNorm.Forward(h));
     }
 
@@ -89,6 +91,14 @@ public sealed class Qwen2QuantizedForCausalLM : LanguageModel, IDisposable
     private readonly QwenQuantizedBlock[] _blocks;
     private readonly QwenRmsNorm _finalNorm;
     private readonly QwenQuantizedLinear _head;
+
+    // Preserve callers that construct a model with a dense embedding.
+    internal Qwen2QuantizedForCausalLM(
+        int vocabulary, int context, int width, int heads, int kvHeads,
+        Parameter embedding, QwenQuantizedBlock[] blocks,
+        QwenRmsNorm finalNorm, QwenQuantizedLinear head, TensorDType dtype)
+        : this(vocabulary, context, width, heads, kvHeads,
+            embedding, null, blocks, finalNorm, head, dtype) { }
 
     internal Qwen2QuantizedForCausalLM(
         int vocabulary, int context, int width, int heads, int kvHeads,
@@ -129,7 +139,8 @@ public sealed class Qwen2QuantizedForCausalLM : LanguageModel, IDisposable
         => throw new NotSupportedException(
             "Quantized Qwen model is inference-first; training is intentionally deferred.");
 
-    private Tensor Hidden(int[] tokenIds, int batch, int sequence)
+    private Tensor Hidden(int[] tokenIds, int batch, int sequence,
+        ArcQwenKvCache[]? caches = null, int position = 0)
     {
         if (sequence <= 0 || sequence > ContextLength)
             throw new ArgumentOutOfRangeException(nameof(sequence));
@@ -138,45 +149,113 @@ public sealed class Qwen2QuantizedForCausalLM : LanguageModel, IDisposable
         Tensor h = _quantizedEmbedding is not null
             ? _quantizedEmbedding.LookupEmbedding(tokenIds, batch, sequence)
             : _embedding!.T.EmbeddingLookup(tokenIds, batch, sequence);
-        foreach (QwenQuantizedBlock block in _blocks) h = block.Forward(h);
+        for (int layer = 0; layer < _blocks.Length; ++layer)
+            h = _blocks[layer].Forward(h, caches?[layer], position);
         return _finalNorm.Forward(h);
+    }
+
+    internal Tensor ForwardLastLogits(int[] tokenIds, ArcQwenKvCache[]? caches = null,
+        int position = 0)
+        => _head.Forward(Hidden(tokenIds, 1, tokenIds.Length, caches, position)
+            .SelectLastSequenceToken());
+
+    internal ArcQwenKvCache[] CreateArcKvCaches(int capacity)
+    {
+        var owned = new List<ArcQwenKvCache>(_blocks.Length);
+        try
+        {
+            for (int layer = 0; layer < _blocks.Length; ++layer)
+                owned.Add(new ArcQwenKvCache(QueryHeads, KvHeads,
+                    ModelWidth / QueryHeads, capacity));
+            return owned.ToArray();
+        }
+        catch
+        {
+            foreach (ArcQwenKvCache cache in owned) cache.Dispose();
+            throw;
+        }
     }
 
     internal override int[] GenerateTokenIds(
         IEnumerable<int> promptTokenIds, int maxNewTokens,
         float temperature, int topK, int? stopTokenId, Random? random)
+        => GenerateTokenIds(promptTokenIds, maxNewTokens, temperature, topK,
+            stopTokenId, random, onToken: null);
+
+    internal override int[] GenerateTokenIds(
+        IEnumerable<int> promptTokenIds, int maxNewTokens,
+        float temperature, int topK, int? stopTokenId, Random? random,
+        Action<int>? onToken)
     {
+        ArgumentNullException.ThrowIfNull(promptTokenIds);
+        ArgumentOutOfRangeException.ThrowIfNegative(maxNewTokens);
         var result = promptTokenIds.ToList();
         if (result.Count == 0) throw new ArgumentException("Prompt cannot be empty.", nameof(promptTokenIds));
+        if (result.Count > ContextLength) throw new ArgumentOutOfRangeException(nameof(promptTokenIds));
+        if (result.Any(token => (uint)token >= (uint)VocabularySize))
+            throw new ArgumentOutOfRangeException(nameof(promptTokenIds));
         random ??= Random.Shared;
         bool training = IsTraining; Eval();
+        ArcQwenKvCache[]? caches = null;
         try
         {
             using (AutogradContext.NoGrad())
             {
+                int maximum = Math.Min(maxNewTokens, ContextLength - result.Count);
+                if (maximum > 0 && Tensor.ArcResident && Tensor.ArcLane.Options.QwenInferenceKvCache)
+                    caches = CreateArcKvCaches(checked(result.Count + maximum - 1));
+                int position = 0;
+                int[] input = result.ToArray();
                 for (int generated = 0;
-                     generated < maxNewTokens && result.Count < ContextLength;
+                     generated < maximum;
                      ++generated)
                 {
                     // Quantized weights belong to the model. Only detached
                     // activations are released after the logits have been read.
                     using IDisposable? arcInference = Tensor.BeginArcInferenceFrame();
-                    Tensor logits = Forward(result.ToArray(), 1, result.Count);
+                    Tensor logits = caches is null
+                        ? Forward(input, 1, input.Length)
+                        : ForwardLastLogits(input, caches, position);
                     int next = SampleLogits(
-                        logits, (result.Count - 1) * VocabularySize,
+                        logits, caches is null ? checked((input.Length - 1) * VocabularySize) : 0,
                         VocabularySize, temperature, topK, random);
                     result.Add(next);
+                    onToken?.Invoke(next);
                     if (stopTokenId.HasValue && next == stopTokenId.Value) break;
+                    position = caches is null ? 0 : result.Count - 1;
+                    input = caches is null ? result.ToArray() : [next];
                 }
             }
         }
-        finally { if (training) Train(); }
+        finally
+        {
+            if (caches is not null)
+                foreach (ArcQwenKvCache cache in caches) cache.Dispose();
+            if (training) Train();
+        }
         return result.ToArray();
     }
 
     public string Generate(
         string prompt, Qwen2GgufTokenizer tokenizer, int maxNewTokens,
         float temperature = 0f, int topK = 1, Random? random = null)
+        => GenerateText(prompt, tokenizer, maxNewTokens, onToken: null,
+            temperature, topK, random);
+
+    /// <summary>Emits each new token immediately after sampling, including EOS.</summary>
+    public string GenerateStreaming(
+        string prompt, Qwen2GgufTokenizer tokenizer, int maxNewTokens,
+        Action<int> onToken, float temperature = 0f, int topK = 1,
+        Random? random = null)
+    {
+        ArgumentNullException.ThrowIfNull(onToken);
+        return GenerateText(prompt, tokenizer, maxNewTokens, onToken,
+            temperature, topK, random);
+    }
+
+    private string GenerateText(
+        string prompt, Qwen2GgufTokenizer tokenizer, int maxNewTokens,
+        Action<int>? onToken, float temperature, int topK, Random? random)
     {
         ArgumentNullException.ThrowIfNull(prompt);
         ArgumentNullException.ThrowIfNull(tokenizer);
@@ -185,7 +264,7 @@ public sealed class Qwen2QuantizedForCausalLM : LanguageModel, IDisposable
         int[] promptIds = tokenizer.Encode(prompt);
         int[] generated = GenerateTokenIds(
             promptIds, maxNewTokens, temperature, topK,
-            tokenizer.EosTokenId, random);
+            tokenizer.EosTokenId, random, onToken);
         return tokenizer.Decode(generated);
     }
 

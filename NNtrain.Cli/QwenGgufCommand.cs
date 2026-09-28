@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Globalization;
+using System.Text;
 
 namespace NNtrain;
 
@@ -25,9 +27,9 @@ internal static class QwenGgufCommand
                     case "--model": modelPath = Path.GetFullPath(value); break;
                     case "--adapter": adapterPath = Path.GetFullPath(value); break;
                     case "--prompt": prompt = value; break;
-                    case "--device": device = int.Parse(value); explicitDevice = true; break;
-                    case "--devices": devices = value.Split(',').Select(int.Parse).ToArray(); break;
-                    case "--max-new-tokens": maxNewTokens = int.Parse(value); break;
+                    case "--device": device = ParseNonnegativeInteger(value, option); explicitDevice = true; break;
+                    case "--devices": devices = value.Split(',').Select(index => ParseNonnegativeInteger(index, option)).ToArray(); break;
+                    case "--max-new-tokens": maxNewTokens = ParseNonnegativeInteger(value, option); break;
                     default: throw new ArgumentException($"Unknown qwen-gguf option: {option}");
                 }
             }
@@ -64,6 +66,7 @@ internal static class QwenGgufCommand
                 device = devices[0];
             }
 
+            var loadTimer = Stopwatch.StartNew();
             Qwen2GgufDescriptor descriptor = Qwen2Gguf.Inspect(modelPath);
             Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(gguf);
             output.WriteLine(
@@ -77,11 +80,20 @@ internal static class QwenGgufCommand
             using Qwen2QuantizedForCausalLM model =
                 Qwen2Gguf.LoadQuantizedModel(modelPath);
             model.to(new TorchDevice(TensorDevice.Arc, device));
-            string generated = model.Generate(
-                prompt, tokenizer, maxNewTokens,
-                temperature: 0f, topK: 1, random: new Random(1));
-            output.WriteLine("generated:");
-            output.WriteLine(generated);
+            loadTimer.Stop();
+            GenerationTiming timing = WriteGeneration(prompt, tokenizer, stream,
+                onToken => model.GenerateStreaming(
+                    prompt, tokenizer, maxNewTokens, onToken,
+                    temperature: 0f, topK: 1, random: new Random(1)), output);
+            string first = timing.FirstTokenMilliseconds.HasValue
+                ? timing.FirstTokenMilliseconds.Value.ToString("F1", CultureInfo.InvariantCulture) + " ms"
+                : "n/a";
+            string decode = timing.DecodeTokensPerSecond.HasValue
+                ? timing.DecodeTokensPerSecond.Value.ToString("F2", CultureInfo.InvariantCulture) + " tok/s"
+                : "n/a";
+            error.WriteLine(FormattableString.Invariant(
+                $"timing: load={loadTimer.Elapsed.TotalSeconds:F3} s, prefill/first-token={first}, decode={decode}, generated={timing.GeneratedTokens}, generation={timing.TotalMilliseconds / 1000:F3} s"));
+            error.Flush();
             return 0;
         }
         catch (Exception exception) when (
@@ -91,6 +103,15 @@ internal static class QwenGgufCommand
             error.WriteLine(exception.StackTrace);
             return 2;
         }
+    }
+
+    internal static int ParseNonnegativeInteger(string value, string option)
+    {
+        string normalized = value.Normalize(NormalizationForm.FormKC);
+        if (!int.TryParse(normalized, NumberStyles.Integer, CultureInfo.InvariantCulture, out int result)
+            || result < 0)
+            throw new ArgumentException($"{option} must be a nonnegative integer; got '{value}'.");
+        return result;
     }
 
     // The delegate is the model's single generation call. Keeping display

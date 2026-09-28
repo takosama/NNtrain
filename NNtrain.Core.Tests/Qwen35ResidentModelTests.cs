@@ -5,6 +5,69 @@ namespace NNtrain.Core.Tests;
 
 public sealed class Qwen35ResidentModelTests
 {
+    [Fact]
+    public void SeededSamplingMatchesFullPrefillAfterPromptPrefixReuse()
+    {
+        RequireArcDevices(1);
+        using TemporaryQwenGguf file = CreateFixture(tiedOutput: false, contextLength: 40);
+        using Qwen35QuantizedModel model = Qwen35QuantizedModel.Load(file.Path, [0]);
+        int[] firstPrompt = [1, 2, 0];
+        int[] secondPrompt = [1, 2, 0, 3, 1];
+        _ = model.GenerateTokenIdsWithPrefixReuse(firstPrompt, 3,
+            temperature: 0.6f, topP: 0.95f, topK: 20, random: new Random(17));
+        int[] reused = model.GenerateTokenIdsWithPrefixReuse(secondPrompt, 3,
+            temperature: 0.6f, topP: 0.95f, topK: 20, random: new Random(28));
+        Assert.Equal(firstPrompt.Length, model.LastReusedPromptTokens);
+        int[] full = model.GenerateTokenIds(secondPrompt, 3,
+            temperature: 0.6f, topP: 0.95f, topK: 20, random: new Random(28));
+        Assert.Equal(full, reused);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void PrefixReuseRestoresHybridPromptStateAndFallsBackForChangedPrompts(int deviceCount)
+    {
+        RequireArcDevices(deviceCount);
+        using TemporaryQwenGguf file = CreateFixture(tiedOutput: false, contextLength: 40);
+        int[] devices = Enumerable.Range(0, deviceCount).ToArray();
+        using Qwen35QuantizedModel baseline = Qwen35QuantizedModel.Load(file.Path, devices);
+        using Qwen35QuantizedModel cached = Qwen35QuantizedModel.Load(file.Path, devices);
+        int[] firstPrompt = [1, 2, 0];
+        int[] secondPrompt = [1, 2, 0, 3, 1];
+
+        Assert.Equal(baseline.GenerateTokenIds(firstPrompt, 4),
+            cached.GenerateTokenIdsWithPrefixReuse(firstPrompt, 4));
+        Assert.Equal(0, cached.LastReusedPromptTokens);
+        long[] uploadedBeforeSecond = cached.UploadedBytes.ToArray();
+        Assert.Equal(baseline.GenerateTokenIds(secondPrompt, 4),
+            cached.GenerateTokenIdsWithPrefixReuse(secondPrompt, 4));
+        Assert.Equal(firstPrompt.Length, cached.LastReusedPromptTokens);
+        // Only the two-token suffix and three generated tokens are forwarded.
+        // No checkpoint transfer crosses the host boundary.
+        if (deviceCount == 1)
+            Assert.Equal((secondPrompt.Length - firstPrompt.Length + 3) * sizeof(int),
+                cached.UploadedBytes[0] - uploadedBeforeSecond[0]);
+
+        int[] changedPrompt = [2, 1, 3];
+        Assert.Equal(baseline.GenerateTokenIds(changedPrompt, 3),
+            cached.GenerateTokenIdsWithPrefixReuse(changedPrompt, 3));
+        Assert.Equal(0, cached.LastReusedPromptTokens);
+        cached.Reset();
+        Assert.Equal(baseline.GenerateTokenIds([2, 1, 3, 0], 2),
+            cached.GenerateTokenIdsWithPrefixReuse([2, 1, 3, 0], 2));
+        Assert.Equal(0, cached.LastReusedPromptTokens);
+        Assert.Equal(baseline.GenerateTokenIds(firstPrompt, 2), cached.GenerateTokenIds(firstPrompt, 2));
+        Assert.Equal(0, cached.LastReusedPromptTokens);
+
+        cached.GenerateTokenIdsWithPrefixReuse(firstPrompt, 2);
+        Assert.Throws<OperationCanceledException>(() => cached.GenerateTokenIdsWithPrefixReuse(
+            [1, 2, 0, 3], 2, onToken: _ => throw new OperationCanceledException()));
+        Assert.Equal(baseline.GenerateTokenIds(secondPrompt, 2),
+            cached.GenerateTokenIdsWithPrefixReuse(secondPrompt, 2));
+        Assert.Equal(0, cached.LastReusedPromptTokens);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

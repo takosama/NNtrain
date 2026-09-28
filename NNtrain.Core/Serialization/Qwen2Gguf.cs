@@ -14,6 +14,7 @@ public static class Qwen2Gguf
     public static Qwen2GgufDescriptor Inspect(string path)
     {
         using var gguf = new GgufReader(path);
+        RequireSingleFile(gguf);
         string architecture = RequiredString(gguf, "general.architecture");
         if (!string.Equals(architecture, "qwen2", StringComparison.Ordinal))
             throw new InvalidDataException($"Expected qwen2 GGUF, got '{architecture}'.");
@@ -109,10 +110,11 @@ public static class Qwen2Gguf
         var finalNorm = new QwenRmsNorm(d.EmbeddingLength, d.RmsEpsilon, activationDType);
         Copy(gguf, finalNorm.Weight, "output_norm.weight");
 
-        string outputName = gguf.Tensors.Any(t => t.Name == "output.weight")
-            ? "output.weight" : "token_embd.weight";
+        // Tied heads have the same GGUF [embedding, vocabulary] layout.
+        // Read their original K-quant payload instead of requantizing the
+        // decoded embedding parameter or creating a dense output matrix.
         QwenQuantizedLinear head = QuantizedLinear(
-            gguf, outputName, null,
+            gguf, OutputWeightName(gguf), null,
             d.EmbeddingLength, d.VocabularySize, activationDType);
 
         return new Qwen2QuantizedForCausalLM(
@@ -160,9 +162,8 @@ public static class Qwen2Gguf
             ValidateLinear(p + "ffn_down", d.FeedForwardLength, d.EmbeddingLength);
         }
         ValidateShape(gguf.GetTensor("output_norm.weight"), d.EmbeddingLength);
-        string outputName = gguf.Tensors.Any(t => t.Name == "output.weight")
-            ? "output.weight" : "token_embd.weight";
-        ValidateQuantizedMatrix(gguf.GetTensor(outputName), d.EmbeddingLength, d.VocabularySize);
+        ValidateQuantizedMatrix(
+            gguf.GetTensor(OutputWeightName(gguf)), d.EmbeddingLength, d.VocabularySize);
 
         void ValidateLinear(string name, int inputWidth, int outputWidth, bool hasBias = false)
         {
@@ -172,6 +173,10 @@ public static class Qwen2Gguf
             if (bias is not null) ValidateShape(bias, outputWidth);
         }
     }
+
+    private static string OutputWeightName(GgufReader gguf)
+        => gguf.Tensors.Any(t => t.Name == "output.weight")
+            ? "output.weight" : "token_embd.weight";
 
     private static void ValidateQuantizedMatrix(GgufTensorInfo weight, int inputWidth, int outputWidth)
     {
@@ -196,7 +201,10 @@ public static class Qwen2Gguf
         if (tensor.Shape.Count == 0 || tensor.Shape[0] == 0
             || tensor.Shape[0] % GgufQ4K.BlockElements != 0)
             throw new InvalidDataException(
-                $"Tensor '{tensor.Name}' requires a row width divisible by 256 for K-quant blocks.");
+                $"Tensor '{tensor.Name}' has row width {(tensor.Shape.Count == 0 ? 0 : tensor.Shape[0])}; " +
+                "it requires a row width divisible by 256 for K-quant blocks. " +
+                "K-quant blocks cannot cross rows; use a checkpoint whose matrix row widths " +
+                "and quantization formats are supported by this importer.");
     }
 
     private static Parameter DenseParameter(
@@ -233,6 +241,7 @@ public static class Qwen2Gguf
     {
         ArgumentNullException.ThrowIfNull(model);
         using var gguf = new GgufReader(path);
+        RequireSingleFile(gguf);
 
         Copy(gguf, model.TokenEmbedding, "token_embd.weight");
         for (int i = 0; i < model.Blocks.Count; ++i)
@@ -269,7 +278,31 @@ public static class Qwen2Gguf
     public static float[] ReadTensor(string path, string tensorName)
     {
         using var gguf = new GgufReader(path);
+        RequireSingleFile(gguf);
         return ReadTensor(gguf, gguf.GetTensor(tensorName));
+    }
+
+    private static void RequireSingleFile(GgufReader gguf)
+    {
+        if (!gguf.Metadata.TryGetValue("split.count", out object? value)) return;
+        ulong count;
+        try
+        {
+            if (value is not (byte or sbyte or ushort or short or uint or int or ulong or long))
+                throw new InvalidDataException("GGUF metadata 'split.count' must be a positive integer.");
+            count = Convert.ToUInt64(value);
+        }
+        catch (OverflowException error)
+        {
+            throw new InvalidDataException("GGUF metadata 'split.count' must be a positive integer.", error);
+        }
+        if (count == 0)
+            throw new InvalidDataException("GGUF metadata 'split.count' must be a positive integer.");
+        if (count > 1)
+            throw new NotSupportedException(
+                $"This GGUF is one of {count} split files (split.count={count}). " +
+                "Qwen loading requires a single merged GGUF. Keep all shards together and run " +
+                "llama-gguf-split --merge <first-shard.gguf> <merged.gguf>, then load <merged.gguf>.");
     }
 
     internal static float[] ReadTensor(GgufReader gguf, GgufTensorInfo tensor)

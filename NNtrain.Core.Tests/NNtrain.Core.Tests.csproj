@@ -24,6 +24,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Update="Fixtures\QwenGgufReference\reference.gguf" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Fixtures\QwenGgufReference\expected.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <EmbeddedResource Include="Fixtures\IqQuantReference\iq-quant-blocks.json" />
     <EmbeddedResource Include="Fixtures\PrismQuantReference\prism-quant-blocks.json" />
   </ItemGroup>

@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.Reflection;
 using System.Text;
 using Xunit;
 
@@ -86,6 +88,147 @@ public sealed class QwenGgufValidationTests
     }
 
     [Theory]
+    [InlineData("inspect", true)]
+    [InlineData("quantized", true)]
+    [InlineData("model", true)]
+    [InlineData("weights", true)]
+    [InlineData("tensor", true)]
+    [InlineData("inspect", false)]
+    public void SplitGgufFailsClearlyBeforeMissingMetadataOrTensor(string entryPoint, bool useUInt16)
+    {
+        // Real llama.cpp shards use UInt16 split metadata. There is no
+        // architecture metadata or tensor directory to accidentally rely on.
+        var metadata = new Dictionary<string, object>
+        {
+            ["split.count"] = useUInt16 ? (object)(ushort)2 : 2u,
+            ["split.no"] = (ushort)1
+        };
+        using var file = new TemporaryQwenGguf(metadata);
+
+        NotSupportedException error = Assert.Throws<NotSupportedException>(() =>
+        {
+            switch (entryPoint)
+            {
+                case "inspect": Qwen2Gguf.Inspect(file.Path); break;
+                case "quantized": Qwen2Gguf.LoadQuantizedModel(file.Path); break;
+                case "model": Qwen2Gguf.LoadModel(file.Path); break;
+                case "weights":
+                    Qwen2Gguf.LoadWeights(file.Path, new Qwen2ForCausalLM(4, 8, 4, 1, 1, 8, 1));
+                    break;
+                case "tensor": Qwen2Gguf.ReadTensor(file.Path, "absent"); break;
+                default: throw new ArgumentException(nameof(entryPoint));
+            }
+        });
+
+        Assert.Contains("split.count=2", error.Message);
+        Assert.Contains("llama-gguf-split --merge", error.Message);
+        Assert.Contains("first-shard", error.Message);
+    }
+
+    [Fact]
+    public void SingleFileSplitMetadataDoesNotPreventInspection()
+    {
+        Dictionary<string, object> metadata = ValidMetadata();
+        metadata["split.count"] = (ushort)1;
+        metadata["split.no"] = (ushort)0;
+        using var file = new TemporaryQwenGguf(metadata);
+
+        Assert.Equal(256, Qwen2Gguf.Inspect(file.Path).EmbeddingLength);
+    }
+
+    [Theory]
+    [InlineData(Qwen2Gguf.Q4KType)]
+    [InlineData(Qwen2Gguf.Q6KType)]
+    public void TiedQuantizedHeadPreservesPayloadAndMatchesExplicitHead(uint type)
+    {
+        using var tiedFile = CompleteQuantizedFixture(type, explicitHead: false, out byte[] expected);
+        using var explicitFile = CompleteQuantizedFixture(type, explicitHead: true, out _);
+        using Qwen2QuantizedForCausalLM tied = Qwen2Gguf.LoadQuantizedModel(tiedFile.Path);
+        using Qwen2QuantizedForCausalLM explicitModel = Qwen2Gguf.LoadQuantizedModel(explicitFile.Path);
+
+        // Inspect the immutable encoded matrix without requiring an Arc GPU
+        // or introducing a public API just to expose model storage for tests.
+        ArcQuantizedMatrix tiedMatrix = HeadMatrix(tied);
+        ArcQuantizedMatrix explicitMatrix = HeadMatrix(explicitModel);
+        Assert.Equal(type, tiedMatrix.GgmlType);
+        Assert.Equal(256, tiedMatrix.InputWidth);
+        Assert.Equal(4, tiedMatrix.OutputWidth);
+        Assert.Equal(expected, PrivateField<byte[]>(tiedMatrix, "_payload"));
+        Assert.Equal(PrivateField<byte[]>(explicitMatrix, "_payload"),
+            PrivateField<byte[]>(tiedMatrix, "_payload"));
+        Assert.Equal(explicitMatrix.GgmlType, tiedMatrix.GgmlType);
+        Assert.Equal(expected, PrivateField<byte[]>(
+            PrivateField<ArcQuantizedMatrix>(tied, "_quantizedEmbedding"), "_payload"));
+        Assert.Equal(PrivateField<byte[]>(
+                PrivateField<ArcQuantizedMatrix>(explicitModel, "_quantizedEmbedding"), "_payload"),
+            PrivateField<byte[]>(PrivateField<ArcQuantizedMatrix>(tied, "_quantizedEmbedding"), "_payload"));
+    }
+
+    [Fact]
+    public void TiedHeadRejectsUnsupportedEmbeddingFormatBeforeReadingPayload()
+    {
+        using var file = new TemporaryQwenGguf(ValidMetadata(),
+            ValidTensorDirectory().Where(t => t.Name != "output.weight").ToArray());
+
+        NotSupportedException error = Assert.Throws<NotSupportedException>(
+            () => Qwen2Gguf.LoadQuantizedModel(file.Path));
+
+        Assert.Contains("token_embd.weight", error.Message);
+        Assert.Contains("Q4_K/Q6_K", error.Message);
+    }
+
+    private static ArcQuantizedMatrix HeadMatrix(Qwen2QuantizedForCausalLM model)
+        => PrivateField<ArcQuantizedMatrix>(PrivateField<QwenQuantizedLinear>(model, "_head"), "_weight");
+
+    private static T PrivateField<T>(object instance, string name)
+        => Assert.IsType<T>(instance.GetType().GetField(name,
+            BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(instance));
+
+    private static TemporaryQwenGguf CompleteQuantizedFixture(
+        uint embeddingType, bool explicitHead, out byte[] embeddingPayload)
+    {
+        var random = new Random(731);
+        var directory = new List<GgufTensorInfo>();
+        using var payload = new MemoryStream();
+        embeddingPayload = [];
+        foreach (GgufTensorInfo original in ValidTensorDirectory())
+        {
+            if (original.Name == "output.weight" && !explicitHead) continue;
+            GgufTensorInfo tensor = original.Name is "token_embd.weight" or "output.weight"
+                ? original with { Type = embeddingType } : original;
+            int elements = checked((int)tensor.Shape.Aggregate(1UL, (a, b) => a * b));
+            byte[] encoded;
+            if (tensor.Name == "output.weight") encoded = embeddingPayload;
+            else if (tensor.Type == Qwen2Gguf.F32Type)
+            {
+                encoded = new byte[elements * 4];
+                for (int i = 0; i < elements; ++i)
+                    BinaryPrimitives.WriteSingleLittleEndian(encoded.AsSpan(i * 4, 4), 1f);
+            }
+            else
+            {
+                int blockBytes = tensor.Type == Qwen2Gguf.Q4KType ? GgufQ4K.BlockBytes : GgufQ6K.BlockBytes;
+                encoded = new byte[elements / 256 * blockBytes];
+                random.NextBytes(encoded);
+                for (int offset = 0; offset < encoded.Length; offset += blockBytes)
+                {
+                    if (tensor.Type == Qwen2Gguf.Q4KType)
+                    {
+                        BinaryPrimitives.WriteUInt16LittleEndian(encoded.AsSpan(offset, 2), 0x3800);
+                        BinaryPrimitives.WriteUInt16LittleEndian(encoded.AsSpan(offset + 2, 2), 0x3400);
+                    }
+                    else BinaryPrimitives.WriteUInt16LittleEndian(encoded.AsSpan(offset + 208, 2), 0x3800);
+                }
+            }
+            if (tensor.Name == "token_embd.weight") embeddingPayload = encoded;
+            while (payload.Position % 32 != 0) payload.WriteByte(0);
+            directory.Add(tensor with { Offset = (ulong)payload.Position });
+            payload.Write(encoded);
+        }
+        return new TemporaryQwenGguf(ValidMetadata(), directory, payload.ToArray());
+    }
+
+    [Theory]
     [InlineData(Qwen2Gguf.Q4KType)]
     [InlineData(Qwen2Gguf.Q6KType)]
     public void QuantizedEmbeddingAcceptsTiedHeadBeforeReadingPayload(uint type)
@@ -164,6 +307,10 @@ internal sealed class TemporaryQwenGguf : IDisposable
                     break;
                 case uint number:
                     writer.Write((uint)GgufValueType.UInt32);
+                    writer.Write(number);
+                    break;
+                case ushort number:
+                    writer.Write((uint)GgufValueType.UInt16);
                     writer.Write(number);
                     break;
                 case string[] strings:
