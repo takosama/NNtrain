@@ -10,8 +10,8 @@ namespace NNtrain;
 /// </summary>
 public sealed class Qwen2GgufTokenizer
 {
-    // Equivalent to Qwen2's Unicode-property split, expressed without a
-    // dependency on a third-party regex engine.
+    // SplitOrdinary maps supplementary scalars to category-equivalent BMP
+    // characters before applying the selected architecture's UTF-16 regex.
     private static readonly Regex Qwen2SplitRegex = new(
         @"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -60,8 +60,8 @@ public sealed class Qwen2GgufTokenizer
         if (tokenTypes is not null)
         {
             for (int i = 0; i < Math.Min(tokenTypes.Count, tokens.Length); ++i)
-                // GGML CONTROL (3) and USER_DEFINED (4) are atomic when
-                // parsing special tokens. Qwen3.5 marks <think> as type 4.
+                // GGML CONTROL (3) and USER_DEFINED (4) are literal added
+                // tokens. Qwen3.5 marks <think> and tool delimiters as type 4.
                 if (tokenTypes[i] is 3 or 4) _specialTokens.Add(tokens[i]);
         }
 
@@ -122,10 +122,47 @@ public sealed class Qwen2GgufTokenizer
                 ids.Add(special);
                 continue;
             }
-            foreach (Match match in _splitRegex.Matches(piece))
-                EncodePiece(match.Value, ids);
+            foreach (string ordinary in SplitOrdinary(piece))
+                EncodePiece(ordinary, ids);
         }
         return ids.ToArray();
+    }
+
+    private IEnumerable<string> SplitOrdinary(string text)
+    {
+        // HF Qwen2 applies NFC before its Unicode-property pre-tokenizer.
+        // Added tokens were separated first and keep their exact spelling.
+        // https://github.com/huggingface/transformers/blob/main/src/transformers/models/qwen2/tokenization_qwen2.py
+        if (ReferenceEquals(_splitRegex, Qwen2SplitRegex))
+            text = text.Normalize(NormalizationForm.FormC);
+        if (!text.Any(char.IsSurrogate))
+        {
+            foreach (Match match in _splitRegex.Matches(text)) yield return match.Value;
+            yield break;
+        }
+
+        // .NET regex classifies UTF-16 code units, so \p{L} cannot recognize
+        // an astral letter such as 𠮷. Match a one-char-per-scalar shadow, then
+        // recover the original substring before UTF-8 encoding/BPE. Only
+        // letter, number and whitespace classes matter for non-ASCII scalars
+        // in this pattern; ASCII contractions and CR/LF remain unchanged.
+        var shadow = new StringBuilder(text.Length);
+        var offsets = new List<int>(text.Length + 1);
+        int offset = 0;
+        foreach (Rune rune in text.EnumerateRunes())
+        {
+            offsets.Add(offset);
+            shadow.Append(rune.IsBmp ? (char)rune.Value
+                : Rune.IsLetter(rune) ? '一'
+                : Rune.GetUnicodeCategory(rune) is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark ? '\u0301'
+                : Rune.IsNumber(rune) ? '0'
+                : Rune.IsWhiteSpace(rune) ? ' '
+                : '!');
+            offset += rune.Utf16SequenceLength;
+        }
+        offsets.Add(text.Length);
+        foreach (Match match in _splitRegex.Matches(shadow.ToString()))
+            yield return text[offsets[match.Index]..offsets[match.Index + match.Length]];
     }
 
     public string Decode(IEnumerable<int> tokenIds)

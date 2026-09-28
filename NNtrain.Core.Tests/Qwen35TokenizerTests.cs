@@ -24,16 +24,16 @@ public sealed class Qwen35TokenizerTests
     [Theory]
     [InlineData(null)]
     [InlineData("qwen2")]
-    public void ExistingQwen2BoundaryDoesNotMergeTrailingCombiningMark(string? preTokenizer)
+    public void ExistingQwen2NormalizationRemainsEnabled(string? preTokenizer)
     {
         const string text = "a\u0301";
         using TemporaryQwenGguf file = CreateFixture(preTokenizer, [text], out _);
         Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(file.Path);
 
-        // No standalone mark merge is in this fixture: Qwen2 splits after a,
-        // so the combining mark remains its two UTF-8 byte tokens.
-        Assert.Equal(new[] { (int)'a', 0xcc, 0x81 }, tokenizer.Encode(text));
-        Assert.Equal(text, tokenizer.Decode(tokenizer.Encode(text)));
+        // Preserve the local Qwen2 NFC behavior while Qwen3.5 keeps the
+        // original combining-mark sequence. No composed merge is in this fixture.
+        Assert.Equal(new[] { 0xc3, 0xa1 }, tokenizer.Encode(text));
+        Assert.Equal("á", tokenizer.Decode(tokenizer.Encode(text)));
     }
 
     [Fact]

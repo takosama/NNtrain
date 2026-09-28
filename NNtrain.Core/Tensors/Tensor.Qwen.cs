@@ -24,7 +24,11 @@ public partial class Tensor
             var inv = lane.Allocate(rows);
             try
             {
-                lane.Run("qwen_rmsnorm", rows, 0, x, w, output, inv, rows, width, epsilon);
+                if (lane.Options.QwenRmsNormFast && !AutogradContext.IsRecordingEnabled)
+                    lane.Run("qwen_rmsnorm_fast", checked((long)rows * 64), 64,
+                        x, w, output, inv, rows, width, epsilon);
+                else
+                    lane.Run("qwen_rmsnorm", rows, 0, x, w, output, inv, rows, width, epsilon);
                 Tensor result = ArcDeviceResult(output, _shape, [this, weight]);
                 if (result.Node.IsDetached) { inv.Dispose(); return result; }
                 result.Node.RegisterResource(inv);

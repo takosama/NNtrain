@@ -25,7 +25,9 @@ public sealed class ArcDetailedProfiler
     internal void Reset() => _counters.Clear();
     internal string KernelLabel(string name, object[] args)
     {
-        string shape = name.StartsWith("gemm_xmx_bfp8_epilogue_", StringComparison.Ordinal) && args.Length >= 11
+        string shape = name.StartsWith("qwen_linear_", StringComparison.Ordinal) && args.Length >= 7
+            ? $" M={args[4]} N={args[6]} K={args[5]}"
+            : name.StartsWith("gemm_xmx_bfp8_epilogue_", StringComparison.Ordinal) && args.Length >= 11
             ? $" M={args[6]} N={args[7]} K={args[8]} offset={args[10]}"
             : name.StartsWith("gemm_xmx_streamed_", StringComparison.Ordinal) && args.Length >= 13
             ? $" M={args[4]} N={args[5]} K={args[6]} offset={args[12]}"

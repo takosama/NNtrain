@@ -1,4 +1,4 @@
-# Qwen2 GGUF import (first stage)
+# Qwen2 GGUF import and Arc generation
 
 PR #11 adds Qwen2/Qwen2.5 GGUF inspection, decoding, and Intel Arc inference.
 The existing Transformer training and generation commands retain their own
@@ -7,7 +7,7 @@ configuration and precision settings.
 ## Generate
 
 ```powershell
-dotnet run --project NNtrain.Cli -c Release -- qwen-gguf --model C:\models\qwen.gguf --prompt "Hello" --device 0 --max-new-tokens 16
+dotnet run --project NNtrain.Cli -c Release -- qwen-gguf --model C:\models\qwen.gguf --prompt "国会議事堂への行き方を教えて" --device 0 --max-new-tokens 1000
 ```
 
 The command uses greedy sampling and a single Arc GPU. Large projection matrices
@@ -17,19 +17,40 @@ on the GPU into Float32 activations. F32/F16/BF16 embeddings use the dense path.
 When `output.weight` is absent, a Q4_K/Q6_K token embedding supplies the output
 head. This tied path currently holds separate encoded buffers for embedding and
 output; it does not share their storage. This command does not use `generate.json`
-or its two-GPU selection. Its current generation path recomputes the prefix;
-the GPT generation KV cache is not a Qwen KV cache.
+or its two-GPU selection.
+
+Output streams by default: complete UTF-8 characters are written and flushed
+after each sampled Qwen2 token. `--no-stream` buffers the generated text instead.
+Mixed fullwidth digits such as `--max-new-tokens 1０００` are accepted. Qwen2 timing
+on stderr separates loading, the first token, and subsequent decode throughput.
+The maximum is an upper bound: EOS or the model context limit can stop earlier.
+The supplied prompt is used directly; no chat template is inserted.
+
+Qwen2 generation prefills once, retains rotary K/V per layer, then processes one
+new token at a time. Only the last hidden row enters the vocabulary head and only
+one vocabulary row is downloaded. Caches and temporary activations are released
+on completion, EOS, or callback failure. Q4_K/Q6_K cooperative kernels and a
+parallel inference RMSNorm replace the serial paths on supported devices.
+Reference switches in `ArcExecutionOptions` allow numerical/performance A/B.
 
 ## Supported scope
 
 - GGUF versions 2 and 3 with `general.architecture = qwen2`.
+- Split GGUFs are rejected with a merge command before missing tensors can cause
+  a misleading error: `llama-gguf-split --merge <first-shard.gguf> <merged.gguf>`.
 - Dense import decodes F32, F16, BF16, Q4_K and Q6_K tensors.
 - Native quantized inference requires Q4_K/Q6_K projection weights with complete
   256-element blocks per row. Tensor dimensions are checked before payload reads.
 - RMSNorm, split-half RoPE, grouped-query attention and SwiGLU are implemented.
-- The first GQA kernel supports at most 4096 tokens per forward call and rejects
-  longer inputs explicitly. A larger GGUF context value does not remove this
-  kernel limit. No-grad inference avoids the quadratic saved-probability buffer.
+- Prompt prefill and uncached GQA support at most 4096 tokens per forward call.
+  Cached decode can continue beyond 4096, up to the GGUF context limit, using
+  device scratch for longer attention rows. No-grad inference avoids the
+  quadratic saved-probability buffer.
+- The native matrix path still requires Q4_K/Q6_K rows divisible by 256;
+  checkpoints with other projection formats (including some 896-wide models)
+  remain unsupported and produce explicit errors.
+- Tokenization recognizes CONTROL and USER_DEFINED entries, normalizes ordinary
+  text to NFC, and classifies supplementary Unicode letters by scalar value.
 - Quantized Qwen2 training is unsupported. For Qwen3.5 Attention/MLP LoRA,
   see [the LoRA guide](qwen35-lora.md).
 
@@ -40,9 +61,11 @@ repair, per-token temporary GPU buffer release, correct FP16 subnormal decoding
 in quantized kernels, tensor-operation inventory entries, and failed-reader file
 cleanup. Q4_K CPU decoding reuses bounded stack scratch across blocks.
 
-Regression tests use synthetic GGUF vocabularies/tensors, CPU references and small
-models on Arc. They do not establish tokenizer/logit parity or performance for a
-downloaded pretrained Qwen checkpoint.
+Regression tests include synthetic vocabularies/models, an official gguf-py
+fixture with independently decoded values, and Arc comparisons of cached versus
+full-prefix logits. Real-model timings and generation comparisons are recorded
+in [the optimization report](benchmarks/qwen-gguf-20260925.md). These checks do
+not establish full pretrained-checkpoint logit parity with Hugging Face.
 
 ### Merge validation (2026-09-25)
 

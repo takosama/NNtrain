@@ -86,6 +86,50 @@ public sealed class Qwen35TrainingDeltaTests
         Assert.Equal(bytes, lane.AllocatedBytes);
     }
 
+    [Theory]
+    [InlineData(65, 63, 64)]
+    [InlineData(129, 127, 128)]
+    public void LastTokenGradientCrossesRecurrentChunkBoundary(int sequence, int previous, int lossTime)
+    {
+        Assert.SkipWhen(ArcDevices.Enumerate().Count == 0, "Intel Arc is required.");
+        using var lane = CreateLane();
+        var data = new Data(1, 2, 3, 1, sequence);
+        using var buffers = new Inputs(lane, data);
+        var dy = new float[sequence * data.Values];
+        for (int i = 0; i < data.Values; ++i)
+            dy[lossTime * data.Values + i] = MathF.Sin(i * 0.67f + 0.4f);
+        using ArcBuffer dyGpu = lane.Upload(dy);
+        using ArcBuffer dqkv = lane.Upload(new float[data.Qkv.Length]);
+        using ArcBuffer dgate = lane.Upload(new float[data.Gate.Length]);
+        using ArcBuffer dalpha = lane.Upload(new float[data.Alpha.Length]);
+        using ArcBuffer dbeta = lane.Upload(new float[data.Beta.Length]);
+        using var training = buffers.Forward(lane, data);
+        training.Backward(dyGpu, dqkv, dgate, dalpha, dbeta);
+
+        float[] alphaGradient = Read(lane, dalpha, data.Alpha.Length);
+        float[] betaGradient = Read(lane, dbeta, data.Beta.Length);
+        float Numerical(float[] values, int index)
+        {
+            const float step = 0.002f;
+            float original = values[index];
+            values[index] = original + step;
+            double plus = Loss(data.Reference(), dy);
+            values[index] = original - step;
+            double minus = Loss(data.Reference(), dy);
+            values[index] = original;
+            return (float)((plus - minus) / (2 * step));
+        }
+        int at = previous * data.Heads;
+        float expectedAlpha = Numerical(data.Alpha, at);
+        float expectedBeta = Numerical(data.Beta, at);
+        Assert.True(MathF.Abs(expectedAlpha) + MathF.Abs(expectedBeta) > 1e-4f,
+            "The boundary must carry a measurable recurrent dependency.");
+        Assert.True(MathF.Abs(alphaGradient[at] - expectedAlpha) <= 0.001f + 0.01f * MathF.Abs(expectedAlpha),
+            $"alpha across {previous}->{lossTime}: numerical {expectedAlpha:R}, GPU {alphaGradient[at]:R}");
+        Assert.True(MathF.Abs(betaGradient[at] - expectedBeta) <= 0.001f + 0.01f * MathF.Abs(expectedBeta),
+            $"beta across {previous}->{lossTime}: numerical {expectedBeta:R}, GPU {betaGradient[at]:R}");
+    }
+
     private static ArcExecutionLane CreateLane() => new(0, new()
         { Qwen35InferenceKernelsOnly = true, Qwen35TrainingKernels = true });
 
@@ -113,9 +157,9 @@ public sealed class Qwen35TrainingDeltaTests
         using ArcBuffer serial = lane.Upload(initial);
         using ArcBuffer cooperative = lane.Upload(initial);
         lane.Run("q35t_delta_qk_backward_step", keys * width, 0,
-            alpha, dt, a, states, draw, adj, scratch, serial, time, keys, heads, width);
+            alpha, dt, a, states, draw, adj, scratch, serial, time, 0, keys, heads, width);
         lane.Run("q35t_delta_qk_backward_step_cooperative", (long)keys * width * 32, 32,
-            alpha, dt, a, states, draw, adj, scratch, cooperative, time, keys, heads, width);
+            alpha, dt, a, states, draw, adj, scratch, cooperative, time, 0, keys, heads, width);
         AssertClose(Read(lane, serial, initial.Length), Read(lane, cooperative, initial.Length), 3e-5f, 3e-5f);
     }
 

@@ -41,6 +41,10 @@ else if (args.Length > 0 && args[0] is "--arc-generation-probe" or "--probe-arc-
 {
     ArcGenerationProbe.Run(args[1..]);
 }
+else if (args.Length > 0 && args[0] == "--qwen-generation-probe")
+{
+    QwenGenerationProbe.Run(args[1..]);
+}
 else if (args.Length > 0 && args[0] == "--arc-generation-logit-probe")
 {
     ArcGenerationLogitProbe.Run(args[1..]);

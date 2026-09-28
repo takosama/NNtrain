@@ -190,6 +190,11 @@ internal static class TensorFloat16OperationManifest
         InternalTensorReturningMembers { get; } =
         [
             new(
+                "ArcQwenCachedAttention(Tensor,Tensor,ArcQwenKvCache,Int32,Single)",
+                TensorFloat16ResultPolicy.BackendWithoutFloat16,
+                "QwenKvCacheTests.CachedAttentionMatchesFullPrefixWithAbsolutePositions",
+                "Qwen K/V caching is resident Arc no-grad inference with Float32, BFloat16 or Bfp8 values; legacy Float16 is not supported."),
+            new(
                 "ArcQwenQuantizedEmbedding(ArcBuffer,Int32[],Int32,Int32,Int32,UInt32)",
                 TensorFloat16ResultPolicy.BackendWithoutFloat16,
                 "ArcQwenQuantizedEmbeddingTests.LookupDecodesSelectedRowsWithoutReuploadingWeight",

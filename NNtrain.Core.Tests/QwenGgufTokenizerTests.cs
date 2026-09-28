@@ -1,3 +1,4 @@
+using System.Text;
 using Xunit;
 
 namespace NNtrain.Core.Tests;
@@ -50,7 +51,119 @@ public sealed class QwenGgufTokenizerTests
         Assert.Equal("hello<|endoftext|>hello", tokenizer.Decode(encoded));
     }
 
-    private static TemporaryQwenGguf CreateTokenizerFixture(out Dictionary<string, int> ids)
+    [Fact]
+    public void StreamingDecoderWaitsForAllBytesOfJapaneseAndEmojiCharacters()
+    {
+        using TemporaryQwenGguf file = CreateTokenizerFixture(out _);
+        Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(file.Path);
+        Qwen2GgufTokenizer.StreamingDecoder decoder = tokenizer.CreateStreamingDecoder();
+        // The fixture assigns each ordinary byte its own token id.
+        byte[] bytes = Encoding.UTF8.GetBytes("日😀");
+
+        Assert.Equal(string.Empty, decoder.Append(bytes[0]));
+        Assert.Equal(string.Empty, decoder.Append(bytes[1]));
+        Assert.Equal("日", decoder.Append(bytes[2]));
+        Assert.Equal(string.Empty, decoder.Append(bytes[3]));
+        Assert.Equal(string.Empty, decoder.Append(bytes[4]));
+        Assert.Equal(string.Empty, decoder.Append(bytes[5]));
+        Assert.Equal("😀", decoder.Append(bytes[6]));
+        Assert.Equal(string.Empty, decoder.Complete());
+        Assert.Equal(string.Empty, decoder.Complete());
+        Assert.Throws<InvalidOperationException>(() => decoder.Append((int)'a'));
+    }
+
+    [Fact]
+    public void StreamingDecoderMatchesFullDecodeAcrossSpecialTokensAndTruncatedFinalBytes()
+    {
+        using TemporaryQwenGguf file = CreateTokenizerFixture(out Dictionary<string, int> ids);
+        Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(file.Path);
+        Qwen2GgufTokenizer.StreamingDecoder decoder = tokenizer.CreateStreamingDecoder();
+        int[] tokens = [0xe6, 0x97, 0xa5, ids["<|endoftext|>"], (int)'a', 0xe6];
+        var text = new StringBuilder();
+        foreach (int token in tokens) text.Append(decoder.Append(token));
+
+        Assert.Equal("日<|endoftext|>a", text.ToString());
+        text.Append(decoder.Complete());
+
+        // An actually truncated sequence is replaced only when finalized,
+        // just like the existing non-streaming Decode API.
+        Assert.Equal(tokenizer.Decode(tokens), text.ToString());
+    }
+
+    [Fact]
+    public void StreamingDecoderRejectsInvalidTokenIds()
+    {
+        using TemporaryQwenGguf file = CreateTokenizerFixture(out _);
+        Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(file.Path);
+        Qwen2GgufTokenizer.StreamingDecoder decoder = tokenizer.CreateStreamingDecoder();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => decoder.Append(-1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => decoder.Append(tokenizer.VocabularySize));
+    }
+
+    [Theory]
+    [InlineData("𠮷野家で食べた")]
+    [InlineData("a𠮷b")]
+    [InlineData("𠀀𠮷")]
+    public void EncodeMergesSupplementaryLettersWithAdjacentLetters(string text)
+    {
+        using TemporaryQwenGguf file = CreateTokenizerFixture(out Dictionary<string, int> ids, text);
+        Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(file.Path);
+
+        int[] encoded = tokenizer.Encode(text);
+
+        Assert.Equal(new[] { ids[EncodeBytes(text)] }, encoded);
+        Assert.Equal(text, tokenizer.Decode(encoded));
+    }
+
+    [Theory]
+    [InlineData("e\u0301", "é")]
+    [InlineData("か\u3099", "が")]
+    [InlineData("A\u030a", "Å")]
+    public void EncodeNormalizesOrdinaryTextToNfc(string decomposed, string composed)
+    {
+        using TemporaryQwenGguf file = CreateTokenizerFixture(out Dictionary<string, int> ids, composed);
+        Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(file.Path);
+        int[] expected = [ids[EncodeBytes(composed)]];
+
+        Assert.Equal(expected, tokenizer.Encode(composed));
+        Assert.Equal(expected, tokenizer.Encode(decomposed));
+        Assert.Equal(composed, tokenizer.Decode(tokenizer.Encode(decomposed)));
+    }
+
+    [Fact]
+    public void RuneAwareSplittingPreservesContractionsDigitsPunctuationAndWhitespace()
+    {
+        const string text = "𠮷's 𝟙𝟚!? \r\n😀a";
+        string[] pieces = ["𠮷", "'s", " ", "𝟙", "𝟚", "!?", " \r\n", "😀a"];
+        // Supply tempting cross-boundary merges as well. They must not join
+        // separate numeric scalars, or the letter and contraction pieces.
+        using TemporaryQwenGguf file = CreateTokenizerFixture(
+            out Dictionary<string, int> ids, ["𝟙𝟚", "𠮷's", .. pieces]);
+        Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(file.Path);
+
+        int[] encoded = tokenizer.Encode(text);
+
+        Assert.Equal(pieces.Select(piece => ids[EncodeBytes(piece)]).ToArray(), encoded);
+        Assert.Equal(text, tokenizer.Decode(encoded));
+    }
+
+    [Fact]
+    public void UserDefinedToolTokensKeepExactIdsAndLiteralSpelling()
+    {
+        using TemporaryQwenGguf file = CreateTokenizerFixture(out Dictionary<string, int> ids);
+        Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(file.Path);
+        const string text = "hello<tool_call>hello</tool_call><tool_e\u0301>";
+        int[] expected = [ids["hello"], ids["<tool_call>"], ids["hello"], ids["</tool_call>"], ids["<tool_e\u0301>"]];
+
+        Assert.Equal(expected, tokenizer.Encode(text));
+        Assert.Equal(text, tokenizer.Decode(expected));
+        Qwen2GgufTokenizer.StreamingDecoder decoder = tokenizer.CreateStreamingDecoder();
+        Assert.Equal(text, string.Concat(expected.Select(decoder.Append)) + decoder.Complete());
+    }
+
+    private static TemporaryQwenGguf CreateTokenizerFixture(
+        out Dictionary<string, int> ids, params string[] mergedTexts)
     {
         // A complete GPT-2 byte alphabet in byte-id order, independent of the
         // implementation's encoder. Merges make Encode assertions sensitive
@@ -62,22 +175,71 @@ public sealed class QwenGgufTokenizerTests
             bool literal = value is >= 33 and <= 126 or >= 161 and <= 172 or >= 174 and <= 255;
             tokens.Add(((char)(literal ? value : escaped++)).ToString());
         }
-        string[] merges = [
+        List<string> merges = [
             "h e", "he l", "hel l", "hell o", "Ġ hello", "1 2", "' M", "! ?",
             "hello 1", "hello Ċ", "Ċ hello"
         ];
         foreach (string merge in merges) tokens.Add(merge.Replace(" ", "", StringComparison.Ordinal));
+        foreach (string text in mergedTexts)
+        {
+            string encoded = EncodeBytes(text);
+            var symbols = encoded.Select(character => character.ToString()).ToList();
+            while (symbols.Count > 1)
+            {
+                // Earlier merges can combine a shared UTF-8 prefix at more
+                // than one position. Extend the fixture's actual symbol
+                // partition, instead of assuming all later bytes stay single.
+                int bestRank = int.MaxValue, best = -1;
+                for (int i = 0; i + 1 < symbols.Count; ++i)
+                {
+                    int rank = merges.IndexOf(symbols[i] + " " + symbols[i + 1]);
+                    if (rank >= 0 && rank < bestRank) { bestRank = rank; best = i; }
+                }
+                if (best < 0)
+                {
+                    best = 0;
+                    merges.Add(symbols[0] + " " + symbols[1]);
+                    string joined = symbols[0] + symbols[1];
+                    if (!tokens.Contains(joined)) tokens.Add(joined);
+                }
+                string left = symbols[best], right = symbols[best + 1];
+                for (int i = 0; i + 1 < symbols.Count;)
+                {
+                    if (symbols[i] == left && symbols[i + 1] == right)
+                    {
+                        symbols[i] += symbols[i + 1];
+                        symbols.RemoveAt(i + 1);
+                    }
+                    else ++i;
+                }
+            }
+        }
         tokens.Add("<|endoftext|>");
+        tokens.AddRange(["<tool_call>", "</tool_call>", "<tool_e\u0301>"]);
         ids = tokens.Select((token, id) => (token, id)).ToDictionary(pair => pair.token, pair => pair.id);
         int[] types = Enumerable.Repeat(1, tokens.Count).ToArray();
-        types[^1] = 3;
+        types[ids["<|endoftext|>"]] = 3;
+        foreach (string token in new[] { "<tool_call>", "</tool_call>", "<tool_e\u0301>" })
+            types[ids[token]] = 4;
         return new TemporaryQwenGguf(new Dictionary<string, object>
         {
             ["tokenizer.ggml.model"] = "gpt2",
             ["tokenizer.ggml.tokens"] = tokens.ToArray(),
-            ["tokenizer.ggml.merges"] = merges,
+            ["tokenizer.ggml.merges"] = merges.ToArray(),
             ["tokenizer.ggml.token_type"] = types,
-            ["tokenizer.ggml.eos_token_id"] = (uint)(tokens.Count - 1)
+            ["tokenizer.ggml.eos_token_id"] = (uint)ids["<|endoftext|>"]
         });
+    }
+
+    private static string EncodeBytes(string text)
+    {
+        var alphabet = new char[256];
+        int escaped = 256;
+        for (int value = 0; value < alphabet.Length; ++value)
+        {
+            bool literal = value is >= 33 and <= 126 or >= 161 and <= 172 or >= 174 and <= 255;
+            alphabet[value] = (char)(literal ? value : escaped++);
+        }
+        return string.Concat(Encoding.UTF8.GetBytes(text).Select(value => alphabet[value]));
     }
 }

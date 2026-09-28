@@ -11,6 +11,10 @@
     <ProjectReference Include="..\NNtrain.Runtime\NNtrain.Runtime.csproj" />
     <EmbeddedResource Include="Kernels\training.cl" />
     <EmbeddedResource Include="Kernels\qwen.cl" />
+    <EmbeddedResource Include="Kernels\qwen_quantized_fast.cl" />
+    <EmbeddedResource Include="Kernels\qwen_quantized_subgroup.cl" />
+    <EmbeddedResource Include="Kernels\qwen_norm_fast.cl" />
+    <EmbeddedResource Include="Kernels\qwen_kv.cl" />
     <EmbeddedResource Include="Kernels\qwen35_attention.cl" />
     <EmbeddedResource Include="Kernels\qwen35_delta.cl" />
     <EmbeddedResource Include="Kernels\qwen35_linear_fast.cl" />

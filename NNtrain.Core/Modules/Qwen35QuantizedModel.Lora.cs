@@ -10,6 +10,9 @@ public sealed partial class Qwen35QuantizedModel
     private FileStream? _modelSource;
     private string? _modelFingerprint;
     private bool _loraFaulted;
+    // Internal parity-test hook; the production threshold stays at 64 rows.
+    internal int LoraCheckpointThresholdRows { get; set; } = 64;
+    internal long LoraTransposeScratchBudgetBytes { get; set; } = 256L * 1024 * 1024;
     private readonly Dictionary<string, Qwen35LoraMatrix> _lora = new(StringComparer.Ordinal);
     private Qwen35LoraOptions? _loraOptions;
     public int LoraStep { get; private set; }
@@ -146,11 +149,16 @@ public sealed partial class Qwen35QuantizedModel
         // Per-layer recurrent tapes are recomputed only during that layer's
         // backward pass. Reject predictable oversized workspaces before forward.
         int rows = tokens.Count - 1;
-        long recurrentBytes = checked(4L * (rows + 1) * Descriptor.LinearValueHeads
+        long recurrentElements = checked((long)(rows + 1) * Descriptor.LinearValueHeads
             * Descriptor.LinearHeadWidth * Descriptor.LinearHeadWidth);
-        long logitsBytes = checked(4L * rows * Descriptor.VocabularySize);
-        if (recurrentBytes > int.MaxValue || logitsBytes > int.MaxValue)
+        long logitsElements = checked((long)rows * Descriptor.VocabularySize);
+        if (recurrentElements > int.MaxValue || logitsElements > int.MaxValue)
             throw new NotSupportedException("Training sequence exceeds the current GPU buffer limit.");
+        long recurrentBytes = checked(recurrentElements * sizeof(float));
+        long logitsBytes = checked(logitsElements * sizeof(float));
+        // Tiled head backprop uses ArcExecutionLane.CopyBytes with Int32 byte offsets.
+        if (logitsBytes > int.MaxValue)
+            throw new NotSupportedException("Training logits exceed the current GPU copy-offset limit.");
         foreach (var lane in _lanes)
             if ((ulong)Math.Max(recurrentBytes, logitsBytes) > lane.Device.MaximumAllocationBytes)
                 throw new NotSupportedException("Training workspace exceeds the device allocation limit; shorten context.");
@@ -160,50 +168,18 @@ public sealed partial class Qwen35QuantizedModel
     {
         Reset();
         var d = Descriptor; int rows = tokens.Count - 1, valid = tokens.Count - start;
+        if (rows > LoraCheckpointThresholdRows) return LoraLossCheckpointed(tokens, start, backward);
         using var tape = new Qwen35TrainingTape();
         try
         {
             Matrix embedding = _matrices["token_embd.weight"];
             V hidden = tape.Add(embedding.Lane, embedding.Embedding(tokens, rows), rows, d.EmbeddingLength, false);
             for (int layer = 0; layer < d.LayerCount; layer++)
-            {
-                string p = $"blk.{layer}."; var lane = _states[layer].Lane;
-                hidden = tape.Move(hidden, lane);
-                V norm = tape.Norm(hidden, _dense[p + "attn_norm.weight"], d.RmsEpsilon);
-                V attended;
-                if (d.IsRecurrent(layer))
-                {
-                    V qkv = ProjectTrain(p + "attn_qkv.weight", norm);
-                    V gate = ProjectTrain(p + "attn_gate.weight", norm);
-                    V alpha = ProjectTrain(p + "ssm_alpha.weight", norm);
-                    V beta = ProjectTrain(p + "ssm_beta.weight", norm);
-                    var op = tape.Own(new Qwen35TrainingDelta(lane, qkv.Data, gate.Data, alpha.Data, beta.Data,
-                        _dense[p + "ssm_conv1d.weight"], _dense[p + "ssm_dt.bias"], _dense[p + "ssm_a"],
-                        _dense[p + "ssm_norm.weight"], d, rows));
-                    V delta = tape.Add(lane, op.Output, rows, d.LinearValueHeads * d.LinearHeadWidth,
-                        qkv.Differentiable || gate.Differentiable || alpha.Differentiable || beta.Differentiable, ownsData: false);
-                    tape.Record(() => { if (delta.Gradient is not null) op.Backward(delta.Gradient, qkv.Grad(), gate.Grad(), alpha.Grad(), beta.Grad()); });
-                    attended = ProjectTrain(p + "ssm_out.weight", delta);
-                }
-                else
-                {
-                    V q = ProjectTrain(p + "attn_q.weight", norm), k = ProjectTrain(p + "attn_k.weight", norm), v = ProjectTrain(p + "attn_v.weight", norm);
-                    var op = tape.Own(new Qwen35TrainingAttention(lane, q.Data, k.Data, v.Data,
-                        _dense[p + "attn_q_norm.weight"], _dense[p + "attn_k_norm.weight"], d, rows));
-                    V attention = tape.Add(lane, op.Output, rows, d.HeadCount * d.HeadWidth,
-                        q.Differentiable || k.Differentiable || v.Differentiable, ownsData: false);
-                    tape.Record(() => { if (attention.Gradient is not null) op.Backward(attention.Gradient, q.Grad(), k.Grad(), v.Grad()); });
-                    attended = ProjectTrain(p + "attn_output.weight", attention);
-                }
-                hidden = tape.Sum(hidden, attended);
-                V post = tape.Norm(hidden, _dense[p + "post_attention_norm.weight"], d.RmsEpsilon);
-                V activated = tape.Silu(ProjectTrain(p + "ffn_gate.weight", post), ProjectTrain(p + "ffn_up.weight", post));
-                hidden = tape.Sum(hidden, ProjectTrain(p + "ffn_down.weight", activated));
-            }
+                hidden = ForwardLoraLayer(tape, layer, hidden, rows);
             V final = tape.Norm(hidden, _dense["output_norm.weight"], d.RmsEpsilon);
             final = tape.Move(final, OutputMatrix.Lane);
             V head = _options.TrainingResponseOnlyHead ? tape.SliceRows(final, start - 1, valid) : final;
-            V logits = ProjectTrain("output.weight", head);
+            V logits = ProjectTrain(tape, "output.weight", head);
             int[] targets = _options.TrainingResponseOnlyHead ? tokens.Skip(start).ToArray()
                 : Enumerable.Range(0, rows).Select(t => t + 1 >= start ? tokens[t + 1] : -1).ToArray();
             int logitRows = logits.Rows;
@@ -220,23 +196,156 @@ public sealed partial class Qwen35QuantizedModel
             return loss;
         }
         catch { _faulted = true; throw; }
+    }
 
-        V ProjectTrain(string name, V input)
+    // Long sequences keep only one layer's graph on the GPU at a time. Saved
+    // layer inputs are immutable host checkpoints, so recomputation uses the
+    // same full causal sequence and the same adapter weights before Update.
+    private double LoraLossCheckpointed(IReadOnlyList<int> tokens, int start, bool backward)
+    {
+        Qwen35GgufDescriptor d = Descriptor;
+        int rows = tokens.Count - 1, valid = tokens.Count - start;
+        int hiddenElements = checked(rows * d.EmbeddingLength);
+        var checkpoints = new float[d.LayerCount + 1][];
+        try
         {
-            Matrix matrix = name == "output.weight" ? OutputMatrix : _matrices[name];
-            _lora.TryGetValue(name, out var adapter);
-            int projectionRows = input.Rows;
-            V output = tape.Add(matrix.Lane, matrix.Forward(input.Data, _zeroBias[matrix.Lane], projectionRows), projectionRows, matrix.OutputWidth,
-                input.Differentiable || adapter is not null);
-            ArcBuffer? z = adapter is null ? null : tape.Own(adapter.Forward(input.Data, output.Data, projectionRows));
-            tape.Record(() =>
+            Matrix embedding = _matrices["token_embd.weight"];
+            using (ArcBuffer embedded = embedding.Embedding(tokens, rows))
             {
-                if (output.Gradient is null) return;
-                ArcBuffer? dx = input.Differentiable ? input.Grad() : null;
-                if (dx is not null) matrix.BackwardInput(output.Gradient, dx, projectionRows);
-                adapter?.Backward(input.Data, z!, output.Gradient, dx, projectionRows);
-            });
-            return output;
+                checkpoints[0] = new float[hiddenElements];
+                embedding.Lane.Read(embedded, checkpoints[0]);
+            }
+
+            for (int layer = 0; layer < d.LayerCount; layer++)
+            {
+                ArcExecutionLane lane = _states[layer].Lane;
+                using var tape = new Qwen35TrainingTape();
+                using ArcBuffer source = lane.Upload(checkpoints[layer]);
+                V input = tape.Add(lane, source, rows, d.EmbeddingLength, false, ownsData: false);
+                V output = ForwardLoraLayer(tape, layer, input, rows);
+                checkpoints[layer + 1] = new float[hiddenElements];
+                lane.Read(output.Data, checkpoints[layer + 1]);
+                if (!backward) checkpoints[layer] = null!;
+            }
+
+            float[]? upstream = null;
+            double loss;
+            using (var tape = new Qwen35TrainingTape())
+            {
+                ArcExecutionLane lastLane = _states[d.LayerCount - 1].Lane;
+                using ArcBuffer source = lastLane.Upload(checkpoints[d.LayerCount]);
+                V hidden = tape.Add(lastLane, source, rows, d.EmbeddingLength, backward, ownsData: false);
+                V normalized = tape.Norm(hidden, _dense["output_norm.weight"], d.RmsEpsilon);
+                V final = tape.Move(normalized, OutputMatrix.Lane);
+                V head = _options.TrainingResponseOnlyHead ? tape.SliceRows(final, start - 1, valid) : final;
+                V logits = ProjectTrain(tape, "output.weight", head);
+                int[] targets = _options.TrainingResponseOnlyHead ? tokens.Skip(start).ToArray()
+                    : Enumerable.Range(0, rows).Select(t => t + 1 >= start ? tokens[t + 1] : -1).ToArray();
+                int logitRows = logits.Rows;
+                using ArcBuffer labels = logits.Lane.UploadRaw(targets), stats = logits.Lane.Allocate(checked(logitRows * 3));
+                logits.Lane.Run("q35t_ce_stats", (long)logitRows * 128, 128,
+                    logits.Data, labels, stats, d.VocabularySize, valid);
+                float[] numbers = new float[checked(logitRows * 3)];
+                logits.Lane.Read(stats, numbers);
+                loss = Enumerable.Range(0, logitRows).Sum(t => (double)numbers[t * 3]);
+                if (!double.IsFinite(loss))
+                    throw new ArithmeticException("Non-finite LoRA loss; optimizer update was not committed.");
+                if (backward)
+                {
+                    logits.Lane.Run("q35t_ce_grad", (long)logitRows * d.VocabularySize, 0,
+                        logits.Data, labels, stats, logits.Grad(), logitRows, d.VocabularySize, valid);
+                    tape.Backward();
+                    if (hidden.Gradient is null)
+                        throw new InvalidOperationException("The output head did not propagate its input gradient.");
+                    upstream = new float[hiddenElements];
+                    lastLane.Read(hidden.Gradient, upstream);
+                }
+            }
+
+            if (backward)
+            {
+                for (int layer = d.LayerCount - 1; layer >= 0; layer--)
+                {
+                    ArcExecutionLane lane = _states[layer].Lane;
+                    using var tape = new Qwen35TrainingTape();
+                    using ArcBuffer source = lane.Upload(checkpoints[layer]);
+                    V input = tape.Add(lane, source, rows, d.EmbeddingLength, true, ownsData: false);
+                    V output = ForwardLoraLayer(tape, layer, input, rows);
+                    lane.Write(output.Grad(), upstream!);
+                    tape.Backward();
+                    if (layer > 0)
+                    {
+                        if (input.Gradient is null)
+                            throw new InvalidOperationException($"LoRA layer {layer} did not propagate its input gradient.");
+                        upstream = new float[hiddenElements];
+                        lane.Read(input.Gradient, upstream);
+                    }
+                    checkpoints[layer + 1] = null!;
+                }
+            }
+            return loss;
         }
+        catch { _faulted = true; throw; }
+    }
+
+    private V ForwardLoraLayer(Qwen35TrainingTape tape, int layer, V hidden, int rows)
+    {
+        Qwen35GgufDescriptor d = Descriptor;
+        string p = $"blk.{layer}.";
+        ArcExecutionLane lane = _states[layer].Lane;
+        hidden = tape.Move(hidden, lane);
+        V norm = tape.Norm(hidden, _dense[p + "attn_norm.weight"], d.RmsEpsilon);
+        V attended;
+        if (d.IsRecurrent(layer))
+        {
+            V qkv = ProjectTrain(tape, p + "attn_qkv.weight", norm);
+            V gate = ProjectTrain(tape, p + "attn_gate.weight", norm);
+            V alpha = ProjectTrain(tape, p + "ssm_alpha.weight", norm);
+            V beta = ProjectTrain(tape, p + "ssm_beta.weight", norm);
+            var op = tape.Own(new Qwen35TrainingDelta(lane, qkv.Data, gate.Data, alpha.Data, beta.Data,
+                _dense[p + "ssm_conv1d.weight"], _dense[p + "ssm_dt.bias"], _dense[p + "ssm_a"],
+                _dense[p + "ssm_norm.weight"], d, rows));
+            V delta = tape.Add(lane, op.Output, rows, d.LinearValueHeads * d.LinearHeadWidth,
+                qkv.Differentiable || gate.Differentiable || alpha.Differentiable || beta.Differentiable, ownsData: false);
+            tape.Record(() => { if (delta.Gradient is not null) op.Backward(delta.Gradient, qkv.Grad(), gate.Grad(), alpha.Grad(), beta.Grad()); });
+            attended = ProjectTrain(tape, p + "ssm_out.weight", delta);
+        }
+        else
+        {
+            V q = ProjectTrain(tape, p + "attn_q.weight", norm);
+            V k = ProjectTrain(tape, p + "attn_k.weight", norm);
+            V v = ProjectTrain(tape, p + "attn_v.weight", norm);
+            var op = tape.Own(new Qwen35TrainingAttention(lane, q.Data, k.Data, v.Data,
+                _dense[p + "attn_q_norm.weight"], _dense[p + "attn_k_norm.weight"], d, rows));
+            V attention = tape.Add(lane, op.Output, rows, d.HeadCount * d.HeadWidth,
+                q.Differentiable || k.Differentiable || v.Differentiable, ownsData: false);
+            tape.Record(() => { if (attention.Gradient is not null) op.Backward(attention.Gradient, q.Grad(), k.Grad(), v.Grad()); });
+            attended = ProjectTrain(tape, p + "attn_output.weight", attention);
+        }
+        hidden = tape.Sum(hidden, attended);
+        V post = tape.Norm(hidden, _dense[p + "post_attention_norm.weight"], d.RmsEpsilon);
+        V activated = tape.Silu(ProjectTrain(tape, p + "ffn_gate.weight", post),
+            ProjectTrain(tape, p + "ffn_up.weight", post));
+        return tape.Sum(hidden, ProjectTrain(tape, p + "ffn_down.weight", activated));
+    }
+
+    private V ProjectTrain(Qwen35TrainingTape tape, string name, V input)
+    {
+        Matrix matrix = name == "output.weight" ? OutputMatrix : _matrices[name];
+        _lora.TryGetValue(name, out var adapter);
+        int projectionRows = input.Rows;
+        V output = tape.Add(matrix.Lane,
+            matrix.Forward(input.Data, _zeroBias[matrix.Lane], projectionRows),
+            projectionRows, matrix.OutputWidth, input.Differentiable || adapter is not null);
+        ArcBuffer? z = adapter is null ? null : tape.Own(adapter.Forward(input.Data, output.Data, projectionRows));
+        tape.Record(() =>
+        {
+            if (output.Gradient is null) return;
+            ArcBuffer? dx = input.Differentiable ? input.Grad() : null;
+            if (dx is not null) matrix.BackwardInput(output.Gradient, dx, projectionRows,
+                LoraTransposeScratchBudgetBytes);
+            adapter?.Backward(input.Data, z!, output.Gradient, dx, projectionRows);
+        });
+        return output;
     }
 }

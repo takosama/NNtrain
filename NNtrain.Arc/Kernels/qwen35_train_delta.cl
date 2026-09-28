@@ -85,6 +85,97 @@ __kernel void q35t_delta_recur(__global const float* mixed,
     }
 }
 
+// Recompute the recurrence once and retain only states at chunk boundaries.
+// Work-item ownership and operation order match q35t_delta_recur.
+__kernel void q35t_delta_checkpoints(__global const float* mixed,
+    __global const float* alpha, __global const float* beta,
+    __global const float* dt, __global const float* a,
+    __global float* state, __global float* checkpoints,
+    int sequence, int chunk_size, int key_heads, int value_heads, int width)
+{
+    int item = get_global_id(0), values = value_heads * width;
+    if (item >= values) return;
+    int h = item / width, keys = key_heads * width;
+    int channels = 2 * keys + values, stride = values * width;
+    int so = h * width * width + item % width, qo = (h % key_heads) * width;
+    for (int k = 0; k < width; ++k)
+    {
+        int index = so + k * width;
+        state[index] = 0.0f;
+        checkpoints[index] = 0.0f;
+    }
+    for (int t = 0; t < sequence; ++t)
+    {
+        int mo = t * channels;
+        float decay = exp(a[h] * q35d_softplus(alpha[t * value_heads + h] + dt[h]));
+        float rate = q35d_sigmoid(beta[t * value_heads + h]);
+        float prediction = 0.0f;
+        for (int k = 0; k < width; ++k)
+        {
+            int index = so + k * width;
+            float s = state[index] * decay;
+            state[index] = s;
+            prediction += mixed[mo + keys + qo + k] * s;
+        }
+        float delta = (mixed[mo + 2 * keys + item] - prediction) * rate;
+        for (int k = 0; k < width; ++k)
+        {
+            int index = so + k * width;
+            state[index] += mixed[mo + keys + qo + k] * delta;
+        }
+        if ((t + 1) % chunk_size == 0 && t + 1 < sequence)
+        {
+            int offset = ((t + 1) / chunk_size) * stride;
+            for (int k = 0; k < width; ++k)
+            {
+                int index = so + k * width;
+                checkpoints[offset + index] = state[index];
+            }
+        }
+    }
+}
+
+// Restore one boundary state and reconstruct at most chunk_size + 1 states.
+// Global token indices still address mixed/alpha/beta and their gradients.
+__kernel void q35t_delta_recur_chunk(__global const float* mixed,
+    __global const float* alpha, __global const float* beta,
+    __global const float* dt, __global const float* a,
+    __global const float* checkpoints, __global float* states,
+    int first, int count, int chunk, int key_heads, int value_heads, int width)
+{
+    int item = get_global_id(0), values = value_heads * width;
+    if (item >= values) return;
+    int h = item / width, keys = key_heads * width;
+    int channels = 2 * keys + values, stride = values * width;
+    int so = h * width * width + item % width, qo = (h % key_heads) * width;
+    for (int k = 0; k < width; ++k)
+    {
+        int index = so + k * width;
+        states[index] = checkpoints[chunk * stride + index];
+    }
+    for (int step = 0; step < count; ++step)
+    {
+        int t = first + step, mo = t * channels;
+        int prev = step * stride, next = (step + 1) * stride;
+        float decay = exp(a[h] * q35d_softplus(alpha[t * value_heads + h] + dt[h]));
+        float rate = q35d_sigmoid(beta[t * value_heads + h]);
+        float prediction = 0.0f;
+        for (int k = 0; k < width; ++k)
+        {
+            int index = so + k * width;
+            float s = states[prev + index] * decay;
+            states[next + index] = s;
+            prediction += mixed[mo + keys + qo + k] * s;
+        }
+        float delta = (mixed[mo + 2 * keys + item] - prediction) * rate;
+        for (int k = 0; k < width; ++k)
+        {
+            int index = next + so + k * width;
+            states[index] += mixed[mo + keys + qo + k] * delta;
+        }
+    }
+}
+
 __kernel void q35t_delta_gate(__global const float* raw, __global const float* gate,
     __global const float* norm, __global float* output,
     int sequence, int heads, int width, float eps)
@@ -131,12 +222,13 @@ __kernel void q35t_delta_prepare(__global const float* mixed,
     __global const float* dt, __global const float* a,
     __global const float* states, __global const float* draw,
     __global float* adj, __global float* scratch, __global float* dmixed,
-    int time, int key_heads, int value_heads, int width)
+    int time, int state_first, int key_heads, int value_heads, int width)
 {
     int item = get_global_id(0), values = value_heads * width;
     if (item >= values) return;
     int h = item / width, v = item % width, keys = key_heads * width;
     int channels = 2 * keys + values, stride = values * width;
+    int state_time = time - state_first;
     int so = h * width * width + v, qo = time * channels + (h % key_heads) * width;
     float decay = exp(a[h] * q35d_softplus(alpha[time * value_heads + h] + dt[h]));
     float rate = q35d_sigmoid(beta[time * value_heads + h]);
@@ -147,14 +239,14 @@ __kernel void q35t_delta_prepare(__global const float* mixed,
         float key = mixed[qo + keys + k];
         adj[index] += mixed[qo + k] * draw[time * values + item];
         du += key * adj[index];
-        prediction += key * (decay * states[time * stride + index]);
+        prediction += key * (decay * states[state_time * stride + index]);
     }
     float difference = mixed[time * channels + 2 * keys + item] - prediction;
     float dp = -rate * du, dr = 0.0f;
     for (int k = 0; k < width; ++k)
     {
         int index = so + k * width;
-        dr += states[time * stride + index] * (adj[index] + mixed[qo + keys + k] * dp);
+        dr += states[state_time * stride + index] * (adj[index] + mixed[qo + keys + k] * dp);
     }
     scratch[item * 4] = difference * rate;
     scratch[item * 4 + 1] = dp;
@@ -168,12 +260,13 @@ __kernel void q35t_delta_qk_backward_step(__global const float* alpha,
     __global const float* dt, __global const float* a,
     __global const float* states, __global const float* draw,
     __global const float* adj, __global const float* scratch, __global float* dmixed,
-    int time, int key_heads, int value_heads, int width)
+    int time, int state_first, int key_heads, int value_heads, int width)
 {
     int item = get_global_id(0), keys = key_heads * width;
     if (item >= keys) return;
     int kh = item / width, k = item % width, values = value_heads * width;
     int stride = values * width, channels = 2 * keys + values;
+    int state_time = time - state_first;
     float dq = 0.0f, dk = 0.0f;
     for (int h = kh; h < value_heads; h += key_heads)
     {
@@ -181,9 +274,9 @@ __kernel void q35t_delta_qk_backward_step(__global const float* alpha,
         for (int v = 0; v < width; ++v)
         {
             int vi = h * width + v, si = h * width * width + k * width + v;
-            dq += states[(time + 1) * stride + si] * draw[time * values + vi];
+            dq += states[(state_time + 1) * stride + si] * draw[time * values + vi];
             dk += scratch[vi * 4] * adj[si]
-                + (decay * states[time * stride + si]) * scratch[vi * 4 + 1];
+                + (decay * states[state_time * stride + si]) * scratch[vi * 4 + 1];
         }
     }
     dmixed[time * channels + item] = dq;
@@ -198,12 +291,13 @@ __kernel void q35t_delta_qk_backward_step_cooperative(__global const float* alph
     __global const float* dt, __global const float* a,
     __global const float* states, __global const float* draw,
     __global const float* adj, __global const float* scratch, __global float* dmixed,
-    int time, int key_heads, int value_heads, int width)
+    int time, int state_first, int key_heads, int value_heads, int width)
 {
     int item = get_group_id(0), lane = get_local_id(0), keys = key_heads * width;
     if (item >= keys) return;
     int kh = item / width, k = item % width, values = value_heads * width;
     int stride = values * width, channels = 2 * keys + values;
+    int state_time = time - state_first;
     float dq = 0.0f, dk = 0.0f;
     for (int h = kh; h < value_heads; h += key_heads)
     {
@@ -211,9 +305,9 @@ __kernel void q35t_delta_qk_backward_step_cooperative(__global const float* alph
         for (int v = lane; v < width; v += 32)
         {
             int vi = h * width + v, si = h * width * width + k * width + v;
-            dq += states[(time + 1) * stride + si] * draw[time * values + vi];
+            dq += states[(state_time + 1) * stride + si] * draw[time * values + vi];
             dk += scratch[vi * 4] * adj[si]
-                + (decay * states[time * stride + si]) * scratch[vi * 4 + 1];
+                + (decay * states[state_time * stride + si]) * scratch[vi * 4 + 1];
         }
     }
     __local float sum_q[32], sum_k[32];

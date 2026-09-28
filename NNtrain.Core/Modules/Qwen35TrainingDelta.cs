@@ -6,6 +6,9 @@ namespace NNtrain;
 /// <summary>Zero-state sequence DeltaNet with exact recurrent and convolution BPTT.</summary>
 internal sealed class Qwen35TrainingDelta : IDisposable
 {
+    // Only one short slice of the recurrent states is resident during BPTT.
+    // The adjoint itself is carried across slices, so this does not truncate it.
+    private const int RecurrentChunkSize = 64;
     private readonly ArcExecutionLane _lane;
     private readonly ArcBuffer _gate, _alpha, _beta, _convWeights, _dt, _a, _norm;
     private readonly ArcBuffer _pre, _mixed, _raw;
@@ -30,8 +33,11 @@ internal sealed class Qwen35TrainingDelta : IDisposable
         _values = checked(_heads * _width);
         _channels = checked((2 * _keys + _heads) * _width);
         _stateSize = checked(_values * _width);
-        // ArcBuffer uses Int32 element counts; fail before allocating any saved activations.
-        _ = checked((sequence + 1) * _stateSize);
+        // ArcBuffer uses Int32 element counts. A full-sequence tape would be
+        // several GiB at the 27B model's head dimensions; validate the bounded
+        // tape and its sparse boundary checkpoints instead.
+        _ = checked((Math.Min(sequence, RecurrentChunkSize) + 1) * _stateSize);
+        _ = checked((1 + (sequence - 1) / RecurrentChunkSize) * _stateSize);
         Check(qkv, checked(sequence * _channels), nameof(qkv));
         Check(gate, checked(sequence * _values), nameof(gate));
         Check(alpha, checked(sequence * _heads), nameof(alpha));
@@ -72,28 +78,42 @@ internal sealed class Qwen35TrainingDelta : IDisposable
         Check(dgate, checked(_sequence * _values), nameof(dgate));
         Check(dalpha, checked(_sequence * _heads), nameof(dalpha));
         Check(dbeta, checked(_sequence * _heads), nameof(dbeta));
-        // The large recurrent tape exists only while this one layer is backpropagated.
-        using ArcBuffer states = _lane.Allocate(checked((_sequence + 1) * _stateSize));
+        int chunks = 1 + (_sequence - 1) / RecurrentChunkSize;
+        using ArcBuffer checkpoints = _lane.Allocate(checked(chunks * _stateSize));
+        using ArcBuffer checkpointState = _lane.Allocate(_stateSize);
+        using ArcBuffer states = _lane.Allocate(checked((Math.Min(_sequence, RecurrentChunkSize) + 1) * _stateSize));
         using ArcBuffer adj = _lane.Allocate(_stateSize);
         using ArcBuffer scratch = _lane.Allocate(checked(_values * 4));
         using ArcBuffer dmixed = _lane.Allocate(checked(_sequence * _channels));
         using ArcBuffer draw = _lane.Allocate(checked(_sequence * _values));
-        Recurrent(states, true);
+        // Replay once from zero and retain the state at each chunk start.
+        // Replay each chunk from that exact boundary during reverse traversal.
+        _lane.Run("q35t_delta_checkpoints", _values, 0,
+            _mixed, _alpha, _beta, _dt, _a, checkpointState, checkpoints,
+            _sequence, RecurrentChunkSize, _keys, _heads, _width);
         _lane.Run("q35a_zero", _stateSize, 0, adj, _stateSize);
         _lane.Run("q35t_delta_gate_backward", _sequence * _heads, 0,
             _raw, _gate, _norm, dy, draw, dgate, _sequence, _heads, _width, _eps);
-        for (int t = _sequence - 1; t >= 0; --t)
+        for (int chunk = chunks - 1; chunk >= 0; --chunk)
         {
-            _lane.Run("q35t_delta_prepare", _values, 0,
-                _mixed, _alpha, _beta, _dt, _a, states, draw, adj, scratch, dmixed,
-                t, _keys, _heads, _width);
-            bool cooperative = _lane.Options.Qwen35CooperativeDelta && _width >= 32;
-            _lane.Run(cooperative ? "q35t_delta_qk_backward_step_cooperative" : "q35t_delta_qk_backward_step",
-                (long)_keys * _width * (cooperative ? 32 : 1), cooperative ? 32 : 0,
-                _alpha, _dt, _a, states, draw, adj, scratch, dmixed, t, _keys, _heads, _width);
-            _lane.Run("q35t_delta_finish", _values, 0,
-                _mixed, _alpha, _beta, _dt, _a, scratch, adj, dalpha, dbeta,
-                t, _keys, _heads, _width);
+            int first = chunk * RecurrentChunkSize;
+            int count = Math.Min(RecurrentChunkSize, _sequence - first);
+            _lane.Run("q35t_delta_recur_chunk", _values, 0,
+                _mixed, _alpha, _beta, _dt, _a, checkpoints, states,
+                first, count, chunk, _keys, _heads, _width);
+            for (int t = first + count - 1; t >= first; --t)
+            {
+                _lane.Run("q35t_delta_prepare", _values, 0,
+                    _mixed, _alpha, _beta, _dt, _a, states, draw, adj, scratch, dmixed,
+                    t, first, _keys, _heads, _width);
+                bool cooperative = _lane.Options.Qwen35CooperativeDelta && _width >= 32;
+                _lane.Run(cooperative ? "q35t_delta_qk_backward_step_cooperative" : "q35t_delta_qk_backward_step",
+                    (long)_keys * _width * (cooperative ? 32 : 1), cooperative ? 32 : 0,
+                    _alpha, _dt, _a, states, draw, adj, scratch, dmixed, t, first, _keys, _heads, _width);
+                _lane.Run("q35t_delta_finish", _values, 0,
+                    _mixed, _alpha, _beta, _dt, _a, scratch, adj, dalpha, dbeta,
+                    t, _keys, _heads, _width);
+            }
         }
         _lane.Run("q35t_delta_qk_backward", _sequence * _keys * 2, 0,
             _pre, dmixed, _sequence, _keys, _heads, _width, _eps);

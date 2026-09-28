@@ -21,6 +21,8 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
     private Matrix _embedding = null!;
     private ArcBuffer _outputNorm = null!;
     private int _position;
+    private int[]? _cachedPromptTokens;
+    private int _lastReusedPromptTokens;
     private bool _disposed, _faulted;
     private readonly Qwen35ExecutionOptions _options;
     private Qwen35PrismMetadata? _prism;
@@ -40,6 +42,8 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
     public IReadOnlyList<long> DownloadedBytes => _lanes.Select(lane => lane.D2HBytes).ToArray();
     public IReadOnlyList<long> LiveDeviceBytes => _lanes.Select(lane => lane.AllocatedBytes).ToArray();
     public IReadOnlyList<long> PeakDeviceBytes => _lanes.Select(lane => lane.PeakAllocatedBytes).ToArray();
+    /// <summary>Prompt tokens skipped by the most recent prefix-reuse generation.</summary>
+    public int LastReusedPromptTokens => _lastReusedPromptTokens;
     public IReadOnlyDictionary<string, double> KernelMilliseconds => _lanes
         .SelectMany(lane => lane.KernelTimings).GroupBy(pair => pair.Key)
         .ToDictionary(group => group.Key, group => group.Sum(pair => pair.Value));
@@ -313,6 +317,8 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         _faulted = true;
+        _cachedPromptTokens = null;
+        _lastReusedPromptTokens = 0;
         foreach (LayerState state in _states) state.Reset();
         _position = 0;
         _faulted = false;
@@ -321,6 +327,7 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
     /// <summary>Advances GPU state by one token. Only requested final logits are downloaded.</summary>
     public float[] ForwardToken(int tokenId, bool returnLogits = true)
     {
+        InvalidatePromptCheckpoint();
         using ArcBuffer? logits = ForwardTokenDevice(tokenId, returnLogits);
         if (logits is null) return [];
         try
@@ -471,38 +478,212 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
     }
 
     /// <summary>
-    /// Starts a new sequence and samples greedily on the GPU. Only the selected
-    /// token/status is downloaded. The final emitted token has not yet been forwarded.
+    /// Starts a new sequence. Greedy selection stays on the GPU; stochastic
+    /// sampling downloads one logits row for top-k and top-p filtering.
+    /// The final emitted token has not yet been forwarded.
     /// </summary>
     public int[] GenerateTokenIds(IReadOnlyList<int> prompt, int maxNewTokens,
-        int? eosTokenId = null, Action<int>? onToken = null)
+        int? eosTokenId = null, Action<int>? onToken = null,
+        float temperature = 0f, float topP = 1f, int topK = 1, Random? random = null)
+        => GenerateTokenIdsCore(prompt, maxNewTokens, eosTokenId, onToken, reusePromptPrefix: false,
+            temperature, topP, topK, random);
+
+    /// <summary>
+    /// Reuses a previous prompt's GPU state only when its token IDs are an exact
+    /// prefix of this prompt. Full-attention K/V rows are retained in place;
+    /// recurrent state is restored from a GPU-side copy after each response.
+    /// A changed or shorter prompt falls back to a full prefill.
+    /// </summary>
+    public int[] GenerateTokenIdsWithPrefixReuse(IReadOnlyList<int> prompt, int maxNewTokens,
+        int? eosTokenId = null, Action<int>? onToken = null,
+        float temperature = 0f, float topP = 1f, int topK = 1, Random? random = null)
+        => GenerateTokenIdsCore(prompt, maxNewTokens, eosTokenId, onToken, reusePromptPrefix: true,
+            temperature, topP, topK, random);
+
+    private int[] GenerateTokenIdsCore(IReadOnlyList<int> prompt, int maxNewTokens,
+        int? eosTokenId, Action<int>? onToken, bool reusePromptPrefix,
+        float temperature, float topP, int topK, Random? random)
     {
         ArgumentNullException.ThrowIfNull(prompt);
         ArgumentOutOfRangeException.ThrowIfNegative(maxNewTokens);
+        ValidateSampling(temperature, topP, topK);
         if (prompt.Count == 0 || prompt.Count > Descriptor.ContextLength)
             throw new ArgumentException("Prompt must contain 1..context-length tokens.", nameof(prompt));
         if (prompt.Any(token => (uint)token >= (uint)Descriptor.VocabularySize))
             throw new ArgumentOutOfRangeException(nameof(prompt));
-        Reset();
+        int reused = reusePromptPrefix && CanReusePromptPrefix(prompt)
+            ? _cachedPromptTokens!.Length : 0;
+        if (reused == 0) Reset();
+        _lastReusedPromptTokens = reused;
         var result = prompt.ToList();
-        if (maxNewTokens == 0 || result.Count == Descriptor.ContextLength) return result.ToArray();
+        if (maxNewTokens == 0 || result.Count == Descriptor.ContextLength)
+        {
+            // No final logits are computed in this path, so it cannot seed a
+            // later continuation even when an earlier prefix was reusable.
+            InvalidatePromptCheckpoint();
+            return result.ToArray();
+        }
         ArcBuffer? logits = null;
+        bool checkpointCaptured = false;
+        bool greedy = temperature == 0f || topK == 1;
+        float[]? hostLogits = greedy ? null : new float[Descriptor.VocabularySize];
+        random ??= Random.Shared;
         try
         {
-            for (int i = 0; i < prompt.Count; i++) logits = ForwardTokenDevice(prompt[i], i == prompt.Count - 1);
+            for (int i = reused; i < prompt.Count; i++)
+                logits = ForwardTokenDevice(prompt[i], i == prompt.Count - 1);
+            if (reusePromptPrefix)
+                checkpointCaptured = TryCapturePromptCheckpoint();
             for (int generated = 0; generated < maxNewTokens && result.Count < Descriptor.ContextLength; generated++)
             {
-                int next = Qwen35Gpu.ArgMax(OutputMatrix.Lane, logits!, Descriptor.VocabularySize);
+                int next;
+                if (greedy)
+                    next = Qwen35Gpu.ArgMax(OutputMatrix.Lane, logits!, Descriptor.VocabularySize);
+                else
+                {
+                    OutputMatrix.Lane.Read(logits!, hostLogits!);
+                    next = SampleLogits(hostLogits, temperature, topP, topK, random);
+                }
                 logits!.Dispose(); logits = null;
                 result.Add(next);
                 onToken?.Invoke(next);
                 if (next == eosTokenId || generated + 1 == maxNewTokens || result.Count == Descriptor.ContextLength) break;
                 logits = ForwardTokenDevice(next, true);
             }
+            if (checkpointCaptured)
+            {
+                foreach (LayerState state in _states) state.RestorePromptState();
+                foreach (ArcExecutionLane lane in _lanes) lane.Synchronize();
+                _position = prompt.Count;
+                _cachedPromptTokens = prompt.ToArray();
+            }
             return result.ToArray();
         }
-        catch { _faulted = true; throw; }
+        catch { _faulted = true; InvalidatePromptCheckpoint(); throw; }
         finally { logits?.Dispose(); }
+    }
+
+    private static void ValidateSampling(float temperature, float topP, int topK)
+    {
+        if (!float.IsFinite(temperature) || temperature < 0f)
+            throw new ArgumentOutOfRangeException(nameof(temperature));
+        if (!float.IsFinite(topP) || topP <= 0f || topP > 1f)
+            throw new ArgumentOutOfRangeException(nameof(topP));
+        if (topK < 1)
+            throw new ArgumentOutOfRangeException(nameof(topK));
+    }
+
+    /// <summary>
+    /// Selects top-k before nucleus filtering, as required by Qwen sampling.
+    /// The returned ID is reproducible when the caller supplies a seeded Random.
+    /// </summary>
+    internal static int SampleLogits(ReadOnlySpan<float> logits,
+        float temperature, float topP, int topK, Random random)
+    {
+        ValidateSampling(temperature, topP, topK);
+        ArgumentNullException.ThrowIfNull(random);
+        if (logits.IsEmpty) throw new ArgumentException("Logits cannot be empty.", nameof(logits));
+
+        int bestId = 0;
+        float bestValue = float.NegativeInfinity;
+        int count = Math.Min(topK, logits.Length);
+        bool greedy = temperature == 0f || count == 1;
+        var candidates = greedy ? null :
+            new PriorityQueue<(int Id, float Value), (float Value, int NegativeId)>(count);
+        for (int id = 0; id < logits.Length; id++)
+        {
+            float value = logits[id];
+            if (!float.IsFinite(value))
+                throw new ArithmeticException("Qwen3.5 produced non-finite logits.");
+            if (value > bestValue) { bestValue = value; bestId = id; }
+            if (greedy) continue;
+
+            (float Value, int NegativeId) priority = (value, -id);
+            if (candidates!.Count < count)
+                candidates.Enqueue((id, value), priority);
+            else if (candidates.TryPeek(out _, out var worst) && priority.CompareTo(worst) > 0)
+            {
+                candidates.Dequeue();
+                candidates.Enqueue((id, value), priority);
+            }
+        }
+        if (greedy) return bestId;
+
+        (int Id, float Value)[] ordered = candidates!.UnorderedItems
+            .Select(item => item.Element).ToArray();
+        Array.Sort(ordered, (left, right) =>
+        {
+            int byValue = right.Value.CompareTo(left.Value);
+            return byValue != 0 ? byValue : left.Id.CompareTo(right.Id);
+        });
+        var weights = new double[ordered.Length];
+        double sum = 0;
+        double maximum = ordered[0].Value;
+        for (int i = 0; i < ordered.Length; i++)
+        {
+            double weight = Math.Exp(((double)ordered[i].Value - maximum) / temperature);
+            weights[i] = weight;
+            sum += weight;
+        }
+        double nucleusMass = 0;
+        int nucleusCount = 0;
+        do
+        {
+            nucleusMass += weights[nucleusCount++];
+        } while (nucleusCount < ordered.Length && nucleusMass / sum < topP);
+
+        double draw = random.NextDouble() * nucleusMass;
+        double cumulative = 0;
+        for (int i = 0; i < nucleusCount; i++)
+        {
+            cumulative += weights[i];
+            if (draw < cumulative) return ordered[i].Id;
+        }
+        return ordered[nucleusCount - 1].Id;
+    }
+
+    private bool CanReusePromptPrefix(IReadOnlyList<int> prompt)
+    {
+        int[]? cached = _cachedPromptTokens;
+        if (_faulted || cached is null || cached.Length >= prompt.Count || _position != cached.Length
+            || _states.Any(state => !state.HasPromptState)) return false;
+        for (int i = 0; i < cached.Length; i++)
+            if (cached[i] != prompt[i]) return false;
+        return true;
+    }
+
+    private bool TryCapturePromptCheckpoint()
+    {
+        // The previous snapshot is no longer a valid prefix once the prompt
+        // advances, but its GPU buffers can hold the new recurrent state.
+        _cachedPromptTokens = null;
+        foreach (ArcExecutionLane lane in _lanes)
+        {
+            long bytes = _states.Where(state => ReferenceEquals(state.Lane, lane))
+                .Sum(state => state.AdditionalPromptSnapshotBytes);
+            if (lane.AllocatedBytes + bytes + WorkspaceReserveBytes > DeviceBudget(lane.Device))
+            {
+                InvalidatePromptCheckpoint();
+                return false; // Generate normally when a snapshot will not fit.
+            }
+        }
+        try
+        {
+            foreach (LayerState state in _states) state.CapturePromptState();
+            foreach (ArcExecutionLane lane in _lanes) lane.Synchronize();
+            return true;
+        }
+        catch
+        {
+            InvalidatePromptCheckpoint();
+            throw;
+        }
+    }
+
+    private void InvalidatePromptCheckpoint()
+    {
+        _cachedPromptTokens = null;
+        foreach (LayerState state in _states) state.ClearPromptState();
     }
 
     public void Dispose()
@@ -573,9 +754,15 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
     {
         internal ArcExecutionLane Lane { get; } = lane;
         internal ArcBuffer? Convolution, Recurrent, Keys, Values;
+        private ArcBuffer? _promptConvolution, _promptRecurrent;
         private int _capacity;
         internal long StorageBytes => (Convolution?.ByteLength ?? 0) + (Recurrent?.ByteLength ?? 0)
-            + (Keys?.ByteLength ?? 0) + (Values?.ByteLength ?? 0);
+            + (Keys?.ByteLength ?? 0) + (Values?.ByteLength ?? 0)
+            + (_promptConvolution?.ByteLength ?? 0) + (_promptRecurrent?.ByteLength ?? 0);
+        internal long AdditionalPromptSnapshotBytes => recurrent
+            ? (_promptConvolution is null ? Convolution?.ByteLength ?? 0 : 0)
+                + (_promptRecurrent is null ? Recurrent?.ByteLength ?? 0 : 0) : 0;
+        internal bool HasPromptState => !recurrent || (_promptConvolution is not null && _promptRecurrent is not null);
         internal void Initialize()
         {
             if (recurrent)
@@ -588,10 +775,38 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         }
         internal void Reset()
         {
+            ClearPromptState();
             if (Convolution is not null) Zero(Convolution);
             if (Recurrent is not null) Zero(Recurrent);
             // Cached rows beyond the current position are never read. Resetting
             // the model position is enough; capacity remains reusable on device.
+        }
+        internal void CapturePromptState()
+        {
+            if (!recurrent) return;
+            ArcBuffer convolutionBuffer = Convolution!;
+            ArcBuffer recurrentBuffer = Recurrent!;
+            try
+            {
+                _promptConvolution ??= Lane.AllocateBytes(checked((int)convolutionBuffer.ByteLength));
+                _promptRecurrent ??= Lane.AllocateBytes(checked((int)recurrentBuffer.ByteLength));
+                Lane.CopyBytes(convolutionBuffer, _promptConvolution, 0, 0, checked((int)convolutionBuffer.ByteLength));
+                Lane.CopyBytes(recurrentBuffer, _promptRecurrent, 0, 0, checked((int)recurrentBuffer.ByteLength));
+            }
+            catch { ClearPromptState(); throw; }
+        }
+        internal void RestorePromptState()
+        {
+            if (!recurrent) return;
+            if (!HasPromptState) throw new InvalidOperationException("Qwen3.5 prompt state is unavailable.");
+            Lane.CopyBytes(_promptConvolution!, Convolution!, 0, 0, checked((int)Convolution!.ByteLength));
+            Lane.CopyBytes(_promptRecurrent!, Recurrent!, 0, 0, checked((int)Recurrent!.ByteLength));
+        }
+        internal void ClearPromptState()
+        {
+            _promptConvolution?.Dispose();
+            _promptRecurrent?.Dispose();
+            _promptConvolution = _promptRecurrent = null;
         }
         private void Zero(ArcBuffer buffer)
         {
@@ -623,7 +838,11 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
             }
             finally { keys?.Dispose(); values?.Dispose(); }
         }
-        public void Dispose() { Convolution?.Dispose(); Recurrent?.Dispose(); Keys?.Dispose(); Values?.Dispose(); }
+        public void Dispose()
+        {
+            ClearPromptState();
+            Convolution?.Dispose(); Recurrent?.Dispose(); Keys?.Dispose(); Values?.Dispose();
+        }
     }
 
     private sealed class Matrix : IDisposable
@@ -724,23 +943,56 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
             }
             catch { output.Dispose(); throw; }
         }
-        internal void BackwardInput(ArcBuffer dy, ArcBuffer dx, int rows)
+        internal void BackwardInput(ArcBuffer dy, ArcBuffer dx, int rows, long scratchBudgetBytes)
         {
             const int tile = 1024;
             int splits = (OutputWidth + tile - 1) / tile;
-            using ArcBuffer partial = Lane.Allocate(checked(rows * splits * _inputWidth));
-            if (_transposeOctetRows != 0)
-                Lane.Run("q35t_xpose_" + _quantization + "_vec8_rows" + _transposeOctetRows,
-                    ((long)rows + _transposeOctetRows - 1) / _transposeOctetRows * splits * (_inputWidth / 8), 32,
-                    dy, _encoded, partial, rows, _inputWidth, OutputWidth, splits, tile);
-            else
+            if (scratchBudgetBytes < sizeof(float)) throw new ArgumentOutOfRangeException(nameof(scratchBudgetBytes));
+            long bytesPerRow = checked((long)splits * _inputWidth * sizeof(float));
+            if (checked((long)rows * bytesPerRow) <= scratchBudgetBytes)
             {
-                string suffix = _transposeRows == 1 ? "" : "_rows" + _transposeRows;
-                Lane.Run("q35t_xpose_" + _quantization + suffix, ((long)rows + _transposeRows - 1) / _transposeRows * splits * _inputWidth, 128,
-                    dy, _encoded, partial, rows, _inputWidth, OutputWidth, splits, tile);
+                // Keep the original fast path and its accumulation order.
+                using ArcBuffer fullPartial = Lane.Allocate(checked(rows * splits * _inputWidth));
+                RunTranspose(dy, fullPartial, rows);
+                Lane.Run("q35t_xpose_reduce", (long)rows * _inputWidth, 0,
+                    fullPartial, dx, rows, _inputWidth, splits);
+                return;
             }
-            Lane.Run("q35t_xpose_reduce", (long)rows * _inputWidth, 0,
-                partial, dx, rows, _inputWidth, splits);
+            int chunkRows = checked((int)Math.Max(1L, Math.Min(rows, scratchBudgetBytes / bytesPerRow)));
+            // Row tiles leave every token's quantized transpose and split
+            // reduction unchanged, while bounding the vocabulary-head scratch.
+            for (int row = 0; row < rows; row += chunkRows)
+            {
+                int count = Math.Min(chunkRows, rows - row);
+                int dyElements = checked(count * OutputWidth);
+                int dxElements = checked(count * _inputWidth);
+                using ArcBuffer dyTile = Lane.Allocate(dyElements);
+                Lane.CopyBytes(dy, dyTile, checked(row * OutputWidth * sizeof(float)), 0,
+                    checked(dyElements * sizeof(float)));
+                using ArcBuffer partial = Lane.Allocate(checked(count * splits * _inputWidth));
+                using ArcBuffer dxTile = Lane.Allocate(dxElements);
+                Lane.Run("q35a_zero", dxElements, 0, dxTile, dxElements);
+                RunTranspose(dyTile, partial, count);
+                Lane.Run("q35t_xpose_reduce", (long)count * _inputWidth, 0,
+                    partial, dxTile, count, _inputWidth, splits);
+                Lane.Run("q35t_add_offset", dxElements, 0, dxTile, dx, dxElements,
+                    checked(row * _inputWidth));
+            }
+
+            void RunTranspose(ArcBuffer source, ArcBuffer partial, int count)
+            {
+                if (_transposeOctetRows != 0)
+                    Lane.Run("q35t_xpose_" + _quantization + "_vec8_rows" + _transposeOctetRows,
+                        ((long)count + _transposeOctetRows - 1) / _transposeOctetRows * splits * (_inputWidth / 8), 32,
+                        source, _encoded, partial, count, _inputWidth, OutputWidth, splits, tile);
+                else
+                {
+                    string suffix = _transposeRows == 1 ? "" : "_rows" + _transposeRows;
+                    Lane.Run("q35t_xpose_" + _quantization + suffix,
+                        ((long)count + _transposeRows - 1) / _transposeRows * splits * _inputWidth, 128,
+                        source, _encoded, partial, count, _inputWidth, OutputWidth, splits, tile);
+                }
+            }
         }
         internal ArcBuffer Embedding(int tokenId)
         {

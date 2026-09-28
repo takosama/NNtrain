@@ -23,6 +23,15 @@ public sealed record ArcExecutionOptions
     public bool Qwen35CooperativeDelta { get; init; }
     public bool Qwen35InferenceKernelsOnly { get; init; } = false;
 
+    // Qwen GGUF inference keeps the original encoded Q4_K/Q6_K matrices.
+    // Separate switches retain a same-binary reference for numerical and timing checks.
+    public bool QwenQuantizedLinearFast { get; init; } = true;
+    public bool QwenInferenceKvCache { get; init; } = true;
+    public bool QwenRmsNormFast { get; init; } = true;
+    // B580 SG16 reduces Q4_K decode cost substantially versus WG64; other
+    // devices retain the portable cooperative kernel through capability checks.
+    public bool QwenQuantizedLinearSubgroup { get; init; } = true;
+    public bool QwenQuantizedSubgroupPrefill { get; init; } = true;
     // Measured one-sequence generation paths; matrix/normalization dispatch
     // remains unchanged while recording gradients. Each switch permits A/B.
     public bool InferenceKvCache { get; init; } = true;
@@ -216,6 +225,9 @@ public sealed record ArcExecutionOptions
     public bool OrderedTiledNorm { get; init; } = true;
     public bool PackedNormInput { get; init; } = true;
     public static ArcExecutionOptions Reference { get; } = new() {
+        QwenQuantizedLinearFast = false, QwenInferenceKvCache = false,
+        QwenRmsNormFast = false, QwenQuantizedLinearSubgroup = false,
+        QwenQuantizedSubgroupPrefill = false,
         InferenceKvCache = false, InferenceGemv = false, InferencePackedEmbedding = false,
         InferenceSmallRowNorm = false, InferenceFusedGemv = false,
         ResidentTensors = false, TiledMatrices = false, StreamingAttention = false, ResidentMuonIterations = false, ChunkedLossHead = false, PackedUploads = false, FusedNormalization = false, BufferPoolBytes = 0, BatchDispatch = false, DeepMatrices = false, CausalAttentionBounds = false, ParallelWeightGradients = false,
