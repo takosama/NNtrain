@@ -1,11 +1,13 @@
 # NNtrain チャット
 
-Windows用のローカル推論GUIです。GGUFを選び、必要ならNNtrainのLoRAチェックポイントを選んで、Intel Arc GPUで会話できます。学習コマンドや学習画面はありません。
+Windows用のローカル推論GUIです。起動時に同じ実行ファイルから別プロセスのOpenAI API互換サーバーを立ち上げ、GUIは `http://127.0.0.1:<自動選択ポート>/v1/chat/completions` を呼びます。サーバーの処理とログは別のCUIウィンドウに表示されます。GUIを閉じると所有するサーバーも終了します。
+
+GGUFを選び、必要ならNNtrainのLoRAチェックポイントを選んで、Intel Arc GPUで会話できます。学習コマンドや学習画面はありません。
 
 - モデルの「プリロード」で重みをGPUに読み込み、後続の送信でも保持します。
 - 「モデル・生成設定」をクリックすると設定欄を折りたたみ、チャット表示を広げられます。設定値は保持されます。
 - 「使用GPU」でArc 0＋1または各GPU単独を選べます。2台見つかった場合は両方を初期選択し、モデルの層とKVキャッシュを分散します。選択を変えると読み込み直します。
-- 生成中はテキストを逐次表示します。送信の停止、モデルやLoRAの切替にも対応します。
+- StreamのOn/Offを切り替えられます。OnならOpenAI形式のSSEで逐次表示し、Offなら完了後にまとめて表示します。送信の停止、モデルやLoRAの切替にも対応します。
 - ThinkingのOn/OffはQwen3.8のGGUFチャットテンプレートにある生成開始部分を使います。
 - Thinkingは初期状態でオンです。オフにするとモデルへ思考しないよう指示します。
 - 生成の初期値は temperature 0.6、top-p 0.95、top-k 20 です。GUIで変更できます。temperature 0 はgreedyです。
@@ -13,7 +15,7 @@ Windows用のローカル推論GUIです。GGUFを選び、必要ならNNtrain�
 - 過去ターンの思考本文は次の推論プロンプトに含めず、回答本文だけを履歴に残します。テンプレートの空の思考区切りは保持します。
 - Thinkingをオンにした生成で回答に到達しない場合は、一度だけThinkingオフで回答を生成し直します。最初の思考文は折りたたんで残します。
 - Thinkingオフでもモデルが `</think>` を余分に出した場合は、その前を折りたたみ可能な思考として扱い、回答には終端後の文だけを表示します。思考だけで生成が終わった場合は、回答が未生成であることを表示します。
-- 最後のプリロードまたは生成完了から5分間操作がなければモデルを解放し、GPUメモリを空けます。次の送信時は選択中のモデルを再読み込みします。
+- 最後のプリロードまたは生成完了から5分間操作がなければサーバーがモデルを解放し、GPUメモリを空けます。GUIはサーバーの状態を表示し、次の送信時は選択中のモデルを再読み込みします。
 - 現在のモデル読込経路は `general.architecture=qwen35` のテキストモデルです。Qwen3.8-27BやBonsai PQ2_0/PTQ1_0を使用できます。Qwen2.5と画像入力はこのGUIでは扱いません。
 - LoRAの選択はNNtrainの `adapter.bin` チェックポイントです。エクスポート済みのGGUF LoRAアダプターはこの読込経路に直接渡せません。Bonsai PQ2_0/PTQ1_0のLoRAはサポート対象外です。
 - モデルは会話間で常駐します。前回プロンプトのトークン列が次のプロンプトの先頭と一致すれば、GPU上のKVとDeltaNet状態を保持して続きだけを計算します。表示用の会話履歴には思考本文を残さず、回答だけを入れます。
@@ -27,3 +29,13 @@ dotnet publish .\NNtrain.Gui\NNtrain.Gui.csproj -c Release -r win-x64 --self-con
 ```
 
 実行ファイルは `NNtrain.Gui\bin\Release\net10.0-windows\win-x64\publish\NNtrain.Gui.exe` です。モデルとLoRAは実行ファイルに含めず、既存の `models`、`checkpoints` フォルダーから選びます。
+
+起動引数で初期設定を指定できます。例えば：
+
+```powershell
+.\NNtrain.Gui.exe --model C:\models\base.gguf --lora C:\models\adapter.bin --top_p 0.95 --top_k 20 --temperature 0.6 --maxtokens 512 --stream on --think on
+```
+
+`--lora` は省略できます。`--tempreture` も `--temperature` の別名として受け付けます。モデル・LoRAのパスには `../` または `..\` を含む親ディレクトリ参照を指定できません。
+
+APIサーバーだけを起動する場合は `NNtrain.Gui.exe --server --port 8000` を使います。`--lora C:\models\adapter.bin` で既定のLoRAを指定でき、`POST /internal/shutdown` で終了します。

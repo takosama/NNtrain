@@ -4,6 +4,10 @@ NNtrain is a small neural-network training implementation for studying Tensor
 operations, reverse-mode automatic differentiation, Transformer modules,
 optimizers, dataset boundaries, and training orchestration in C#/.NET 10.
 
+The Windows chat GUI starts a loopback OpenAI-compatible API server in a
+separate console process. See the [GUI and local API guide](docs/gui-openai-api.md)
+for startup options, LoRA selection, streaming, and request examples.
+
 ## Intel Arc (Windows OpenCL)
 
 `device: "arc"` selects the Intel Arc backend independently of CPU/CUDA.

@@ -9,6 +9,7 @@
     <NNtrainAllowedProjectReferences>NNtrain.Core</NNtrainAllowedProjectReferences>
   </PropertyGroup>
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="..\NNtrain.Core\NNtrain.Core.csproj" />
   </ItemGroup>
 </Project>

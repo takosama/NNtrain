@@ -523,7 +523,13 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         int? eosTokenId = null, Action<int>? onToken = null,
         float temperature = 0f, float topP = 1f, int topK = 1, Random? random = null)
         => GenerateTokenIdsCore(prompt, maxNewTokens, eosTokenId, onToken, reusePromptPrefix: false,
-            temperature, topP, topK, random);
+            temperature, topP, topK, random, CancellationToken.None);
+
+    public int[] GenerateTokenIds(IReadOnlyList<int> prompt, int maxNewTokens,
+        CancellationToken cancellationToken, int? eosTokenId = null, Action<int>? onToken = null,
+        float temperature = 0f, float topP = 1f, int topK = 1, Random? random = null)
+        => GenerateTokenIdsCore(prompt, maxNewTokens, eosTokenId, onToken, reusePromptPrefix: false,
+            temperature, topP, topK, random, cancellationToken);
 
     /// <summary>
     /// Reuses a previous prompt's GPU state only when its token IDs are an exact
@@ -535,11 +541,18 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         int? eosTokenId = null, Action<int>? onToken = null,
         float temperature = 0f, float topP = 1f, int topK = 1, Random? random = null)
         => GenerateTokenIdsCore(prompt, maxNewTokens, eosTokenId, onToken, reusePromptPrefix: true,
-            temperature, topP, topK, random);
+            temperature, topP, topK, random, CancellationToken.None);
+
+    public int[] GenerateTokenIdsWithPrefixReuse(IReadOnlyList<int> prompt, int maxNewTokens,
+        CancellationToken cancellationToken, int? eosTokenId = null, Action<int>? onToken = null,
+        float temperature = 0f, float topP = 1f, int topK = 1, Random? random = null)
+        => GenerateTokenIdsCore(prompt, maxNewTokens, eosTokenId, onToken, reusePromptPrefix: true,
+            temperature, topP, topK, random, cancellationToken);
 
     private int[] GenerateTokenIdsCore(IReadOnlyList<int> prompt, int maxNewTokens,
         int? eosTokenId, Action<int>? onToken, bool reusePromptPrefix,
-        float temperature, float topP, int topK, Random? random)
+        float temperature, float topP, int topK, Random? random,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(prompt);
         ArgumentOutOfRangeException.ThrowIfNegative(maxNewTokens);
@@ -548,6 +561,7 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
             throw new ArgumentException("Prompt must contain 1..context-length tokens.", nameof(prompt));
         if (prompt.Any(token => (uint)token >= (uint)Descriptor.VocabularySize))
             throw new ArgumentOutOfRangeException(nameof(prompt));
+        cancellationToken.ThrowIfCancellationRequested();
         int reused = reusePromptPrefix && CanReusePromptPrefix(prompt)
             ? _cachedPromptTokens!.Length : 0;
         if (reused == 0) Reset();
@@ -568,11 +582,16 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         try
         {
             for (int i = reused; i < prompt.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
                 logits = ForwardTokenDevice(prompt[i], i == prompt.Count - 1);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
             if (reusePromptPrefix)
                 checkpointCaptured = TryCapturePromptCheckpoint();
             for (int generated = 0; generated < maxNewTokens && result.Count < Descriptor.ContextLength; generated++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 int next;
                 if (greedy)
                     next = Qwen35Gpu.ArgMax(OutputMatrix.Lane, logits!, Descriptor.VocabularySize);
@@ -584,6 +603,7 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                 logits!.Dispose(); logits = null;
                 result.Add(next);
                 onToken?.Invoke(next);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (next == eosTokenId || generated + 1 == maxNewTokens || result.Count == Descriptor.ContextLength) break;
                 logits = ForwardTokenDevice(next, true);
             }

@@ -6,6 +6,23 @@ namespace NNtrain.Core.Tests;
 public sealed class Qwen35ResidentModelTests
 {
     [Fact]
+    public void CancelledGenerationDoesNotConsumeCachedPromptState()
+    {
+        RequireArcDevices(1);
+        using TemporaryQwenGguf file = CreateFixture(tiedOutput: false, contextLength: 40);
+        using Qwen35QuantizedModel model = Qwen35QuantizedModel.Load(file.Path, [0]);
+        int[] firstPrompt = [1, 2, 0];
+        int[] continuation = [1, 2, 0, 3];
+        _ = model.GenerateTokenIdsWithPrefixReuse(firstPrompt, 2);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        Assert.Throws<OperationCanceledException>(() => model.GenerateTokenIdsWithPrefixReuse(
+            continuation, 2, cancellationToken: cancellation.Token));
+        _ = model.GenerateTokenIdsWithPrefixReuse(continuation, 2);
+        Assert.Equal(firstPrompt.Length, model.LastReusedPromptTokens);
+    }
+
+    [Fact]
     public void SeededSamplingMatchesFullPrefillAfterPromptPrefixReuse()
     {
         RequireArcDevices(1);
