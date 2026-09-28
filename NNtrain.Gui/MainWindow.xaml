@@ -98,7 +98,11 @@
                     <CheckBox x:Name="ThinkingCheckBox" Content="Thinking: On" IsChecked="True"
                               Foreground="#D8F7F1" FontWeight="SemiBold" VerticalAlignment="Center"
                               ToolTip="オン: 思考を生成中に折りたたみ表示できます。オフ: モデルに思考を要求しません。"
-                              Checked="Thinking_Changed" Unchecked="Thinking_Changed" Margin="0,0,24,0"/>
+                              Checked="Thinking_Changed" Unchecked="Thinking_Changed" Margin="0,0,18,0"/>
+                    <CheckBox x:Name="StreamCheckBox" Content="Stream: On" IsChecked="True"
+                              Foreground="#D8F7F1" FontWeight="SemiBold" VerticalAlignment="Center"
+                              ToolTip="オン: 回答を逐次表示します。オフ: 完了後にまとめて表示します。"
+                              Checked="Stream_Changed" Unchecked="Stream_Changed" Margin="0,0,18,0"/>
                     <TextBlock Text="最大生成数" VerticalAlignment="Center" Margin="0,0,8,0"/>
                     <TextBox x:Name="MaxTokensBox" Text="512" Width="78" Height="36" VerticalContentAlignment="Center"
                              ToolTip="1 ～ 8192 トークン"/>

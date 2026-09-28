@@ -1,8 +1,13 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -14,23 +19,28 @@ namespace NNtrain.Gui;
 
 public partial class MainWindow : Window
 {
-    private static readonly TimeSpan IdleLimit = TimeSpan.FromMinutes(5);
-    private readonly InferenceSession _session = new();
+    private readonly GuiLaunchOptions _launchOptions;
+    private readonly HttpClient _client = new() { Timeout = Timeout.InfiniteTimeSpan };
     private readonly ObservableCollection<FileChoice> _models = [];
     private readonly ObservableCollection<FileChoice> _adapters = [];
     private readonly ObservableCollection<GpuChoice> _gpus = [];
     private readonly ObservableCollection<ChatBubble> _messages = [];
     private readonly List<ChatTurn> _conversation = [];
-    private readonly SemaphoreSlim _sessionGate = new(1, 1);
+    private readonly SemaphoreSlim _requestGate = new(1, 1);
     private readonly DispatcherTimer _idleTimer = new() { Interval = TimeSpan.FromSeconds(15) };
     private CancellationTokenSource? _activeCancellation;
-    private DateTimeOffset? _lastCompletedUtc;
+    private Process? _serverProcess;
+    private bool _serverReady, _isLoaded;
+    private string? _loadedModelPath, _loadedAdapterPath;
+    private int[]? _loadedDevices;
+    private double? _idleSecondsRemaining;
     private string? _modelsDirectory;
     private bool _busy, _refreshing, _pendingUnload, _closingFinished;
     private int _streamingGeneration;
 
-    public MainWindow()
+    internal MainWindow(GuiLaunchOptions launchOptions)
     {
+        _launchOptions = launchOptions;
         InitializeComponent();
         ModelComboBox.ItemsSource = _models;
         AdapterComboBox.ItemsSource = _adapters;
@@ -39,7 +49,86 @@ public partial class MainWindow : Window
         _idleTimer.Tick += IdleTimer_Tick;
         RefreshGpuChoices();
         RefreshChoices();
+        ApplyLaunchOptions();
         UpdateControls();
+        Loaded += async (_, _) => await StartServerAsync();
+    }
+
+    private void ApplyLaunchOptions()
+    {
+        if (_launchOptions.ModelPath is { } model)
+        {
+            if (!File.Exists(model)) throw new FileNotFoundException("--model の GGUF が見つかりません。", model);
+            ModelComboBox.SelectedItem = AddChoice(_models, model, true);
+        }
+        if (_launchOptions.LoraPath is { } lora)
+        {
+            if (!File.Exists(lora)) throw new FileNotFoundException("--lora のアダプターが見つかりません。", lora);
+            AdapterComboBox.SelectedItem = AddChoice(_adapters, lora, true);
+        }
+        if (_launchOptions.TopP is { } p) TopPBox.Text = p;
+        if (_launchOptions.TopK is { } k) TopKBox.Text = k;
+        if (_launchOptions.Temperature is { } t) TemperatureBox.Text = t;
+        if (_launchOptions.MaxTokens is { } max) MaxTokensBox.Text = max;
+        ThinkingCheckBox.IsChecked = _launchOptions.Think;
+        StreamCheckBox.IsChecked = _launchOptions.Stream;
+    }
+
+    private async Task StartServerAsync()
+    {
+        try
+        {
+            SetStatus("ローカル推論サーバーを起動しています…");
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            listener.Stop();
+            string executable = Environment.ProcessPath
+                ?? throw new InvalidOperationException("実行ファイルの場所を取得できません。");
+            var start = new ProcessStartInfo(executable)
+            {
+                UseShellExecute = true,
+                WindowStyle = ProcessWindowStyle.Normal
+            };
+            if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+                start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "NNtrain.Gui.dll"));
+            start.ArgumentList.Add("--server");
+            start.ArgumentList.Add("--port");
+            start.ArgumentList.Add(port.ToString(CultureInfo.InvariantCulture));
+            if (_launchOptions.LoraPath is { } lora)
+            {
+                start.ArgumentList.Add("--lora");
+                start.ArgumentList.Add(lora);
+            }
+            start.ArgumentList.Add("--parent-pid");
+            start.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+            _serverProcess = Process.Start(start)
+                ?? throw new InvalidOperationException("推論サーバーを起動できませんでした。");
+            _client.BaseAddress = new Uri($"http://127.0.0.1:{port}/");
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            while (!timeout.IsCancellationRequested)
+            {
+                if (_serverProcess.HasExited)
+                    throw new InvalidOperationException($"推論サーバーが終了しました（コード {_serverProcess.ExitCode}）。");
+                try
+                {
+                    using var probe = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+                    using HttpResponseMessage response = await _client.GetAsync("health", probe.Token);
+                    if (response.IsSuccessStatusCode) break;
+                }
+                catch (HttpRequestException) { }
+                catch (OperationCanceledException) { }
+                await Task.Delay(200, timeout.Token);
+            }
+            timeout.Token.ThrowIfCancellationRequested();
+            _serverReady = true;
+            await RefreshServerStateAsync();
+            _idleTimer.Start();
+            SetStatus("推論サーバーの準備ができました。");
+            UpdateControls();
+        }
+        catch (OperationCanceledException) { SetStatus("推論サーバーの起動がタイムアウトしました。"); }
+        catch (Exception ex) { SetStatus($"推論サーバーの起動に失敗: {ex.Message}"); }
     }
 
     private void RefreshChoices()
@@ -75,7 +164,7 @@ public partial class MainWindow : Window
                 SetStatus("models フォルダーに GGUF がありません。参照からモデルを選択してください。");
         }
         finally { _refreshing = false; }
-        if (_session.IsLoaded && !SelectionMatchesLoaded())
+        if (_isLoaded && !SelectionMatchesLoaded())
             _ = ReleaseForSelectionChangeAsync();
         UpdateControls();
     }
@@ -137,6 +226,7 @@ public partial class MainWindow : Window
 
     private static FileChoice AddChoice(ObservableCollection<FileChoice> choices, string path, bool manual)
     {
+        App.RejectParentTraversal(path);
         string fullPath = Path.GetFullPath(path);
         FileChoice? existing = FindChoice(choices, fullPath);
         if (existing is not null) return existing;
@@ -154,16 +244,16 @@ public partial class MainWindow : Window
     private async void ModelOrAdapter_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_refreshing || _closingFinished) return;
-        if (_session.IsLoaded && !SelectionMatchesLoaded()) await ReleaseForSelectionChangeAsync();
+        if (_isLoaded && !SelectionMatchesLoaded()) await ReleaseForSelectionChangeAsync();
         UpdateControls();
     }
 
     private bool SelectionMatchesLoaded() =>
-        string.Equals(_session.LoadedModelPath, (ModelComboBox.SelectedItem as FileChoice)?.FilePath,
+        string.Equals(_loadedModelPath, (ModelComboBox.SelectedItem as FileChoice)?.FilePath,
             StringComparison.OrdinalIgnoreCase) &&
-        string.Equals(_session.LoadedAdapterPath, (AdapterComboBox.SelectedItem as FileChoice)?.FilePath,
+        string.Equals(_loadedAdapterPath, (AdapterComboBox.SelectedItem as FileChoice)?.FilePath,
             StringComparison.OrdinalIgnoreCase) &&
-        _session.LoadedDevices is { } loadedDevices &&
+        _loadedDevices is { } loadedDevices &&
         GpuComboBox.SelectedItem is GpuChoice gpu && loadedDevices.SequenceEqual(gpu.DeviceIndices);
 
     private async Task ReleaseForSelectionChangeAsync()
@@ -177,9 +267,8 @@ public partial class MainWindow : Window
         }
         await ExecuteAsync(async _ =>
         {
-            if (!_session.IsLoaded || SelectionMatchesLoaded()) return;
-            await _session.UnloadAsync();
-            _lastCompletedUtc = null;
+            if (!_isLoaded || SelectionMatchesLoaded()) return;
+            await UnloadServerAsync();
             SetStatus("選択が変わったため GPU 資源を解放しました。");
         });
     }
@@ -196,6 +285,7 @@ public partial class MainWindow : Window
         };
         if (dialog.ShowDialog(this) == true)
         {
+            App.RejectParentTraversal(dialog.FileName);
             if (Path.GetFileName(dialog.FileName).StartsWith("lora_", StringComparison.OrdinalIgnoreCase))
             {
                 SetStatus("選択したファイルは LoRA アダプターです。ベースの GGUF モデルを選んでください。");
@@ -216,7 +306,10 @@ public partial class MainWindow : Window
             InitialDirectory = _modelsDirectory ?? Environment.CurrentDirectory
         };
         if (dialog.ShowDialog(this) == true)
+        {
+            App.RejectParentTraversal(dialog.FileName);
             AdapterComboBox.SelectedItem = AddChoice(_adapters, dialog.FileName, true);
+        }
     }
 
     private void RefreshModels_Click(object sender, RoutedEventArgs e)
@@ -234,6 +327,12 @@ public partial class MainWindow : Window
             ThinkingCheckBox.Content = ThinkingCheckBox.IsChecked == true ? "Thinking: On" : "Thinking: Off";
     }
 
+    private void Stream_Changed(object sender, RoutedEventArgs e)
+    {
+        if (StreamCheckBox is not null)
+            StreamCheckBox.Content = StreamCheckBox.IsChecked == true ? "Stream: On" : "Stream: Off";
+    }
+
     private async void Preload_Click(object sender, RoutedEventArgs e)
     {
         if (!TrySelectedFiles(out string? modelPath, out string? adapterPath, out GpuChoice? gpu)) return;
@@ -243,32 +342,87 @@ public partial class MainWindow : Window
     private async Task EnsureLoadedAsync(string modelPath, string? adapterPath,
         IReadOnlyList<int> deviceIndices, CancellationToken ct)
     {
-        if (_session.IsLoaded && string.Equals(_session.LoadedModelPath, modelPath, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(_session.LoadedAdapterPath, adapterPath, StringComparison.OrdinalIgnoreCase)
-            && _session.LoadedDevices is { } loadedDevices && loadedDevices.SequenceEqual(deviceIndices))
+        if (_isLoaded && string.Equals(_loadedModelPath, modelPath, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(_loadedAdapterPath, adapterPath, StringComparison.OrdinalIgnoreCase)
+            && _loadedDevices is { } loadedDevices && loadedDevices.SequenceEqual(deviceIndices))
         {
+            await PostAsync("internal/load", new { model = modelPath, lora = adapterPath, devices = deviceIndices }, ct);
+            await RefreshServerStateAsync(ct);
             SetStatus("選択中のモデルはプリロード済みです。");
-            MarkCompleted();
             return;
-        }
-        if (_session.IsLoaded)
-        {
-            SetStatus("前のモデルの GPU 資源を解放しています…");
-            await _session.UnloadAsync();
-            _lastCompletedUtc = null;
         }
         ct.ThrowIfCancellationRequested();
         SetStatus($"読み込み中: {Path.GetFileName(modelPath)}");
-        var progress = new Progress<string>(message => SetStatus(message));
-        await _session.LoadAsync(modelPath, adapterPath, progress, ct, deviceIndices);
+        await PostAsync("internal/load", new { model = modelPath, lora = adapterPath, devices = deviceIndices }, ct);
         ct.ThrowIfCancellationRequested();
-        string gpu = _session.LoadedDevices is { Count: > 0 } devices
-            ? $"Arc {string.Join(",", devices)}" : "Arc GPU";
+        await RefreshServerStateAsync(ct);
+        string gpu = $"Arc {string.Join(",", deviceIndices)}";
         SetStatus(adapterPath is null
             ? $"プリロード完了。モデルを {gpu} に保持しています。"
             : $"プリロード完了。モデルと LoRA を {gpu} に保持しています。");
-        MarkCompleted();
     }
+
+    private async Task UnloadServerAsync(CancellationToken ct = default)
+    {
+        if (!_serverReady) return;
+        await PostAsync("internal/unload", new { }, ct);
+        await RefreshServerStateAsync(ct);
+    }
+
+    private async Task PostAsync(string path, object body, CancellationToken ct)
+    {
+        EnsureServerReady();
+        using var request = new HttpRequestMessage(HttpMethod.Post, path)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json")
+        };
+        using HttpResponseMessage response = await _client.SendAsync(request, ct);
+        await EnsureSuccessAsync(response, ct);
+    }
+
+    private async Task RefreshServerStateAsync(CancellationToken ct = default)
+    {
+        if (!_serverReady) return;
+        using HttpResponseMessage response = await _client.GetAsync("internal/state", ct);
+        await EnsureSuccessAsync(response, ct);
+        using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        JsonElement state = document.RootElement;
+        _isLoaded = ReadBoolean(state, "is_loaded");
+        _loadedModelPath = ReadString(state, "model");
+        _loadedAdapterPath = ReadString(state, "lora");
+        _loadedDevices = state.TryGetProperty("devices", out JsonElement devices) && devices.ValueKind == JsonValueKind.Array
+            ? devices.EnumerateArray().Select(value => value.GetInt32()).ToArray() : null;
+        _idleSecondsRemaining = state.TryGetProperty("idle_seconds_remaining", out JsonElement idle) && idle.ValueKind == JsonValueKind.Number
+            ? idle.GetDouble() : null;
+        UpdateMemoryStatus();
+    }
+
+    private void EnsureServerReady()
+    {
+        if (!_serverReady || _serverProcess is null || _serverProcess.HasExited)
+            throw new InvalidOperationException("推論サーバーに接続できません。");
+    }
+
+    private static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        if (response.IsSuccessStatusCode) return;
+        string detail = await response.Content.ReadAsStringAsync(ct);
+        try
+        {
+            using JsonDocument body = JsonDocument.Parse(detail);
+            if (body.RootElement.TryGetProperty("error", out JsonElement error))
+                detail = error.ValueKind == JsonValueKind.Object ? ReadString(error, "message") ?? detail : error.ToString();
+        }
+        catch (JsonException) { }
+        throw new HttpRequestException($"サーバー応答 {(int)response.StatusCode}: {detail}");
+    }
+
+    private static string? ReadString(JsonElement element, string name) =>
+        element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() : null;
+
+    private static bool ReadBoolean(JsonElement element, string name) =>
+        element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.True;
 
     private async void Send_Click(object sender, RoutedEventArgs e) => await SendMessageAsync();
 
@@ -317,6 +471,7 @@ public partial class MainWindow : Window
             _conversation.Add(new ChatTurn("user", message));
             _messages.Add(new ChatBubble("あなた", message));
             bool thinking = ThinkingCheckBox.IsChecked == true;
+            bool stream = StreamCheckBox.IsChecked == true;
             var answer = new ChatBubble("アシスタント", "", thinking);
             _messages.Add(answer);
             ScrollToEnd();
@@ -329,26 +484,26 @@ public partial class MainWindow : Window
             GenerationStopReason? stopReason = null;
             bool usedThinkingForAnswer = thinking;
             bool retriedWithoutThinking = false;
+            bool generationCompleted = false;
             try
             {
-                finalRaw = await _session.GenerateAsync(_conversation.ToArray(),
-                    thinking, maxNewTokens, chunk =>
+                ServerGeneration first = await GenerateViaServerAsync(_conversation.ToArray(),
+                    modelPath!, adapterPath, gpu!.DeviceIndices, thinking, stream, maxNewTokens, sampling, chunk =>
                     {
                         streamedRaw.Append(chunk);
-                        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
-                        {
-                            if (firstGeneration != _streamingGeneration) return;
-                            ThinkingStreamSnapshot snapshot = liveParser.Append(chunk);
-                            answer.Update(snapshot);
-                            if (snapshot.ThinkingInProgress) SetStatus("思考中…");
-                            else if (snapshot.AnswerText.Length != 0) SetStatus("回答を生成中…");
-                            ScrollToEnd();
-                        }));
-                    }, ct, sampling);
-                stopReason = _session.LastGenerationStats?.StopReason;
+                        if (firstGeneration != _streamingGeneration) return;
+                        ThinkingStreamSnapshot snapshot = liveParser.Append(chunk);
+                        answer.Update(snapshot);
+                        if (snapshot.ThinkingInProgress) SetStatus("思考中…");
+                        else if (snapshot.AnswerText.Length != 0) SetStatus("回答を生成中…");
+                        ScrollToEnd();
+                    }, ct);
+                finalRaw = first.Text;
+                stopReason = first.StopReason;
                 var firstFinalParser = new ThinkingStreamParser(thinking);
                 firstFinalParser.Append(finalRaw);
-                ThinkingStreamSnapshot firstSnapshot = firstFinalParser.Complete();
+                ThinkingStreamSnapshot firstSnapshot = firstFinalParser.Complete(
+                    stopReason == GenerationStopReason.EndOfMessage);
                 completedSnapshot = firstSnapshot;
 
                 // A model can finish its turn or exhaust the token limit before
@@ -365,20 +520,18 @@ public partial class MainWindow : Window
                     answer.Update(firstSnapshot);
                     SetStatus("思考だけで終了したため、回答を生成しています…");
                     var directParser = new ThinkingStreamParser(requestedThinking: false);
-                    string directRaw = await _session.GenerateAsync(_conversation.ToArray(),
-                        thinking: false, maxNewTokens, chunk =>
+                    ServerGeneration directResult = await GenerateViaServerAsync(_conversation.ToArray(),
+                        modelPath!, adapterPath, gpu!.DeviceIndices, false, stream, maxNewTokens, sampling, chunk =>
                         {
-                            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
-                            {
-                                if (retryGeneration != _streamingGeneration) return;
-                                ThinkingStreamSnapshot direct = directParser.Append(chunk);
-                                answer.Update(new ThinkingStreamSnapshot(firstThought,
-                                    direct.AnswerText, firstThought.Length != 0, false));
-                                if (direct.AnswerText.Length != 0) SetStatus("回答を生成中…");
-                                ScrollToEnd();
-                            }));
-                        }, ct, sampling);
-                    stopReason = _session.LastGenerationStats?.StopReason;
+                            if (retryGeneration != _streamingGeneration) return;
+                            ThinkingStreamSnapshot direct = directParser.Append(chunk);
+                            answer.Update(new ThinkingStreamSnapshot(firstThought,
+                                direct.AnswerText, firstThought.Length != 0, false));
+                            if (direct.AnswerText.Length != 0) SetStatus("回答を生成中…");
+                            ScrollToEnd();
+                        }, ct);
+                    string directRaw = directResult.Text;
+                    stopReason = directResult.StopReason;
                     var directFinalParser = new ThinkingStreamParser(requestedThinking: false);
                     directFinalParser.Append(directRaw);
                     ThinkingStreamSnapshot directFinal = directFinalParser.Complete(
@@ -389,13 +542,8 @@ public partial class MainWindow : Window
                     completedSnapshot = new ThinkingStreamSnapshot(combinedThought,
                         directFinal.AnswerText, !string.IsNullOrWhiteSpace(combinedThought), false);
                 }
-                MarkCompleted();
-                GenerationStats? stats = _session.LastGenerationStats;
-                SetStatus(stats is null ? "生成が完了しました。" :
-                    (retriedWithoutThinking ? "回答を再生成しました。" : "生成完了。") +
-                    $"入力 {stats.PromptTokens} token、KV再利用 {stats.ReusedPromptTokens} token、" +
-                    (stats.FirstTokenMilliseconds is double first
-                        ? $"最初の出力まで {first / 1000:F2} 秒。" : "出力トークンなし。"));
+                generationCompleted = true;
+                SetStatus(retriedWithoutThinking ? "回答を再生成しました。" : "生成完了。");
             }
             finally
             {
@@ -405,13 +553,13 @@ public partial class MainWindow : Window
                     var finalParser = new ThinkingStreamParser(thinking);
                     finalParser.Append(finalRaw ?? streamedRaw.ToString());
                     completedSnapshot = finalParser.Complete(
-                        _session.LastGenerationStats?.StopReason == GenerationStopReason.EndOfMessage);
+                        stopReason == GenerationStopReason.EndOfMessage);
                 }
                 answer.Update(completedSnapshot.Value);
                 answer.FinishThinking(stopReason);
                 if (answer.Content.Length == 0 && answer.ThinkingContent.Length == 0 && stopReason is null)
                     _messages.Remove(answer);
-                else if (answer.Content.Length != 0)
+                else if (answer.Content.Length != 0 && generationCompleted)
                 {
                     // Keep the exact assistant prefix used by the preceding
                     // prompt while retaining only the visible answer in history.
@@ -425,6 +573,119 @@ public partial class MainWindow : Window
         });
     }
 
+    private sealed record ServerGeneration(string Text, GenerationStopReason? StopReason);
+
+    private async Task<ServerGeneration> GenerateViaServerAsync(
+        IReadOnlyList<ChatTurn> conversation, string modelPath, string? adapterPath,
+        IReadOnlyList<int> devices, bool thinking, bool stream, int maxNewTokens,
+        GenerationSampling sampling, Action<string> onText, CancellationToken ct)
+    {
+        EnsureServerReady();
+        var body = new
+        {
+            model = modelPath,
+            messages = conversation.Select(turn => new
+            {
+                role = turn.Role,
+                content = turn.Content,
+                assistant_prefix = turn.AssistantPrefix
+            }).ToArray(),
+            max_tokens = maxNewTokens,
+            temperature = sampling.Temperature,
+            top_p = sampling.TopP,
+            top_k = sampling.TopK,
+            stream,
+            think = thinking,
+            lora = adapterPath,
+            devices
+        };
+        using var request = new HttpRequestMessage(HttpMethod.Post, "v1/chat/completions")
+        {
+            Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json")
+        };
+        using HttpResponseMessage response = await _client.SendAsync(request,
+            HttpCompletionOption.ResponseHeadersRead, ct);
+        await EnsureSuccessAsync(response, ct);
+        if (!stream)
+        {
+            using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            JsonElement root = document.RootElement;
+            ThrowIfApiError(root);
+            JsonElement choice = root.GetProperty("choices")[0];
+            string raw = ReadString(choice.GetProperty("message"), "content") ?? string.Empty;
+            GenerationStopReason? resultReason = ParseStopReason(
+                ReadString(choice, "nntrain_stop_reason") ?? ReadString(choice, "finish_reason"));
+            if (resultReason is null)
+                throw new InvalidDataException("サーバー応答に生成の終了理由がありません。");
+            if (raw.Length != 0) onText(raw);
+            return new ServerGeneration(raw, resultReason);
+        }
+
+        await using Stream responseStream = await response.Content.ReadAsStreamAsync(ct);
+        using var reader = new StreamReader(responseStream, Encoding.UTF8);
+        var rawText = new StringBuilder();
+        var eventData = new StringBuilder();
+        GenerationStopReason? stopReason = null;
+        bool done = false;
+        while (await reader.ReadLineAsync(ct) is { } line)
+        {
+            if (line.Length == 0)
+            {
+                ConsumeEvent();
+                continue;
+            }
+            if (!line.StartsWith("data:", StringComparison.Ordinal)) continue;
+            if (eventData.Length != 0) eventData.Append('\n');
+            eventData.Append(line.AsSpan(5).TrimStart());
+        }
+        ConsumeEvent();
+        ct.ThrowIfCancellationRequested();
+        if (!done || stopReason is null)
+            throw new IOException("ストリームが正常に終了する前に接続が切れました。");
+        return new ServerGeneration(rawText.ToString(), stopReason);
+
+        void ConsumeEvent()
+        {
+            if (eventData.Length == 0) return;
+            string data = eventData.ToString();
+            eventData.Clear();
+            if (data == "[DONE]") { done = true; return; }
+            using JsonDocument eventJson = JsonDocument.Parse(data);
+            JsonElement root = eventJson.RootElement;
+            ThrowIfApiError(root);
+            if (!root.TryGetProperty("choices", out JsonElement choices) || choices.GetArrayLength() == 0)
+                return;
+            JsonElement choice = choices[0];
+            if (choice.TryGetProperty("delta", out JsonElement delta))
+            {
+                string? chunk = ReadString(delta, "content");
+                if (!string.IsNullOrEmpty(chunk))
+                {
+                    rawText.Append(chunk);
+                    onText(chunk);
+                }
+            }
+            stopReason = ParseStopReason(
+                ReadString(choice, "nntrain_stop_reason") ?? ReadString(choice, "finish_reason")) ?? stopReason;
+        }
+    }
+
+    private static void ThrowIfApiError(JsonElement root)
+    {
+        if (!root.TryGetProperty("error", out JsonElement error)) return;
+        string detail = error.ValueKind == JsonValueKind.Object
+            ? ReadString(error, "message") ?? error.ToString() : error.ToString();
+        throw new InvalidOperationException(detail);
+    }
+
+    private static GenerationStopReason? ParseStopReason(string? reason) => reason switch
+    {
+        "stop" or "end_of_message" => GenerationStopReason.EndOfMessage,
+        "length" or "maximum_tokens" => GenerationStopReason.MaximumTokens,
+        "context_limit" => GenerationStopReason.ContextLimit,
+        _ => null
+    };
+
     private void Stop_Click(object sender, RoutedEventArgs e)
     {
         _activeCancellation?.Cancel();
@@ -433,9 +694,8 @@ public partial class MainWindow : Window
 
     private async Task ExecuteAsync(Func<CancellationToken, Task> action)
     {
-        if (!_sessionGate.Wait(0)) return;
+        if (!_requestGate.Wait(0)) return;
         _busy = true;
-        _idleTimer.Stop();
         var cancellation = new CancellationTokenSource();
         _activeCancellation = cancellation;
         UpdateControls();
@@ -449,8 +709,7 @@ public partial class MainWindow : Window
                 _pendingUnload = false;
                 try
                 {
-                    if (_session.IsLoaded) await _session.UnloadAsync();
-                    _lastCompletedUtc = null;
+                    if (_isLoaded) await UnloadServerAsync();
                     SetStatus("選択変更により GPU 資源を解放しました。");
                 }
                 catch (Exception ex) { SetStatus($"GPU 資源の解放に失敗: {ex.Message}"); }
@@ -458,37 +717,24 @@ public partial class MainWindow : Window
             _activeCancellation = null;
             cancellation.Dispose();
             _busy = false;
-            _sessionGate.Release();
-            if (_session.IsLoaded)
-            {
-                // A stopped or failed generation can have occupied the GPU for
-                // minutes. Restart the idle window when that operation ends.
-                _lastCompletedUtc = DateTimeOffset.UtcNow;
-                _idleTimer.Start();
-            }
-            else _lastCompletedUtc = null;
+            _requestGate.Release();
+            try { await RefreshServerStateAsync(); }
+            catch (Exception ex) { SetStatus($"サーバー状態を取得できません: {ex.Message}"); }
             UpdateControls();
         }
     }
 
     private async void IdleTimer_Tick(object? sender, EventArgs e)
     {
-        if (_busy || !_session.IsLoaded || _lastCompletedUtc is null) return;
-        UpdateMemoryStatus();
-        if (DateTimeOffset.UtcNow - _lastCompletedUtc.Value < IdleLimit) return;
-        await ExecuteAsync(async _ =>
+        if (_busy || !_serverReady || _closingFinished) return;
+        bool wasLoaded = _isLoaded;
+        try
         {
-            if (!_session.IsLoaded) return;
-            await _session.UnloadAsync();
-            _lastCompletedUtc = null;
-            SetStatus("最終プリロード/生成から 5 分経過したため GPU 資源を解放しました。");
-        });
-    }
-
-    private void MarkCompleted()
-    {
-        _lastCompletedUtc = DateTimeOffset.UtcNow;
-        _idleTimer.Start();
+            await RefreshServerStateAsync();
+            if (wasLoaded && !_isLoaded)
+                SetStatus("5 分間操作がなかったため、サーバーが GPU 資源を解放しました。");
+        }
+        catch (Exception ex) { SetStatus($"サーバー状態を取得できません: {ex.Message}"); }
     }
 
     private bool TrySelectedFiles(out string? modelPath, out string? adapterPath, out GpuChoice? gpu)
@@ -496,6 +742,12 @@ public partial class MainWindow : Window
         modelPath = (ModelComboBox.SelectedItem as FileChoice)?.FilePath;
         adapterPath = (AdapterComboBox.SelectedItem as FileChoice)?.FilePath;
         gpu = GpuComboBox.SelectedItem as GpuChoice;
+        try
+        {
+            if (modelPath is not null) App.RejectParentTraversal(modelPath);
+            if (adapterPath is not null) App.RejectParentTraversal(adapterPath);
+        }
+        catch (ArgumentException ex) { SetStatus(ex.Message); return false; }
         if (modelPath is null || !File.Exists(modelPath))
         {
             SetStatus("GGUF モデルを選択してください。");
@@ -536,9 +788,10 @@ public partial class MainWindow : Window
         TopPBox.IsEnabled = !_busy;
         TopKBox.IsEnabled = !_busy;
         ThinkingCheckBox.IsEnabled = !_busy;
-        PreloadButton.IsEnabled = !_busy && ModelComboBox.SelectedItem is FileChoice
+        StreamCheckBox.IsEnabled = !_busy;
+        PreloadButton.IsEnabled = _serverReady && !_busy && ModelComboBox.SelectedItem is FileChoice
             && GpuComboBox.SelectedItem is GpuChoice;
-        SendButton.IsEnabled = !_busy && ModelComboBox.SelectedItem is FileChoice
+        SendButton.IsEnabled = _serverReady && !_busy && ModelComboBox.SelectedItem is FileChoice
             && GpuComboBox.SelectedItem is GpuChoice;
         StopButton.IsEnabled = _busy;
         UpdateMemoryStatus();
@@ -546,12 +799,12 @@ public partial class MainWindow : Window
 
     private void UpdateMemoryStatus()
     {
-        if (_session.IsLoaded)
+        if (_isLoaded)
         {
-            string gpu = _session.LoadedDevices is { Count: > 0 } devices
+            string gpu = _loadedDevices is { Length: > 0 } devices
                 ? $"Arc {string.Join(",", devices)}" : "GPU";
-            string remaining = _lastCompletedUtc is null ? "" :
-                $" · 約{Math.Max(0, (int)Math.Ceiling((IdleLimit - (DateTimeOffset.UtcNow - _lastCompletedUtc.Value)).TotalSeconds / 60))}分後に解放";
+            string remaining = _idleSecondsRemaining is double seconds ?
+                $" · 約{Math.Max(0, (int)Math.Ceiling(seconds / 60))}分後に解放" : "";
             MemoryStatusText.Text = $"{gpu}{remaining}";
         }
         else MemoryStatusText.Text = "GPU: 未読込・解放済み";
@@ -567,17 +820,27 @@ public partial class MainWindow : Window
         IsEnabled = false;
         _idleTimer.Stop();
         _activeCancellation?.Cancel();
-        await _sessionGate.WaitAsync();
         try
         {
-            await _session.UnloadAsync();
+            if (_serverReady && _serverProcess is { HasExited: false })
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                await PostAsync("internal/shutdown", new { }, timeout.Token);
+                try { await _serverProcess.WaitForExitAsync(timeout.Token); }
+                catch (OperationCanceledException) { }
+            }
         }
-        catch { /* Closing still disposes the owned session. */ }
+        catch { /* The owned child is stopped below if graceful shutdown fails. */ }
         finally
         {
-            try { _session.Dispose(); }
-            catch { /* A failing driver must not prevent the window from closing. */ }
-            _sessionGate.Release();
+            if (_serverProcess is { HasExited: false } child)
+            {
+                try { child.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) { }
+                catch (System.ComponentModel.Win32Exception) { }
+            }
+            _serverProcess?.Dispose();
+            _client.Dispose();
             _closingFinished = true;
             Close();
         }

@@ -8,7 +8,7 @@ namespace NNtrain.Gui;
 public sealed record ChatTurn(string Role, string Content, string? AssistantPrefix = null);
 public sealed record GenerationSampling(float Temperature, float TopP, int TopK);
 public enum GenerationStopReason { EndOfMessage, MaximumTokens, ContextLimit }
-public sealed record GenerationStats(int PromptTokens, int ReusedPromptTokens,
+public sealed record GenerationStats(int PromptTokens, int CompletionTokens, int ReusedPromptTokens,
     double? FirstTokenMilliseconds, int? FirstTokenId, GenerationStopReason StopReason);
 
 /// <summary>
@@ -134,7 +134,8 @@ public sealed class InferenceSession : IDisposable
                 int? firstTokenId = null;
                 try
                 {
-                    int[] generatedIds = model.GenerateTokenIdsWithPrefixReuse(promptIds, maxNewTokens, tokenizer.EosTokenId, token =>
+                    int[] generatedIds = model.GenerateTokenIdsWithPrefixReuse(promptIds, maxNewTokens,
+                        ct, tokenizer.EosTokenId, token =>
                     {
                         ct.ThrowIfCancellationRequested();
                         firstTokenMilliseconds ??= firstTokenTimer.Elapsed.TotalMilliseconds;
@@ -151,7 +152,8 @@ public sealed class InferenceSession : IDisposable
                         : generatedIds.Length >= model.Descriptor.ContextLength
                             ? GenerationStopReason.ContextLimit : GenerationStopReason.MaximumTokens;
                     LastGenerationStats = new GenerationStats(promptIds.Length,
-                        model.LastReusedPromptTokens, firstTokenMilliseconds, firstTokenId, stopReason);
+                        generatedIds.Length - promptIds.Length, model.LastReusedPromptTokens,
+                        firstTokenMilliseconds, firstTokenId, stopReason);
                     return text.ToString();
                 }
                 catch
