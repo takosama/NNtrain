@@ -28,7 +28,7 @@ internal static class Qwen35LoraTrainingProbe
         for (int i = 0; i < args.Length; i++)
         {
             string flag = args[i];
-            if (flag is not ("--model" or "--data" or "--examples" or "--output" or "--options"
+            if (flag is not ("--model" or "--data" or "--examples" or "--output" or "--options" or "--prompt-mode"
                 or "--checkpoint" or "--resume" or "--devices" or "--rank" or "--alpha" or "--seed"))
                 throw new ArgumentException($"Unknown Qwen3.5 training probe argument: {flag}");
             if (++i >= args.Length || !flags.TryAdd(flag, args[i]) || string.IsNullOrWhiteSpace(args[i]))
@@ -60,6 +60,9 @@ internal static class Qwen35LoraTrainingProbe
             .Select(value => int.Parse(value, CultureInfo.InvariantCulture)).ToArray();
         if (devices.Length == 0 || devices.Any(index => index < 0) || devices.Distinct().Count() != devices.Length)
             throw new ArgumentException("--devices requires distinct nonnegative device indices.");
+        string promptMode = flags.GetValueOrDefault("--prompt-mode", "wrapped");
+        if (promptMode is not ("wrapped" or "direct"))
+            throw new ArgumentException("--prompt-mode must be wrapped or direct.");
         Qwen35ExecutionOptions options = (flags.TryGetValue("--options", out string? optionsText)
             ? JsonSerializer.Deserialize<Qwen35ExecutionOptions>(optionsText.TrimStart().StartsWith('{')
                 ? optionsText : File.ReadAllText(optionsText), JsonOptions)
@@ -99,7 +102,8 @@ internal static class Qwen35LoraTrainingProbe
                 ?? throw new InvalidDataException($"Null prompt on line {physicalLine}.");
             string response = document.RootElement.GetProperty("response").GetString()
                 ?? throw new InvalidDataException($"Null response on line {physicalLine}.");
-            int[] prefix = tokenizer.Encode("<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n");
+            int[] prefix = tokenizer.Encode(promptMode == "direct" ? prompt
+                : "<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n");
             int[] tokens = [.. prefix, .. tokenizer.Encode(response), eos];
             examples.Add(new(examples.Count + 1, physicalLine, HashText(line), tokens, prefix.Length));
         }
@@ -116,7 +120,8 @@ internal static class Qwen35LoraTrainingProbe
         var report = new Dictionary<string, object?>
         {
             ["SchemaVersion"] = 1, ["Status"] = "loading", ["StartedUtc"] = DateTimeOffset.UtcNow,
-            ["CommandArguments"] = args, ["Model"] = new { Path = modelPath, Bytes = modelInput.Length },
+            ["CommandArguments"] = args, ["PromptMode"] = promptMode,
+            ["Model"] = new { Path = modelPath, Bytes = modelInput.Length },
             ["Data"] = new { Path = dataPath, Sha256 = dataSha, RecordCount = examples.Count },
             ["Resume"] = resumePath is null ? null : new { Path = resumePath, Sha256 = resumeSha },
             ["Source"] = source, ["BinarySha256"] = binaries, ["Options"] = options,
@@ -169,6 +174,8 @@ internal static class Qwen35LoraTrainingProbe
                 foreach (ArcExecutionLane lane in lanes) lane.Synchronize();
                 double seconds = Stopwatch.GetElapsedTime(start).TotalSeconds;
                 var after = lanes.Select(Snapshot).ToArray();
+                var iq2Cache = model.LastIq2ProjectionCacheStats;
+                var iq2GpuCache = model.LastIq2GpuProjectionCacheStats;
                 var kernels = model.KernelMilliseconds.Select(pair => new
                 {
                     Kernel = pair.Key, Milliseconds = pair.Value - kernelsBefore.GetValueOrDefault(pair.Key)
@@ -181,6 +188,20 @@ internal static class Qwen35LoraTrainingProbe
                     ["SupervisedTokens"] = result.SupervisedTokens, ["Step"] = result.Step,
                     ["Seconds"] = seconds, ["Loss"] = result.Loss, ["GradientNorm"] = result.GradientNorm,
                     ["TrainingTokensPerSecond"] = (example.TokenIds.Length - 1) / seconds,
+                    ["Iq2ProjectionCache"] = new
+                    {
+                        iq2Cache.Captured, iq2Cache.Reused, iq2Cache.PeakBytes,
+                        ConfiguredBudgetBytes = (long)options.TrainingIQ2ProjectionCacheMiB * 1024 * 1024,
+                        Selection = options.TrainingIQ2ProjectionCachePrioritize
+                            ? "highest-input-width" : "forward-order"
+                    },
+                    ["Iq2GpuProjectionCache"] = new
+                    {
+                        iq2GpuCache.Captured, iq2GpuCache.Reused, iq2GpuCache.PeakBytes,
+                        PeakBytesByDevice = model.LastIq2GpuProjectionCachePeakBytesByDevice,
+                        BudgetBytesByDevice = model.LastIq2GpuProjectionCacheBudgetBytesByDevice,
+                        ConfiguredBudgetBytesPerDevice = (long)options.TrainingIQ2GpuProjectionCacheMiB * 1024 * 1024
+                    },
                     ["Kernels"] = kernels, ["GpuBefore"] = before, ["GpuAfter"] = after,
                     ["GpuDelta"] = after.Select((snapshot, i) => Delta(snapshot, before[i])).ToArray(),
                     ["DetailedProfile"] = lanes.Select(lane => new { lane.DeviceIndex, Entries = lane.DetailedProfiler?.Snapshot() }).ToArray()
@@ -212,7 +233,8 @@ internal static class Qwen35LoraTrainingProbe
             string evidenceId = HashText(JsonSerializer.Serialize(new
             {
                 ModelSha256 = modelSha, DataSha256 = dataSha, ResumeSha256 = resumeSha,
-                Source = source, Binaries = binaries, Options = options, Lora = effectiveLora, Devices = devices, Examples = selected
+                Source = source, Binaries = binaries, Options = options, Lora = effectiveLora,
+                PromptMode = promptMode, Devices = devices, Examples = selected
             }, JsonOptions));
             report["EvidenceId"] = evidenceId;
             foreach (var sample in samples) sample["TestId"] = evidenceId + "/step-" + sample["Case"];

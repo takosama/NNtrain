@@ -32,13 +32,34 @@ public sealed record Qwen35ExecutionOptions
     public bool TrainingCooperativeLora { get; init; } = true;
     public bool TrainingCooperativeDelta { get; init; } = true;
     public bool TrainingResponseOnlyHead { get; init; } = true;
+    public bool TrainingGpuCheckpoints { get; init; } = true;
+    // Experimental exact-FP32 IQ2_S base-output cache for long-sequence recomputation.
+    // Zero leaves the existing recomputation path unchanged.
+    public int TrainingIQ2ProjectionCacheMiB { get; init; }
+    // Opt in to selecting projections by estimated saved IQ2_S work per host byte.
+    // The default retains the original forward-order cache selection.
+    public bool TrainingIQ2ProjectionCachePrioritize { get; init; }
+    // Experimental exact-FP32 base-output cache on each Arc device. Zero disables it.
+    // The requested cap applies separately to each selected device.
+    public int TrainingIQ2GpuProjectionCacheMiB { get; init; }
+    // Experimental IQ2_S training forward: round activations and decoded
+    // weights to BF16 and use Arc XMX. Off by default: this changes numerics.
+    public bool TrainingIQ2Bf16XmxForward { get; init; }
+    // Experimental FP16 alternative with finer precision and a narrower
+    // numeric range. Keep disabled until model-level loss/gradient validation.
+    public bool TrainingIQ2Fp16XmxForward { get; init; }
     public int TrainingTransposeRows { get; init; } = 16;
     // Eight packed components share decode work across eight sequence rows.
     // Set a tile to zero to compare with the scalar transpose implementation.
     public int TrainingTransposeOctetRows { get; init; } = 8;
     public int TrainingQ4TransposeOctetRows { get; init; } = 8;
     public int TrainingIQ3TransposeOctetRows { get; init; } = 8;
+    // Eight packed Q5_K components share decode work across eight token rows.
+    // Set zero to compare with the scalar transpose path.
+    public int TrainingQ5TransposeOctetRows { get; init; } = 8;
     public int TrainingForwardRows { get; init; } = 4;
+    // The Q5_K vocabulary head reuses each GGUF decode across eight rows.
+    public int TrainingQ5ForwardRows { get; init; } = 8;
     public int TrainingBufferPoolMiB { get; init; } = 2048;
     public bool DetailedProfiling { get; init; }
     public bool FusedDelta { get; init; } = true;

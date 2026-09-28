@@ -119,7 +119,10 @@ public sealed class QwenLoraCommandTests
         string identity = QwenLoraCommand.TrainingIdentity(dataset, 3, config);
         Assert.Equal(identity, QwenLoraCommand.TrainingIdentity(dataset, 3, config with
         { MaxSteps = 100, SaveEverySteps = 5, AdapterPath = "different.bin", DataPath = "copy.jsonl", Devices = [1],
-            LossGraphPath = "different.html", ShowLossGraph = false, OpenLossGraph = false, LossGraphEverySteps = 100 }));
+            LossGraphPath = "different.html", ShowLossGraph = false, OpenLossGraph = false, LossGraphEverySteps = 100,
+            Iq2ProjectionCacheMiB = 4096, Iq2ProjectionCachePrioritize = true }));
+        Assert.Equal(identity, QwenLoraCommand.TrainingIdentity(dataset, 3, config with { Iq2GpuProjectionCacheMiB = 1024 }));
+        Assert.NotEqual(identity, QwenLoraCommand.TrainingIdentity(dataset, 3, config with { Iq2ForwardPrecision = "fp16" }));
         Assert.NotEqual(identity, QwenLoraCommand.TrainingIdentity([.. dataset, 10], 3, config));
         Assert.NotEqual(identity, QwenLoraCommand.TrainingIdentity(dataset, 3, config with { Seed = 9 }));
         Assert.NotEqual(identity, QwenLoraCommand.TrainingIdentity(dataset, 3, config with { IncludeOutput = true }));
@@ -143,6 +146,11 @@ public sealed class QwenLoraCommandTests
         Assert.Throws<ArgumentException>(() => (config with { Devices = [0, 0] }).Validate());
         Assert.Throws<ArgumentException>(() => (config with { Targets = ["not_a_projection"] }).Validate());
         Assert.Throws<ArgumentException>(() => (config with { LearningRate = float.NaN }).Validate());
+        Assert.Throws<ArgumentException>(() => (config with { Iq2ForwardPrecision = "bf16" }).Validate());
+        Assert.Throws<ArgumentException>(() => (config with { Iq2ProjectionCacheMiB = 16385 }).Validate());
+        Assert.Throws<ArgumentException>(() => (config with { Iq2GpuProjectionCacheMiB = 1025 }).Validate());
+        Assert.Throws<ArgumentException>(() => (config with
+        { Iq2ProjectionCacheMiB = 4096, Iq2GpuProjectionCacheMiB = 1024 }).Validate());
         File.WriteAllText(configPath, "{\"unknownOption\":1}");
         Assert.Throws<JsonException>(() => QwenLoraTrainingConfiguration.Load(configPath));
     }

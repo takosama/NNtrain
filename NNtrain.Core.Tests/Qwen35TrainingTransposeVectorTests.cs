@@ -26,6 +26,12 @@ public sealed class Qwen35TrainingTransposeVectorTests
     [InlineData("q4_k", Qwen2Gguf.Q4KType, 144, 4, true)]
     [InlineData("q4_k", Qwen2Gguf.Q4KType, 144, 8, true)]
     [InlineData("q4_k", Qwen2Gguf.Q4KType, 144, 16, true)]
+    [InlineData("q5_k", Qwen35Gguf.Q5KType, 176, 4, false)]
+    [InlineData("q5_k", Qwen35Gguf.Q5KType, 176, 8, false)]
+    [InlineData("q5_k", Qwen35Gguf.Q5KType, 176, 16, false)]
+    [InlineData("q5_k", Qwen35Gguf.Q5KType, 176, 4, true)]
+    [InlineData("q5_k", Qwen35Gguf.Q5KType, 176, 8, true)]
+    [InlineData("q5_k", Qwen35Gguf.Q5KType, 176, 16, true)]
     public void EightComponentDecodeRetainsScalarTransposeBitsAndRowTails(
         string quant, uint type, int blockBytes, int tileRows, bool nativeHalf)
     {

@@ -130,6 +130,136 @@ public sealed class Qwen35TrainingDeltaTests
             $"beta across {previous}->{lossTime}: numerical {expectedBeta:R}, GPU {betaGradient[at]:R}");
     }
 
+    [Theory]
+    [InlineData(63, 2, 4, 32)]
+    [InlineData(64, 2, 4, 32)]
+    [InlineData(65, 2, 4, 32)]
+    [InlineData(127, 2, 4, 32)]
+    [InlineData(128, 2, 4, 32)]
+    [InlineData(129, 2, 4, 32)]
+    [InlineData(65, 16, 48, 128)]
+    public void ForwardCapturedCheckpointsMatchSeparateReplay(int sequence, int keys, int heads, int width)
+    {
+        Assert.SkipWhen(ArcDevices.Enumerate().Count == 0, "Intel Arc is required.");
+        using var lane = CreateLane();
+        var data = new Data(keys, heads, width, 3, sequence);
+        int stateSize = data.Values * data.Width;
+        int chunks = 1 + (sequence - 1) / 64;
+        using ArcBuffer mixed = lane.Upload(data.Qkv);
+        using ArcBuffer alpha = lane.Upload(data.Alpha);
+        using ArcBuffer beta = lane.Upload(data.Beta);
+        using ArcBuffer dt = lane.Upload(data.Dt);
+        using ArcBuffer a = lane.Upload(data.A);
+        using ArcBuffer state = lane.Allocate(stateSize);
+        using ArcBuffer replayState = lane.Allocate(stateSize);
+        using ArcBuffer captured = lane.Allocate(chunks * stateSize);
+        using ArcBuffer replayed = lane.Allocate(chunks * stateSize);
+        using ArcBuffer raw = lane.Allocate(sequence * data.Values);
+
+        lane.Run("q35t_delta_recur", data.Values, 0,
+            mixed, alpha, beta, dt, a, state, captured, raw,
+            sequence, 64, data.Keys, data.Heads, data.Width, 0, 1);
+        lane.Run("q35t_delta_checkpoints", data.Values, 0,
+            mixed, alpha, beta, dt, a, replayState, replayed,
+            sequence, 64, data.Keys, data.Heads, data.Width);
+        AssertClose(Read(lane, replayed, chunks * stateSize),
+            Read(lane, captured, chunks * stateSize), 1e-7f, 1e-7f);
+    }
+
+    [Fact]
+    public void GateBackwardUsingForwardOutputMatchesDirectDerivative()
+    {
+        Assert.SkipWhen(ArcDevices.Enumerate().Count == 0, "Intel Arc is required.");
+        using var lane = CreateLane();
+        const int sequence = 5, heads = 48, width = 128;
+        const float eps = 1e-4f, initial = 0.03125f;
+        var random = new Random(2735);
+        float[] Values(int count) => Enumerable.Range(0, count)
+            .Select(_ => (float)(random.NextDouble() * 2 - 1) * 0.6f).ToArray();
+        float[] raw = Values(sequence * heads * width), gate = Values(raw.Length);
+        float[] dy = Values(raw.Length), norm = Values(width).Select(x => x + 1f).ToArray();
+        using ArcBuffer rawGpu = lane.Upload(raw), gateGpu = lane.Upload(gate);
+        using ArcBuffer normGpu = lane.Upload(norm), dyGpu = lane.Upload(dy);
+        using ArcBuffer outputGpu = lane.Allocate(raw.Length), drawGpu = lane.Allocate(raw.Length);
+        using ArcBuffer dgateGpu = lane.Upload(Enumerable.Repeat(initial, raw.Length).ToArray());
+        lane.Run("q35t_delta_gate", sequence * heads, 0,
+            rawGpu, gateGpu, normGpu, outputGpu, sequence, heads, width, eps);
+        lane.Run("q35t_delta_gate_backward", sequence * heads, 0,
+            rawGpu, gateGpu, normGpu, outputGpu, dyGpu, drawGpu, dgateGpu,
+            sequence, heads, width, eps);
+
+        var expectedDraw = new float[raw.Length];
+        var expectedGate = new float[raw.Length];
+        for (int head = 0; head < sequence * heads; head++)
+        {
+            int offset = head * width;
+            float ss = 0f, dot = 0f;
+            for (int v = 0; v < width; v++)
+            {
+                int i = offset + v;
+                float s = Sigmoid(gate[i]);
+                ss += raw[i] * raw[i];
+                dot += raw[i] * dy[i] * norm[v] * (gate[i] * s);
+            }
+            float inv = 1f / MathF.Sqrt(ss / width + eps);
+            float correction = dot * inv * inv / width;
+            for (int v = 0; v < width; v++)
+            {
+                int i = offset + v;
+                float s = Sigmoid(gate[i]);
+                expectedDraw[i] = inv * (dy[i] * norm[v] * (gate[i] * s) - raw[i] * correction);
+                expectedGate[i] = initial + dy[i] * raw[i] * inv * norm[v]
+                    * (s * (1f + gate[i] * (1f - s)));
+            }
+        }
+        AssertClose(expectedDraw, Read(lane, drawGpu, raw.Length), 2e-5f, 2e-4f);
+        AssertClose(expectedGate, Read(lane, dgateGpu, raw.Length), 2e-5f, 2e-4f);
+
+        static float Sigmoid(float x) => x >= 0f
+            ? 1f / (1f + MathF.Exp(-x))
+            : MathF.Exp(x) / (1f + MathF.Exp(x));
+    }
+
+    [Theory]
+    [InlineData(65, 2, 4, 32)]
+    [InlineData(129, 2, 4, 32)]
+    [InlineData(65, 16, 48, 128)]
+    public void SkippingUnusedForwardCheckpointsPreservesOutputAndBackward(
+        int sequence, int keys, int heads, int width)
+    {
+        Assert.SkipWhen(ArcDevices.Enumerate().Count == 0, "Intel Arc is required.");
+        using var lane = CreateLane();
+        var data = new Data(keys, heads, width, 3, sequence);
+        using var buffers = new Inputs(lane, data);
+        float[] dy = Enumerable.Range(0, sequence * data.Values)
+            .Select(i => MathF.Sin(i * 0.071f + 0.3f)).ToArray();
+        using ArcBuffer dyGpu = lane.Upload(dy);
+        long baseline = lane.AllocatedBytes;
+
+        (long Live, float[][] Values) Run(bool capture)
+        {
+            using ArcBuffer dqkv = lane.Upload(new float[data.Qkv.Length]);
+            using ArcBuffer dgate = lane.Upload(new float[data.Gate.Length]);
+            using ArcBuffer dalpha = lane.Upload(new float[data.Alpha.Length]);
+            using ArcBuffer dbeta = lane.Upload(new float[data.Beta.Length]);
+            using var training = buffers.Forward(lane, data, capture);
+            long live = lane.AllocatedBytes;
+            float[] output = Read(lane, training.Output, sequence * data.Values);
+            training.Backward(dyGpu, dqkv, dgate, dalpha, dbeta);
+            return (live, [output, Read(lane, dqkv, data.Qkv.Length),
+                Read(lane, dgate, data.Gate.Length), Read(lane, dalpha, data.Alpha.Length),
+                Read(lane, dbeta, data.Beta.Length)]);
+        }
+
+        var captured = Run(true);
+        var skipped = Run(false);
+        long checkpointBytes = (long)(1 + (sequence - 1) / 64) * data.Values * data.Width * sizeof(float);
+        Assert.Equal(checkpointBytes, captured.Live - skipped.Live);
+        for (int i = 0; i < captured.Values.Length; i++)
+            AssertClose(captured.Values[i], skipped.Values[i], 3e-5f, 3e-5f);
+        Assert.Equal(baseline, lane.AllocatedBytes);
+    }
+
     private static ArcExecutionLane CreateLane() => new(0, new()
         { Qwen35InferenceKernelsOnly = true, Qwen35TrainingKernels = true });
 
@@ -161,6 +291,48 @@ public sealed class Qwen35TrainingDeltaTests
         lane.Run("q35t_delta_qk_backward_step_cooperative", (long)keys * width * 32, 32,
             alpha, dt, a, states, draw, adj, scratch, cooperative, time, 0, keys, heads, width);
         AssertClose(Read(lane, serial, initial.Length), Read(lane, cooperative, initial.Length), 3e-5f, 3e-5f);
+    }
+
+    [Theory]
+    [InlineData(65, 2, 4, 32)]
+    [InlineData(129, 2, 4, 32)]
+    [InlineData(5, 16, 48, 128)]
+    public void PersistentChunkBackwardMatchesPerTokenOracle(int sequence, int keys, int heads, int width)
+    {
+        Assert.SkipWhen(ArcDevices.Enumerate().Count == 0, "Intel Arc is required.");
+        using var lane = new ArcExecutionLane(0, new()
+        {
+            Qwen35InferenceKernelsOnly = true, Qwen35TrainingKernels = true,
+            Qwen35CooperativeDelta = true
+        });
+        var data = new Data(keys, heads, width, 3, sequence);
+        using var buffers = new Inputs(lane, data);
+        float[] dy = Enumerable.Range(0, sequence * data.Values)
+            .Select(i => MathF.Sin(i * 0.071f + 0.3f)).ToArray();
+        using ArcBuffer dyGpu = lane.Upload(dy);
+
+        float[][] Run(bool persistent)
+        {
+            float[] Initial(int n) => Enumerable.Repeat(0.03125f, n).ToArray();
+            using ArcBuffer dqkv = lane.Upload(Initial(data.Qkv.Length));
+            using ArcBuffer dgate = lane.Upload(Initial(data.Gate.Length));
+            using ArcBuffer dalpha = lane.Upload(Initial(data.Alpha.Length));
+            using ArcBuffer dbeta = lane.Upload(Initial(data.Beta.Length));
+            using var training = buffers.Forward(lane, data);
+            training.UsePersistentBackward = persistent;
+            long live = lane.AllocatedBytes, uploaded = lane.H2DBytes, downloaded = lane.D2HBytes;
+            training.Backward(dyGpu, dqkv, dgate, dalpha, dbeta);
+            training.Backward(dyGpu, dqkv, dgate, dalpha, dbeta);
+            Assert.Equal(live, lane.AllocatedBytes);
+            Assert.Equal(uploaded, lane.H2DBytes);
+            Assert.Equal(downloaded, lane.D2HBytes);
+            return [Read(lane, dqkv, data.Qkv.Length), Read(lane, dgate, data.Gate.Length),
+                Read(lane, dalpha, data.Alpha.Length), Read(lane, dbeta, data.Beta.Length)];
+        }
+
+        float[][] reference = Run(false), optimized = Run(true);
+        for (int i = 0; i < reference.Length; i++)
+            AssertClose(reference[i], optimized[i], 3e-5f, 3e-5f);
     }
 
     private sealed class Data
@@ -212,8 +384,9 @@ public sealed class Qwen35TrainingDeltaTests
             Conv = lane.Upload(data.Conv); Dt = lane.Upload(data.Dt);
             A = lane.Upload(data.A); Norm = lane.Upload(data.Norm);
         }
-        internal Qwen35TrainingDelta Forward(ArcExecutionLane lane, Data data)
-            => new(lane, Qkv, Gate, Alpha, Beta, Conv, Dt, A, Norm, data.Descriptor, data.Sequence);
+        internal Qwen35TrainingDelta Forward(ArcExecutionLane lane, Data data, bool captureCheckpoints = true)
+            => new(lane, Qkv, Gate, Alpha, Beta, Conv, Dt, A, Norm,
+                data.Descriptor, data.Sequence, captureCheckpoints);
         public void Dispose()
         { Qkv.Dispose(); Gate.Dispose(); Alpha.Dispose(); Beta.Dispose(); Conv.Dispose(); Dt.Dispose(); A.Dispose(); Norm.Dispose(); }
     }

@@ -378,7 +378,7 @@ public sealed class Qwen35ResidentModelTests
     }
 
     internal static TemporaryQwenGguf CreateFixture(bool tiedOutput, uint contextLength = 8,
-        bool nonFiniteOutputNorm = false)
+        bool nonFiniteOutputNorm = false, bool iq2Qkv = false, bool iq2Gate = false)
     {
         var metadata = new Dictionary<string, object>
         {
@@ -410,8 +410,8 @@ public sealed class Qwen35ResidentModelTests
             new("blk.0.ffn_gate.weight", [256, 512], Qwen2Gguf.Q4KType, 0),
             new("blk.0.ffn_up.weight", [256, 512], Qwen2Gguf.Q4KType, 0),
             new("blk.0.ffn_down.weight", [512, 256], Qwen2Gguf.Q6KType, 0),
-            new("blk.0.attn_qkv.weight", [256, 512], Qwen2Gguf.Q6KType, 0),
-            new("blk.0.attn_gate.weight", [256, 256], Qwen2Gguf.Q4KType, 0),
+            new("blk.0.attn_qkv.weight", [256, 512], iq2Qkv ? Qwen35Gguf.IQ2SType : Qwen2Gguf.Q6KType, 0),
+            new("blk.0.attn_gate.weight", [256, 256], iq2Gate ? Qwen35Gguf.IQ2SType : Qwen2Gguf.Q4KType, 0),
             new("blk.0.ssm_alpha.weight", [256, 2], Qwen2Gguf.Q4KType, 0),
             new("blk.0.ssm_beta.weight", [256, 2], Qwen2Gguf.Q4KType, 0),
             new("blk.0.ssm_conv1d.weight", [4, 512], Qwen2Gguf.F32Type, 0),
@@ -469,7 +469,12 @@ public sealed class Qwen35ResidentModelTests
         // Fixed seed independent of randomized string hashes. Centered Q4
         // blocks and signed Q6 blocks keep projections small but nonzero.
         var random = new Random(name.Aggregate(17, (seed, ch) => unchecked(seed * 31 + ch)));
-        int blockBytes = type == Qwen2Gguf.Q4KType ? GgufQ4K.BlockBytes : GgufQ6K.BlockBytes;
+        int blockBytes = type switch
+        {
+            Qwen2Gguf.Q4KType => GgufQ4K.BlockBytes,
+            Qwen35Gguf.IQ2SType => 82,
+            _ => GgufQ6K.BlockBytes
+        };
         var payload = new byte[elements / 256 * blockBytes];
         for (int offset = 0; offset < payload.Length; offset += blockBytes)
         {
@@ -480,6 +485,11 @@ public sealed class Qwen35ResidentModelTests
                 payload.AsSpan(offset + 4, 8).Fill(1);
                 payload.AsSpan(offset + 12, 4).Fill(0x11);
                 random.NextBytes(payload.AsSpan(offset + 16, 128));
+            }
+            else if (type == Qwen35Gguf.IQ2SType)
+            {
+                random.NextBytes(payload.AsSpan(offset, blockBytes));
+                WriteHalf(payload, offset, 1f / 4096f);
             }
             else
             {

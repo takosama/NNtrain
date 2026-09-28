@@ -11,6 +11,14 @@ internal sealed record QwenLoraTrainingConfiguration
     public int ContextLength { get; init; } = 64;
     public int MaxSteps { get; init; } = 10;
     public int SaveEverySteps { get; init; } = 1;
+    // The default preserves the exact training trajectory. FP16 uses Arc XMX
+    // for the frozen IQ2_S forward projection and changes roundoff slightly.
+    public string Iq2ForwardPrecision { get; init; } = "exact";
+    // Optional exact FP32 host cache for long-sequence IQ2_S recomputation.
+    public int Iq2ProjectionCacheMiB { get; init; }
+    public bool Iq2ProjectionCachePrioritize { get; init; }
+    // Bounded per-Arc alternative to the host cache; outputs never leave VRAM.
+    public int Iq2GpuProjectionCacheMiB { get; init; }
     public string? LossGraphPath { get; init; }
     public bool ShowLossGraph { get; init; } = true;
     public bool OpenLossGraph { get; init; } = true;
@@ -45,6 +53,14 @@ internal sealed record QwenLoraTrainingConfiguration
             throw new ArgumentException("devices must contain distinct nonnegative Arc indices.");
         if (ContextLength < 2 || MaxSteps <= 0 || SaveEverySteps <= 0)
             throw new ArgumentException("contextLength must be at least 2; maxSteps and saveEverySteps must be positive.");
+        if (Iq2ForwardPrecision is not ("exact" or "fp16"))
+            throw new ArgumentException("iq2ForwardPrecision must be exact or fp16.");
+        if (Iq2ProjectionCacheMiB is < 0 or > 16384)
+            throw new ArgumentException("iq2ProjectionCacheMiB must be between 0 and 16384.");
+        if (Iq2GpuProjectionCacheMiB is < 0 or > 1024)
+            throw new ArgumentException("iq2GpuProjectionCacheMiB must be between 0 and 1024 per Arc.");
+        if (Iq2ProjectionCacheMiB > 0 && Iq2GpuProjectionCacheMiB > 0)
+            throw new ArgumentException("Choose either the host or GPU IQ2 projection cache.");
         if (LossGraphEverySteps <= 0)
             throw new ArgumentException("lossGraphEverySteps must be positive.");
         if (LossGraphPath is not null && string.IsNullOrWhiteSpace(LossGraphPath))
