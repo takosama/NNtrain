@@ -44,8 +44,13 @@
                        Foreground="#9BAEC6" Margin="0,4,0,0"/>
         </StackPanel>
 
-        <Border Grid.Row="1" Background="#142136" CornerRadius="12" Padding="16" Margin="0,0,0,12">
-            <Grid>
+        <Border Grid.Row="1" Background="#142136" CornerRadius="12" Padding="12,6" Margin="0,0,0,12">
+            <Expander x:Name="SettingsExpander" IsExpanded="True" Foreground="#EEF3FA"
+                      ToolTip="クリックしてモデルと生成設定を開閉します。設定値は保持されます。">
+                <Expander.Header>
+                    <TextBlock Text="モデル・生成設定" FontWeight="SemiBold" Margin="4,4,0,4"/>
+                </Expander.Header>
+            <Grid Margin="4,8,4,10">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
@@ -115,6 +120,7 @@
                              ToolTip="候補に残すトークン数（1 ～ 256）"/>
                 </StackPanel>
             </Grid>
+            </Expander>
         </Border>
 
         <Border Grid.Row="2" Background="#142136" CornerRadius="10" Padding="12,9" Margin="0,0,0,12">
