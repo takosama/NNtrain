@@ -53,6 +53,34 @@ all layers; a list such as `[0,1]` selects explicit zero-based layer indices.
 Targets are projection suffixes without `blk.N.` or `.weight`; a layer uses the
 listed projections that exist in its architecture.
 
+For long IQ2_M examples, the training configuration can select the measured
+Arc XMX forward path or a bounded cache of exact IQ2_S base outputs:
+
+```json
+{
+  "iq2ForwardPrecision": "fp16",
+  "iq2ProjectionCacheMiB": 0,
+  "iq2ProjectionCachePrioritize": false,
+  "iq2GpuProjectionCacheMiB": 1024
+}
+```
+
+`exact` is the default forward precision and retains the previous numerical
+trajectory. `fp16` requires FP16 and XMX support on every selected Arc device;
+it keeps GGUF weights quantized in VRAM but rounds inputs and decoded weights
+for the frozen IQ2_S forward product. Its small numerical differences make it
+a separate resume contract from `exact`. A nonzero cache size stores exact
+FP32 base projection outputs in host RAM for reuse in the backward replay.
+Prioritization favors projections with wider inputs when the cache is too
+small to hold them all. These cache settings do not change the update
+contract. The GPU cache instead keeps up to the specified MiB **per Arc** in
+VRAM and has no host round trip. It automatically limits its effective size
+to preserve the model's VRAM budget. Choose either host or GPU cache, or zero
+for neither. Benchmark the options with your own sequence lengths and memory;
+the host cache can slow down the FP16 path because of GPU transfers.
+The 27B two-Arc measurements and precision checks are in
+[qwen35-lora-long-sequence-performance.md](qwen35-lora-long-sequence-performance.md).
+
 ## Live HTML loss graph
 
 Training writes the same self-refreshing HTML loss graph used by the regular

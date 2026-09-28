@@ -60,13 +60,24 @@ internal static class QwenLoraCommand
             string identity = TrainingIdentity(dataset, tokenizer.EosTokenId!.Value, config);
 
             using Qwen35QuantizedModel model = Qwen35QuantizedModel.Load(modelPath, config.Devices,
-                output.WriteLine, options: new Qwen35ExecutionOptions { LoraTraining = true });
+                output.WriteLine, options: new Qwen35ExecutionOptions
+                {
+                    LoraTraining = true,
+                    TrainingIQ2Fp16XmxForward = config.Iq2ForwardPrecision == "fp16",
+                    TrainingIQ2ProjectionCacheMiB = config.Iq2ProjectionCacheMiB,
+                    TrainingIQ2ProjectionCachePrioritize = config.Iq2ProjectionCachePrioritize,
+                    TrainingIQ2GpuProjectionCacheMiB = config.Iq2GpuProjectionCacheMiB
+                });
             long[] encodedBeforeTraining = model.ResidentWeightBytes.ToArray();
             if (resume) model.LoadLora(adapterPath, identity);
             else model.AttachLora(config.AdapterOptions());
             output.WriteLine($"Qwen3.5 LoRA: rank={config.Rank}, trainable={model.LoraParameterCount}, "
                 + $"examples={examples.Length}, context={config.ContextLength}, step={model.LoraStep}/{config.MaxSteps}");
             output.WriteLine("Frozen quantized GPU base; response-only next-token loss including EOS; one example per step.");
+            output.WriteLine($"IQ2 forward precision={config.Iq2ForwardPrecision}, "
+                + $"host projection cache={config.Iq2ProjectionCacheMiB} MiB, "
+                + $"GPU projection cache={config.Iq2GpuProjectionCacheMiB} MiB/Arc"
+                + (config.Iq2ProjectionCacheMiB > 0 && config.Iq2ProjectionCachePrioritize ? " (prioritized)" : ""));
             using var metrics = new QwenLoraMetricReporter(config, graphPath, examples.Length,
                 model.LoraStep, resume, output, error);
             long savedStep = resume ? model.LoraStep : -1;
@@ -177,6 +188,10 @@ internal static class QwenLoraCommand
             Layers = config.Layers?.Order().ToArray(),
             Targets = config.Targets.Order(StringComparer.Ordinal).ToArray(), config.IncludeOutput
         }, LoraConfiguration.Json);
+        // Preserve the identity of existing exact checkpoints. FP16 updates
+        // use a different numerical trajectory and must not resume an exact run.
+        if (config.Iq2ForwardPrecision != "exact")
+            contract += "|iq2ForwardPrecision=" + config.Iq2ForwardPrecision;
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(contract)));
     }
 }

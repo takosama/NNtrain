@@ -70,6 +70,21 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
             progress = message => { lock (callbackLock) callback(message); };
         }
         options ??= new Qwen35ExecutionOptions();
+        if (options.TrainingIQ2Bf16XmxForward && options.TrainingIQ2Fp16XmxForward)
+            throw new ArgumentException("Choose either BF16 or FP16 IQ2_S/XMX forward, not both.", nameof(options));
+        if ((options.TrainingIQ2Bf16XmxForward || options.TrainingIQ2Fp16XmxForward)
+            && !options.LoraTraining)
+            throw new ArgumentException("IQ2_S XMX forward is only available for LoRA training.", nameof(options));
+        if (options.TrainingIQ2ProjectionCacheMiB is < 0 or > 16384)
+            throw new ArgumentOutOfRangeException(nameof(options),
+                "The experimental IQ2_S host projection cache cap must be 0..16384 MiB.");
+        if (options.TrainingIQ2GpuProjectionCacheMiB is < 0 or > 1024)
+            throw new ArgumentOutOfRangeException(nameof(options),
+                "The experimental IQ2_S GPU projection cache cap per Arc must be 0..1024 MiB.");
+        if (options.TrainingIQ2ProjectionCacheMiB > 0 && options.TrainingIQ2GpuProjectionCacheMiB > 0)
+            throw new ArgumentException("Choose the IQ2_S host projection cache or GPU projection cache, not both.", nameof(options));
+        if (options.TrainingIQ2GpuProjectionCacheMiB > 0 && !options.TrainingGpuCheckpoints)
+            throw new ArgumentException("The IQ2_S GPU projection cache requires GPU training checkpoints.", nameof(options));
         if (!Enum.IsDefined(options.QuantizedKernel) || options.QueuedKernelLimit is < 16 or > 4096
             || options.ProjectionWorkgroupSize is not (32 or 64 or 128)
             || options.InferencePairedProjectionTypes is < 0 or > 7
@@ -78,8 +93,10 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
             || options.TrainingTransposeOctetRows is not (0 or 4 or 8 or 16)
             || options.TrainingQ4TransposeOctetRows is not (0 or 4 or 8 or 16)
             || options.TrainingIQ3TransposeOctetRows is not (0 or 4 or 8 or 16)
+            || options.TrainingQ5TransposeOctetRows is not (0 or 4 or 8 or 16)
             || options.TrainingNormSplits is < 1 or > 32
             || options.TrainingForwardRows is not (1 or 2 or 4 or 8 or 16)
+            || options.TrainingQ5ForwardRows is not (1 or 4 or 8)
             || options.TrainingBufferPoolMiB is < 0 or > 2048)
             throw new ArgumentException("Invalid Qwen3.5 execution options.", nameof(options));
         Qwen35GgufDescriptor d = Qwen35Gguf.Inspect(gguf);
@@ -94,6 +111,11 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
             || selected.Distinct().Count() != selected.Length
             || selected.Any(index => index < 0 || index >= available.Length))
             throw new ArgumentException("Specify distinct, available Arc device indices.", nameof(devices));
+        if ((options.TrainingIQ2Bf16XmxForward || options.TrainingIQ2Fp16XmxForward) && selected.Any(index =>
+            !available[index].SupportsXmx || available[index].MinimumSubgroupSize != 16
+            || !available[index].Extensions.Split(' ').Contains("cl_intel_subgroups")
+            || (options.TrainingIQ2Fp16XmxForward && !available[index].Extensions.Split(' ').Contains("cl_khr_fp16"))))
+            throw new NotSupportedException("IQ2_S XMX training forward requires Arc XMX, subgroup size 16, and FP16 support when selected.");
         long[] planned = PlanPersistentBytes(d, selected.Length);
         for (int slot = 0; slot < selected.Length; slot++)
         {
@@ -182,10 +204,14 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                     var matrix = new Matrix(lane, tensor,
                         gguf.ReadTensorBytes(tensor, EncodedBytes(tensor)), options.QuantizedKernel,
                         options.TrainingTransposeRows, options.LoraTraining ? options.TrainingForwardRows : 1,
+                        options.LoraTraining ? options.TrainingQ5ForwardRows : 1,
+                        options.TrainingIQ2Bf16XmxForward,
+                        options.TrainingIQ2Fp16XmxForward,
                         tensor.Type switch {
                             Qwen35Gguf.IQ2SType => options.TrainingTransposeOctetRows,
                             Qwen2Gguf.Q4KType => options.TrainingQ4TransposeOctetRows,
                             Qwen35Gguf.IQ3SType => options.TrainingIQ3TransposeOctetRows,
+                            Qwen35Gguf.Q5KType => options.TrainingQ5TransposeOctetRows,
                             _ => 0 });
                     lock (model._matrices) model._matrices.Add(tensor.Name, matrix);
                 }
@@ -292,6 +318,17 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
     }
 
     private static long DeviceBudget(ArcDeviceInfo device) => checked((long)(device.GlobalMemoryBytes / 10 * 9));
+
+    internal static int AlignedTransposeChunkRows(int rows, long bytesPerRow,
+        long scratchBudgetBytes, int rowTile)
+    {
+        if (rows < 1 || bytesPerRow < 1 || rowTile < 1)
+            throw new ArgumentOutOfRangeException(nameof(rows));
+        int capacity = checked((int)Math.Max(1L, Math.Min(rows, scratchBudgetBytes / bytesPerRow)));
+        // A short tail launches another complete quantized-weight traversal.
+        // Align the main chunks to the kernel's row tile when the budget permits.
+        return capacity >= rowTile ? capacity / rowTile * rowTile : capacity;
+    }
 
     private static int DeviceSlot(string name, int layers, int devices)
     {
@@ -858,15 +895,22 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         private readonly int _transposeRows;
         private readonly int _transposeOctetRows;
         private readonly int _forwardRows;
+        private readonly int _q5ForwardRows;
+        private readonly bool _trainingIq2Bf16XmxForward;
+        private readonly bool _trainingIq2Fp16XmxForward;
         private readonly string _projectionKernel, _fusedProjectionKernel;
         private readonly bool PairedProjection;
         private readonly bool PairedLoraProjection;
         internal bool SupportsFusedLora => _kernel == Qwen35QuantizedKernel.Subgroup
             && _type is not (Qwen35Gguf.PQ20Type or Qwen35Gguf.PTQ10Type or Qwen2Gguf.BF16Type);
-        internal Matrix(ArcExecutionLane lane, GgufTensorInfo info, byte[] payload, Qwen35QuantizedKernel kernel, int transposeRows, int forwardRows, int transposeOctetRows)
+        internal bool IsIq2S => _type == Qwen35Gguf.IQ2SType;
+        internal Matrix(ArcExecutionLane lane, GgufTensorInfo info, byte[] payload, Qwen35QuantizedKernel kernel, int transposeRows, int forwardRows, int q5ForwardRows, bool trainingIq2Bf16XmxForward, bool trainingIq2Fp16XmxForward, int transposeOctetRows)
         {
             _transposeRows = transposeRows;
             _forwardRows = forwardRows;
+            _q5ForwardRows = q5ForwardRows;
+            _trainingIq2Bf16XmxForward = trainingIq2Bf16XmxForward;
+            _trainingIq2Fp16XmxForward = trainingIq2Fp16XmxForward;
             Lane = lane; Name = info.Name; StorageBytes = payload.Length; _type = info.Type;
             _quantization = _type switch
             {
@@ -904,7 +948,29 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
             ArcBuffer output = Lane.Allocate(checked(rows * OutputWidth));
             try
             {
-                if (_kernel == Qwen35QuantizedKernel.Subgroup && _forwardRows > 1 && rows > 1
+                if ((_trainingIq2Bf16XmxForward || _trainingIq2Fp16XmxForward)
+                    && _kernel == Qwen35QuantizedKernel.Subgroup
+                    && IsIq2S && rows > 1)
+                {
+                    using ArcBuffer input16 = Lane.AllocateBytes(checked(rows * _inputWidth * sizeof(ushort)));
+                    Lane.Run(_trainingIq2Fp16XmxForward ? "q35t_iq2_input_f16" : "q35t_iq2_input_bf16",
+                        (long)rows * _inputWidth, 0, input, input16, checked(rows * _inputWidth));
+                    if (_trainingIq2Fp16XmxForward && rows >= 128)
+                        Lane.Run2D("q35t_linear_iq2_s_xmx_f16_r128_n64",
+                            ((long)OutputWidth + 63) / 64 * 16, ((long)rows + 127) / 128 * 16,
+                            16, 16, input16, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
+                    else
+                        Lane.Run2D(_trainingIq2Fp16XmxForward
+                                ? "q35t_linear_iq2_s_xmx_f16" : "q35t_linear_iq2_s_xmx_bf16",
+                            ((long)OutputWidth + 31) / 32 * 16, ((long)rows + 63) / 64 * 8,
+                            16, 8, input16, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
+                }
+                else if (_kernel == Qwen35QuantizedKernel.Subgroup
+                    && _type == Qwen35Gguf.Q5KType && _q5ForwardRows > 1 && rows > 1)
+                    Lane.Run($"q35t_linear_q5_k_rows{_q5ForwardRows}",
+                        ((((long)rows + _q5ForwardRows - 1) / _q5ForwardRows * OutputWidth + 1) / 2) * 32, 32,
+                        input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
+                else if (_kernel == Qwen35QuantizedKernel.Subgroup && _forwardRows > 1 && rows > 1
                     && _type is Qwen2Gguf.Q4KType or Qwen35Gguf.IQ2SType or Qwen35Gguf.IQ3SType)
                     Lane.Run($"q35t_linear_{_quantization}_rows{_forwardRows}",
                         ((((long)rows + _forwardRows - 1) / _forwardRows * OutputWidth + 1) / 2) * 32, 32,
@@ -958,7 +1024,8 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                     fullPartial, dx, rows, _inputWidth, splits);
                 return;
             }
-            int chunkRows = checked((int)Math.Max(1L, Math.Min(rows, scratchBudgetBytes / bytesPerRow)));
+            int rowTile = _transposeOctetRows != 0 ? _transposeOctetRows : _transposeRows;
+            int chunkRows = AlignedTransposeChunkRows(rows, bytesPerRow, scratchBudgetBytes, rowTile);
             // Row tiles leave every token's quantized transpose and split
             // reduction unchanged, while bounding the vocabulary-head scratch.
             for (int row = 0; row < rows; row += chunkRows)

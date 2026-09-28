@@ -49,6 +49,19 @@ inline float8 q35tx_q4_decode8(__global const uchar* block, int octet) {
     return (d * (float)scale) * convert_float8(quant) - dmin * (float)minimum;
 }
 
+inline float8 q35tx_q5_decode8(__global const uchar* block, int octet) {
+    int group = octet >> 2, within = (octet & 3) * 8;
+    float d = q35l_half_to_float((ushort)block[0] | ((ushort)block[1] << 8));
+    float dmin = q35l_half_to_float((ushort)block[2] | ((ushort)block[3] << 8));
+    float multiplier, minimum;
+    q35l_q5_fast_scale_min(block, group, d, dmin, &multiplier, &minimum);
+    uchar8 packed = vload8(0, block + 48 + (group >> 1) * 32 + within);
+    uchar8 high = vload8(0, block + 16 + within);
+    uchar8 quant = (group & 1) ? packed >> (uchar8)(4) : packed & (uchar8)(15);
+    quant |= ((high >> (uchar8)(group)) & (uchar8)(1)) << (uchar8)(4);
+    return multiplier * convert_float8(quant) - minimum;
+}
+
 #define Q35TX_VEC8_ROWS(NAME, DECODE, BLOCK_BYTES, ROWS) \
 __attribute__((intel_reqd_sub_group_size(16))) \
 __attribute__((reqd_work_group_size(32, 1, 1))) \
@@ -112,5 +125,8 @@ Q35TX_VEC8_ROWS(q35t_xpose_iq3_s_vec8_rows16, q35tx_iq3_decode8, 110, 16)
 Q35TX_VEC8_ROWS(q35t_xpose_q4_k_vec8_rows4, q35tx_q4_decode8, 144, 4)
 Q35TX_VEC8_ROWS(q35t_xpose_q4_k_vec8_rows8, q35tx_q4_decode8, 144, 8)
 Q35TX_VEC8_ROWS(q35t_xpose_q4_k_vec8_rows16, q35tx_q4_decode8, 144, 16)
+Q35TX_VEC8_ROWS(q35t_xpose_q5_k_vec8_rows4, q35tx_q5_decode8, 176, 4)
+Q35TX_VEC8_ROWS(q35t_xpose_q5_k_vec8_rows8, q35tx_q5_decode8, 176, 8)
+Q35TX_VEC8_ROWS(q35t_xpose_q5_k_vec8_rows16, q35tx_q5_decode8, 176, 16)
 #undef Q35TX_VEC8_ROWS
 #endif

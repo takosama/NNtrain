@@ -13,6 +13,8 @@ public sealed class Qwen35TrainingLinearTests
     [InlineData("iq3_s", 110, 4)]
     [InlineData("q4_k", 144, 2)]
     [InlineData("q4_k", 144, 4)]
+    [InlineData("q5_k", 176, 4)]
+    [InlineData("q5_k", 176, 8)]
     public void MultirowForwardRetainsSg16BitsAndEncodedStorage(string quant, int blockBytes, int tileRows)
     {
         Assert.SkipWhen(ArcDevices.Enumerate().Count == 0, "Intel Arc is required.");
@@ -26,6 +28,7 @@ public sealed class Qwen35TrainingLinearTests
             (Rows: 5, Input: 5120, Output: 17, Subnormal: false),
             (Rows: 8, Input: 17408, Output: 5, Subnormal: false),
             (Rows: 25, Input: 5120, Output: 17, Subnormal: false),
+            (Rows: 17, Input: 512, Output: 257, Subnormal: false),
             (Rows: 3, Input: 512, Output: 7, Subnormal: true)
         })
         {
@@ -37,7 +40,7 @@ public sealed class Qwen35TrainingLinearTests
                 ushort d = shape.Subnormal ? (ushort)(block % 2 == 0 ? 0x0001 : 0x83ff)
                     : BitConverter.HalfToUInt16Bits((Half)((block % 7 + 1) / 8192f));
                 WriteHalf(payload, block * blockBytes, d);
-                if (quant == "q4_k") WriteHalf(payload, block * blockBytes + 2, shape.Subnormal ? (ushort)2
+                if (quant is "q4_k" or "q5_k") WriteHalf(payload, block * blockBytes + 2, shape.Subnormal ? (ushort)2
                     : BitConverter.HalfToUInt16Bits((Half)((block % 3 + 1) / 16384f)));
             }
             float[] input = Enumerable.Range(0, shape.Rows * shape.Input)

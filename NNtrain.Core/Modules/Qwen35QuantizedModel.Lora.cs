@@ -13,6 +13,12 @@ public sealed partial class Qwen35QuantizedModel
     // Internal parity-test hook; the production threshold stays at 64 rows.
     internal int LoraCheckpointThresholdRows { get; set; } = 64;
     internal long LoraTransposeScratchBudgetBytes { get; set; } = 256L * 1024 * 1024;
+    internal (int Captured, int Reused, long PeakBytes) LastIq2ProjectionCacheStats { get; private set; }
+    internal (int Captured, int Reused, long PeakBytes) LastIq2GpuProjectionCacheStats { get; private set; }
+    internal IReadOnlyList<long> LastIq2GpuProjectionCachePeakBytesByDevice { get; private set; } = [];
+    internal IReadOnlyList<long> LastIq2GpuProjectionCacheBudgetBytesByDevice { get; private set; } = [];
+    // Lets tiny GGUF tests exercise a full cache without a million-byte activation.
+    internal long? LoraIq2ProjectionCacheBudgetBytesOverride { get; set; }
     private readonly Dictionary<string, Qwen35LoraMatrix> _lora = new(StringComparer.Ordinal);
     private Qwen35LoraOptions? _loraOptions;
     public int LoraStep { get; private set; }
@@ -167,8 +173,15 @@ public sealed partial class Qwen35QuantizedModel
     private double LoraLoss(IReadOnlyList<int> tokens, int start, bool backward)
     {
         Reset();
+        LastIq2ProjectionCacheStats = default;
+        LastIq2GpuProjectionCacheStats = default;
+        LastIq2GpuProjectionCachePeakBytesByDevice = [];
+        LastIq2GpuProjectionCacheBudgetBytesByDevice = [];
         var d = Descriptor; int rows = tokens.Count - 1, valid = tokens.Count - start;
-        if (rows > LoraCheckpointThresholdRows) return LoraLossCheckpointed(tokens, start, backward);
+        if (rows > LoraCheckpointThresholdRows)
+            return CanKeepLoraCheckpointsOnGpu(rows)
+                ? LoraLossGpuCheckpointed(tokens, start, backward)
+                : LoraLossCheckpointed(tokens, start, backward);
         using var tape = new Qwen35TrainingTape();
         try
         {
@@ -222,7 +235,8 @@ public sealed partial class Qwen35QuantizedModel
                 using var tape = new Qwen35TrainingTape();
                 using ArcBuffer source = lane.Upload(checkpoints[layer]);
                 V input = tape.Add(lane, source, rows, d.EmbeddingLength, false, ownsData: false);
-                V output = ForwardLoraLayer(tape, layer, input, rows);
+                V output = ForwardLoraLayer(tape, layer, input, rows,
+                    captureDeltaCheckpoints: false);
                 checkpoints[layer + 1] = new float[hiddenElements];
                 lane.Read(output.Data, checkpoints[layer + 1]);
                 if (!backward) checkpoints[layer] = null!;
@@ -288,8 +302,354 @@ public sealed partial class Qwen35QuantizedModel
         catch { _faulted = true; throw; }
     }
 
-    private V ForwardLoraLayer(Qwen35TrainingTape tape, int layer, V hidden, int rows)
+    private bool CanKeepLoraCheckpointsOnGpu(int rows)
     {
+        if (!_options.TrainingGpuCheckpoints) return false;
+        long hiddenBytes = checked((long)rows * Descriptor.EmbeddingLength * sizeof(float));
+        if (hiddenBytes > int.MaxValue) return false; // ArcExecutionLane.CopyBytes uses Int32 offsets.
+        // Leave room for the active layer's recurrent tape, vocabulary head,
+        // transpose scratch and reusable buffers. Cached buffers are reclaimable;
+        // AllocatedBytes counts only live allocations that cannot be evicted.
+        long workingReserve = LoraTrainingWorkingReserveBytes();
+        foreach (ArcExecutionLane lane in _lanes)
+        {
+            long budget = DeviceBudget(lane.Device);
+            if ((ulong)hiddenBytes > lane.Device.MaximumAllocationBytes
+                || ProjectedLoraCheckpointBytes(lane, hiddenBytes) >
+                    budget - lane.AllocatedBytes - workingReserve)
+                return false;
+        }
+        return true;
+    }
+
+    private long LoraTrainingWorkingReserveBytes()
+    {
+        const long mebibyte = 1024L * 1024;
+        return checked((long)_options.TrainingBufferPoolMiB * mebibyte
+            + Math.Max(1024L * mebibyte, LoraTransposeScratchBudgetBytes));
+    }
+
+    private long ProjectedLoraCheckpointBytes(ArcExecutionLane lane, long hiddenBytes)
+    {
+        long count = 0;
+        for (int layer = 0; layer <= Descriptor.LayerCount; layer++)
+        {
+            ArcExecutionLane owner = _states[Math.Min(layer, Descriptor.LayerCount - 1)].Lane;
+            if (ReferenceEquals(owner, lane)) count++;
+        }
+        return checked(count * hiddenBytes);
+    }
+
+    // Copy within an Arc lane without a host fence. Only the boundary between
+    // model-parallel devices needs a blocking host staging transfer.
+    private static void CopyLoraHidden(ArcExecutionLane sourceLane, ArcBuffer source,
+        ArcExecutionLane targetLane, ArcBuffer target, int elements, int bytes)
+    {
+        if (ReferenceEquals(sourceLane, targetLane))
+        {
+            sourceLane.CopyBytes(source, target, 0, 0, bytes);
+            return;
+        }
+        var staging = new float[elements];
+        sourceLane.Read(source, staging);
+        targetLane.Write(target, staging);
+    }
+
+    // One IQ2_S forward performs work proportional to inputWidth * outputWidth,
+    // while retaining its FP32 result costs rows * outputWidth * four bytes.
+    // Prefer the widest inputs to save the most forward work per host byte.
+    internal static HashSet<string> SelectIq2ProjectionCacheTargets(
+        IEnumerable<(string Name, int InputWidth, int OutputWidth)> projections,
+        int rows, long byteLimit)
+    {
+        var selected = new HashSet<string>(StringComparer.Ordinal);
+        long usedBytes = 0;
+        foreach (var candidate in projections
+            .OrderByDescending(projection => projection.InputWidth)
+            .ThenByDescending(projection => projection.OutputWidth)
+            .ThenBy(projection => projection.Name, StringComparer.Ordinal))
+        {
+            long bytes = checked((long)rows * candidate.OutputWidth * sizeof(float));
+            if (bytes > byteLimit - usedBytes) continue;
+            if (selected.Add(candidate.Name)) usedBytes += bytes;
+        }
+        return selected;
+    }
+
+    private sealed class Iq2BaseOutputCache(long byteLimit, HashSet<string> targets)
+    {
+        private readonly Dictionary<string, float[]> _outputs = new(StringComparer.Ordinal);
+        private long _usedBytes;
+        internal int Captured { get; private set; }
+        internal int Reused { get; private set; }
+        internal long PeakBytes { get; private set; }
+
+        internal bool CanCapture(string name, int elements)
+            => targets.Contains(name) && !_outputs.ContainsKey(name)
+                && checked((long)elements * sizeof(float)) <= byteLimit - _usedBytes;
+
+        internal void Capture(string name, float[] values)
+        {
+            if (!CanCapture(name, values.Length))
+                throw new InvalidOperationException("IQ2_S projection exceeds the configured host cache cap.");
+            _outputs.Add(name, values);
+            _usedBytes += checked((long)values.Length * sizeof(float));
+            PeakBytes = Math.Max(PeakBytes, _usedBytes);
+            Captured++;
+        }
+
+        internal bool TryTake(string name, out float[]? values)
+        {
+            if (!_outputs.Remove(name, out values)) return false;
+            _usedBytes -= checked((long)values.Length * sizeof(float));
+            Reused++;
+            return true;
+        }
+
+        internal void ReleaseLayer(int layer)
+        {
+            string prefix = $"blk.{layer}.";
+            foreach (string name in _outputs.Keys.Where(name => name.StartsWith(prefix, StringComparison.Ordinal)).ToArray())
+            {
+                float[] values = _outputs[name];
+                _outputs.Remove(name);
+                _usedBytes -= checked((long)values.Length * sizeof(float));
+            }
+        }
+
+        internal void Clear() { _outputs.Clear(); _usedBytes = 0; }
+    }
+
+    private sealed class Iq2GpuBaseOutputCache(
+        IReadOnlyDictionary<ArcExecutionLane, long> byteLimits, HashSet<string> targets) : IDisposable
+    {
+        private readonly Dictionary<string, (ArcExecutionLane Lane, ArcBuffer Buffer)> _outputs =
+            new(StringComparer.Ordinal);
+        private readonly Dictionary<ArcExecutionLane, long> _usedBytes =
+            byteLimits.Keys.ToDictionary(lane => lane, _ => 0L);
+        private readonly Dictionary<ArcExecutionLane, long> _peakBytes =
+            byteLimits.Keys.ToDictionary(lane => lane, _ => 0L);
+        internal int Captured { get; private set; }
+        internal int Reused { get; private set; }
+        internal long PeakBytes => _peakBytes.Values.Sum();
+
+        internal long PeakBytesOn(ArcExecutionLane lane) => _peakBytes.GetValueOrDefault(lane);
+        internal long BudgetBytesOn(ArcExecutionLane lane) => byteLimits.GetValueOrDefault(lane);
+
+        internal bool CanCapture(string name, ArcExecutionLane lane, int elements)
+            => targets.Contains(name) && !_outputs.ContainsKey(name)
+                && byteLimits.TryGetValue(lane, out long limit)
+                && checked((long)elements * sizeof(float)) <= limit - _usedBytes.GetValueOrDefault(lane);
+
+        internal void Capture(string name, ArcExecutionLane lane, ArcBuffer buffer, int elements)
+        {
+            if (!CanCapture(name, lane, elements))
+                throw new InvalidOperationException("IQ2_S projection exceeds the configured Arc cache cap.");
+            _outputs.Add(name, (lane, buffer));
+            long used = _usedBytes.GetValueOrDefault(lane) + checked((long)elements * sizeof(float));
+            _usedBytes[lane] = used;
+            _peakBytes[lane] = Math.Max(used, _peakBytes.GetValueOrDefault(lane));
+            Captured++;
+        }
+
+        internal bool TryTake(string name, out ArcBuffer? buffer)
+        {
+            if (!_outputs.Remove(name, out var entry))
+            {
+                buffer = null;
+                return false;
+            }
+            buffer = entry.Buffer;
+            _usedBytes[entry.Lane] -= buffer.ByteLength;
+            Reused++;
+            return true;
+        }
+
+        internal void ReleaseLayer(int layer)
+        {
+            string prefix = $"blk.{layer}.";
+            foreach (string name in _outputs.Keys.Where(name => name.StartsWith(prefix, StringComparison.Ordinal)).ToArray())
+            {
+                var entry = _outputs[name];
+                _outputs.Remove(name);
+                _usedBytes[entry.Lane] -= entry.Buffer.ByteLength;
+                entry.Buffer.Dispose();
+            }
+        }
+
+        public void Dispose()
+        {
+            foreach (var entry in _outputs.Values) entry.Buffer.Dispose();
+            _outputs.Clear();
+            _usedBytes.Clear();
+        }
+    }
+
+    private Iq2GpuBaseOutputCache CreateIq2GpuProjectionCache(int rows, long hiddenBytes)
+    {
+        const long mebibyte = 1024L * 1024;
+        long requestedBytes = checked((long)_options.TrainingIQ2GpuProjectionCacheMiB * mebibyte);
+        long workingReserve = LoraTrainingWorkingReserveBytes();
+        var limits = new Dictionary<ArcExecutionLane, long>();
+        var targets = new HashSet<string>(StringComparer.Ordinal);
+        foreach (ArcExecutionLane lane in _lanes)
+        {
+            // Reserve all layer checkpoints, the regular training workspace,
+            // and one extra buffer margin below the 90% physical VRAM budget.
+            long spare = DeviceBudget(lane.Device) - lane.AllocatedBytes
+                - ProjectedLoraCheckpointBytes(lane, hiddenBytes)
+                - workingReserve - WorkspaceReserveBytes;
+            long limit = Math.Min(requestedBytes, Math.Max(0, spare));
+            limits.Add(lane, limit);
+            targets.UnionWith(SelectIq2ProjectionCacheTargets(_matrices.Values
+                .Where(matrix => matrix.IsIq2S && ReferenceEquals(matrix.Lane, lane)
+                    && matrix.Name.StartsWith("blk.", StringComparison.Ordinal))
+                .Select(matrix => (matrix.Name, matrix._inputWidth, matrix.OutputWidth)),
+                rows, limit));
+        }
+        return new Iq2GpuBaseOutputCache(limits, targets);
+    }
+
+    private double LoraLossGpuCheckpointed(IReadOnlyList<int> tokens, int start, bool backward)
+    {
+        Qwen35GgufDescriptor d = Descriptor;
+        int rows = tokens.Count - 1, valid = tokens.Count - start;
+        int hiddenElements = checked(rows * d.EmbeddingLength);
+        int hiddenBytes = checked(hiddenElements * sizeof(float));
+        var checkpoints = new ArcBuffer?[d.LayerCount + 1];
+        long iq2ByteLimit = LoraIq2ProjectionCacheBudgetBytesOverride
+            ?? checked((long)_options.TrainingIQ2ProjectionCacheMiB * 1024 * 1024);
+        Iq2BaseOutputCache? iq2Cache = null;
+        if (backward && _options.TrainingIQ2ProjectionCacheMiB > 0)
+        {
+            var projections = _matrices.Values
+                .Where(matrix => matrix.IsIq2S && matrix.Name.StartsWith("blk.", StringComparison.Ordinal))
+                .Select(matrix => (matrix.Name, matrix._inputWidth, matrix.OutputWidth)).ToArray();
+            HashSet<string> targets = _options.TrainingIQ2ProjectionCachePrioritize
+                ? SelectIq2ProjectionCacheTargets(projections, rows, iq2ByteLimit)
+                : projections.Select(projection => projection.Name).ToHashSet(StringComparer.Ordinal);
+            iq2Cache = new Iq2BaseOutputCache(iq2ByteLimit, targets);
+        }
+        Iq2GpuBaseOutputCache? iq2GpuCache = backward && _options.TrainingIQ2GpuProjectionCacheMiB > 0
+            ? CreateIq2GpuProjectionCache(rows, hiddenBytes) : null;
+        ArcBuffer? upstream = null;
+        ArcExecutionLane? upstreamLane = null;
+        try
+        {
+            Matrix embedding = _matrices["token_embd.weight"];
+            checkpoints[0] = embedding.Embedding(tokens, rows);
+            for (int layer = 0; layer < d.LayerCount; layer++)
+            {
+                ArcExecutionLane lane = _states[layer].Lane;
+                using var tape = new Qwen35TrainingTape();
+                V input = tape.Add(lane, checkpoints[layer]!, rows, d.EmbeddingLength,
+                    false, ownsData: false);
+                V output = ForwardLoraLayer(tape, layer, input, rows, iq2Cache, iq2GpuCache,
+                    captureIq2Base: true, captureDeltaCheckpoints: false);
+                ArcExecutionLane nextLane = _states[Math.Min(layer + 1, d.LayerCount - 1)].Lane;
+                checkpoints[layer + 1] = nextLane.Allocate(hiddenElements);
+                CopyLoraHidden(lane, output.Data, nextLane, checkpoints[layer + 1]!,
+                    hiddenElements, hiddenBytes);
+                if (!backward)
+                {
+                    checkpoints[layer]!.Dispose();
+                    checkpoints[layer] = null;
+                }
+            }
+
+            double loss;
+            using (var tape = new Qwen35TrainingTape())
+            {
+                ArcExecutionLane lastLane = _states[d.LayerCount - 1].Lane;
+                V hidden = tape.Add(lastLane, checkpoints[d.LayerCount]!, rows,
+                    d.EmbeddingLength, backward, ownsData: false);
+                V normalized = tape.Norm(hidden, _dense["output_norm.weight"], d.RmsEpsilon);
+                V final = tape.Move(normalized, OutputMatrix.Lane);
+                V head = _options.TrainingResponseOnlyHead ? tape.SliceRows(final, start - 1, valid) : final;
+                V logits = ProjectTrain(tape, "output.weight", head);
+                int[] targets = _options.TrainingResponseOnlyHead ? tokens.Skip(start).ToArray()
+                    : Enumerable.Range(0, rows).Select(t => t + 1 >= start ? tokens[t + 1] : -1).ToArray();
+                int logitRows = logits.Rows;
+                using ArcBuffer labels = logits.Lane.UploadRaw(targets), stats = logits.Lane.Allocate(checked(logitRows * 3));
+                logits.Lane.Run("q35t_ce_stats", (long)logitRows * 128, 128,
+                    logits.Data, labels, stats, d.VocabularySize, valid);
+                float[] numbers = new float[checked(logitRows * 3)];
+                logits.Lane.Read(stats, numbers);
+                loss = Enumerable.Range(0, logitRows).Sum(t => (double)numbers[t * 3]);
+                if (!double.IsFinite(loss))
+                    throw new ArithmeticException("Non-finite LoRA loss; optimizer update was not committed.");
+                if (backward)
+                {
+                    logits.Lane.Run("q35t_ce_grad", (long)logitRows * d.VocabularySize, 0,
+                        logits.Data, labels, stats, logits.Grad(), logitRows, d.VocabularySize, valid);
+                    tape.Backward();
+                    if (hidden.Gradient is null)
+                        throw new InvalidOperationException("The output head did not propagate its input gradient.");
+                    upstream = lastLane.Allocate(hiddenElements);
+                    CopyLoraHidden(lastLane, hidden.Gradient, lastLane, upstream,
+                        hiddenElements, hiddenBytes);
+                    upstreamLane = lastLane;
+                }
+            }
+
+            if (backward)
+            {
+                for (int layer = d.LayerCount - 1; layer >= 0; layer--)
+                {
+                    ArcExecutionLane lane = _states[layer].Lane;
+                    using var tape = new Qwen35TrainingTape();
+                    V input = tape.Add(lane, checkpoints[layer]!, rows,
+                        d.EmbeddingLength, true, ownsData: false);
+                    V output = ForwardLoraLayer(tape, layer, input, rows, iq2Cache, iq2GpuCache,
+                        captureIq2Base: false);
+                    CopyLoraHidden(upstreamLane!, upstream!, lane, output.Grad(),
+                        hiddenElements, hiddenBytes);
+                    tape.Backward();
+                    iq2Cache?.ReleaseLayer(layer);
+                    iq2GpuCache?.ReleaseLayer(layer);
+                    ArcBuffer? nextUpstream = null;
+                    if (layer > 0)
+                    {
+                        if (input.Gradient is null)
+                            throw new InvalidOperationException($"LoRA layer {layer} did not propagate its input gradient.");
+                        nextUpstream = lane.Allocate(hiddenElements);
+                        CopyLoraHidden(lane, input.Gradient, lane, nextUpstream,
+                            hiddenElements, hiddenBytes);
+                    }
+                    upstream!.Dispose();
+                    upstream = nextUpstream;
+                    upstreamLane = lane;
+                    checkpoints[layer + 1]!.Dispose();
+                    checkpoints[layer + 1] = null;
+                }
+            }
+            return loss;
+        }
+        catch { _faulted = true; throw; }
+        finally
+        {
+            upstream?.Dispose();
+            foreach (ArcBuffer? checkpoint in checkpoints) checkpoint?.Dispose();
+            LastIq2ProjectionCacheStats = (iq2Cache?.Captured ?? 0,
+                iq2Cache?.Reused ?? 0, iq2Cache?.PeakBytes ?? 0);
+            iq2Cache?.Clear();
+            LastIq2GpuProjectionCacheStats = (iq2GpuCache?.Captured ?? 0,
+                iq2GpuCache?.Reused ?? 0, iq2GpuCache?.PeakBytes ?? 0);
+            LastIq2GpuProjectionCachePeakBytesByDevice = _lanes
+                .Select(lane => iq2GpuCache?.PeakBytesOn(lane) ?? 0).ToArray();
+            LastIq2GpuProjectionCacheBudgetBytesByDevice = _lanes
+                .Select(lane => iq2GpuCache?.BudgetBytesOn(lane) ?? 0).ToArray();
+            iq2GpuCache?.Dispose();
+        }
+    }
+
+    private V ForwardLoraLayer(Qwen35TrainingTape tape, int layer, V hidden, int rows,
+        Iq2BaseOutputCache? iq2Cache = null, Iq2GpuBaseOutputCache? iq2GpuCache = null,
+        bool captureIq2Base = false,
+        bool captureDeltaCheckpoints = true)
+    {
+        V Project(string name, V input) => ProjectTrain(tape, name, input,
+            iq2Cache, iq2GpuCache, captureIq2Base);
         Qwen35GgufDescriptor d = Descriptor;
         string p = $"blk.{layer}.";
         ArcExecutionLane lane = _states[layer].Lane;
@@ -298,45 +658,78 @@ public sealed partial class Qwen35QuantizedModel
         V attended;
         if (d.IsRecurrent(layer))
         {
-            V qkv = ProjectTrain(tape, p + "attn_qkv.weight", norm);
-            V gate = ProjectTrain(tape, p + "attn_gate.weight", norm);
-            V alpha = ProjectTrain(tape, p + "ssm_alpha.weight", norm);
-            V beta = ProjectTrain(tape, p + "ssm_beta.weight", norm);
+            V qkv = Project(p + "attn_qkv.weight", norm);
+            V gate = Project(p + "attn_gate.weight", norm);
+            V alpha = Project(p + "ssm_alpha.weight", norm);
+            V beta = Project(p + "ssm_beta.weight", norm);
             var op = tape.Own(new Qwen35TrainingDelta(lane, qkv.Data, gate.Data, alpha.Data, beta.Data,
                 _dense[p + "ssm_conv1d.weight"], _dense[p + "ssm_dt.bias"], _dense[p + "ssm_a"],
-                _dense[p + "ssm_norm.weight"], d, rows));
+                _dense[p + "ssm_norm.weight"], d, rows, captureDeltaCheckpoints));
             V delta = tape.Add(lane, op.Output, rows, d.LinearValueHeads * d.LinearHeadWidth,
                 qkv.Differentiable || gate.Differentiable || alpha.Differentiable || beta.Differentiable, ownsData: false);
             tape.Record(() => { if (delta.Gradient is not null) op.Backward(delta.Gradient, qkv.Grad(), gate.Grad(), alpha.Grad(), beta.Grad()); });
-            attended = ProjectTrain(tape, p + "ssm_out.weight", delta);
+            attended = Project(p + "ssm_out.weight", delta);
         }
         else
         {
-            V q = ProjectTrain(tape, p + "attn_q.weight", norm);
-            V k = ProjectTrain(tape, p + "attn_k.weight", norm);
-            V v = ProjectTrain(tape, p + "attn_v.weight", norm);
+            V q = Project(p + "attn_q.weight", norm);
+            V k = Project(p + "attn_k.weight", norm);
+            V v = Project(p + "attn_v.weight", norm);
             var op = tape.Own(new Qwen35TrainingAttention(lane, q.Data, k.Data, v.Data,
                 _dense[p + "attn_q_norm.weight"], _dense[p + "attn_k_norm.weight"], d, rows));
             V attention = tape.Add(lane, op.Output, rows, d.HeadCount * d.HeadWidth,
                 q.Differentiable || k.Differentiable || v.Differentiable, ownsData: false);
             tape.Record(() => { if (attention.Gradient is not null) op.Backward(attention.Gradient, q.Grad(), k.Grad(), v.Grad()); });
-            attended = ProjectTrain(tape, p + "attn_output.weight", attention);
+            attended = Project(p + "attn_output.weight", attention);
         }
         hidden = tape.Sum(hidden, attended);
         V post = tape.Norm(hidden, _dense[p + "post_attention_norm.weight"], d.RmsEpsilon);
-        V activated = tape.Silu(ProjectTrain(tape, p + "ffn_gate.weight", post),
-            ProjectTrain(tape, p + "ffn_up.weight", post));
-        return tape.Sum(hidden, ProjectTrain(tape, p + "ffn_down.weight", activated));
+        V activated = tape.Silu(Project(p + "ffn_gate.weight", post),
+            Project(p + "ffn_up.weight", post));
+        return tape.Sum(hidden, Project(p + "ffn_down.weight", activated));
     }
 
-    private V ProjectTrain(Qwen35TrainingTape tape, string name, V input)
+    private V ProjectTrain(Qwen35TrainingTape tape, string name, V input,
+        Iq2BaseOutputCache? iq2Cache = null, Iq2GpuBaseOutputCache? iq2GpuCache = null,
+        bool captureIq2Base = false)
     {
         Matrix matrix = name == "output.weight" ? OutputMatrix : _matrices[name];
         _lora.TryGetValue(name, out var adapter);
         int projectionRows = input.Rows;
+        ArcBuffer baseOutput;
+        if (!captureIq2Base && iq2GpuCache is not null
+            && iq2GpuCache.TryTake(name, out ArcBuffer? deviceCached))
+            baseOutput = deviceCached!;
+        else if (!captureIq2Base && iq2Cache is not null && iq2Cache.TryTake(name, out float[]? cached))
+            baseOutput = matrix.Lane.Upload(cached!);
+        else
+            baseOutput = matrix.Forward(input.Data, _zeroBias[matrix.Lane], projectionRows);
         V output = tape.Add(matrix.Lane,
-            matrix.Forward(input.Data, _zeroBias[matrix.Lane], projectionRows),
+            baseOutput,
             projectionRows, matrix.OutputWidth, input.Differentiable || adapter is not null);
+        // Retain the frozen base result before adapter.Forward adds LoRA in place.
+        // Backward still runs the ordinary quantized transpose and LoRA gradients.
+        if (captureIq2Base && matrix.IsIq2S)
+        {
+            int elements = checked(projectionRows * matrix.OutputWidth);
+            if (iq2GpuCache is not null && iq2GpuCache.CanCapture(name, matrix.Lane, elements))
+            {
+                ArcBuffer retained = matrix.Lane.Allocate(elements);
+                try
+                {
+                    matrix.Lane.CopyBytes(output.Data, retained, 0, 0,
+                        checked(elements * sizeof(float)));
+                    iq2GpuCache.Capture(name, matrix.Lane, retained, elements);
+                }
+                catch { retained.Dispose(); throw; }
+            }
+            else if (iq2Cache is not null && iq2Cache.CanCapture(name, elements))
+            {
+                var values = new float[elements];
+                matrix.Lane.Read(output.Data, values);
+                iq2Cache.Capture(name, values);
+            }
+        }
         ArcBuffer? z = adapter is null ? null : tape.Own(adapter.Forward(input.Data, output.Data, projectionRows));
         tape.Record(() =>
         {
