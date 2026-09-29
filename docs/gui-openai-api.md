@@ -47,6 +47,18 @@ needed for KV reuse. The response text may include model-generated
 `<think>` / `</think>` markers. The GUI shows these in its collapsible
 thinking panel.
 
+For streamed GUI requests, `prime_history` is enabled. After the final SSE
+event, the server processes the visible answer without its thinking text and
+keeps that conversation prefix in the GPU KV/recurrent cache. The GUI can show
+the completed answer while this work continues. If the next request arrives
+before priming finishes, it waits for the same work; no prior thinking text is
+added back to the prompt. External API clients can opt in with
+`"prime_history": true` on streamed requests. To reuse that state, the next
+request must include the visible answer as an assistant message with
+`assistant_prefix` set to `"<think>\n</think>\n"` when `think` was on, or
+`"<think>\n\n</think>\n\n"` when it was off. Ordinary OpenAI clients that omit
+this extension will prefill the conversation again.
+
 ```powershell
 $body = @{
   model = 'C:\models\Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf'

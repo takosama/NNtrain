@@ -10,6 +10,7 @@ public sealed record GenerationSampling(float Temperature, float TopP, int TopK)
 public enum GenerationStopReason { EndOfMessage, MaximumTokens, ContextLimit }
 public sealed record GenerationStats(int PromptTokens, int CompletionTokens, int ReusedPromptTokens,
     double? FirstTokenMilliseconds, int? FirstTokenId, GenerationStopReason StopReason);
+public sealed record PromptPrimeStats(int PromptTokens, int ReusedPromptTokens, bool Cached);
 
 /// <summary>
 /// Owns one resident Qwen3.5 model and serializes GPU loading, generation and
@@ -189,6 +190,40 @@ public sealed class InferenceSession : IDisposable
         finally { _operation.Release(); }
     }
 
+    public async Task<PromptPrimeStats> PrimeHistoryAsync(IReadOnlyList<ChatTurn> conversation,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(conversation);
+        if (conversation.Count == 0 || conversation[^1].Role != "assistant")
+            throw new ArgumentException("History must end with an assistant turn.", nameof(conversation));
+        string prompt = FormatHistory(conversation);
+        ThrowIfDisposed();
+        await _operation.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            Qwen35QuantizedModel model = _model ?? throw new InvalidOperationException("Load a model before priming.");
+            Qwen2GgufTokenizer tokenizer = _tokenizer!;
+            return await Task.Run(() =>
+            {
+                int[] ids = tokenizer.Encode(prompt);
+                if (ids.Length >= model.Descriptor.ContextLength)
+                    throw new ArgumentException("The conversation exceeds the model context length.", nameof(conversation));
+                try
+                {
+                    var result = model.PrimePromptPrefix(ids, ct);
+                    return new PromptPrimeStats(ids.Length, result.ReusedTokens, result.Cached);
+                }
+                catch
+                {
+                    try { model.Reset(); }
+                    catch { try { UnloadCore(); } catch { } }
+                    throw;
+                }
+            }, ct).ConfigureAwait(false);
+        }
+        finally { _operation.Release(); }
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
@@ -220,6 +255,21 @@ public sealed class InferenceSession : IDisposable
         if (conversation.Count == 0 || conversation[^1] is not { Role: "user" })
             throw new ArgumentException("The conversation must end with a user turn.", nameof(conversation));
         var prompt = new StringBuilder();
+        AppendTurns(prompt, conversation);
+        prompt.Append("<|im_start|>assistant\n<think>\n");
+        if (!thinking) prompt.Append("\n</think>\n\n");
+        return prompt.ToString();
+    }
+
+    private static string FormatHistory(IReadOnlyList<ChatTurn> conversation)
+    {
+        var prompt = new StringBuilder();
+        AppendTurns(prompt, conversation);
+        return prompt.ToString();
+    }
+
+    private static void AppendTurns(StringBuilder prompt, IReadOnlyList<ChatTurn> conversation)
+    {
         foreach (ChatTurn turn in conversation)
         {
             if (turn is null || turn.Role is not ("system" or "user" or "assistant"))
@@ -228,9 +278,6 @@ public sealed class InferenceSession : IDisposable
                 .Append(turn.Role == "assistant" ? turn.AssistantPrefix : null)
                 .Append(EscapeMarkers(turn.Content ?? string.Empty)).Append("<|im_end|>\n");
         }
-        prompt.Append("<|im_start|>assistant\n<think>\n");
-        if (!thinking) prompt.Append("\n</think>\n\n");
-        return prompt.ToString();
     }
 
     private static string EscapeMarkers(string content) => content

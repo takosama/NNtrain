@@ -6,6 +6,34 @@ namespace NNtrain.Core.Tests;
 public sealed class Qwen35ResidentModelTests
 {
     [Fact]
+    public void PrimedSanitizedHistoryMatchesFreshNextTurn()
+    {
+        RequireArcDevices(1);
+        using TemporaryQwenGguf file = CreateFixture(tiedOutput: false, contextLength: 40);
+        using Qwen35QuantizedModel cached = Qwen35QuantizedModel.Load(file.Path, [0]);
+        using Qwen35QuantizedModel fresh = Qwen35QuantizedModel.Load(file.Path, [0]);
+        int[] firstPrompt = [1, 2, 0];
+        int[] sanitizedHistory = [1, 2, 0, 3, 1, 2];
+        int[] nextTurn = [1, 2, 0, 3, 1, 2, 0, 1];
+
+        _ = cached.GenerateTokenIdsWithPrefixReuse(firstPrompt, 3);
+        var primed = cached.PrimePromptPrefix(sanitizedHistory,
+            TestContext.Current.CancellationToken);
+        Assert.True(primed.Cached);
+        Assert.Equal(firstPrompt.Length, primed.ReusedTokens);
+
+        int[] actual = cached.GenerateTokenIdsWithPrefixReuse(nextTurn, 3,
+            temperature: 0.6f, topP: 0.95f, topK: 4, random: new Random(37));
+        int[] expected = fresh.GenerateTokenIds(nextTurn, 3,
+            temperature: 0.6f, topP: 0.95f, topK: 4, random: new Random(37));
+        Assert.Equal(expected, actual);
+        Assert.Equal(sanitizedHistory.Length, cached.LastReusedPromptTokens);
+        cached.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => cached.PrimePromptPrefix(nextTurn,
+            TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public void CancelledGenerationDoesNotConsumeCachedPromptState()
     {
         RequireArcDevices(1);

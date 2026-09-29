@@ -97,7 +97,17 @@ internal static partial class Qwen35Gpu
         int cacheOffset = checked(position * kvSize * sizeof(float)), kvBytes = checked(kvSize * sizeof(float));
         lane.CopyBytes(normalizedKey, keysCache, 0, cacheOffset, kvBytes);
         lane.CopyBytes(value, valuesCache, 0, cacheOffset, kvBytes);
-        using ArcBuffer scores = lane.Allocate(checked(heads * sequence));
+        // Keep scratch sizes stable across adjacent positions so the lane's
+        // exact-size buffer pool can reuse them during a long prompt prefill.
+        // The kernels still receive the unpadded sequence length and never
+        // read the unused tail.
+        int scoreCapacity = 16;
+        while (scoreCapacity < sequence && scoreCapacity <= int.MaxValue / 2)
+            scoreCapacity *= 2;
+        if (scoreCapacity < sequence || (long)heads * scoreCapacity > int.MaxValue
+            || (ulong)heads * (ulong)scoreCapacity * sizeof(float) > lane.Device.MaximumAllocationBytes)
+            scoreCapacity = sequence;
+        using ArcBuffer scores = lane.Allocate(checked(heads * scoreCapacity));
         lane.Run("q35a_scores", (long)heads * sequence, AttentionReductionSize,
             query, keysCache, scores, heads, kvHeads, headWidth, sequence);
         lane.Run("q35a_softmax", (long)heads * AttentionReductionSize, AttentionReductionSize, scores, sequence);
