@@ -21,6 +21,8 @@ public sealed record Qwen35ExecutionOptions
     public bool ParallelArgmax { get; init; } = true;
     public bool ParallelDeltaNorm { get; init; } = true;
     public bool InferenceFusedLora { get; init; } = true;
+    // Experimental layerwise prompt prefill. Zero keeps the serial path.
+    public int InferencePrefillChunkTokens { get; init; }
     public int LoraReductionSize { get; init; } = 1024;
     public bool UnrollQ4 { get; init; }
     public bool NativeHalfScale { get; init; } = true;

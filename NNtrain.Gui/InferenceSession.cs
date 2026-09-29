@@ -75,6 +75,7 @@ public sealed class InferenceSession : IDisposable
                     progress: progress is null ? null : progress.Report,
                     options: new Qwen35ExecutionOptions
                     {
+                        InferencePrefillChunkTokens = 16,
                         ComputeModelFingerprintOnLoad = adapterPath is not null
                     });
                 try

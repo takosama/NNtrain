@@ -88,6 +88,7 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         if (!Enum.IsDefined(options.QuantizedKernel) || options.QueuedKernelLimit is < 16 or > 4096
             || options.ProjectionWorkgroupSize is not (32 or 64 or 128)
             || options.InferencePairedProjectionTypes is < 0 or > 7
+            || options.InferencePrefillChunkTokens is < 0 or > 64
             || options.LoraReductionSize is not (16 or 128 or 256 or 512 or 1024)
             || options.TrainingTransposeRows is not (1 or 4 or 8 or 16 or 32)
             || options.TrainingTransposeOctetRows is not (0 or 4 or 8 or 16)
@@ -576,7 +577,13 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         try
         {
             foreach (LayerState state in _states) state.EnsureCapacity(prompt.Count);
-            for (int i = reused; i < prompt.Count; i++)
+            int i = reused;
+            for (; CanPrefillChunk(prompt.Count - i); i += Math.Min(_options.InferencePrefillChunkTokens, prompt.Count - i))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ForwardPromptChunkDevice(prompt, i, Math.Min(_options.InferencePrefillChunkTokens, prompt.Count - i));
+            }
+            for (; i < prompt.Count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 _ = ForwardTokenDevice(prompt[i], returnLogits: false);
@@ -622,7 +629,13 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         try
         {
             foreach (LayerState state in _states) state.EnsureCapacity(prompt.Count);
-            for (int i = reused; i < prompt.Count; i++)
+            int i = reused;
+            for (; CanPrefillChunk(prompt.Count - 1 - i); i += Math.Min(_options.InferencePrefillChunkTokens, prompt.Count - 1 - i))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ForwardPromptChunkDevice(prompt, i, Math.Min(_options.InferencePrefillChunkTokens, prompt.Count - 1 - i));
+            }
+            for (; i < prompt.Count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 logits = ForwardTokenDevice(prompt[i], i == prompt.Count - 1);
@@ -1055,16 +1068,16 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
             }
             catch { output.Dispose(); throw; }
         }
-        internal ArcBuffer ForwardFusedLora(ArcBuffer input, ArcBuffer zeroBias, ArcBuffer z, Qwen35LoraMatrix adapter)
+        internal ArcBuffer ForwardFusedLora(ArcBuffer input, ArcBuffer zeroBias, ArcBuffer z, Qwen35LoraMatrix adapter, int rows = 1)
         {
-            ArcBuffer output = Lane.Allocate(OutputWidth);
+            ArcBuffer output = Lane.Allocate(checked(rows * OutputWidth));
             try
             {
                 int group = PairedLoraProjection ? 32 : Lane.Options.Qwen35ProjectionWorkgroupSize;
-                long work = PairedLoraProjection ? ((long)(OutputWidth + 1) / 2 + 1) / 2 * 32
-                    : ((long)OutputWidth + group / 16 - 1) / (group / 16) * group;
+                long work = PairedLoraProjection ? ((long)rows * ((OutputWidth + 1) / 2) + 1) / 2 * 32
+                    : ((long)rows * OutputWidth + group / 16 - 1) / (group / 16) * group;
                 Lane.Run(_fusedProjectionKernel, work,
-                    group, input, _encoded, zeroBias, output, 1, _inputWidth, OutputWidth,
+                    group, input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth,
                     z, adapter.B, adapter.Rank, adapter.Scale);
                 return output;
             }
