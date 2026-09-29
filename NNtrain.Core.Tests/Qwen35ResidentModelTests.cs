@@ -5,6 +5,74 @@ namespace NNtrain.Core.Tests;
 
 public sealed class Qwen35ResidentModelTests
 {
+    [Theory]
+    [InlineData(7, false, true, 1, 8)]
+    [InlineData(8, false, true, 1, 8)]
+    [InlineData(9, false, true, 1, 8)]
+    [InlineData(8, true, true, 1, 8)]
+    [InlineData(9, true, false, 1, 8)]
+    [InlineData(8, false, true, 2, 8)]
+    [InlineData(9, true, true, 2, 8)]
+    [InlineData(3, false, true, 1, 4)]
+    [InlineData(4, true, true, 1, 4)]
+    [InlineData(5, true, false, 2, 4)]
+    [InlineData(15, false, true, 1, 16)]
+    [InlineData(16, true, true, 1, 16)]
+    [InlineData(17, true, false, 2, 16)]
+    [InlineData(31, false, true, 1, 32)]
+    [InlineData(32, true, true, 1, 32)]
+    [InlineData(33, true, false, 2, 32)]
+    public void LayerwiseChunkPrefillMatchesSerialAcrossCachedBoundaries(
+        int historyLength, bool lora, bool fusedLora, int deviceCount, int chunkSize)
+    {
+        RequireArcDevices(deviceCount);
+        using TemporaryQwenGguf file = CreateFixture(tiedOutput: false, contextLength: 40);
+        int[] devices = Enumerable.Range(0, deviceCount).ToArray();
+        using Qwen35QuantizedModel serial = Qwen35QuantizedModel.Load(file.Path, devices, options: new()
+        {
+            InferencePrefillChunkTokens = 0,
+            InferenceFusedLora = fusedLora
+        });
+        using Qwen35QuantizedModel chunked = Qwen35QuantizedModel.Load(file.Path, devices, options: new()
+        {
+            InferencePrefillChunkTokens = chunkSize,
+            InferenceFusedLora = fusedLora
+        });
+        if (lora)
+        {
+            var options = new Qwen35LoraOptions { Rank = 2, Alpha = 4, IncludeOutput = true, Seed = 73 };
+            serial.AttachLora(options);
+            chunked.AttachLora(options);
+            var random = new Random(921);
+            foreach (string name in serial.LoraMatrices.Keys)
+            {
+                float[][] state = serial.LoraMatrices[name].ReadState();
+                foreach (int index in new[] { 0, 1 })
+                    for (int i = 0; i < state[index].Length; i++)
+                        state[index][i] = (float)(random.NextDouble() * .2 - .1);
+                serial.LoraMatrices[name].RestoreState(state, training: false);
+                chunked.LoraMatrices[name].RestoreState(state, training: false);
+            }
+        }
+
+        int[] firstPrompt = [1, 2, 0];
+        int[] history = [.. firstPrompt, .. Enumerable.Range(3, historyLength - 3).Select(i => i % 4)];
+        int[] nextPrompt = [.. history, 0, 1, 2];
+        Assert.Equal(serial.GenerateTokenIdsWithPrefixReuse(firstPrompt, 2),
+            chunked.GenerateTokenIdsWithPrefixReuse(firstPrompt, 2));
+        Assert.Equal(serial.PrimePromptPrefix(history, TestContext.Current.CancellationToken),
+            chunked.PrimePromptPrefix(history, TestContext.Current.CancellationToken));
+        Assert.Equal(serial.GenerateTokenIdsWithPrefixReuse(nextPrompt, 3),
+            chunked.GenerateTokenIdsWithPrefixReuse(nextPrompt, 3));
+        Assert.Equal(historyLength, chunked.LastReusedPromptTokens);
+
+        serial.Reset();
+        chunked.Reset();
+        Assert.Equal(serial.PrimePromptPrefix(nextPrompt, TestContext.Current.CancellationToken),
+            chunked.PrimePromptPrefix(nextPrompt, TestContext.Current.CancellationToken));
+        Assert.Equal(serial.ForwardToken(3), chunked.ForwardToken(3));
+    }
+
     [Fact]
     public void PrimedSanitizedHistoryMatchesFreshNextTurn()
     {
