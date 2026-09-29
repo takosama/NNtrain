@@ -595,6 +595,7 @@ public partial class MainWindow : Window
             top_p = sampling.TopP,
             top_k = sampling.TopK,
             stream,
+            prime_history = stream,
             think = thinking,
             lora = adapterPath,
             devices
@@ -632,6 +633,7 @@ public partial class MainWindow : Window
             if (line.Length == 0)
             {
                 ConsumeEvent();
+                if (done) break;
                 continue;
             }
             if (!line.StartsWith("data:", StringComparison.Ordinal)) continue;

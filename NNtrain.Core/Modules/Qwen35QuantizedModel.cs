@@ -549,6 +549,46 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         => GenerateTokenIdsCore(prompt, maxNewTokens, eosTokenId, onToken, reusePromptPrefix: true,
             temperature, topP, topK, random, cancellationToken);
 
+    /// <summary>
+    /// Advances the resident state to an exact conversation prefix without
+    /// sampling. This lets the next user turn reuse a sanitized assistant
+    /// answer while leaving earlier thinking text out of the context.
+    /// </summary>
+    public (int ReusedTokens, bool Cached) PrimePromptPrefix(IReadOnlyList<int> prompt,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(prompt);
+        if (prompt.Count == 0 || prompt.Count >= Descriptor.ContextLength)
+            throw new ArgumentException("Prefix must leave room for a following turn.", nameof(prompt));
+        if (prompt.Any(token => (uint)token >= (uint)Descriptor.VocabularySize))
+            throw new ArgumentOutOfRangeException(nameof(prompt));
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_cachedPromptTokens is { } cached && _position == cached.Length
+            && _states.All(state => state.HasPromptState) && cached.SequenceEqual(prompt))
+        {
+            _lastReusedPromptTokens = cached.Length;
+            return (cached.Length, true);
+        }
+        int reused = CanReusePromptPrefix(prompt) ? _cachedPromptTokens!.Length : 0;
+        if (reused == 0) Reset();
+        _lastReusedPromptTokens = reused;
+        try
+        {
+            foreach (LayerState state in _states) state.EnsureCapacity(prompt.Count);
+            for (int i = reused; i < prompt.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _ = ForwardTokenDevice(prompt[i], returnLogits: false);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!TryCapturePromptCheckpoint()) return (reused, false);
+            _cachedPromptTokens = prompt.ToArray();
+            return (reused, true);
+        }
+        catch { _faulted = true; InvalidatePromptCheckpoint(); throw; }
+    }
+
     private int[] GenerateTokenIdsCore(IReadOnlyList<int> prompt, int maxNewTokens,
         int? eosTokenId, Action<int>? onToken, bool reusePromptPrefix,
         float temperature, float topP, int topK, Random? random,
@@ -581,6 +621,7 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         random ??= Random.Shared;
         try
         {
+            foreach (LayerState state in _states) state.EnsureCapacity(prompt.Count);
             for (int i = reused; i < prompt.Count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
