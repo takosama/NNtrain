@@ -2,7 +2,7 @@
 
 Windows用のローカル推論GUIです。起動時に同じ実行ファイルから別プロセスのOpenAI API互換サーバーを立ち上げ、GUIは `http://127.0.0.1:<自動選択ポート>/v1/chat/completions` を呼びます。サーバーの処理とログは別のCUIウィンドウに表示されます。GUIを閉じると所有するサーバーも終了します。
 
-GGUFを選び、必要ならNNtrainのLoRAチェックポイントを選んで、Intel Arc GPUで会話できます。学習コマンドや学習画面はありません。
+GGUFを選び、必要ならNNtrainのLoRAチェックポイント（.bin）またはエクスポート済みGGUF LoRA（.gguf）を選んで、Intel Arc GPUで会話できます。学習コマンドや学習画面はありません。
 
 - モデルの「プリロード」で重みをGPUに読み込み、後続の送信でも保持します。
 - 「モデル・生成設定」をクリックすると設定欄を折りたたみ、チャット表示を広げられます。設定値は保持されます。
@@ -17,7 +17,7 @@ GGUFを選び、必要ならNNtrainのLoRAチェックポイントを選んで�
 - Thinkingオフでもモデルが `</think>` を余分に出した場合は、その前を折りたたみ可能な思考として扱い、回答には終端後の文だけを表示します。思考だけで生成が終わった場合は、回答が未生成であることを表示します。
 - 最後のプリロードまたは生成完了から5分間操作がなければサーバーがモデルを解放し、GPUメモリを空けます。GUIはサーバーの状態を表示し、次の送信時は選択中のモデルを再読み込みします。
 - 現在のモデル読込経路は `general.architecture=qwen35` のテキストモデルです。Qwen3.8-27BやBonsai PQ2_0/PTQ1_0を使用できます。Qwen2.5と画像入力はこのGUIでは扱いません。
-- LoRAの選択はNNtrainの `adapter.bin` チェックポイントです。エクスポート済みのGGUF LoRAアダプターはこの読込経路に直接渡せません。Bonsai PQ2_0/PTQ1_0のLoRAはサポート対象外です。
+- NNtrainの `adapter.bin` と、NNtrainが出力したQwen3.5 F32 GGUF LoRAを直接読み込めます。GGUFではベースモデルSHA-256、A/Bテンソル名・形状・有限値を検査します。GGUFにはAdam状態がないため、学習再開には `adapter.bin` を使用します。Bonsai PQ2_0/PTQ1_0のLoRAはサポート対象外です。
 - モデルは会話間で常駐します。前回プロンプトのトークン列が次のプロンプトの先頭と一致すれば、GPU上のKVとDeltaNet状態を保持して続きだけを計算します。表示用の会話履歴には思考本文を残さず、回答だけを入れます。
 - 一致しない場合や生成を停止した場合は、安全のため全プロンプトを再計算します。最初の質問もプリロードだけでは事前計算されません。生成完了時の状態欄に入力数、再利用数、最初の出力までの時間を表示します。
 - KVキャッシュの確保領域は生成後も保持し、モデル解放時に解放します。長い会話では使用量が増えます。GPUの空き容量が少ない場合は追加の状態保存を見送り、通常の推論を続けます。
@@ -33,9 +33,9 @@ dotnet publish .\NNtrain.Gui\NNtrain.Gui.csproj -c Release -r win-x64 --self-con
 起動引数で初期設定を指定できます。例えば：
 
 ```powershell
-.\NNtrain.Gui.exe --model C:\models\base.gguf --lora C:\models\adapter.bin --top_p 0.95 --top_k 20 --temperature 0.6 --maxtokens 512 --stream on --think on
+.\NNtrain.Gui.exe --model C:\models\base.gguf --lora C:\models\adapter.gguf --top_p 0.95 --top_k 20 --temperature 0.6 --maxtokens 512 --stream on --think on
 ```
 
 `--lora` は省略できます。`--tempreture` も `--temperature` の別名として受け付けます。モデル・LoRAのパスには `../` または `..\` を含む親ディレクトリ参照を指定できません。
 
-APIサーバーだけを起動する場合は `NNtrain.Gui.exe --server --port 8000` を使います。`--lora C:\models\adapter.bin` で既定のLoRAを指定でき、`POST /internal/shutdown` で終了します。
+APIサーバーだけを起動する場合は `NNtrain.Gui.exe --server --port 8000` を使います。`--lora C:\models\adapter.gguf` または `--lora C:\models\adapter.bin` で既定のLoRAを指定でき、`POST /internal/shutdown` で終了します。

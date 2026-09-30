@@ -152,12 +152,16 @@ public sealed partial class Qwen35QuantizedModel
             throw new ArgumentException("Training requires 2..context+1 tokens and a nonempty response after the prompt.");
         if (tokens.Any(token => (uint)token >= (uint)Descriptor.VocabularySize))
             throw new ArgumentOutOfRangeException(nameof(tokens));
-        // Per-layer recurrent tapes are recomputed only during that layer's
-        // backward pass. Reject predictable oversized workspaces before forward.
+        // DeltaNet keeps only one 64-token recurrent slice and its sparse
+        // boundary checkpoints. The vocabulary head is also processed in
+        // bounded row tiles, so neither needs a full-sequence GPU buffer.
         int rows = tokens.Count - 1;
-        long recurrentElements = checked((long)(rows + 1) * Descriptor.LinearValueHeads
+        long recurrentState = checked((long)Descriptor.LinearValueHeads
             * Descriptor.LinearHeadWidth * Descriptor.LinearHeadWidth);
-        long logitsElements = checked((long)rows * Descriptor.VocabularySize);
+        long recurrentElements = checked(Math.Max(
+            (Math.Min(rows, 64) + 1L) * recurrentState,
+            (1L + (rows - 1L) / 64) * recurrentState));
+        long logitsElements = checked((long)Math.Min(rows, LoraHeadTileRows) * Descriptor.VocabularySize);
         if (recurrentElements > int.MaxValue || logitsElements > int.MaxValue)
             throw new NotSupportedException("Training sequence exceeds the current GPU buffer limit.");
         long recurrentBytes = checked(recurrentElements * sizeof(float));
@@ -191,21 +195,9 @@ public sealed partial class Qwen35QuantizedModel
                 hidden = ForwardLoraLayer(tape, layer, hidden, rows);
             V final = tape.Norm(hidden, _dense["output_norm.weight"], d.RmsEpsilon);
             final = tape.Move(final, OutputMatrix.Lane);
-            V head = _options.TrainingResponseOnlyHead ? tape.SliceRows(final, start - 1, valid) : final;
-            V logits = ProjectTrain(tape, "output.weight", head);
-            int[] targets = _options.TrainingResponseOnlyHead ? tokens.Skip(start).ToArray()
-                : Enumerable.Range(0, rows).Select(t => t + 1 >= start ? tokens[t + 1] : -1).ToArray();
-            int logitRows = logits.Rows;
-            using ArcBuffer labels = logits.Lane.UploadRaw(targets), stats = logits.Lane.Allocate(checked(logitRows * 3));
-            logits.Lane.Run("q35t_ce_stats", (long)logitRows * 128, 128, logits.Data, labels, stats, d.VocabularySize, valid);
-            float[] numbers = new float[logitRows * 3]; logits.Lane.Read(stats, numbers);
-            double loss = Enumerable.Range(0, logitRows).Sum(t => (double)numbers[t * 3]);
-            if (!double.IsFinite(loss)) throw new ArithmeticException("Non-finite LoRA loss; optimizer update was not committed.");
+            double loss = LoraHeadLoss(final, tokens, start, backward);
             if (backward)
-            {
-                logits.Lane.Run("q35t_ce_grad", (long)logitRows * d.VocabularySize, 0, logits.Data, labels, stats, logits.Grad(), logitRows, d.VocabularySize, valid);
                 tape.Backward();
-            }
             return loss;
         }
         catch { _faulted = true; throw; }
@@ -251,23 +243,9 @@ public sealed partial class Qwen35QuantizedModel
                 V hidden = tape.Add(lastLane, source, rows, d.EmbeddingLength, backward, ownsData: false);
                 V normalized = tape.Norm(hidden, _dense["output_norm.weight"], d.RmsEpsilon);
                 V final = tape.Move(normalized, OutputMatrix.Lane);
-                V head = _options.TrainingResponseOnlyHead ? tape.SliceRows(final, start - 1, valid) : final;
-                V logits = ProjectTrain(tape, "output.weight", head);
-                int[] targets = _options.TrainingResponseOnlyHead ? tokens.Skip(start).ToArray()
-                    : Enumerable.Range(0, rows).Select(t => t + 1 >= start ? tokens[t + 1] : -1).ToArray();
-                int logitRows = logits.Rows;
-                using ArcBuffer labels = logits.Lane.UploadRaw(targets), stats = logits.Lane.Allocate(checked(logitRows * 3));
-                logits.Lane.Run("q35t_ce_stats", (long)logitRows * 128, 128,
-                    logits.Data, labels, stats, d.VocabularySize, valid);
-                float[] numbers = new float[checked(logitRows * 3)];
-                logits.Lane.Read(stats, numbers);
-                loss = Enumerable.Range(0, logitRows).Sum(t => (double)numbers[t * 3]);
-                if (!double.IsFinite(loss))
-                    throw new ArithmeticException("Non-finite LoRA loss; optimizer update was not committed.");
+                loss = LoraHeadLoss(final, tokens, start, backward);
                 if (backward)
                 {
-                    logits.Lane.Run("q35t_ce_grad", (long)logitRows * d.VocabularySize, 0,
-                        logits.Data, labels, stats, logits.Grad(), logitRows, d.VocabularySize, valid);
                     tape.Backward();
                     if (hidden.Gradient is null)
                         throw new InvalidOperationException("The output head did not propagate its input gradient.");
@@ -565,23 +543,9 @@ public sealed partial class Qwen35QuantizedModel
                     d.EmbeddingLength, backward, ownsData: false);
                 V normalized = tape.Norm(hidden, _dense["output_norm.weight"], d.RmsEpsilon);
                 V final = tape.Move(normalized, OutputMatrix.Lane);
-                V head = _options.TrainingResponseOnlyHead ? tape.SliceRows(final, start - 1, valid) : final;
-                V logits = ProjectTrain(tape, "output.weight", head);
-                int[] targets = _options.TrainingResponseOnlyHead ? tokens.Skip(start).ToArray()
-                    : Enumerable.Range(0, rows).Select(t => t + 1 >= start ? tokens[t + 1] : -1).ToArray();
-                int logitRows = logits.Rows;
-                using ArcBuffer labels = logits.Lane.UploadRaw(targets), stats = logits.Lane.Allocate(checked(logitRows * 3));
-                logits.Lane.Run("q35t_ce_stats", (long)logitRows * 128, 128,
-                    logits.Data, labels, stats, d.VocabularySize, valid);
-                float[] numbers = new float[checked(logitRows * 3)];
-                logits.Lane.Read(stats, numbers);
-                loss = Enumerable.Range(0, logitRows).Sum(t => (double)numbers[t * 3]);
-                if (!double.IsFinite(loss))
-                    throw new ArithmeticException("Non-finite LoRA loss; optimizer update was not committed.");
+                loss = LoraHeadLoss(final, tokens, start, backward);
                 if (backward)
                 {
-                    logits.Lane.Run("q35t_ce_grad", (long)logitRows * d.VocabularySize, 0,
-                        logits.Data, labels, stats, logits.Grad(), logitRows, d.VocabularySize, valid);
                     tape.Backward();
                     if (hidden.Gradient is null)
                         throw new InvalidOperationException("The output head did not propagate its input gradient.");
@@ -641,6 +605,49 @@ public sealed partial class Qwen35QuantizedModel
                 .Select(lane => iq2GpuCache?.BudgetBytesOn(lane) ?? 0).ToArray();
             iq2GpuCache?.Dispose();
         }
+    }
+
+    private const int LoraHeadTileRows = 256;
+
+    // Every tile uses the full response length as the CE denominator. Its
+    // gradient is scattered into the same final hidden tensor before the
+    // layer tape is backpropagated once, preserving full-sequence training.
+    private double LoraHeadLoss(V final, IReadOnlyList<int> tokens, int start, bool backward)
+    {
+        int rows = tokens.Count - 1;
+        int valid = tokens.Count - start;
+        int first = _options.TrainingResponseOnlyHead ? start - 1 : 0;
+        int logitRows = _options.TrainingResponseOnlyHead ? valid : rows;
+        double loss = 0;
+        for (int offset = 0; offset < logitRows; offset += LoraHeadTileRows)
+        {
+            int count = Math.Min(LoraHeadTileRows, logitRows - offset);
+            using var headTape = new Qwen35TrainingTape();
+            V head = headTape.SliceRows(final, first + offset, count);
+            V logits = ProjectTrain(headTape, "output.weight", head);
+            int[] targets = new int[count];
+            for (int i = 0; i < count; i++)
+            {
+                int next = _options.TrainingResponseOnlyHead ? start + offset + i : offset + i + 1;
+                targets[i] = next < start ? -1 : tokens[next];
+            }
+            using ArcBuffer labels = logits.Lane.UploadRaw(targets);
+            using ArcBuffer stats = logits.Lane.Allocate(checked(count * 3));
+            logits.Lane.Run("q35t_ce_stats", (long)count * 128, 128,
+                logits.Data, labels, stats, Descriptor.VocabularySize, valid);
+            float[] numbers = new float[checked(count * 3)];
+            logits.Lane.Read(stats, numbers);
+            for (int i = 0; i < count; i++) loss += numbers[i * 3];
+            if (!double.IsFinite(loss))
+                throw new ArithmeticException("Non-finite LoRA loss; optimizer update was not committed.");
+            if (backward)
+            {
+                logits.Lane.Run("q35t_ce_grad", (long)count * Descriptor.VocabularySize, 0,
+                    logits.Data, labels, stats, logits.Grad(), count, Descriptor.VocabularySize, valid);
+                headTape.Backward();
+            }
+        }
+        return loss;
     }
 
     private V ForwardLoraLayer(Qwen35TrainingTape tape, int layer, V hidden, int rows,

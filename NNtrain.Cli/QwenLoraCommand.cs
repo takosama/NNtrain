@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -57,7 +58,19 @@ internal static class QwenLoraCommand
             Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(modelPath);
             byte[] dataset = File.ReadAllBytes(dataPath);
             TrainingExample[] examples = ReadExamples(dataset, tokenizer, config);
-            string identity = TrainingIdentity(dataset, tokenizer.EosTokenId!.Value, config);
+            bool shuffleExamples = config.ShuffleExamples ?? true;
+            string identity = TrainingIdentity(dataset, tokenizer.EosTokenId!.Value, config, shuffleExamples);
+            if (resume && config.ShuffleExamples is null)
+            {
+                // Configs written before shuffling existed must continue their
+                // original sequence. A new shuffled checkpoint keeps its order.
+                string legacyIdentity = TrainingIdentity(dataset, tokenizer.EosTokenId.Value, config, false);
+                if (ReadCheckpointTrainingIdentity(adapterPath) == legacyIdentity)
+                {
+                    shuffleExamples = false;
+                    identity = legacyIdentity;
+                }
+            }
 
             using Qwen35QuantizedModel model = Qwen35QuantizedModel.Load(modelPath, config.Devices,
                 output.WriteLine, options: new Qwen35ExecutionOptions
@@ -66,7 +79,8 @@ internal static class QwenLoraCommand
                     TrainingIQ2Fp16XmxForward = config.Iq2ForwardPrecision == "fp16",
                     TrainingIQ2ProjectionCacheMiB = config.Iq2ProjectionCacheMiB,
                     TrainingIQ2ProjectionCachePrioritize = config.Iq2ProjectionCachePrioritize,
-                    TrainingIQ2GpuProjectionCacheMiB = config.Iq2GpuProjectionCacheMiB
+                    TrainingIQ2GpuProjectionCacheMiB = config.Iq2GpuProjectionCacheMiB,
+                    TrainingBufferPoolMiB = config.TrainingBufferPoolMiB
                 });
             long[] encodedBeforeTraining = model.ResidentWeightBytes.ToArray();
             if (resume) model.LoadLora(adapterPath, identity);
@@ -74,16 +88,30 @@ internal static class QwenLoraCommand
             output.WriteLine($"Qwen3.5 LoRA: rank={config.Rank}, trainable={model.LoraParameterCount}, "
                 + $"examples={examples.Length}, context={config.ContextLength}, step={model.LoraStep}/{config.MaxSteps}");
             output.WriteLine("Frozen quantized GPU base; response-only next-token loss including EOS; one example per step.");
+            output.WriteLine(shuffleExamples
+                ? $"Example order: deterministic per-epoch shuffle (seed={config.Seed})."
+                : "Example order: dataset order (legacy/explicit).");
             output.WriteLine($"IQ2 forward precision={config.Iq2ForwardPrecision}, "
-                + $"host projection cache={config.Iq2ProjectionCacheMiB} MiB, "
-                + $"GPU projection cache={config.Iq2GpuProjectionCacheMiB} MiB/Arc"
-                + (config.Iq2ProjectionCacheMiB > 0 && config.Iq2ProjectionCachePrioritize ? " (prioritized)" : ""));
+                + $"host projection cache={config.Iq2ProjectionCacheMiB} MiB"
+                + (config.Iq2ProjectionCacheMiB > 0 && config.Iq2ProjectionCachePrioritize ? " (prioritized)" : "")
+                + ", "
+                + $"GPU projection cache={config.Iq2GpuProjectionCacheMiB} MiB/Arc, "
+                + $"training buffer pool={config.TrainingBufferPoolMiB} MiB/Arc");
             using var metrics = new QwenLoraMetricReporter(config, graphPath, examples.Length,
                 model.LoraStep, resume, output, error);
             long savedStep = resume ? model.LoraStep : -1;
+            long currentEpoch = -1;
+            int[]? epochOrder = null;
             while (model.LoraStep < config.MaxSteps)
             {
-                int index = (int)(model.LoraStep % examples.Length);
+                long epoch = model.LoraStep / examples.Length;
+                if (shuffleExamples && epoch != currentEpoch)
+                {
+                    epochOrder = ShuffledExampleOrder(examples.Length, config.Seed, epoch);
+                    currentEpoch = epoch;
+                }
+                int position = (int)(model.LoraStep % examples.Length);
+                int index = shuffleExamples ? epochOrder![position] : position;
                 TrainingExample example = examples[index];
                 var timer = Stopwatch.StartNew();
                 Qwen35LoraStepResult result = model.TrainLora(example.Tokens, example.ResponseStartIndex);
@@ -175,7 +203,7 @@ internal static class QwenLoraCommand
     }
 
     internal static string TrainingIdentity(byte[] dataset, int eos,
-        QwenLoraTrainingConfiguration config)
+        QwenLoraTrainingConfiguration config, bool? shuffleExamples = null)
     {
         // MaxSteps is a total-step ceiling that can grow on resume. Output path,
         // device placement and save frequency do not change the update contract.
@@ -192,6 +220,45 @@ internal static class QwenLoraCommand
         // use a different numerical trajectory and must not resume an exact run.
         if (config.Iq2ForwardPrecision != "exact")
             contract += "|iq2ForwardPrecision=" + config.Iq2ForwardPrecision;
+        if (shuffleExamples ?? config.ShuffleExamples ?? true)
+            contract += "|exampleOrder=epoch-shuffle-splitmix64-v1";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(contract)));
+    }
+
+    internal static int[] ShuffledExampleOrder(int count, int seed, long epoch)
+    {
+        if (count <= 0 || epoch < 0) throw new ArgumentOutOfRangeException(nameof(count));
+        int[] order = Enumerable.Range(0, count).ToArray();
+        // SplitMix64 makes the order stable across .NET runtime versions. Each
+        // epoch is derived independently, so a saved step fully defines resume.
+        ulong state = unchecked((uint)seed + (ulong)epoch * 0x9E3779B97F4A7C15UL);
+        for (int i = count - 1; i > 0; --i)
+        {
+            state = unchecked(state + 0x9E3779B97F4A7C15UL);
+            ulong value = state;
+            value = unchecked((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9UL);
+            value = unchecked((value ^ (value >> 27)) * 0x94D049BB133111EBUL);
+            value ^= value >> 31;
+            int swap = (int)(value % (ulong)(i + 1));
+            (order[i], order[swap]) = (order[swap], order[i]);
+        }
+        return order;
+    }
+
+    private static string? ReadCheckpointTrainingIdentity(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        Span<byte> prefix = stackalloc byte[12];
+        stream.ReadExactly(prefix);
+        if (!prefix[..8].SequenceEqual("NNQ35LR1"u8))
+            throw new InvalidDataException("Not an NNtrain Qwen3.5 LoRA checkpoint.");
+        int headerLength = BinaryPrimitives.ReadInt32LittleEndian(prefix[8..]);
+        if (headerLength < 1 || headerLength > 1024 * 1024 || headerLength > stream.Length - 44)
+            throw new InvalidDataException("Invalid LoRA header length.");
+        byte[] header = new byte[headerLength];
+        stream.ReadExactly(header);
+        using JsonDocument json = JsonDocument.Parse(header);
+        return json.RootElement.TryGetProperty("TrainingIdentity", out JsonElement identity)
+            ? identity.GetString() : null;
     }
 }

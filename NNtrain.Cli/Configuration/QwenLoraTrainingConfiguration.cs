@@ -19,6 +19,8 @@ internal sealed record QwenLoraTrainingConfiguration
     public bool Iq2ProjectionCachePrioritize { get; init; }
     // Bounded per-Arc alternative to the host cache; outputs never leave VRAM.
     public int Iq2GpuProjectionCacheMiB { get; init; }
+    // Maximum reusable Arc training buffers retained per device.
+    public int TrainingBufferPoolMiB { get; init; } = 2048;
     public string? LossGraphPath { get; init; }
     public bool ShowLossGraph { get; init; } = true;
     public bool OpenLossGraph { get; init; } = true;
@@ -29,6 +31,9 @@ internal sealed record QwenLoraTrainingConfiguration
     public float WeightDecay { get; init; }
     public float GradientClip { get; init; } = 1f;
     public int Seed { get; init; } = 1;
+    // Omitted: shuffle new runs, but preserve legacy sequential order on resume.
+    // Set false to request the original dataset order explicitly.
+    public bool? ShuffleExamples { get; init; }
     public int[]? Layers { get; init; }
     public string[] Targets { get; init; } =
     [
@@ -59,6 +64,8 @@ internal sealed record QwenLoraTrainingConfiguration
             throw new ArgumentException("iq2ProjectionCacheMiB must be between 0 and 16384.");
         if (Iq2GpuProjectionCacheMiB is < 0 or > 1024)
             throw new ArgumentException("iq2GpuProjectionCacheMiB must be between 0 and 1024 per Arc.");
+        if (TrainingBufferPoolMiB is < 0 or > 2048)
+            throw new ArgumentException("trainingBufferPoolMiB must be between 0 and 2048 per Arc.");
         if (Iq2ProjectionCacheMiB > 0 && Iq2GpuProjectionCacheMiB > 0)
             throw new ArgumentException("Choose either the host or GPU IQ2 projection cache.");
         if (LossGraphEverySteps <= 0)

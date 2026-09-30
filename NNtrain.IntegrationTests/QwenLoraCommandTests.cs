@@ -22,7 +22,8 @@ public sealed class QwenLoraCommandTests
         {
             DataPath = "train.jsonl", AdapterPath = "adapter.bin", Devices = [0],
             ContextLength = 8, Rank = 2, Alpha = 4, MaxSteps = 1, SaveEverySteps = 1,
-            PromptPrefix = "", ResponsePrefix = "", IncludeOutput = true, OpenLossGraph = false
+            PromptPrefix = "", ResponsePrefix = "", IncludeOutput = true, OpenLossGraph = false,
+            ShuffleExamples = false, TrainingBufferPoolMiB = 512
         };
         (int Exit, string Output, string Error) Run(bool resume = false)
         {
@@ -37,6 +38,7 @@ public sealed class QwenLoraCommandTests
         Assert.True(first.Exit == 0, first.Error);
         Assert.Contains("step=1, example=1/2", first.Output);
         Assert.Contains("supervised-tokens=2", first.Output);
+        Assert.Contains("training buffer pool=512 MiB/Arc", first.Output);
         Assert.Contains("Arc 0 GPU bytes: encoded=", first.Output);
         Assert.Contains("encoded weight byte count unchanged", first.Output);
         Assert.True(File.Exists(Path.ChangeExtension(configPath, ".html")));
@@ -44,7 +46,9 @@ public sealed class QwenLoraCommandTests
             < first.Output.IndexOf("LoRA step=1", StringComparison.Ordinal));
         Assert.True(File.Exists(adapterPath));
         byte[] afterOne = File.ReadAllBytes(adapterPath);
-        config = config with { MaxSteps = 2 };
+        // An old sequential checkpoint must stay sequential when the new
+        // shuffleExamples setting is absent from its resume configuration.
+        config = config with { MaxSteps = 2, ShuffleExamples = null };
         var resumed = Run(resume: true);
         Assert.True(resumed.Exit == 0, resumed.Error);
         Assert.Contains("step=2, example=2/2", resumed.Output);
@@ -63,7 +67,8 @@ public sealed class QwenLoraCommandTests
         config = config with { LearningRate = config.LearningRate * 2 };
         Assert.Equal(2, Run(resume: true).Exit);
         Assert.Equal(protectedAdapter, File.ReadAllBytes(adapterPath));
-        config = config with { LearningRate = config.LearningRate / 2, MaxSteps = 2, AdapterPath = "continuous.bin" };
+        config = config with { LearningRate = config.LearningRate / 2, MaxSteps = 2,
+            AdapterPath = "continuous.bin", ShuffleExamples = false };
         var continuous = Run();
         Assert.True(continuous.Exit == 0, continuous.Error);
 
@@ -122,12 +127,34 @@ public sealed class QwenLoraCommandTests
             LossGraphPath = "different.html", ShowLossGraph = false, OpenLossGraph = false, LossGraphEverySteps = 100,
             Iq2ProjectionCacheMiB = 4096, Iq2ProjectionCachePrioritize = true }));
         Assert.Equal(identity, QwenLoraCommand.TrainingIdentity(dataset, 3, config with { Iq2GpuProjectionCacheMiB = 1024 }));
+        Assert.Equal(identity, QwenLoraCommand.TrainingIdentity(dataset, 3, config with { TrainingBufferPoolMiB = 512 }));
         Assert.NotEqual(identity, QwenLoraCommand.TrainingIdentity(dataset, 3, config with { Iq2ForwardPrecision = "fp16" }));
         Assert.NotEqual(identity, QwenLoraCommand.TrainingIdentity([.. dataset, 10], 3, config));
         Assert.NotEqual(identity, QwenLoraCommand.TrainingIdentity(dataset, 3, config with { Seed = 9 }));
         Assert.NotEqual(identity, QwenLoraCommand.TrainingIdentity(dataset, 3, config with { IncludeOutput = true }));
         Assert.NotEqual(identity, QwenLoraCommand.TrainingIdentity(dataset, 3, config with { ResponsePrefix = "" }));
         Assert.NotEqual(identity, QwenLoraCommand.TrainingIdentity(dataset, 2, config));
+        Assert.NotEqual(identity, QwenLoraCommand.TrainingIdentity(dataset, 3, config with { ShuffleExamples = false }));
+    }
+
+    [Fact]
+    public void PerEpochShuffleCoversEveryExampleAndResumesAtTheSamePosition()
+    {
+        const int count = 105, seed = 17;
+        int[] original = Enumerable.Range(0, count).ToArray();
+        int[] first = QwenLoraCommand.ShuffledExampleOrder(count, seed, 0);
+        int[] second = QwenLoraCommand.ShuffledExampleOrder(count, seed, 1);
+        Assert.Equal(original, first.Order().ToArray());
+        Assert.Equal(original, second.Order().ToArray());
+        Assert.False(first.SequenceEqual(original));
+        Assert.False(first.SequenceEqual(second));
+        Assert.Equal(first, QwenLoraCommand.ShuffledExampleOrder(count, seed, 0));
+        Assert.False(first.SequenceEqual(QwenLoraCommand.ShuffledExampleOrder(count, seed + 1, 0)));
+
+        const long savedStep = count + 37;
+        int resumedIndex = QwenLoraCommand.ShuffledExampleOrder(count, seed, savedStep / count)
+            [(int)(savedStep % count)];
+        Assert.Equal(second[37], resumedIndex);
     }
 
     [Fact]
@@ -149,6 +176,10 @@ public sealed class QwenLoraCommandTests
         Assert.Throws<ArgumentException>(() => (config with { Iq2ForwardPrecision = "bf16" }).Validate());
         Assert.Throws<ArgumentException>(() => (config with { Iq2ProjectionCacheMiB = 16385 }).Validate());
         Assert.Throws<ArgumentException>(() => (config with { Iq2GpuProjectionCacheMiB = 1025 }).Validate());
+        Assert.Equal(2048, config.TrainingBufferPoolMiB);
+        (config with { TrainingBufferPoolMiB = 0 }).Validate();
+        Assert.Throws<ArgumentException>(() => (config with { TrainingBufferPoolMiB = -1 }).Validate());
+        Assert.Throws<ArgumentException>(() => (config with { TrainingBufferPoolMiB = 2049 }).Validate());
         Assert.Throws<ArgumentException>(() => (config with
         { Iq2ProjectionCacheMiB = 4096, Iq2GpuProjectionCacheMiB = 1024 }).Validate());
         File.WriteAllText(configPath, "{\"unknownOption\":1}");

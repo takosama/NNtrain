@@ -47,6 +47,13 @@ public sealed partial class Qwen35QuantizedModel
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_lora.Count != 0) throw new InvalidOperationException("A LoRA adapter is already attached.");
+        if (Path.GetExtension(path).Equals(".gguf", StringComparison.OrdinalIgnoreCase))
+        {
+            if (expectedTrainingIdentity is not null)
+                throw new NotSupportedException("GGUF LoRA cannot resume training; use the NNtrain adapter.bin checkpoint.");
+            LoadLoraGguf(path);
+            return;
+        }
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
             bufferSize: 64 * 1024, options: FileOptions.SequentialScan);
         LoraHeader? header = null;

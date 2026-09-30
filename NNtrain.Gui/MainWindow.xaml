@@ -40,7 +40,7 @@
 
         <StackPanel Grid.Row="0" Margin="0,0,0,18">
             <TextBlock Text="NNtrain チャット" FontSize="28" FontWeight="SemiBold"/>
-            <TextBlock Text="Qwen3.5 / Qwen3.8 の GGUF と LoRA (.bin) を選び、Arc GPU で会話します。"
+            <TextBlock Text="Qwen3.5 / Qwen3.8 の GGUF と LoRA (.bin / .gguf) を選び、Arc GPU で会話します。"
                        Foreground="#9BAEC6" Margin="0,4,0,0"/>
         </StackPanel>
 
@@ -77,7 +77,7 @@
                 <Button Grid.Row="0" Grid.Column="3" Content="再読込" Margin="8,0,0,0"
                         Click="RefreshModels_Click"/>
 
-                <TextBlock Grid.Row="1" Grid.Column="0" Text="LoRA (.bin)" VerticalAlignment="Center" Margin="0,10,0,0"/>
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="LoRA" VerticalAlignment="Center" Margin="0,10,0,0"/>
                 <ComboBox Grid.Row="1" Grid.Column="1" x:Name="AdapterComboBox" Margin="0,10,0,0"
                           SelectionChanged="ModelOrAdapter_SelectionChanged" ToolTip="LoRA アダプター。なしも選べます。">
                     <ComboBox.ItemTemplate>
@@ -151,22 +151,42 @@
                                 <Border Background="#21324B" CornerRadius="10" Padding="12" Margin="0,0,0,10"
                                         MaxWidth="820" HorizontalAlignment="Left">
                                     <StackPanel>
-                                        <TextBlock Text="{Binding Author}" Foreground="#83DCCB"
-                                                   FontWeight="SemiBold" Margin="0,0,0,5"/>
-                                        <Expander Visibility="{Binding ThinkingVisibility}"
-                                                  IsExpanded="{Binding ThinkingExpanded, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                  Background="#172437" Foreground="#9BAEC6"
-                                                  ToolTip="クリックして思考の内容を開閉" Margin="0,0,0,8">
-                                            <Expander.Header>
-                                                <Border Background="#28415E" CornerRadius="5" Padding="10,6"
-                                                        Cursor="Hand">
-                                                    <TextBlock Text="{Binding ThinkingHeader}" Foreground="#B6F1E6"
-                                                               FontWeight="SemiBold"/>
-                                                </Border>
-                                            </Expander.Header>
-                                            <TextBlock Text="{Binding ThinkingContent}" TextWrapping="Wrap"
-                                                       Foreground="#C6D3E5" Margin="8,4,8,8"/>
-                                        </Expander>
+                                        <Grid Margin="0,0,0,5">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="{Binding Author}" Foreground="#83DCCB"
+                                                       FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                            <Button Grid.Column="1" Content="{Binding CopyContentLabel}"
+                                                    Click="CopyContent_Click" IsEnabled="{Binding CanCopyContent}"
+                                                    ToolTip="{Binding CopyContentLabel}" FontSize="11"
+                                                    MinHeight="26" Padding="8,3" Margin="12,0,0,0"/>
+                                        </Grid>
+                                        <Grid Visibility="{Binding ThinkingVisibility}" Margin="0,0,0,8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Expander Grid.Column="0"
+                                                      IsExpanded="{Binding ThinkingExpanded, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                      Background="#172437" Foreground="#9BAEC6"
+                                                      ToolTip="クリックして思考の内容を開閉">
+                                                <Expander.Header>
+                                                    <Border Background="#28415E" CornerRadius="5" Padding="10,6"
+                                                            Cursor="Hand">
+                                                        <TextBlock Text="{Binding ThinkingHeader}" Foreground="#B6F1E6"
+                                                                   FontWeight="SemiBold"/>
+                                                    </Border>
+                                                </Expander.Header>
+                                                <TextBlock Text="{Binding ThinkingContent}" TextWrapping="Wrap"
+                                                           Foreground="#C6D3E5" Margin="8,4,8,8"/>
+                                            </Expander>
+                                            <Button Grid.Column="1" Content="思考をコピー" Click="CopyThinking_Click"
+                                                    IsEnabled="{Binding CanCopyThinking}" ToolTip="思考の内容だけをコピー"
+                                                    VerticalAlignment="Top" FontSize="11" MinHeight="26"
+                                                    Padding="8,3" Margin="8,0,0,0"/>
+                                        </Grid>
                                         <TextBlock Text="{Binding DisplayContent}" TextWrapping="Wrap"/>
                                     </StackPanel>
                                 </Border>

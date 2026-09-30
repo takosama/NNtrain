@@ -20,6 +20,7 @@
   "weightDecay": 0,
   "gradientClip": 1,
   "seed": 1,
+  "shuffleExamples": true,
   "layers": null,
   "targets": [
     "attn_q", "attn_k", "attn_v", "attn_output",

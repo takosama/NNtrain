@@ -439,9 +439,12 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
         {
             throw new ApiException(400, $"Invalid {parameter} path.", parameter);
         }
-        if (!Path.GetExtension(fullPath).Equals(extension, StringComparison.OrdinalIgnoreCase))
+        string actualExtension = Path.GetExtension(fullPath);
+        bool accepted = actualExtension.Equals(extension, StringComparison.OrdinalIgnoreCase) ||
+            parameter == "lora" && actualExtension.Equals(".gguf", StringComparison.OrdinalIgnoreCase);
+        if (!accepted)
             throw new ApiException(400, parameter == "lora"
-                ? "lora must be an NNtrain adapter.bin file; GGUF LoRA adapters are not supported."
+                ? "lora must be an NNtrain adapter.bin or GGUF LoRA adapter."
                 : $"{parameter} must be a {extension} file.", parameter);
         if (!File.Exists(fullPath))
             throw new ApiException(400, $"{parameter} file does not exist: {fullPath}", parameter);

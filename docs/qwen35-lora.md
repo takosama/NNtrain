@@ -46,9 +46,12 @@ examples fail with their JSONL line number; neither prompts nor responses are
 silently truncated. Keep context short for the first run, because training
 retains activations and gradients in addition to inference state.
 
-One example produces one optimizer update. Examples run in file order, cycling
-through the file until the total `maxSteps` limit is reached. There is no shuffle,
-batch accumulation or automatic training beyond that limit. `layers: null` means
+One example produces one optimizer update. New runs shuffle the full dataset
+independently for each epoch with a repeatable `seed`, cycling until the total
+`maxSteps` limit is reached. The `example=N/count` training log field records
+the selected one-based JSONL record for each update; monitoring and audit tools
+should use that field rather than assume `step % count` is the record index.
+There is no batch accumulation or automatic training beyond that limit. `layers: null` means
 all layers; a list such as `[0,1]` selects explicit zero-based layer indices.
 Targets are projection suffixes without `blk.N.` or `.weight`; a layer uses the
 listed projections that exist in its architecture.
@@ -131,8 +134,15 @@ To continue, raise `maxSteps` to the desired **total** step count and run:
 dotnet run --configuration Release --project NNtrain.Cli -- qwen-lora --model "C:\models\qwen35-27b-iq2_m.gguf" --config qwen-lora.example.json --resume
 ```
 
+New runs shuffle the complete dataset once per epoch using `seed`. The permutation
+is deterministic, so a saved step resumes at the same example. Set
+`shuffleExamples: false` to retain JSONL order. Older checkpoints with no
+`shuffleExamples` setting automatically retain their original JSONL order when
+resumed; explicitly requesting a different order is rejected by the training
+identity check.
+
 Resume verifies the base GGUF SHA-256, exact dataset bytes and numerical training
-contract. The next example index is `savedStep % exampleCount`. Changing learning
+contract. Changing learning
 rate, targets, rank, seed, context, formatting or dataset requires a new adapter
 run. Increasing `maxSteps`, changing the save interval or device placement, or
 moving unchanged data/checkpoint files does not change that contract. A mismatch

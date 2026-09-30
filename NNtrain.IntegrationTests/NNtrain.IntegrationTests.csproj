@@ -22,4 +22,8 @@
     <ProjectReference Include="..\NNtrain.Cli\NNtrain.Cli.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\NNtrain.Gui\ThinkingStreamParser.cs" Link="Gui\ThinkingStreamParser.cs" />
+  </ItemGroup>
+
 </Project>

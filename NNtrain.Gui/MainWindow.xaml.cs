@@ -6,6 +6,7 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
@@ -203,7 +204,11 @@ public partial class MainWindow : Window
     private static IEnumerable<string> EnumerateAdapterFiles(string directory)
     {
         IEnumerable<string> files;
-        try { files = Directory.GetFiles(directory, "*.bin", SearchOption.AllDirectories); }
+        try
+        {
+            files = Directory.GetFiles(directory, "*.bin", SearchOption.AllDirectories)
+                .Concat(Directory.GetFiles(directory, "lora_*.gguf", SearchOption.AllDirectories));
+        }
         catch (IOException) { yield break; }
         catch (UnauthorizedAccessException) { yield break; }
         foreach (string path in files.Order(StringComparer.OrdinalIgnoreCase)) yield return path;
@@ -301,7 +306,7 @@ public partial class MainWindow : Window
         var dialog = new OpenFileDialog
         {
             Title = "LoRA アダプターを選択",
-            Filter = "NNtrain LoRA アダプター (*.bin)|*.bin",
+            Filter = "LoRA アダプター (*.bin;*.gguf)|*.bin;*.gguf|NNtrain チェックポイント (*.bin)|*.bin|GGUF LoRA (*.gguf)|*.gguf",
             CheckFileExists = true,
             InitialDirectory = _modelsDirectory ?? Environment.CurrentDirectory
         };
@@ -342,6 +347,7 @@ public partial class MainWindow : Window
     private async Task EnsureLoadedAsync(string modelPath, string? adapterPath,
         IReadOnlyList<int> deviceIndices, CancellationToken ct)
     {
+        await RestartServerIfStoppedAsync(ct);
         if (_isLoaded && string.Equals(_loadedModelPath, modelPath, StringComparison.OrdinalIgnoreCase)
             && string.Equals(_loadedAdapterPath, adapterPath, StringComparison.OrdinalIgnoreCase)
             && _loadedDevices is { } loadedDevices && loadedDevices.SequenceEqual(deviceIndices))
@@ -360,6 +366,28 @@ public partial class MainWindow : Window
         SetStatus(adapterPath is null
             ? $"プリロード完了。モデルを {gpu} に保持しています。"
             : $"プリロード完了。モデルと LoRA を {gpu} に保持しています。");
+    }
+
+    private async Task RestartServerIfStoppedAsync(CancellationToken ct)
+    {
+        if (_serverProcess is { HasExited: false })
+        {
+            if (_serverReady) return;
+            throw new InvalidOperationException("推論サーバーの起動が完了していません。");
+        }
+        ct.ThrowIfCancellationRequested();
+        _idleTimer.Stop();
+        _serverReady = false;
+        _isLoaded = false;
+        _loadedModelPath = null;
+        _loadedAdapterPath = null;
+        _loadedDevices = null;
+        _serverProcess?.Dispose();
+        _serverProcess = null;
+        SetStatus("推論サーバーが停止したため、再起動しています…");
+        await StartServerAsync();
+        ct.ThrowIfCancellationRequested();
+        EnsureServerReady();
     }
 
     private async Task UnloadServerAsync(CancellationToken ct = default)
@@ -435,6 +463,32 @@ public partial class MainWindow : Window
         }
     }
 
+    private void CopyContent_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: ChatBubble bubble })
+            CopyBubbleText(bubble.Content, bubble.CopyContentLabel);
+    }
+
+    private void CopyThinking_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: ChatBubble bubble })
+            CopyBubbleText(bubble.ThinkingContent, "思考をコピー");
+    }
+
+    private void CopyBubbleText(string text, string label)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        try
+        {
+            Clipboard.SetDataObject(text, true);
+            SetStatus($"{label}しました。");
+        }
+        catch (ExternalException ex)
+        {
+            SetStatus($"クリップボードにコピーできませんでした: {ex.Message}");
+        }
+    }
+
     private async Task SendMessageAsync()
     {
         string message = MessageBox.Text.Trim();
@@ -468,8 +522,10 @@ public partial class MainWindow : Window
             await EnsureLoadedAsync(modelPath!, adapterPath, gpu!.DeviceIndices, ct);
             ct.ThrowIfCancellationRequested();
             MessageBox.Clear();
+            int conversationCountBeforeMessage = _conversation.Count;
             _conversation.Add(new ChatTurn("user", message));
-            _messages.Add(new ChatBubble("あなた", message));
+            var question = new ChatBubble("あなた", message);
+            _messages.Add(question);
             bool thinking = ThinkingCheckBox.IsChecked == true;
             bool stream = StreamCheckBox.IsChecked == true;
             var answer = new ChatBubble("アシスタント", "", thinking);
@@ -479,7 +535,9 @@ public partial class MainWindow : Window
             int firstGeneration = ++_streamingGeneration;
             var liveParser = new ThinkingStreamParser(thinking);
             var streamedRaw = new StringBuilder();
+            var directStreamedRaw = new StringBuilder();
             string? finalRaw = null;
+            string firstThought = "";
             ThinkingStreamSnapshot? completedSnapshot = null;
             GenerationStopReason? stopReason = null;
             bool usedThinkingForAnswer = thinking;
@@ -516,13 +574,15 @@ public partial class MainWindow : Window
                     retriedWithoutThinking = true;
                     usedThinkingForAnswer = false;
                     int retryGeneration = ++_streamingGeneration;
-                    string firstThought = firstSnapshot.ThinkingText;
+                    firstThought = firstSnapshot.ThinkingText;
                     answer.Update(firstSnapshot);
                     SetStatus("思考だけで終了したため、回答を生成しています…");
                     var directParser = new ThinkingStreamParser(requestedThinking: false);
+                    stopReason = null; // The first attempt's reason does not describe an interrupted retry.
                     ServerGeneration directResult = await GenerateViaServerAsync(_conversation.ToArray(),
                         modelPath!, adapterPath, gpu!.DeviceIndices, false, stream, maxNewTokens, sampling, chunk =>
                         {
+                            directStreamedRaw.Append(chunk);
                             if (retryGeneration != _streamingGeneration) return;
                             ThinkingStreamSnapshot direct = directParser.Append(chunk);
                             answer.Update(new ThinkingStreamSnapshot(firstThought,
@@ -536,19 +596,25 @@ public partial class MainWindow : Window
                     directFinalParser.Append(directRaw);
                     ThinkingStreamSnapshot directFinal = directFinalParser.Complete(
                         stopReason == GenerationStopReason.EndOfMessage);
-                    string combinedThought = string.IsNullOrWhiteSpace(directFinal.ThinkingText)
-                        ? firstThought : string.IsNullOrWhiteSpace(firstThought)
-                            ? directFinal.ThinkingText : firstThought + "\n\n" + directFinal.ThinkingText;
-                    completedSnapshot = new ThinkingStreamSnapshot(combinedThought,
-                        directFinal.AnswerText, !string.IsNullOrWhiteSpace(combinedThought), false);
+                    completedSnapshot = CombineRetrySnapshot(firstThought, directFinal);
                 }
                 generationCompleted = true;
-                SetStatus(retriedWithoutThinking ? "回答を再生成しました。" : "生成完了。");
+                SetStatus(completedSnapshot.Value.AnswerText.Length == 0
+                    ? "回答に到達できませんでした。入力を戻しました。"
+                    : retriedWithoutThinking ? "回答を再生成しました。" : "生成完了。");
             }
             finally
             {
                 ++_streamingGeneration; // Ignore queued callbacks after settling the final text.
-                if (completedSnapshot is null)
+                if (retriedWithoutThinking && !generationCompleted)
+                {
+                    // The direct-answer retry can be canceled after showing a partial answer.
+                    // Do not replace it with the completed thinking-only first attempt.
+                    var directFinalParser = new ThinkingStreamParser(requestedThinking: false);
+                    directFinalParser.Append(directStreamedRaw.ToString());
+                    completedSnapshot = CombineRetrySnapshot(firstThought, directFinalParser.Complete(false));
+                }
+                else if (completedSnapshot is null)
                 {
                     var finalParser = new ThinkingStreamParser(thinking);
                     finalParser.Append(finalRaw ?? streamedRaw.ToString());
@@ -556,14 +622,24 @@ public partial class MainWindow : Window
                         stopReason == GenerationStopReason.EndOfMessage);
                 }
                 answer.Update(completedSnapshot.Value);
-                answer.FinishThinking(stopReason);
-                if (answer.Content.Length == 0 && answer.ThinkingContent.Length == 0 && stopReason is null)
+                answer.FinishThinking(stopReason, interrupted: !generationCompleted);
+                if (answer.Content.Length == 0)
+                {
+                    // An unanswered request must not leave a dangling user turn in the
+                    // next prompt or a duplicate failed turn on screen. Restore
+                    // the input so the user can retry it.
+                    _conversation.RemoveRange(conversationCountBeforeMessage,
+                        _conversation.Count - conversationCountBeforeMessage);
+                    MessageBox.Text = message;
                     _messages.Remove(answer);
-                else if (answer.Content.Length != 0 && generationCompleted)
+                    _messages.Remove(question);
+                }
+                else
                 {
                     // Keep the exact assistant prefix used by the preceding
                     // prompt while retaining only the visible answer in history.
-                    // The next prompt can then extend the cached token prefix.
+                    // This also keeps interrupted partial answers paired with
+                    // their user turn, so the next prompt remains well formed.
                     string assistantPrefix = usedThinkingForAnswer
                         ? "<think>\n</think>\n" : "<think>\n\n</think>\n\n";
                     _conversation.Add(new ChatTurn("assistant", answer.Content, assistantPrefix));
@@ -571,6 +647,16 @@ public partial class MainWindow : Window
                 ScrollToEnd();
             }
         });
+    }
+
+    private static ThinkingStreamSnapshot CombineRetrySnapshot(string firstThought,
+        ThinkingStreamSnapshot direct)
+    {
+        string combinedThought = string.IsNullOrWhiteSpace(direct.ThinkingText)
+            ? firstThought : string.IsNullOrWhiteSpace(firstThought)
+                ? direct.ThinkingText : firstThought + "\n\n" + direct.ThinkingText;
+        return new ThinkingStreamSnapshot(combinedThought, direct.AnswerText,
+            !string.IsNullOrWhiteSpace(combinedThought), false);
     }
 
     private sealed record ServerGeneration(string Text, GenerationStopReason? StopReason);
@@ -859,6 +945,7 @@ public partial class MainWindow : Window
         private bool _thinkingInProgress;
         private bool _thinkingExpanded;
         private bool _generationFinished;
+        private bool _generationInterrupted;
         private GenerationStopReason? _stopReason;
 
         public ChatBubble(string author, string content, bool hasThinking = false)
@@ -870,6 +957,9 @@ public partial class MainWindow : Window
         }
 
         public string Author { get; }
+        public string CopyContentLabel => Author == "あなた" ? "質問をコピー" : "回答をコピー";
+        public bool CanCopyContent => _content.Length != 0;
+        public bool CanCopyThinking => !string.IsNullOrWhiteSpace(_thinkingContent);
         public bool HasThinking => _hasThinking;
         public Visibility ThinkingVisibility => _hasThinking && (_thinkingInProgress || _thinkingContent.Length != 0)
             ? Visibility.Visible : Visibility.Collapsed;
@@ -878,7 +968,17 @@ public partial class MainWindow : Window
         {
             get
             {
-                if (_content.Length != 0) return _content;
+                if (_content.Length != 0)
+                {
+                    if (_generationInterrupted)
+                        return _content + "\n\n（生成が中断されました。ここまでの回答は会話に残しています。）";
+                    return _stopReason switch
+                    {
+                        GenerationStopReason.MaximumTokens => _content + "\n\n（最大生成数に達しました。）",
+                        GenerationStopReason.ContextLimit => _content + "\n\n（会話がモデルの文脈上限に達しました。）",
+                        _ => _content
+                    };
+                }
                 if (_generationFinished)
                 {
                     if (_hasThinking && !string.IsNullOrWhiteSpace(_thinkingContent))
@@ -911,6 +1011,7 @@ public partial class MainWindow : Window
                 _content = value;
                 Notify(nameof(Content));
                 Notify(nameof(DisplayContent));
+                Notify(nameof(CanCopyContent));
             }
         }
 
@@ -924,6 +1025,7 @@ public partial class MainWindow : Window
                 Notify(nameof(ThinkingContent));
                 Notify(nameof(ThinkingVisibility));
                 Notify(nameof(DisplayContent));
+                Notify(nameof(CanCopyThinking));
             }
         }
 
@@ -951,9 +1053,10 @@ public partial class MainWindow : Window
             SetThinkingInProgress(snapshot.ThinkingInProgress);
         }
 
-        internal void FinishThinking(GenerationStopReason? stopReason = null)
+        internal void FinishThinking(GenerationStopReason? stopReason = null, bool interrupted = false)
         {
             _generationFinished = true;
+            _generationInterrupted = interrupted;
             _stopReason = stopReason;
             SetThinkingInProgress(false);
             ThinkingExpanded = false;
