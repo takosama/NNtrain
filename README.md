@@ -1,790 +1,179 @@
 # NNtrain
 
-NNtrain is a small neural-network training implementation for studying Tensor
-operations, reverse-mode automatic differentiation, Transformer modules,
-optimizers, dataset boundaries, and training orchestration in C#/.NET 10.
+C# / .NET 10 で実装した、ローカル推論・学習用のニューラルネットワーク実行環境です。Tensor、自動微分、言語モデル、最適化、チェックポイントを独自実装し、Windows GUI から Intel Arc 上の GGUF モデルへチャット、画像、音声からの入力を送れます。
 
-The Windows chat GUI starts a loopback OpenAI-compatible API server in a
-separate console process. See the [GUI and local API guide](docs/gui-openai-api.md)
-for startup options, LoRA selection, streaming, and request examples.
+モデルの重みとデータセットは付属しません。推論に外部 LLM API やクラウド音声認識は使いません。Hugging Face からのダウンロードには通信が必要です。
 
-## Intel Arc (Windows OpenCL)
+## できること
 
-`device: "arc"` selects the Intel Arc backend independently of CPU/CUDA.
-Set `deviceIndices: [0]` for one GPU or `[0, 1]` for two; the latter is the
-current `training.transformer.json` setting.
-Install the Intel graphics driver (including OpenCL); no CUDA toolkit or oneAPI
-installation is needed for Arc. Transformer training uses one or two Arc GPUs
-with Muon, NekoMuon, or AdamW. Transformer inference can also use two Arc GPUs.
-Both support `float32`, `mix16_32`, `mix8_32`, and `mix8_16`. Unsupported architectures or
-pure low-precision modes fail explicitly. DRN and LoRA/DPO
-are not implemented here.
+| 用途 | 現在の対応 |
+| --- | --- |
+| GUI チャット | `general.architecture=qwen35` の GGUF、ストリーミング、Thinking、LoRA、Arc 1 台 / 2 台 |
+| CLI GGUF 推論 | Qwen3.5 と Qwen2 / Qwen2.5。Qwen2 系は単一 Arc |
+| 画像入力 | Qwen3.5 用の対応 mmproj GGUF と PNG / JPEG の静止画 |
+| 日本語音声入力 | Nemotron 3.5 ASR のキャッシュ付き認識、Parakeet 日本語モデルの CTC 認識、確定文の編集・送信 |
+| 学習 | Transformer、ForgetMemory 系、ForgetScan、Hyena、CIFAR-100。CPU / CUDA / Arc の対応範囲は異なります |
+| LoRA | 独自 DRN の LoRA / DPO、Arc 上の Qwen3.5 GGUF LoRA 学習・再開・推論 |
+| ライブラリ | `torch`、`nn`、`optim`、`lr_scheduler`、`datasets`、`tokenizers`、`safetensors` の C# API |
 
-```powershell
-dotnet run --configuration Release --project .\NNtrain.Cli -- `
-  --config .\training.transformer.json
-```
+モデル名だけでは互換性を判定しません。GGUF の architecture、テンソル形式、形状を検証します。GUI は Qwen2 系や Qwen3.5 MoE を汎用的に扱うものではありません。
 
-The single-GPU training route keeps packed weights/activations and optimizer
-state **resident on Arc** across operators and updates. `mix8_32` retains FP32
-gradients, master weights, and optimizer state. `mix8_16` stores the master
-weights and optimizer moments in physical BF16 buffers. Backward temporarily
-accumulates gradients in FP32, then packs the completed gradients into BF16.
-After initialization, training transfers only token/target IDs and small loss,
-norm and Muon statistics. Explicit inspection, checkpoint and session closure
-perform the necessary readback. BF16 matrix operands use **Intel XMX** when the
-driver advertises the matrix extension and a supported minimum subgroup size.
-Float32 mode keeps FP32 tiled arithmetic. `mix16_32` and `mix8_32`
-Linear/loss-head backward use BF16-rounded GEMM operands with FP32 accumulation.
-`mix8_16` prefers INT8 weight arithmetic and permits BF16 weight GEMM when
-measured faster. Its non-weight kernels select formats and summation order for
-speed. On the measured T2048/D32 Arc path, decoded QKV and a saved raw attention
-output use physical BF16. Backward forms `delta = dY dot O`, fuses dP/dS, and
-stores paired BF16 probabilities/derivatives without a separate FP32 derivative
-matrix. These kernels currently use FP32 FMA scratch because the tested BF16
-XMX alternative was slower. This is a measured implementation choice.
-Bounded allocation reuse, deferred frees, head-tiled attention
-and chunked loss heads control temporary storage.
-The byte counters in the Arc benchmark are native backend allocations, not the
-driver's total VRAM reservation.
+## 必要な環境
 
-With two training GPUs, each receives half of every microbatch and keeps a
-separate Transformer replica. Gradients from GPU 1 are staged through host
-memory and added to the GPU 0 gradients before clipping. `mix8_16` transfers
-these gradients in physical BF16 (two bytes per value); GPU 0 clips the packed
-gradients directly. GPU 0 owns the
-optimizer and checkpoint; updated weights are copied to GPU 1 after each
-optimizer step. `batchSize` must be at least 2. The configured batch and
-gradient accumulation counts remain global, so `[0, 1]` does not double the
-effective batch size. Training and inference device lists are independent.
+- 開発・ビルド: [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)。GUI は Windows / WPF が必要です。
+- Intel Arc: OpenCL を含む Intel グラフィックスドライバー。Arc 経路に CUDA Toolkit や oneAPI は不要です。
+- CUDA: 対応する NVIDIA GPU、ドライバー、CUDA バックエンドのネイティブ依存物。詳細は [精度モード](docs/precision-modes.md) を確認してください。
+- RAM・VRAM・ディスク: モデルサイズ、コンテキスト、画像、学習設定によって変わります。量子化重みのサイズだけでは必要 VRAM を見積もれません。
 
-Direct API usage owns the device lifetime explicitly:
-
-```csharp
-using var execution = Tensor.BeginArcExecution(0, TensorPrecisionMode.Mix8_32);
-model.to(TensorPrecisionMode.Mix8_32, 32).to("arc:0");
-// forward_loss -> BackwardAndRelease -> optimizer.step
-```
-
-Reproducible, bounded probes use synthetic seeded tokens and never overwrite the
-dataset, tokenizer, metrics or training checkpoint. Output JSON must be new:
+以下のコマンドはリポジトリのルートで実行します。実行中の GUI や学習が使用する出力を上書きしないよう、開発用ビルドは Debug を利用できます。
 
 ```powershell
-dotnet run --configuration Release --project .\NNtrain.Benchmarks -- `
-  --probe-arc-transformer .\training.transformer.json .\benchmark-results\arc-run.json `
-  --batch 4 --sequence 512 --layers 2 --accumulation 1 --warmup 3 --steps 10
+dotnet restore NNtrain.slnx
+dotnet build NNtrain.slnx -c Debug --no-restore
 ```
 
-The probe honors Arc `deviceIndices` and reports both lanes for two-GPU
-training. At the full `training.transformer.json` shape on two B580s, the
-initial data-parallel implementation reached 13,584 tokens/s (19.30 s/update),
-versus 6,965 tokens/s (37.64 s/update) with `[0]`. The updated replica sync
-copies the published forward weights instead of the FP32 optimizer master.
-A same-binary full/packed/full comparison measured 19.33/18.61/19.33 s/update;
-the packed path reached 14,084 tokens/s. These short synthetic runs use one
-warmup and two measured updates and exclude corpus and checkpoint I/O. The
-initial results are in `benchmark-results/arc-train-dual-b580-20260923.json`
-and `arc-train-single-b580-20260923.json`; the synchronization comparison is
-documented in `docs/arc-dual-training-speed-2026-09-23.md`. The probe accepts
-`--replica-sync full|packed` for a matched comparison.
-
-For the current `mix8_16` configuration, a same-binary B580 comparison with
-one warmup and four measured updates gave **14,555 → 16,613 tokens/s** with
-row-delta attention fusion and BF16 activation publication: **14.1% higher
-throughput**, or 18.01 → 15.78 s/update. The effective batch remains 262,144
-tokens. Saved BF16 attention outputs and wider activation publication increase
-peak backend allocation by about 1.15 GiB per GPU; the selected peaks are
-5,726.9/5,194.7 MiB. Native INT8 Linear, BF16 XMX
-attention, BF16 activation publication, and larger microbatches were also
-implemented or compared. See the [speed policy and measurements](docs/arc-mix8-16-speed-policy-2026-09-23.md)
-and `benchmark-results/arc-mix8-16-speed-policy-final-{baseline,bf16-activations}-20260923.json`.
-Earlier physical-BF16 tuning is recorded in [the previous report](docs/arc-mix8-16-tuning-2026-09-23.md).
-
-The next same-binary A/B/A comparison on two B580s measured the seven selected
-non-Attention `mix8_16` optimizations at **16,621 → 17,225 tokens/s** (+3.6%),
-or 15.77 → 15.22 s/update. The comparison used the full 262,144-token synthetic
-batch and three measured updates per run. Peak backend allocation rose by
-364.2 MiB per GPU. The [non-Attention tuning report](docs/arc-nonattention-tuning-2026-09-23.md)
-records the selected paths, accuracy, memory, and trace results.
-
-The subsequent Attention and normalization pass measured **17,222 → 17,952
-tokens/s** (+4.24%) in a same-binary two-B580 A/B/A comparison, or 15.22 →
-14.60 s/update. The effective batch remains 262,144 tokens. Six measured paths
-are enabled by default: native softmax exponential, K32 fused dP/dS, packed
-shared-memory operands for PV/dQ/dK+dV, and fused normalization parameter
-partials. The [overall tuning report](docs/arc-overall-tuning-2026-09-24.md)
-includes the profiles, rejected candidates, numerical checks and reproduction
-commands.
-
-Use `--arc-mode reference` for the untiled/staged reference, `staged` for the
-previous optimized but host-staged route, and `optimized`
-(default) for the optimized route; `--compare-cpu` adds a separate CPU run.
-The report includes wall-clock phase breakdowns, Amdahl fractions, GPU event
-times, transfer bytes, memory/allocation counters and config/binary hashes.
-Add `--profile` for per-phase/per-shape kernel timings, allocation-size counts
-and synchronization reasons. `--arc-mode pre-profile` freezes the path before
-the detailed-profile optimization pass for same-binary comparison.
-See [Arc residency measurements](docs/arc-backend-2026-09-20.md) and
-[XMX, tiling and command-batching measurements](docs/arc-tuning-2026-09-21.md), and
-[further backward/causal-attention tuning](docs/arc-backward-tuning-2026-09-21.md).
-The [detailed profile and repeated tuning results](docs/arc-profile-tuning-2026-09-21.md)
-cover mixed backward XMX, split-K, attention tiles and bounded memory reuse.
-The [XMX layout and attention tuning](docs/arc-xmx-layout-tuning-2026-09-21.md)
-adds packed subgroup block reads, transpose-specialized GEMMs, shape-selected
-128x64/256x128 tiles and ordered FP32 attention loop unrolling. These are default
-on the measured SG16 Arc route; `--arc-mode pre-xmx` provides a frozen A/B baseline.
-`--probe-arc-xmx-tune NEW.json` benchmarks retained GEMM routes and records
-driver-reported local/private/spill resources. No hand-written assembly or
-additional host packing is required.
-
-The [direct-XMX, storage, Attention and allocator tuning](docs/arc-deep-tuning-2026-09-21.md)
-adds direct BF16 panels from BFP8/BF16 storage, phase-local loss-head panel reuse,
-ordered FP32 attention tiles, fused DKV, coalesced norm-gradient writes and bounded
-LRU/retired-buffer reuse. Batch16 with accumulation4 measured about 12.06 to 8.27
-seconds/update (3 warmup + 10 measured); the additional 3x target was not achieved.
-`--next-features none` disables that pass's listed features only; later feature
-switches must also be disabled to reproduce a historical configuration.
-The report includes rejected candidates, exact tests and memory/transfer limits.
-
-The earlier batch64 configuration is covered separately by the
-[large-batch memory and kernel tuning report](docs/arc-b64-memory-tuning-2026-09-21.md).
-The subsequent [reprofile and optimization report](docs/arc-reprofile-2026-09-21.md)
-records separate forward/backward attention tiles, bounded streamed split-K,
-packed ReLU gradients, exact BFP8 codec changes, and rejected candidates.
-The [exclusive wall-time profile](docs/arc-exclusive-timeline-2026-09-21.md)
-accounts for GPU work and exposed host/queue/allocator/transfer waits without
-double counting. Its four-update measurement improved 31.918 to 29.705 seconds
-per update using pipelined event collection, exact block-scale addressing and
-phase-local Q/K panels. The report includes clock uncertainty, numerical tests,
-rejected DKV variants and the B580 FP8 capability decision.
-The [microbatch and fused-XMX throughput report](docs/arc-throughput-fusion-2026-09-21.md)
-keeps the effective batch at 256 and compares 64x4, 32x8, 16x16 and 8x32.
-The selected 16x16 configuration avoids activation recomputation. Large BF16
-GEMMs use shape-specific tiles and publish block32 BFP8 directly from FP32
-accumulators, without a full FP32 output round-trip. The report records separate
-kernel/end-to-end comparisons, transfer and allocation counts, and rejected paths.
-The [15,000 tokens/s optimization attempt](docs/arc-15000-target-2026-09-21.md)
-adds exact-order coalesced SLM block reads for D32 K/V backward and extends the
-fused XMX tile to smaller microbatches. It also records rejected larger-GRF GEMM,
-attention fusion, split-reduction and weight-cache experiments. The throughput
-target remains unmet; optional weight-panel caching stays disabled by default.
-Batch64 with accumulation4 measured 70.46 to 34.10 seconds/update (2.07x;
-the requested 2.5x remains unmet). OpenCL buffer-accounting peak fell from
-15.73 to 10.00 GiB; this is not a measurement of driver-reserved physical VRAM.
-It uses bounded streamed XMX panels, exact-order coalesced LayerNorm, direct QK
-packing, row-register softmax, and shape-based activation recomputation. Small shapes keep their saved
-activations; large shapes first recompute FFN, then only the required prefix of
-full blocks. Dropout masks and FP32 gradient accumulation are preserved. A 4 GiB
-idle-buffer cache is a ceiling, not an eager allocation; idle buffers are trimmed
-against a soft device-memory budget before new allocations. This cannot guarantee
-available VRAM when other applications consume GPU memory.
-
-## Precision modes and native F16C dense kernels
-
-Training configurations expose six precision modes through
-`precisionMode`: `float32`, `bfloat16`, `mix16_32`, `bfp8`, `mix8_32`, and
-`mix8_16`. Both BF16 storage modes keep
-parameters and activations in physical BF16 storage. `bfloat16` also keeps the
-AdamW moments in BF16. `mix16_32` keeps GEMM accumulation, reductions,
-normalization statistics, losses, gradients, optimizer state, and master
-weights in Float32. `mix8_16` keeps block BFP8 weights and prefers native
-8-bit weight computations, while allowing 16-bit weight computations when
-they are faster. Activations may use BFP8 or BF16, and other operations choose
-their format and reduction order for speed. The policy does not require
-reproducing an FP32 operation sequence. Retained gradients, master weights,
-and optimizer moments use physical BF16 on Arc. Native INT32/FP32 accumulator
-and reduction scratch formats are implementation choices. Host master
-weights and optimizer moments stay packed BF16. New
-`mix8_16` checkpoints store both as two-byte BF16 values and can read older
-Float32 checkpoint artifacts. This mode is supported for Arc Transformer
-training and inference. `ForgetMemoryV2Gpt` and `ForgetMemoryV3Gpt` use this mixed
-contract by default. The lower-level `TensorDType.Float16` remains available
-for legacy/raw IEEE binary16 tensor operations, but is not a configuration
-mode.
-
-Training resume inherits checkpoint precision when `precisionMode` is omitted.
-An explicit `float32`, `mix16_32`, or `mix8_32` can migrate a checkpoint from
-another of these three modes, loading its saved weights and FP32 optimizer
-state while preserving scheduler, global step and data cursor. The numerical
-trajectory changes; this is not a bit-exact continuation. Pure `bfloat16` and
-`bfp8` optimizer-state migration is not supported. `mix8_16` resumes from a
-`mix8_16` checkpoint; migration to or from another precision mode is rejected.
-To test whether 8-bit quantization limits convergence, use `mix16_32` (BF16
-storage with FP32
-gradients/master weights), keeping effective batch and learning rates fixed.
-
-On Windows x64 CPUs with AVX2 and F16C, the optional native dense-kernel
-payload accelerates Float16 `Linear.ForwardBatch` forward and backward while
-retaining Float32 gradient accumulation. Build the payload once after cloning:
+## GUI を使う
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\native\f16c\build-win-x64.ps1
+dotnet run --project NNtrain.Gui -c Debug
 ```
 
-The regular managed AVX2/scalar implementation remains the fallback on every
-other runtime, and can be forced for comparison with:
+1. GGUF を選び、使用する Arc GPU を指定します。必要なら LoRA と mmproj を選びます。
+2. 「プリロード」で読み込みます。モデルは後続の会話でも保持されます。
+3. 入力して送信します。Stream、Thinking、temperature、top-p、top-k、最大出力数を変更できます。
+4. 音声はチャット内の音声設定から ASR を読み込み、「録音」または PCM16 WAV の選択で入力します。確定後に編集して、通常の送信ボタンを押します。
 
-```csharp
-Tensor.Float16NativeEnabled = false;
-```
+GUI は別プロセスのローカル API サーバーを起動します。サーバーは `127.0.0.1` に限定して待ち受け、セッションごとの Bearer 認証を使います。GUI 終了時に自身のサーバーを終了します。詳細は [GUI 操作ガイド](NNtrain.Gui/README.md) と [ローカル API](docs/gui-openai-api.md) を参照してください。
 
-Profile the same V2 training configuration with or without the payload:
+配布用の自己完結実行ファイルを作る場合:
 
 ```powershell
-dotnet run --project NNtrain.Benchmarks -c Release -- `
-  --profile-wiki training.forgetmemoryv2-wiki-jp.json float16 true 3 8
+dotnet publish NNtrain.Gui/NNtrain.Gui.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
 ```
 
-## PyTorch-style API
+出力は `NNtrain.Gui/bin/Release/net10.0-windows/win-x64/publish/NNtrain.Gui.exe` です。重みは別途配置します。
 
-User-facing training code follows PyTorch's vocabulary while remaining native
-C#. The `torch`, `nn`, `optim`, `lr_scheduler`, `datasets`, `tokenizers`, and
-`safetensors` facades are the canonical entry points and call the same Tensor,
-autograd, SIMD, module, and optimizer kernels.
+### Hugging Face・画像・prefill
 
-```csharp
-using NNtrain;
+Hugging Face タブでリポジトリを調べ、GGUF / mmproj をダウンロードできます。コミットを固定し、サイズと取得可能なハッシュを検証します。中断した同じコミットの部分ファイルは再開できます。トークンは任意で、設定ファイルに保存しません。モデルのライセンス・アクセス条件は利用者が確認してください。ASR の SafeTensors / `.nemo` はこのタブの取得対象ではありません。
 
-torch.manual_seed(1234);
-TorchDevice device = torch.device("cuda:0");
+画像にはベースモデルと互換性のある Qwen3.5 mmproj が必要です。画像準備と既知の会話 prefix を先に処理し、送信時に利用できます。会話の KV / DeltaNet 状態は一致する prefix のみ再利用し、不一致・キャンセル時は再計算します。画像や長いコンテキストの準備にも VRAM と時間が必要です。
 
-IImageClassificationDataset trainSet = datasets.mnist(
-    images: "data/train-images.idx3-ubyte",
-    labels: "data/train-labels.idx1-ubyte");
-IImageClassificationDataset testSet = datasets.mnist(
-    images: "data/t10k-images.idx3-ubyte",
-    labels: "data/t10k-labels.idx1-ubyte");
+## GGUF を CLI で推論する
 
-var trainLoader = torch.utils.data.DataLoader(
-    trainSet,
-    batch_size: 64,
-    shuffle: true,
-    training: true,
-    generator: torch.generator());
-var testLoader = torch.utils.data.DataLoader(testSet, batch_size: 64);
-
-TransformerClassifier model = nn.transformer_classifier(
-    seq_len: trainSet.Rows,
-    d_model: trainSet.Columns,
-    num_heads: 4,
-    dim_feedforward: 256,
-    num_layers: 2,
-    num_classes: trainSet.ClassCount,
-    dropout: 0.1f,
-    generator: torch.generator());
-model.to(device);
-
-IOptimizer optimizer = optim.AdamW(
-    model.parameters(),
-    lr: 3e-4f,
-    weight_decay: 5e-4f);
-ILRScheduler scheduler = lr_scheduler.LinearWarmupCosineAnnealingLR(
-    optimizer,
-    total_epochs: 20,
-    warmup_epochs: 2,
-    min_lr_ratio: 0.01f);
-
-for (int epoch = 0; epoch < 20; epoch++)
-{
-    model.train();
-    scheduler.step();
-    foreach (DataBatch batch in trainLoader)
-    {
-        optimizer.zero_grad();
-        Tensor logits = model.forward(batch.input);
-        Tensor loss = nn.functional.cross_entropy(logits, batch.target);
-        loss.backward();
-        optimizer.step();
-        Console.WriteLine(loss.item());
-    }
-
-    model.eval();
-    using (torch.no_grad())
-    {
-        foreach (DataBatch batch in testLoader)
-            _ = model.forward(batch.input);
-    }
-}
-
-torch.save(model.state_dict(), "model.json");
-model.load_state_dict(torch.load<ModuleState>("model.json"));
-torch.save(optimizer.state_dict(), "optimizer.json");
-optimizer.load_state_dict(
-    torch.load<OptimizerStateDictionary>("optimizer.json"));
-
-safetensors.torch.save_file(
-    model.state_dict(),
-    "model.safetensors");
-model.load_state_dict(
-    safetensors.torch.load_file("model.safetensors"));
-```
-
-Save and resume the model, optimizer, and scheduler as one training
-checkpoint:
-
-```csharp
-const string checkpointPath = "training.checkpoint.json";
-int firstEpoch = 1;
-
-if (File.Exists(checkpointPath))
-{
-    TrainingCheckpoint checkpoint =
-        torch.load<TrainingCheckpoint>(checkpointPath);
-    model.load_state_dict(checkpoint.Model);
-    optimizer.load_state_dict(checkpoint.Optimizer);
-    scheduler.load_state_dict(checkpoint.Scheduler);
-    firstEpoch = checkpoint.Epoch + 1;
-}
-
-for (int epoch = firstEpoch; epoch <= 20; epoch++)
-{
-    model.train();
-    // forward, backward, optimizer.step(), and evaluation
-    scheduler.step();
-    torch.save(
-        new TrainingCheckpoint(
-            epoch,
-            model.state_dict(),
-            optimizer.state_dict(),
-            scheduler.state_dict()),
-        checkpointPath);
-}
-```
-
-Text training uses the same style:
-
-```csharp
-BpeTokenizer tokenizer = tokenizers.train_bpe(
-    documents,
-    vocab_size: 4096);
-int[] tokenIds = tokenizer.encode(text, add_bos: true, add_eos: true);
-string restored = tokenizer.decode(tokenIds);
-
-IAsyncEnumerable<string> wikipedia = datasets.wikipedia(
-    root: "data/wiki",
-    text_column: "text");
-```
-
-The CLI entry point is `Program.main()`. Its classification path constructs
-`datasets`, `DataLoader`, `nn`, `optim`, and `lr_scheduler` objects in that
-order before entering the training loop. Wikipedia training uses the same
-`torch`, `nn`, `optim`, scheduler, dataset, and tokenizer facades.
-
-## Projects
-
-- `NNtrain.Core`: Tensor, autograd, modules, optimizers, and CPU/CUDA backends
-- `NNtrain.Data`: dataset implementations such as MNIST IDX
-- `NNtrain.Cli`: JSON configuration and the command-line application
-- `NNtrain.Core.Tests`: Core unit and characterization tests
-- `NNtrain.IntegrationTests`: dataset, configuration, and learning-flow tests
-
-## Build and test
+`models/model.gguf` は利用者が用意した実際のファイルに置き換えてください。CLI の `--prompt` は生のプロンプトで、GUI のようにチャットテンプレートを自動挿入しません。
 
 ```powershell
-dotnet build NNtrain.slnx --configuration Release
-dotnet test NNtrain.slnx --configuration Release --no-build
+dotnet run --project NNtrain.Cli -c Release -- qwen-gguf --model models/model.gguf --prompt "こんにちは" --devices 0,1 --max-new-tokens 64
 ```
 
-## Run training
+単一 GPU は `--device 0`、逐次出力を止める場合は `--no-stream`、Qwen3.5 のアダプターは `--adapter checkpoints/qwen35.adapter.bin` を指定します。このコマンドは greedy 生成です。
 
-The default `training.example.json` is configured for the Japanese Wikipedia
-GPT task. Place the Parquet shards under `data/wiki` and run:
+Qwen3.5 の行列形式は Q4_K / Q5_K / Q6_K / IQ2_S / IQ3_S / BF16、Bonsai の PQ2_0 / PTQ1_0 に対応します。ファイル名の IQ2_M などは混合テンソル構成を表し、各テンソルの形式を検証します。分割 GGUF は事前に結合が必要です。Bonsai PQ2_0 / PTQ1_0 の LoRA はサポート対象外です。[GGUF の詳細](docs/gguf-qwen.md) と [Bonsai 推論](docs/ternary-bonsai-generation.md) を参照してください。
+
+## 日本語音声認識
+
+| モデル | 必要なローカルファイル | 認識方式 |
+| --- | --- | --- |
+| [NVIDIA Nemotron 3.5 ASR Streaming 0.6B](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) | `config.json`、`tokenizer.json`、`model.safetensors` | FastConformer / RNNT。日本語プロンプトとキャッシュを使うストリーミング |
+| [NVIDIA Parakeet TDT/CTC 0.6B JA](https://huggingface.co/nvidia/parakeet-tdt_ctc-0.6b-ja) | `parakeet-tdt_ctc-0.6b-ja.nemo` | CTC 分岐。読み込み時に必要な設定・語彙を取り出し、FP16 SafeTensors に変換 |
+
+公式配布元から取得し、各ライセンスを確認してください。Parakeet の変換先には原本と変換後の両方のディスク容量が必要です。Python / NeMo は本番認識には不要です。
+
+重みは FP16 で保持・読み込み、累積演算は FP32 です。元の Nemotron 配布ファイルが FP32 でも全モデルの FP32 コピーを常駐させません。CPU に加えて Arc 専用 OpenCL 経路があります。Nemotron は密行列を Arc、前処理・畳み込み・キャッシュを CPU で処理します。Parakeet は密行列・全体 attention・FFN を Arc、前処理・畳み込みを CPU で処理します。
+
+PCM16 WAV は mono / stereo、8–192 kHz に対応し、連続した sinc リサンプリングで 16 kHz に変換します。録音は利用者の開始操作だけで行い、対応する 48 kHz デバイス形式を優先します。途中結果は未確定で、後から変わる場合があります。停止は残りの音声を処理して確定し、キャンセルは元の入力文を復元します。
+
+Parakeet の途中表示は、入力済み音声全体を再認識する方式です。TDT とキャッシュ付き encoder ストリーミングは未実装で、1 発話は最大 30 秒です。停止時は不要な途中認識を中断し、音声末尾を含む最終認識を優先します。完全に同じ音声まで認識済みの場合だけ確定結果を再利用します。
+
+### 検証済みの性能と限界
+
+両 ASR の CPU ロードを高速化しました。同じ Debug 実行環境で、Nemotron は初回 21.889 → 6.784 秒、再読込 21.790 → 6.625 秒、Parakeet は初回 15.235 → 1.211 秒、再読込 15.226 → 1.236 秒でした。既存のモデルファイルから設定・語彙・重みの検証と FP16 変換までを含み、GPU 準備と Parakeet の初回 `.nemo` 変換は除外します。OS キャッシュは消去しておらず、初回は測定プロセス内の最初の実モデルロードです。詳細は [ASR 読み込み測定](docs/benchmarks/asr-loading-2026-10-06.md) を参照してください。
+
+2026-10-06 のローカル作業ツリーでは、Ryzen 7 5700X / RAM 64 GB / Arc B580 12 GB の単一 ASR GPU、公開 FLEURS 日本語 PCM16 3 本で Parakeet を検証しました。11.10 / 22.86 / 7.98 秒の音声を 1.619 / 3.173 / 1.101 秒で認識しました。重み読み込み・アップロード時間は除外しています。以前のネイティブ実装に対して認識文は完全一致し、正規化 CER は 4.35% / 6.17% / 0% です。
+
+22.86 秒を実時間で供給する最新 GUI テストでは、最初の表示は 1.510 秒、停止から確定までは 2.963 秒でした。先行の改善段階では停止後 6.078 秒でした。ドライバー割り当てを含む専用 GPU メモリの観測ピークは約 1.35 GB で、ASR 単体の 2 GB 目標を満たしました。共有メモリと LLM の同時使用量は別です。
+
+この測定は未公開の高速化差分を含みます。公開済み `c1b53d2` の結果と区別してください。実マイク、30 秒の連続入力、雑音、LLM と同時使用、長時間の連続発話は未検証です。3 本での一致は一般的な認識精度を保証しません。[測定方法・数値誤差・テスト結果](docs/benchmarks/parakeet-performance-2026-10-06.md) に詳細があります。
+
+## 学習とチェックポイント
+
+学習は CLI から JSON 設定を指定します。引数なしの CLI は既定の学習を開始します。設定のデータパス・モデル規模・GPU・精度・出力先を確認してから実行してください。
+
+| 設定例 | 用途 |
+| --- | --- |
+| [training.transformer.json](training.transformer.json) | Transformer の日本語 Wikipedia 学習、Arc の例 |
+| [training.example.json](training.example.json) | Wikipedia 言語モデルの設定例。小規模な動作確認用ではありません |
+| [training.forgetmemoryv2-wiki-jp.json](training.forgetmemoryv2-wiki-jp.json) | ForgetMemoryV2 |
+| [training.forgetmemorydrn-wiki-jp.json](training.forgetmemorydrn-wiki-jp.json) | ForgetMemory DRN |
+| [training.forgetscan-wiki-jp.json](training.forgetscan-wiki-jp.json) | ForgetScan |
+| [training.hyena-wiki-jp.json](training.hyena-wiki-jp.json) | Hyena |
+| [training.cifar100.json](training.cifar100.json) | CIFAR-100 分類 |
 
 ```powershell
-dotnet run --configuration Release --project NNtrain.Cli -- `
-  --config training.example.json
+dotnet run --project NNtrain.Cli -c Release -- --config training.transformer.json
+# 保存済みチェックポイントから再開
+dotnet run --project NNtrain.Cli -c Release -- --config training.transformer.json --resume
 ```
 
-Every 30 minutes (after a safe optimizer-update boundary) and every completed epoch updates a resumable checkpoint
-containing
-the current model, optimizer, scheduler, epoch, and task-specific training
-state. The model weights are also written as standard F32 SafeTensors beside
-the JSON training state. Classification uses optimizer-update progress;
-finite Wikipedia training uses batch progress; streaming Wikipedia training
-uses processed-document progress. Continue from it by increasing `epochs` and
-running:
+`--auto-resume` は再開可能な状態があれば利用します。チェックポイントはモデル重みの SafeTensors と設定・学習状態を保存します。データセットは別途準備します。[データ設計](docs/data-design.md)、[チェックポイントと学習構造](docs/project-architecture.md) を参照してください。
+
+学習済みの独自モデルを生成に使う場合:
 
 ```powershell
-dotnet run --configuration Release --project NNtrain.Cli -- `
-  --config training.example.json --resume
+dotnet run --project NNtrain.Cli -c Release -- --config training.transformer.json --generate "日本の歴史は"
+dotnet run --project NNtrain.Cli -c Release -- --generate-config generate.json
 ```
 
-To resume only when the previous training process ended abnormally, use:
+[generate.json](generate.json) の tokenizer / checkpoint パスは実際の学習結果に合わせます。サンプリングは greedy / topK、temperature、seed を設定できます。Arc Transformer の推論は `inferenceDeviceIndices` と `arcInferenceMode` で single / tensorParallel / auto を選びます。
+
+### バックエンドと精度
+
+CPU は scalar / SIMD 経路を持ちます。CUDA は対応する独自モデルの GPU 経路を持ちます。Arc の汎用学習経路は Transformer 用で、DRN の LoRA / DPO をその経路では実行できません。別経路として Qwen3.5 GGUF の Arc LoRA 学習があります。
+
+Arc Transformer は `device: "arc"` と `deviceIndices: [0]` または `[0,1]` を指定し、float32 / mix16_32 / mix8_32 / mix8_16 を選びます。2 台の学習はモデル複製とホスト経由の勾配集約を使います。推論はモデルに応じた tensor parallel や層・状態の分散を使います。Intel XMX 経路はドライバーの拡張対応によって選択されます。未対応の組み合わせは明示的に失敗します。
+
+低精度の保存形式と演算精度は異なります。設定名だけで全演算が FP16 / INT8 になるとは限りません。[精度モード](docs/precision-modes.md)、[低ビット保存](docs/low-bit-storage-design.md)、[Arc バックエンド](docs/arc-backend-2026-09-20.md)、[Arc 推論の測定](docs/arc-generation-tuning-2026-09-24.md) を参照してください。
+
+## LoRA / DPO
+
+Qwen3.5 GGUF のベース重みを固定して Arc 上で LoRA を学習できます。まず [qwen-lora.example.json](qwen-lora.example.json) と [JSONL データ例](qwen-lora.example.jsonl) のパス・GPU・出力先を編集してください。
 
 ```powershell
-dotnet run --configuration Release --project NNtrain.Cli -- `
-  --config training.example.json --auto-resume
+# CPU でデータ・設定の整合性だけ確認する
+dotnet run --project NNtrain.Cli -c Release -- qwen-lora --model models/model.gguf --config qwen-lora.example.json --dry-run
+# 学習 / 再開
+dotnet run --project NNtrain.Cli -c Release -- qwen-lora --model models/model.gguf --config qwen-lora.example.json
+dotnet run --project NNtrain.Cli -c Release -- qwen-lora --model models/model.gguf --config qwen-lora.example.json --resume
 ```
 
-`--auto-resume` creates an exclusive `*.running.json` run marker next to the
-checkpoint. A normal training completion removes it; a crash, forced process
-termination, or error leaves it behind. On the next launch, the CLI restores
-the latest checkpoint only when both the interrupted-run marker and checkpoint
-exist. The same marker lease also prevents two processes from updating one
-checkpoint concurrently.
-Set `checkpoint.autoResume` to `true` in the training JSON to make this the
-default without passing a CLI flag. The supplied classification and Wikipedia
-JSON profiles enable it.
+`adapter.bin` は NNtrain 固有形式で、学習再開に必要な状態を保存します。PEFT アダプターを汎用的に読めるものではありません。NNtrain が出力した Qwen3.5 F32 GGUF LoRA は GUI で読み込めますが、学習再開には `.bin` を使います。
 
-Set `checkpoint.intervalMinutes` to change the default 30-minute interval.
-The timer starts when training begins or resumes, and restarts after a successful save;
-wall-clock adjustments do not affect it. A timed save does not interrupt gradient accumulation.
-Each timed or epoch-end save also keeps a timestamped SafeTensors history file named
-`<ModelName>_<epoch>_epoch_<yyyyMMdd_HHmm>.safetensors`, for example
-`ForgetMemoryV2Gpt_0.1_epoch_20260312_1224.safetensors`. The fixed checkpoint
-name remains the latest resumable state.
-
-Every checked-in profile uses configuration schema version 2. The task is
-explicit rather than inferred from unrelated properties, and common concerns
-occupy the same sections for classification and language modelling:
-
-```json
-{
-  "schemaVersion": 2,
-  "task": { "type": "wiki-language-model" },
-  "data": { "dataPath": "data/wiki", "textColumn": "text" },
-  "model": { "modelArchitecture": "forgetmemoryv2" },
-  "training": { "epochs": 1, "batchSize": 2 },
-  "runtime": { "device": "cuda", "deviceIndices": [0, 1] },
-  "optimization": {},
-  "checkpoint": {},
-  "reporting": {}
-}
-```
-
-Checkpoint placement and restart behavior are grouped in one section. Paths
-are resolved relative to the training JSON, and the directory is created when
-training starts or the first checkpoint is saved:
-
-```json
-"checkpoint": {
-  "directory": "checkpoints/wiki-v2",
-  "fileName": "latest.model.json",
-  "resume": false,
-  "autoResume": true
-}
-```
-
-`fileName` is optional. Classification then defaults to
-`<config>.checkpoint.json`, while Wikipedia defaults to
-`<config>.wiki-model.json`. The fixed JSON file retains the model, optimizer,
-scheduler, and exact restart position; its SafeTensors sidecars and timestamped
-snapshots are written to the same directory. Legacy checkpoint files remain
-readable and are written in the current format on the next save.
-
-With no arguments the CLI selects a legacy `training.wiki-jp.json` when it is
-present, then falls back to `training.example.json`. The selected absolute path and the
-effective batch/model settings are printed before training. The GPT run
-trains or loads the BPE tokenizer, reads bounded Wikipedia data, trains the
-causal language model, writes the loss graph and checkpoint, and generates a
-sample continuation. Image-classification examples remain available in the
-separate CIFAR-100 configuration.
-`TransformerClassifier` is used only by the image-classification command. The
-default Wikipedia configurations select `modelArchitecture:
-"forgetmemoryv3"`, which constructs the custom `ForgetMemoryV3Gpt`; startup
-prints the concrete model type so this selection is visible before training.
-The CIFAR-100 configuration normalizes RGB channels using the training-set
-statistics. Each 32x32 RGB image is emitted directly as 64 row-major 4x4 patch
-tokens with 48 channel-first features per token. Its training augmentation uses
-a four-pixel random crop and random horizontal flip; vertical flipping is
-available but disabled by default.
-Optimizer and scheduler settings now live together in the same training JSON:
-
-```json
-"optimization": {
-  "optimizer": {
-    "type": "gainshareadamw",
-    "learningRate": 0.0003,
-    "weightDecay": 0.0005
-  },
-  "scheduler": {
-    "type": "linearWarmupCosineAnnealing",
-    "warmupEpochs": 5,
-    "minimumLearningRateRatio": 0.01
-  }
-}
-```
-
-Wikipedia training uses scheduler type `warmupCosineProgress` and its
-`warmupPercent` setting.
-
-GainShareAdamW is the default optimizer. It groups parameters at the configured
-module depth, measures each block's gradient/update alignment through an EMA,
-and redistributes the AdamW update norm between blocks while preserving the
-global squared update norm. The default profile uses learning rate `3e-4`,
-weight decay `5e-4`, rho `0.95`, gamma `1.0`, and scales `0.5` to `2.0`.
-Set `optimization.optimizer.type` to `nekomuon`, `lion`, or `adamw` to retain
-the other update rules. NekoMuon continues to use auxiliary AdamW for
-non-hidden parameters.
-The CIFAR-100 profile applies five warmup epochs followed by cosine learning-
-rate decay, residual dropout `0.1`, and early stopping after 15 epochs without
-an evaluation-loss improvement. At exit, the best model weights are restored
-and saved beside the configuration as `*.best-model.json`.
-
-## Train Japanese Wikipedia GPT
-
-`training.example.json` reads the sharded Parquet files under `data/wiki`,
-trains a reversible UTF-8 byte-level BPE tokenizer when one does not already
-exist, streams the corpus, and trains the decoder-only
-`GptRinWikiJp` model:
+`messages` JSONL を整形する CPU 専用コマンドもあります。既存ファイルへの上書きを避け、新しい出力ディレクトリを指定します。
 
 ```powershell
-dotnet run --configuration Release --project NNtrain.Cli -- `
-  --config training.example.json
+dotnet run --project NNtrain.Cli -c Release -- qwen-lora-prepare --model models/model.gguf --data messages.jsonl --output prepared-data --epochs 2
 ```
 
-To train the attention-free Hyena variant with the same Wikipedia pipeline:
+変換は未対応フィールドを捨てずに失敗し、限定した既知の JSON エスケープ問題だけを修復します。詳細は [Qwen3.5 LoRA](docs/qwen35-lora.md)、独自 DRN は [LoRA](docs/lora.md) と [DPO](docs/dpo.md) を参照してください。
+
+## プロジェクト構成と検証
+
+| プロジェクト | 役割 |
+| --- | --- |
+| NNtrain.Runtime / Core | 数値実行環境、Tensor、自動微分、モデル、ASR |
+| NNtrain.Arc / Cuda | GPU バックエンド |
+| NNtrain.Training / Data | 学習基盤、データ読み込み、tokenizer |
+| NNtrain.Cli / Gui | コマンドと Windows チャット |
+| Core.Tests / Gui.Tests / IntegrationTests | 数値・状態・統合検証 |
+| Benchmarks / Benchmarks.Tests | 性能測定と測定コードの検証 |
+
+ライブラリの詳細は [Tensor](docs/tensor-semantics.md)、[自動微分](docs/autograd-design.md)、[Module](docs/module-design.md) を参照してください。
 
 ```powershell
-dotnet run --configuration Release --project NNtrain.Cli -- `
-  --config training.hyena-wiki-jp.json
+dotnet test NNtrain.Core.Tests/NNtrain.Core.Tests.csproj -c Debug --filter "FullyQualifiedName~AsrInputTests|FullyQualifiedName~AsrResamplerTests|FullyQualifiedName~ParakeetCtcTests"
 ```
 
-To train ForgetScanGPT with its content-dependent associative memory scan:
+GPU・実モデルのテストには対象ハードウェア、ローカル重み、明示的な実行条件が必要です。全テストを実行するときは学習・推論との競合に注意してください。測定した環境では GUI Debug ビルドは警告・エラー 0、ASR CPU 34 件と Core CPU 1,502 件が通過しました。GUI テストの通常 restore は権限問題が残り、既存 SDK を使うオフラインの 11 件を検証しています。これは全 solution の通常テスト完了を意味しません。
 
-```powershell
-dotnet run --configuration Release --project NNtrain.Cli -- `
-  --config training.forgetscan-wiki-jp.json
-```
-
-To run the conceptual ForgetMemoryV2 matrix-memory model:
-
-```powershell
-dotnet run --configuration Release --project NNtrain.Cli -- `
-  --config training.forgetmemoryv2-wiki-jp.json
-```
-
-To compare the independent ForgetMemory DRN variant under the same model
-dimensions and training pipeline:
-
-```powershell
-dotnet run --configuration Release --project NNtrain.Cli -- `
-  --config training.forgetmemorydrn-wiki-jp.json
-```
-
-The supplied ForgetMemoryV2 profile selects `device: "cuda"`,
-`deviceIndices: [0, 1]`, and `precisionMode: "bfloat16"`. Dense rows and the batch
-dimension of the stateful ForgetMemoryV2 recurrence are sharded across every
-listed GPU; their backward parameter gradients are reduced before the
-optimizer step.
-Use a single-element array such as `[1]` to select only one adapter.
-ForgetMemoryV2 recurrence,
-dense projections, layer normalization, embeddings, dropout/residual,
-cross-entropy, AdamW updates, and the compute-heavy NekoMuon phases run through
-the native CUDA/cuBLASLt backend. Tensor Core eligible GEMMs and FlashAttention
-use BF16 Tensor Core kernels; the checked-in native runtime payload is loaded
-directly rather than through a managed GPU compiler.
-Parameters and activations use two-byte BF16 storage while arithmetic and
-gradient accumulation use Float32. Immutable tensor compute views are cached
-on each adapter and invalidated only when their tensor is updated. In
-particular, ForgetMemory's projected input and full time-state stay resident
-from forward through backward instead of being copied back between the two.
-Host BF16 backing is retained for the public tensor API and checkpoints, so
-CPU-only graph boundaries still synchronize. Set `device` back to `"cpu"` for
-the portable path.
-
-ForgetMemoryV3 is the default model. Set `modelArchitecture` to
-`"forgetmemoryv3"`, `"forgetmemorydrn"`, `"forgetmemoryv2"`, `"forgetscan"`,
-`"hyena"`, or `"transformer"` when an
-explicit architecture is required. `forgetMemoryKeyWidth` and
-`forgetMemoryValueWidth` control the associative matrix shape. The retention
-floor increases from `forgetMemoryRetentionMinimum` in the shallow layer to
-`forgetMemoryRetentionMaximum` in the deepest layer.
-`hyenaFilterWidth` controls the hidden width of the implicit long-filter MLP.
-`hyenaConvolutionAlgorithm` accepts `"auto"`, `"direct"`, or `"fft"`.
-The automatic mode keeps short sequences on the direct SIMD kernel and uses
-the zero-padded SIMD FFT kernel from 1024 tokens during training and 2048
-tokens during inference.
-`HyenaGpt` follows the order-2 operator from the
-[Hyena Hierarchy paper](https://arxiv.org/abs/2302.10866) and its
-[official standalone implementation](https://github.com/HazyResearch/safari/blob/main/standalone_hyena.py):
-a 3-way input projection, causal depthwise short filter, two data-controlled
-gates, an implicit sinusoidal and exponentially modulated long filter, and an
-output projection. The CPU implementation automatically selects between the
-direct SIMD convolution and the zero-padded SIMD FFT convolution.
-
-`ForgetScanGpt` projects each normalized token into forget, input, and value
-gates, then evaluates `m[t] = f[t] * m[t-1] + i[t] * v[t]` with an associative
-affine scan. On CPU, independent state channels are scheduled as cache-aligned
-tiles across worker threads and evaluated in one `O(Ld)` pass; AVX2/FMA kernels
-apply the gates and recurrence in each tile. Training saves gate values for a
-SIMD reverse scan, while inference omits those buffers. Both paths remain
-causal without storing attention keys or values.
-
-`ForgetMemoryV2Layer` packs q, k, v, retention-gate, and beta projections into
-one Tensor and evaluates a differentiable matrix memory recurrence:
-`g = lambda + (1-lambda)sigmoid(gate)`,
-`write = (1-g)sigmoid(beta)`,
-`M[t] = g*M[t-1] + write*(v-M[t-1]k)k^T`, and `r[t] = M[t]q`.
-The positive delta term moves the current recall toward v; using a negative
-term would increase the prediction error. Time remains a direct causal
-recurrence, while AVX2/FMA handles state dot products, state updates, recall,
-and all major backward vectors. Independent batches use `Parallel.For`.
-
-ForgetMemoryV3 keeps the same layer and residual/FFN structure but normalizes
-`k = tanh(k_raw) / sqrt(sum(tanh(k_raw)^2) + 1e-6)`, then evaluates
-`M_bar = g*M[t-1]`, `error = v-M_bar*k`,
-`M[t] = M_bar + beta*error*k^T`, and `r[t] = M[t]q`. Retention and write
-strength are therefore independent. `forgetmemoryv2` remains available for
-loading and comparing existing V2 checkpoints.
-
-ForgetMemory DRN is selected with `modelArchitecture: "forgetmemorydrn"`.
-It L2-normalizes both query and key with epsilon `1e-8`, reads from the old
-memory before writing, predicts `pred = M[t-1]k`, and updates
-`f = retentionFloor + (1-retentionFloor)*sigmoid(gate)` and
-`M[t] = f*M[t-1] + beta*(v-pred)*k^T`. The configured per-layer retention
-floor schedule (default 0.5 to 0.99) applies to both training and generation,
-including CUDA Tensor Core, chunk replay, and backward. The gate derivative
-includes `(1-retentionFloor)`. CUDA DRN requires native ABI 1.35 or newer;
-rebuild the CUDA DLL when updating. Existing checkpoints keep their stored
-floor schedule and can still load, but now use that schedule instead of the
-previously ignored floor.
-
-On a Ryzen 7 5700X, the reproducible two-layer training benchmark
-(`batch=2`, `width=64`, `hidden=128`, key/value width 32) measured:
-
-| Sequence | Attention | ForgetMemoryV2 SIMD |
-|---:|---:|---:|
-| 64 | 2.184 ms | 2.453 ms |
-| 128 | 4.908 ms | 4.805 ms |
-| 256 | 11.198 ms | 9.218 ms |
-
-Run it with `--filter *ForgetMemoryV2AttentionBenchmarks*`. These compare the
-same GPT macro dimensions; parameter counts are close but not exactly equal.
-
-The reproducible ForgetScan microbenchmarks can be run with:
-
-```powershell
-dotnet run -c Release --project NNtrain.Benchmarks -- --filter *ForgetScan*
-```
-
-To profile one complete training step with the dimensions and optimizer read
-directly from a training JSON file, run:
-
-```powershell
-dotnet run -c Release --project NNtrain.Benchmarks -- --profile-wiki training.forgetmemoryv2-wiki-jp.json
-```
-
-To isolate AdamW with the exact model shape and optimizer settings from the
-same JSON, run:
-
-```powershell
-dotnet run -c Release --project NNtrain.Benchmarks -- --profile-adamw training.forgetmemoryv2-wiki-jp.json
-dotnet run -c Release --project NNtrain.Benchmarks -- --filter *AdamWJsonBenchmarks*
-```
-
-The low-level `AdamWOptions.UseBFloat16FirstMoment` and
-`UseBFloat16SecondMoment` switches remain available to library callers. Wiki
-training JSON no longer exposes competing moment flags: `bfloat16` selects
-BF16 moments, while `float32` and `mix16_32` select FP32 moments. Checkpoints
-still serialize moment arrays as Float32, so restore remains portable.
-
-The profiler reports forward, loss, backward, NekoMuon, and AdamW wall time,
-plus allocation/GC counts and a separate summed worker-CPU breakdown inside
-NekoMuon. With the corresponding ForgetMemoryV2 profile on a
-Ryzen 7 5700X and `nekoMuonNewtonSchulzInterval: 5`, a ten-step run averaged
-589.89 ms per training step and 147.78 ms in NekoMuon. Non-refresh optimizer
-steps took about 36--40 ms, while the fifth-step orthogonalization took about
-585--598 ms. The profiler measures complete cadence cycles and reports means,
-because a median would hide the periodic fifth-step cost.
-
-The default GPT profile uses a 4096-token BPE vocabulary, reads every Parquet
-document (`maxTrainingDocuments: 0`), and uses the JSON-configured token limit
-from each
-document. `maxTrainingTokens: 0` selects the streaming path, so the complete
-tokenized corpus is not retained in memory. The tokenizer path is controlled
-by `tokenizerPath`; checkpoint files and sidecars are placed under
-`checkpoint.directory`.
-The byte-level BPE vocabulary reserves `<pad>=0`, `<bos>=1`, `<eos>=2`, and
-`<unk>=3`. Training pads incomplete final sequences with token id 0 and writes
-`-1` to the corresponding targets. `CrossEntropyWithLogits` enables
-`ignoreIndex=-1` by default, excludes those rows from both gradients and the
-mean-loss denominator, and continues to train BOS/EOS normally.
-The optimizer is selected by the JSON. With
-`optimization.optimizer.type: "adamw"`, AdamW updates every model parameter;
-with `"nekomuon"`, NekoMuon updates matrix weights while an auxiliary AdamW
-updates embeddings, normalization parameters, biases, and the language-model
-output head. Their learning rates are controlled independently by
-`optimization.optimizer.learningRate` and `auxiliaryLearningRate`.
-`optimization.optimizer.nekoMuonNewtonSchulzInterval` defaults to 5: moments
-and weights advance on
-every step using the normalized current momentum, while the expensive
-Newton--Schulz orthogonalization runs only every fifth step. Set it to 1 for
-orthogonalization on every optimizer step. This cadence reduction is an
-intentional throughput variant; the original Muon implementation instead runs
-five Newton--Schulz iterations on every optimizer step.
-`optimization.scheduler.warmupPercent` defaults to 20: both optimizer groups
-linearly warm up over the first 20% of total training progress, then follow
-cosine decay for the remaining 80%. Finite-token training uses exact
-optimizer-step progress;
-streaming all-data training uses epoch plus processed-document progress.
-With `useSimd: true`, GPT training uses hardware-accelerated Vector256 kernels
-for fused token/position embeddings, linear algebra, normalization, softmax
-reductions, cross-entropy, and NekoMuon/AdamW updates. Startup output reports
-whether Vector256 acceleration is available on the current CPU.
-Wide projection linear layers cache a blocked transpose of unchanged weight
-matrices so the output dimension can be processed as contiguous SIMD vectors;
-square and large-input matrices keep the cache-friendly dot-product kernel. Softmax,
-attention, and cross-entropy use a vectorized polynomial exponential, with a
-Vector128 fallback for narrow attention heads. Large cross-entropy batches
-recompute probabilities during backward
-instead of retaining a vocabulary-sized probability buffer. ForgetScan fuses
-residual addition with Dropout; its counter-based SIMD mask is regenerated in
-backward instead of retaining an activation-sized mask. NekoMuon computes both
-symmetric Gram products with a four-by-two blocked AVX2/FMA kernel, updates
-eight polynomial output rows from each source-vector load, and reuses
-per-parameter workspaces to reduce allocation and garbage-collection overhead.
-The same kernels use `Parallel.For` for independent rows, attention heads,
-embedding-gradient groups, loss rows, and optimizer parameter groups. Set
-`maxDegreeOfParallelism` to `0` to use the runtime-selected worker count, or to
-a positive number to cap the number of worker threads.
-When `showLossGraph` is enabled, the graph is refreshed every
-`graphUpdateSteps` optimizer steps (100 by default) and at every epoch end. Its
-horizontal axis is epoch progress; validation loss is added at epoch boundaries.
-Every `datasetSampleEverySteps` steps (1000 by default), a random Wikipedia
-article from the retained sample pool is split in half. The end of the first
-half is used as the prompt, and the dataset continuation and model continuation
-are printed together for comparison. The final post-training sample uses the
-same dataset-continuation flow rather than a fixed prompt.
-
-After training, load the saved tokenizer and checkpoint and generate from a
-prompt without retraining:
-
-```powershell
-dotnet run --configuration Release --project NNtrain.Cli -- `
-  --config training.example.json --generate "日本の歴史は"
-```
-
-Generation can also be fully configured in `generate.json`, including an
-explicit SafeTensors file. Output is flushed as each decoded piece becomes
-available:
-
-```powershell
-dotnet run --configuration Release --project NNtrain.Cli -- `
-  --generate-config generate.json
-```
-
-For Arc Transformer inference, set `inferenceDeviceIndices: [0, 1]` and
-`arcInferenceMode: "tensorParallel"` to use both GPUs for one generated sequence.
-`"single"` uses the first listed GPU. `"auto"` warms and times both routes
-three times each, measuring prompt prefill and incremental decode separately.
-It estimates the requested generation time, including any full-window suffix,
-and uses both GPUs only when that estimate is at least 5% faster. The CLI prints
-the timings and selected route. These settings are independent of training `deviceIndices`.
-They can be set in the training configuration for `--config ... --generate`, or
-overridden in `generate.json` for `--generate-config`.
-
-Arc Transformer generation can retain per-layer K/V on each participating GPU
-and compute only the next token. Both commands keep one generation session
-alive. Once the context window slides, generation recomputes the window because
-absolute positional embeddings change. Unsupported cache shapes use the full
-prefix path. One-token projections can read packed weights directly; the
-inference options in `ArcExecutionOptions` allow comparison with the older paths.
-The [Arc generation tuning report](docs/arc-generation-tuning-2026-09-24.md)
-records the measured speedups, memory counters, numerical differences and
-reproducible benchmark commands. Low-precision reduction changes can change a
-seeded topK continuation even when greedy choices agree.
-
-Set `sampling` to `"topK"` and provide `topK`/`temperature`, or set it to
-`"greedy"`. `templator` is accepted as a backwards-compatible alias for
-`temperature`.
+公開済みの統合状態は [開発統合の記録](docs/development-integration-status-2026-10-06.md)、API の変更は [セキュリティ修正記録](docs/security-scan-current-2026-10-06.md) を参照してください。ベンチマークの生ログ・重み・録音・私用データは配布物に含めません。

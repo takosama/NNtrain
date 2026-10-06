@@ -20,11 +20,13 @@ public partial class MainWindow
     private bool _asrRecognizing;
     private long _asrProcessedSamples;
     private AudioChatDraft? _audioChatDraft;
+    private ILocalAsrPreviewControl? _asrPreviewControl;
+    private bool _asrStopRequested;
 
     private void InitializeAudio()
     {
         AsrDirectoryBox.Text = Path.Combine(FindModelsDirectory() ?? Path.Combine(AppContext.BaseDirectory, "models"), "nemotron-3.5-asr-streaming-0.6b");
-        GpuChoice[] devices = _gpus.Where(x => x.DeviceIndices.Length <= 1).ToArray();
+        GpuChoice[] devices = _gpus.Where(x => x.DeviceIndices.Length <= 1).Prepend(new GpuChoice("CPU", [])).ToArray();
         AsrGpuComboBox.ItemsSource = devices;
         AsrGpuComboBox.SelectedItem = devices.FirstOrDefault(x => x.DeviceIndices.Length == 1) ?? devices.FirstOrDefault();
         AsrModelComboBox.ItemsSource = new[]
@@ -80,17 +82,18 @@ public partial class MainWindow
         await RunAudioAsync((epoch, ct) =>
         {
             BeginAudioChatInput();
-            return Task.Run(() =>
+            return Task.Run(async () =>
             {
                 using var file = File.OpenRead(dialog.FileName);
                 float[] samples = Pcm16Wave.Read(file).To16Khz(ct);
                 var stream = model.CreateStream();
+                using var streamLifetime = stream as IDisposable;
                 for (int offset = 0; offset < samples.Length; offset += 5120)
                 {
                     ct.ThrowIfCancellationRequested();
                     stream.Append(samples.AsSpan(offset, Math.Min(5120, samples.Length - offset)), partial: text => ShowAudioPartial(epoch, text), ct: ct);
                 }
-                CompleteAudio(epoch, stream.Append([], final: true, ct: ct), stream.CacheBytes);
+                await CompleteAudio(epoch, stream.Append([], final: true, ct: ct), stream.CacheBytes);
             }, ct);
         });
     }
@@ -117,21 +120,41 @@ public partial class MainWindow
         return Task.Run(async () =>
         {
             var stream = model.CreateStream();
+            using var streamLifetime = stream as IDisposable;
+            Volatile.Write(ref _asrPreviewControl, stream as ILocalAsrPreviewControl);
+            if (Volatile.Read(ref _asrStopRequested)) _asrPreviewControl?.RequestFinalization();
             long samples = 0;
             await foreach (float[] chunk in audio.ReadAllAsync(ct))
             {
-                samples += chunk.Length;
+                float[] input = chunk;
+                if (model is ParakeetCtcModel && audio.TryRead(out float[]? queued))
+                {
+                    // Keep every sample, but compute one preview of the newest
+                    // prefix instead of replaying snapshots that are already old.
+                    var pending = new List<float[]> { chunk, queued };
+                    while (pending.Count < 17 && audio.TryRead(out queued)) pending.Add(queued);
+                    input = new float[pending.Sum(part => part.Length)];
+                    int offset = 0;
+                    foreach (float[] part in pending) { part.CopyTo(input, offset); offset += part.Length; }
+                }
+                samples += input.Length;
                 if (samples > 16000L * 300) throw new InvalidOperationException("録音は5分までです。");
-                stream.Append(chunk, partial: text => ShowAudioPartial(epoch, text), ct: ct);
+                // A successfully completed, empty source contains no future tail.
+                // Treat its last batch as final directly rather than an optional preview.
+                bool finalInput = model is ParakeetCtcModel && audio.Completion.IsCompletedSuccessfully;
+                string text = stream.Append(input, finalInput,
+                    partial: finalInput ? null : text => ShowAudioPartial(epoch, text), ct: ct);
                 Interlocked.Exchange(ref _asrProcessedSamples, samples);
+                if (finalInput) { await CompleteAudio(epoch, text, stream.CacheBytes); return; }
             }
-            CompleteAudio(epoch, stream.Append([], true, ct: ct), stream.CacheBytes);
+            await CompleteAudio(epoch, stream.Append([], true, ct: ct), stream.CacheBytes);
         }, ct);
     }
     private async Task RunAudioAsync(Func<long, CancellationToken, Task> operation)
     {
         if (_asrActive) return;
         _asrActive = true;
+        Volatile.Write(ref _asrStopRequested, false);
         long epoch = ++_asrEpoch;
         using var cancellation = new CancellationTokenSource();
         _asrCancellation = cancellation;
@@ -144,6 +167,7 @@ public partial class MainWindow
         {
             _microphone?.Dispose(); _microphone = null;
             _asrCompletedEpoch = epoch;
+            Volatile.Write(ref _asrPreviewControl, null);
             _asrCancellation = null; _asrTask = null; _asrActive = false; _asrRecognizing = false;
             UpdateControls();
         }
@@ -153,7 +177,7 @@ public partial class MainWindow
         if (epoch != _asrEpoch || epoch == _asrCompletedEpoch || _closingFinished) return;
         ApplyAudioChatText(text);
     }), System.Windows.Threading.DispatcherPriority.Background);
-    private void CompleteAudio(long epoch, string text, long cacheBytes) => Dispatcher.BeginInvoke(new Action(() =>
+    private Task CompleteAudio(long epoch, string text, long cacheBytes) => Dispatcher.InvokeAsync(new Action(() =>
     {
         if (epoch != _asrEpoch || _closingFinished) return;
         _asrCompletedEpoch = epoch;
@@ -161,9 +185,11 @@ public partial class MainWindow
         _audioChatDraft = null;
         AsrStatusText.Text = $"認識完了。CPUキャッシュ {cacheBytes / 1024d:N1} KiB、Arcバッファ最大 {(_asrModel?.PeakDeviceBufferBytes ?? 0) / (1024d * 1024):N1} MiB。ドライバー領域を含む総VRAMは未測定。";
         UpdateAudioControls();
-    }));
+    })).Task;
     private void AsrStop_Click(object sender, RoutedEventArgs e)
     {
+        Volatile.Write(ref _asrStopRequested, true);
+        Volatile.Read(ref _asrPreviewControl)?.RequestFinalization();
         try { _microphone?.Stop(); AsrStatusText.Text = "録音を停止。残りの音声を確定中…"; AsrStopButton.IsEnabled = false; }
         catch (Exception ex) { CancelAudio(); AsrStatusText.Text = ex.Message; }
     }
@@ -179,7 +205,7 @@ public partial class MainWindow
         AsrDirectoryBox.Text = Path.Combine(FindModelsDirectory() ?? Path.Combine(AppContext.BaseDirectory, "models"), choice.Folder);
         AsrSettingsExpander.Header = choice.Label;
         AsrStatusText.Text = choice.Parakeet
-            ? "Parakeet日本語CTC：4秒ごとに発話を再認識するため途中の文が変わる場合があります。1発話は30秒まで。FP16を読み込んでください。"
+            ? "Parakeet日本語CTC：最初は約1秒、以後は約2秒以上の間隔で発話を再認識します。途中の文は変わります。1発話は30秒まで。FP16を読み込んでください。"
             : "Nemotron日本語：キャッシュ付き逐次認識。FP16を読み込んでください。";
         UpdateAudioControls();
     }

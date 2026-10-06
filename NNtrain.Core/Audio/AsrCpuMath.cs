@@ -27,10 +27,16 @@ internal static class AsrCpuMath
         mean /= input.Length;
         foreach (float value in input) variance += (value - mean) * (value - mean);
         float scale = 1 / MathF.Sqrt(variance / input.Length + 1e-5f);
-        return input.Select((value, i) => (value - mean) * scale * (float)weight.Values[i] + (float)bias.Values[i]).ToArray();
+        var result = new float[input.Length];
+        for (int i = 0; i < input.Length; i++) result[i] = (input[i] - mean) * scale * (float)weight.Values[i] + (float)bias.Values[i];
+        return result;
     }
 
-    internal static float Sigmoid(float value) => value >= 0 ? 1 / (1 + MathF.Exp(-value)) : MathF.Exp(value) / (1 + MathF.Exp(value));
+    internal static float Sigmoid(float value)
+    {
+        float exponential = MathF.Exp(-MathF.Abs(value));
+        return value >= 0 ? 1 / (1 + exponential) : exponential / (1 + exponential);
+    }
     internal static void Silu(float[] values) { for (int i = 0; i < values.Length; i++) values[i] *= Sigmoid(values[i]); }
     internal static void Relu(float[] values) { for (int i = 0; i < values.Length; i++) values[i] = Math.Max(0, values[i]); }
     internal static void Add(float[] target, float[] source, float scale = 1)

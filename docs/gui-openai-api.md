@@ -1,67 +1,27 @@
 # NNtrain GUI local API
 
-Starting `NNtrain.Gui.exe` also starts a local OpenAI-compatible server in a
-separate console window. The GUI sends its own preload and chat requests to
-that server over HTTP. The console shows model loading, request settings,
-generated text, completion statistics, and errors. Closing the GUI stops its
-server and releases the resident model.
+The Windows GUI starts a separate loopback API server and sends preload, image preparation and chat requests to it. The console shows loading and inference progress; closing the GUI stops its own server. The current GUI/server inference route supports compatible `general.architecture=qwen35` GGUF models.
 
-The server binds only to `127.0.0.1`. Its chosen port and base URL are printed
-in the server console. The API is intended for programs on the same computer;
-it has no API-key authentication or remote-network listener.
+## Authentication and startup
 
-## Start the GUI
+The server listens on `127.0.0.1` only. All routes, including health and internal routes, require session-specific `Authorization: Bearer <token>`. The GUI creates a random token and passes it privately to its child server. A manually started server prints its own session token when `NNTRAIN_GUI_SERVER_TOKEN` has not been supplied. Do not publish the token.
 
 ```powershell
-.\NNtrain.Gui.exe --model "C:\models\Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf" `
-  --lora "C:\checkpoints\tuku-qwen35\adapter.bin" `
-  --temperature 0.6 --top_p 0.95 --top_k 20 --maxtokens 512 `
-  --stream on --think on
+.\NNtrain.Gui.exe --server --port 8000
 ```
 
-`--lora` is optional. It accepts an NNtrain `adapter.bin`; exported GGUF LoRA
-adapters are not loadable by this inference path. The GUI also accepts the
-legacy misspelling `--tempreture`. The model and LoRA can be changed in the
-GUI. A parent-directory path component (`../` or `..\`) is rejected in
-startup options and API requests. Absolute paths and ordinary paths within
-the current directory are accepted.
+For GUI startup and publishing, see the [GUI guide](../NNtrain.Gui/README.md). GUI startup accepts `--model`, optional `--lora`, `--temperature`, `--top_p`, `--top_k`, `--maxtokens`, `--stream on|off` and `--think on|off`. LoRA may be an NNtrain `.bin` or an NNtrain-exported compatible Qwen3.5 F32 GGUF adapter; training resume requires `.bin`. Bonsai PQ2_0 / PTQ1_0 LoRA is unsupported.
 
-Use **プリロード** to load the selected model and LoRA before chatting. The
-server keeps weights and reusable inference state resident. Five minutes
-after the last completed preload or generation, it releases the model and GPU
-memory. The next request loads it again.
+Requests also check the local Host, peer and browser Origin. Model paths reject parent traversal and network paths. POST routes require JSON. Admission is bounded to four requests, with overload returning 429 before body parsing. The body limit is 40 MiB and JSON parsing has a 15-second deadline. These checks do not make this a remote service.
 
-## API
+## Chat example
 
-`GET /v1/models` lists available GGUF models. `POST /v1/chat/completions`
-accepts standard text `messages`, `model`, `temperature`, `top_p`,
-`max_tokens` (or `max_completion_tokens`), and `stream`. Streaming replies are
-Server-Sent Events containing `chat.completion.chunk` objects and a final
-`data: [DONE]` event. Nonstreaming replies are `chat.completion` objects.
-
-The local extensions `top_k`, `think`, `lora`, `devices`, and
-`messages[].assistant_prefix` control NNtrain inference. `think` selects the
-Qwen chat-template mode. The GUI keeps prior assistant answers in `messages`
-without previous thinking text; `assistant_prefix` preserves the token prefix
-needed for KV reuse. The response text may include model-generated
-`<think>` / `</think>` markers. The GUI shows these in its collapsible
-thinking panel.
-
-For streamed GUI requests, `prime_history` is enabled. After the final SSE
-event, the server processes the visible answer without its thinking text and
-keeps that conversation prefix in the GPU KV/recurrent cache. The GUI can show
-the completed answer while this work continues. If the next request arrives
-before priming finishes, it waits for the same work; no prior thinking text is
-added back to the prompt. External API clients can opt in with
-`"prime_history": true` on streamed requests. To reuse that state, the next
-request must include the visible answer as an assistant message with
-`assistant_prefix` set to `"<think>\n</think>\n"` when `think` was on, or
-`"<think>\n\n</think>\n\n"` when it was off. Ordinary OpenAI clients that omit
-this extension will prefill the conversation again.
+Use the token printed by your manually started server. Replace the model path and token below with your own values.
 
 ```powershell
+$headers = @{ Authorization = 'Bearer <session-token>' }
 $body = @{
-  model = 'C:\models\Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf'
+  model = 'C:\models\base.gguf'
   messages = @(@{ role = 'user'; content = 'こんにちは' })
   max_tokens = 64
   temperature = 0.6
@@ -72,11 +32,29 @@ $body = @{
   lora = $null
   devices = @(0, 1)
 } | ConvertTo-Json -Depth 6
-Invoke-RestMethod 'http://127.0.0.1:<port>/v1/chat/completions' `
-  -Method Post -ContentType 'application/json' -Body $body
+Invoke-RestMethod 'http://127.0.0.1:8000/v1/chat/completions' `
+  -Headers $headers -Method Post -ContentType 'application/json' -Body $body
 ```
 
-The GUI also uses `POST /internal/load`, `POST /internal/unload`, and
-`GET /internal/state` for preload, release, and status. These routes are local
-extensions and are not OpenAI API routes. Requests to the GPU are serialized
-so a model switch cannot interrupt another request's load-and-generate pair.
+`stream: true` returns Server-Sent Events with `chat.completion.chunk` objects and a final `data: [DONE]`. Nonstreaming requests return a `chat.completion` object. `max_completion_tokens` is accepted as an alternative to `max_tokens`. This is a local implementation of selected OpenAI-compatible routes, not a complete implementation of the OpenAI API.
+
+## Routes and reusable state
+
+| Route | Purpose |
+| --- | --- |
+| `GET /health` | Server health |
+| `GET /v1/models` | Available GGUF models |
+| `POST /v1/chat/completions` | Chat and generation |
+| `POST /internal/load` | Preload model, optional adapter / image model |
+| `POST /internal/prepare-image` | Image preparation |
+| `POST /internal/unload` | Release model |
+| `GET /internal/state` | Load and inference state |
+| `POST /internal/shutdown` | Stop this server; requires valid JSON and authentication |
+
+Internal routes are NNtrain extensions. GPU requests are serialized so a model switch cannot interrupt a load-and-generate pair. After five minutes without a completed preload or generation the server releases its model; a later request reloads it.
+
+Extensions `top_k`, `think`, `lora`, `devices` and `messages[].assistant_prefix` select local inference settings. The GUI keeps prior visible answers without thinking text. Streamed GUI requests enable `prime_history`: after the final event, the server prepares the visible answer prefix for later KV / recurrent-state reuse. A subsequent request waits for this preparation if needed.
+
+External streamed clients may opt in with `prime_history: true`. The next assistant message must preserve the visible answer and use `assistant_prefix: "<think>\n</think>\n"` when Thinking was on, or `"<think>\n\n</think>\n\n"` when it was off. Clients that omit the extension prefill the conversation again. Prefix mismatches and cancellations safely invalidate reuse. The response may contain model-produced thinking delimiters; clients decide how to display them.
+
+For image and ASR usage, follow the [GUI guide](../NNtrain.Gui/README.md). ASR recognition runs locally in the GUI/Core path; it is not a cloud transcription route. Its edited final text enters the usual chat request.
