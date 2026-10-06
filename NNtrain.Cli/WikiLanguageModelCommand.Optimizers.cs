@@ -1,4 +1,5 @@
 using NNtrain.Cuda.Execution;
+using NNtrain.Runtime.Execution;
 using NNtrain.Training.Optimization;
 
 namespace NNtrain;
@@ -49,6 +50,13 @@ internal static partial class WikiLanguageModelCommand
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(config);
+        // Standalone checkpoint helpers may initialize outside a session.
+        // Keep retained optimizer state in the model's numeric contract and
+        // restore the caller's ambient policy after initialization.
+        using IDisposable? precisionScope = TensorExecutionContext.ActivePrecisionPolicy is null
+            ? TensorExecutionContext.PushPrecisionPolicy(PrecisionPolicy.Parse(
+                TensorPrecisionModeNames.Format(model.PrecisionMode)))
+            : null;
         bool useBFloat16Moments =
             model.PrecisionMode == TensorPrecisionMode.BFloat16;
 

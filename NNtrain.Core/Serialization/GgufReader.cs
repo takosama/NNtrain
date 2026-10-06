@@ -20,10 +20,17 @@ public sealed class GgufReader : IDisposable
     private readonly Dictionary<string, object> _metadata = new(StringComparer.Ordinal);
     private readonly List<GgufTensorInfo> _tensors = [];
     private readonly long _dataOffset;
+    private readonly GgufReadLimits _limits;
+    private long _decodedBytes;
 
-    public GgufReader(string path)
+    public GgufReader(string path) : this(path, new GgufReadLimits()) { }
+
+    public GgufReader(string path, GgufReadLimits limits)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(limits);
+        limits.Validate();
+        _limits = limits;
         FilePath = Path.GetFullPath(path);
         _stream = File.Open(FilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
         _reader = new BinaryReader(_stream, Encoding.UTF8, leaveOpen: true);
@@ -38,14 +45,19 @@ public sealed class GgufReader : IDisposable
 
             ulong tensorCount = _reader.ReadUInt64();
             ulong metadataCount = _reader.ReadUInt64();
-            if (tensorCount > int.MaxValue || metadataCount > int.MaxValue)
+            if (tensorCount > (ulong)_limits.MaximumTensors
+                || metadataCount > (ulong)_limits.MaximumMetadataEntries)
                 throw new InvalidDataException("GGUF table is too large.");
+            // Minimum encoded sizes: metadata key/type/value and tensor name/rank/
+            // one dimension/type/offset. Check before allocating table entries.
+            EnsureRemaining(checked(metadataCount * 13 + tensorCount * 32));
+            Reserve(checked((long)metadataCount * 128 + (long)tensorCount * 160));
 
             for (ulong i = 0; i < metadataCount; i++)
             {
                 string key = ReadString();
                 var type = (GgufValueType)_reader.ReadUInt32();
-                _metadata.Add(key, ReadValue(type));
+                _metadata.Add(key, ReadValue(type, 0));
             }
 
             for (ulong i = 0; i < tensorCount; i++)
@@ -114,7 +126,11 @@ public sealed class GgufReader : IDisposable
         => _tensors.FirstOrDefault(t => t.Name == name)
            ?? throw new KeyNotFoundException($"GGUF tensor '{name}' was not found.");
 
-    private object ReadValue(GgufValueType type) => type switch
+    private object ReadValue(GgufValueType type, int depth, bool allocationReserved = false)
+    {
+        EnsureRemaining(MinimumEncodedSize(type));
+        if (!allocationReserved) Reserve(32);
+        return type switch
     {
         GgufValueType.UInt8 => _reader.ReadByte(),
         GgufValueType.Int8 => _reader.ReadSByte(),
@@ -125,12 +141,13 @@ public sealed class GgufReader : IDisposable
         GgufValueType.Float32 => _reader.ReadSingle(),
         GgufValueType.Bool => ReadBool(),
         GgufValueType.String => ReadString(),
-        GgufValueType.Array => ReadArray(),
+        GgufValueType.Array => ReadArray(depth + 1),
         GgufValueType.UInt64 => _reader.ReadUInt64(),
         GgufValueType.Int64 => _reader.ReadInt64(),
         GgufValueType.Float64 => _reader.ReadDouble(),
         _ => throw new NotSupportedException($"GGUF metadata type {(uint)type} is unsupported.")
-    };
+        };
+    }
 
     private bool ReadBool()
     {
@@ -138,24 +155,59 @@ public sealed class GgufReader : IDisposable
         return value switch { 0 => false, 1 => true, _ => throw new InvalidDataException("Invalid GGUF bool.") };
     }
 
-    private object[] ReadArray()
+    private object[] ReadArray(int depth)
     {
+        if (depth > _limits.MaximumNestingDepth)
+            throw new InvalidDataException("GGUF metadata nesting limit exceeded.");
         var elementType = (GgufValueType)_reader.ReadUInt32();
         ulong count = _reader.ReadUInt64();
-        if (count > int.MaxValue) throw new InvalidDataException("GGUF metadata array is too large.");
+        ulong minimumSize = MinimumEncodedSize(elementType); // also rejects unknown empty-array types
+        if (count > (ulong)_limits.MaximumArrayElements)
+            throw new InvalidDataException("GGUF metadata array is too large.");
+        EnsureRemaining(checked(count * minimumSize));
+        // Reserve the slots and every immediate boxed/container value together,
+        // before the array allocation. Variable-size child contents reserve separately.
+        Reserve(checked(32L + (long)count * (IntPtr.Size + 32)));
         var values = new object[(int)count];
-        for (int i = 0; i < values.Length; i++) values[i] = ReadValue(elementType);
+        for (int i = 0; i < values.Length; i++) values[i] = ReadValue(elementType, depth, allocationReserved: true);
         return values;
     }
 
     private string ReadString()
     {
         ulong length = _reader.ReadUInt64();
-        if (length > int.MaxValue) throw new InvalidDataException("GGUF string is too large.");
+        if (length > (ulong)_limits.MaximumStringBytes)
+            throw new InvalidDataException("GGUF string is too large.");
+        EnsureRemaining(length);
+        Reserve(checked(32L + (long)length * 3));
         byte[] bytes = _reader.ReadBytes((int)length);
         if ((ulong)bytes.Length != length) throw new EndOfStreamException();
         return Encoding.UTF8.GetString(bytes);
     }
+
+    private void EnsureRemaining(ulong bytes)
+    {
+        if (bytes > (ulong)(_stream.Length - _stream.Position))
+            throw new EndOfStreamException("GGUF header value exceeds remaining file bytes.");
+    }
+
+    private void Reserve(long bytes)
+    {
+        if (bytes > _limits.MaximumDecodedBytes - _decodedBytes)
+            throw new InvalidDataException("GGUF decoded metadata budget exceeded.");
+        _decodedBytes = checked(_decodedBytes + bytes);
+    }
+
+    private static ulong MinimumEncodedSize(GgufValueType type) => type switch
+    {
+        GgufValueType.UInt8 or GgufValueType.Int8 or GgufValueType.Bool => 1,
+        GgufValueType.UInt16 or GgufValueType.Int16 => 2,
+        GgufValueType.UInt32 or GgufValueType.Int32 or GgufValueType.Float32 => 4,
+        GgufValueType.UInt64 or GgufValueType.Int64 or GgufValueType.Float64
+            or GgufValueType.String => 8,
+        GgufValueType.Array => 12,
+        _ => throw new NotSupportedException($"GGUF metadata type {(uint)type} is unsupported.")
+    };
 
     private static long Align(long value, int alignment)
         => checked((value + alignment - 1) / alignment * alignment);

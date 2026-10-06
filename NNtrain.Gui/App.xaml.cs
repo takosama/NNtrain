@@ -71,10 +71,12 @@ public partial class App : Application
         if (port is null)
             throw new ArgumentException("サーバーには --port が必要です。");
 
-        await using var server = new LocalOpenAiServer();
+        string? suppliedToken = Environment.GetEnvironmentVariable(LocalOpenAiServer.TokenEnvironmentVariable);
+        await using var server = new LocalOpenAiServer(suppliedToken);
         using var cancellation = new CancellationTokenSource();
         Uri address = await server.StartAsync(port.Value, lora, cancellation.Token);
         Console.WriteLine($"NNtrain OpenAI API server: {address}");
+        if (suppliedToken is null) Console.WriteLine($"Session Authorization: Bearer {server.AuthenticationToken}");
         if (parentPid is int pid)
         {
             using Process parent = Process.GetProcessById(pid);

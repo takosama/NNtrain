@@ -5,6 +5,31 @@ using Xunit;
 
 public sealed class WikiParquetCorpusTests
 {
+    [Theory]
+    [InlineData(null)]
+    [InlineData(42)]
+    public async Task OversizedRowGroupIsRejectedBeforeTextMaterialization(int? seed)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"nntrain-parquet-limit-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var field = new Parquet.Schema.DataField<string>("text");
+            var schema = new Parquet.Schema.ParquetSchema(field);
+            await using (Stream stream = File.Create(Path.Combine(directory, "large.parquet")))
+            await using (Parquet.ParquetWriter writer = await Parquet.ParquetWriter.CreateAsync(schema, stream, cancellationToken: Xunit.TestContext.Current.CancellationToken))
+            {
+                using var group = writer.CreateRowGroup();
+                await group.WriteAsync(field, new string[1_000_001]);
+            }
+            await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            {
+                await foreach (string text in WikiParquetCorpus.ReadTextsAsync(directory,
+                    maxDocuments: 1, shuffleSeed: seed, cancellationToken: Xunit.TestContext.Current.CancellationToken)) { }
+            });
+        }
+        finally { Directory.Delete(directory, true); }
+    }
     [Fact]
     public void ShardOrderIsSortedWithoutSeedAndDeterministicWithSeed()
     {

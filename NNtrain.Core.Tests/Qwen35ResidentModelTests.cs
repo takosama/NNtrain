@@ -491,13 +491,16 @@ public sealed class Qwen35ResidentModelTests
     }
 
     internal static TemporaryQwenGguf CreateFixture(bool tiedOutput, uint contextLength = 8,
-        bool nonFiniteOutputNorm = false, bool iq2Qkv = false, bool iq2Gate = false)
+        bool nonFiniteOutputNorm = false, bool iq2Qkv = false, bool iq2Gate = false,
+        uint layerCount = 2)
     {
+        if (layerCount < 2 || layerCount % 2 != 0)
+            throw new ArgumentOutOfRangeException(nameof(layerCount));
         var metadata = new Dictionary<string, object>
         {
             ["general.architecture"] = "qwen35",
             ["tokenizer.ggml.tokens"] = new[] { "a", "b", "c", "d" },
-            ["qwen35.block_count"] = 2u,
+            ["qwen35.block_count"] = layerCount,
             ["qwen35.embedding_length"] = 256u,
             ["qwen35.attention.head_count"] = 2u,
             ["qwen35.attention.head_count_kv"] = 1u,
@@ -544,6 +547,17 @@ public sealed class Qwen35ResidentModelTests
             new("blk.1.attn_k_norm.weight", [128], Qwen2Gguf.F32Type, 0),
             new("blk.1.attn_output.weight", [256, 256], Qwen2Gguf.Q4KType, 0)
         ];
+        if (layerCount > 2)
+        {
+            GgufTensorInfo[] templates = directory;
+            directory = [.. directory, .. Enumerable.Range(2, checked((int)layerCount - 2))
+                .SelectMany(layer => templates
+                    .Where(tensor => tensor.Name.StartsWith($"blk.{layer % 2}.", StringComparison.Ordinal))
+                    .Select(tensor => tensor with
+                    {
+                        Name = $"blk.{layer}." + tensor.Name[$"blk.{layer % 2}.".Length..]
+                    }))];
+        }
         using var payload = new MemoryStream();
         var tensors = new List<GgufTensorInfo>();
         foreach (GgufTensorInfo tensor in directory)

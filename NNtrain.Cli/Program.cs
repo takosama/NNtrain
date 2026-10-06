@@ -37,6 +37,8 @@ internal static partial class Program
             return QwenGgufCommand.Run(args, output, error);
         if (args.Length > 0 && string.Equals(args[0], "qwen-lora", StringComparison.OrdinalIgnoreCase))
             return QwenLoraCommand.Run(args, output, error);
+        if (args.Length > 0 && string.Equals(args[0], "qwen-lora-prepare", StringComparison.OrdinalIgnoreCase))
+            return QwenLoraPreparation.Run(args, output, error);
 
         string configurationPath;
         string? generatePrompt = null;

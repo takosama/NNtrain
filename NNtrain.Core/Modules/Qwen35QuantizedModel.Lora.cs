@@ -19,6 +19,10 @@ public sealed partial class Qwen35QuantizedModel
     internal IReadOnlyList<long> LastIq2GpuProjectionCacheBudgetBytesByDevice { get; private set; } = [];
     // Lets tiny GGUF tests exercise a full cache without a million-byte activation.
     internal long? LoraIq2ProjectionCacheBudgetBytesOverride { get; set; }
+    // Tiny fixture tests can reserve exactly one hidden checkpoint per Arc.
+    internal long? LoraHybridCheckpointBudgetBytesOverride { get; set; }
+    internal int LastHybridCheckpointCount { get; private set; }
+    internal IReadOnlyList<long> LastHybridCheckpointBytesByDevice { get; private set; } = [];
     private readonly Dictionary<string, Qwen35LoraMatrix> _lora = new(StringComparer.Ordinal);
     private Qwen35LoraOptions? _loraOptions;
     public int LoraStep { get; private set; }
@@ -181,6 +185,8 @@ public sealed partial class Qwen35QuantizedModel
         LastIq2GpuProjectionCacheStats = default;
         LastIq2GpuProjectionCachePeakBytesByDevice = [];
         LastIq2GpuProjectionCacheBudgetBytesByDevice = [];
+        LastHybridCheckpointCount = 0;
+        LastHybridCheckpointBytesByDevice = [];
         var d = Descriptor; int rows = tokens.Count - 1, valid = tokens.Count - start;
         if (rows > LoraCheckpointThresholdRows)
             return CanKeepLoraCheckpointsOnGpu(rows)
@@ -211,7 +217,39 @@ public sealed partial class Qwen35QuantizedModel
         Qwen35GgufDescriptor d = Descriptor;
         int rows = tokens.Count - 1, valid = tokens.Count - start;
         int hiddenElements = checked(rows * d.EmbeddingLength);
+        bool forwardCopyHandoff = _options.TrainingHostCheckpointForwardCopyHandoff;
+        bool forwardHandoff = _options.TrainingHostCheckpointBufferHandoff
+            || _options.TrainingHostCheckpointForwardBufferHandoff || forwardCopyHandoff;
+        bool backwardHandoff = _options.TrainingHostCheckpointGpuGradients
+            && (_options.TrainingHostCheckpointBufferHandoff
+                || _options.TrainingHostCheckpointBackwardBufferHandoff);
+        bool asyncRead = backward && _options.TrainingHostCheckpointAsyncRead
+            && forwardHandoff && !forwardCopyHandoff;
         var checkpoints = new float[d.LayerCount + 1][];
+        var gpuCheckpoints = new ArcBuffer?[d.LayerCount + 1];
+        bool[] retainOnGpu = backward ? SelectHybridHostCheckpoints(rows) : new bool[d.LayerCount + 1];
+        LastHybridCheckpointCount = retainOnGpu.Count(keep => keep);
+        LastHybridCheckpointBytesByDevice = _lanes.Select(lane =>
+            (long)retainOnGpu.Select((keep, index) => (keep, index)).Count(pair => pair.keep
+                && ReferenceEquals(_states[pair.index].Lane, lane)) * hiddenElements * sizeof(float)).ToArray();
+        long iq2ByteLimit = LoraIq2ProjectionCacheBudgetBytesOverride
+            ?? checked((long)_options.TrainingIQ2ProjectionCacheMiB * 1024 * 1024);
+        Iq2BaseOutputCache? iq2Cache = null;
+        if (backward && _options.TrainingIQ2ProjectionCacheMiB > 0)
+        {
+            var projections = _matrices.Values
+                .Where(matrix => matrix.IsIq2S && matrix.Name.StartsWith("blk.", StringComparison.Ordinal))
+                .Select(matrix => (matrix.Name, matrix._inputWidth, matrix.OutputWidth)).ToArray();
+            HashSet<string> targets = _options.TrainingIQ2ProjectionCachePrioritize
+                ? SelectIq2ProjectionCacheTargets(projections, rows, iq2ByteLimit)
+                : projections.Select(projection => projection.Name).ToHashSet(StringComparer.Ordinal);
+            iq2Cache = new Iq2BaseOutputCache(iq2ByteLimit, targets);
+        }
+        ArcBuffer? carriedForward = null;
+        ArcExecutionLane.PendingRead? carriedForwardRead = null;
+        ArcExecutionLane? carriedForwardLane = null;
+        ArcBuffer? upstreamGpu = null;
+        ArcExecutionLane? upstreamGpuLane = null;
         try
         {
             Matrix embedding = _matrices["token_embd.weight"];
@@ -224,13 +262,73 @@ public sealed partial class Qwen35QuantizedModel
             for (int layer = 0; layer < d.LayerCount; layer++)
             {
                 ArcExecutionLane lane = _states[layer].Lane;
+                if (carriedForward is not null && !ReferenceEquals(carriedForwardLane, lane))
+                {
+                    carriedForwardRead?.Dispose();
+                    carriedForwardRead = null;
+                    carriedForward.Dispose();
+                    carriedForward = null;
+                    carriedForwardLane = null;
+                }
                 using var tape = new Qwen35TrainingTape();
-                using ArcBuffer source = lane.Upload(checkpoints[layer]);
-                V input = tape.Add(lane, source, rows, d.EmbeddingLength, false, ownsData: false);
-                V output = ForwardLoraLayer(tape, layer, input, rows,
-                    captureDeltaCheckpoints: false);
-                checkpoints[layer + 1] = new float[hiddenElements];
-                lane.Read(output.Data, checkpoints[layer + 1]);
+                ArcBuffer? uploaded = carriedForward is null ? lane.Upload(checkpoints[layer]) : null;
+                try
+                {
+                    ArcBuffer source = carriedForward ?? uploaded!;
+                    V input = tape.Add(lane, source, rows, d.EmbeddingLength, false, ownsData: false);
+                    V output = ForwardLoraLayer(tape, layer, input, rows,
+                        iq2Cache: iq2Cache, captureIq2Base: iq2Cache is not null,
+                        captureDeltaCheckpoints: false);
+                    bool nextConsumerSharesLane = layer == d.LayerCount - 1
+                        || ReferenceEquals(_states[layer + 1].Lane, lane);
+                    bool retainOutput = retainOnGpu[layer + 1];
+                    ArcExecutionLane.PendingRead? nextRead = null;
+                    try
+                    {
+                        if (!retainOutput)
+                        {
+                            checkpoints[layer + 1] = new float[hiddenElements];
+                            if (asyncRead && nextConsumerSharesLane)
+                                nextRead = lane.ReadAsync(output.Data, checkpoints[layer + 1]);
+                            else lane.Read(output.Data, checkpoints[layer + 1]);
+                        }
+                        if (forwardCopyHandoff && nextConsumerSharesLane)
+                        {
+                            // The input is dead after this forward pass. Reuse its
+                            // allocation for the next layer so the output tape can
+                            // return its buffer to the pool immediately.
+                            lane.CopyBytes(output.Data, source, 0, 0,
+                                checked(hiddenElements * sizeof(float)));
+                            carriedForward = source;
+                            carriedForwardLane = lane;
+                            uploaded = null; // ownership moved to carriedForward
+                        }
+                        else
+                        {
+                            carriedForwardRead?.Dispose();
+                            carriedForwardRead = null;
+                            carriedForward?.Dispose();
+                            carriedForward = null;
+                            carriedForwardLane = null;
+                            if (retainOutput)
+                            {
+                                ArcBuffer saved = output.DetachData();
+                                gpuCheckpoints[layer + 1] = saved;
+                                carriedForward = saved.Borrow();
+                                carriedForwardLane = lane;
+                            }
+                            else if (forwardHandoff && !forwardCopyHandoff)
+                            {
+                                carriedForward = output.DetachData();
+                                carriedForwardLane = lane;
+                                carriedForwardRead = nextRead;
+                                nextRead = null; // ownership moved with carriedForward
+                            }
+                        }
+                    }
+                    finally { nextRead?.Dispose(); }
+                }
+                finally { uploaded?.Dispose(); }
                 if (!backward) checkpoints[layer] = null!;
             }
 
@@ -239,7 +337,9 @@ public sealed partial class Qwen35QuantizedModel
             using (var tape = new Qwen35TrainingTape())
             {
                 ArcExecutionLane lastLane = _states[d.LayerCount - 1].Lane;
-                using ArcBuffer source = lastLane.Upload(checkpoints[d.LayerCount]);
+                using ArcBuffer? uploaded = carriedForward is null
+                    ? lastLane.Upload(checkpoints[d.LayerCount]) : null;
+                ArcBuffer source = carriedForward ?? uploaded!;
                 V hidden = tape.Add(lastLane, source, rows, d.EmbeddingLength, backward, ownsData: false);
                 V normalized = tape.Norm(hidden, _dense["output_norm.weight"], d.RmsEpsilon);
                 V final = tape.Move(normalized, OutputMatrix.Lane);
@@ -249,10 +349,30 @@ public sealed partial class Qwen35QuantizedModel
                     tape.Backward();
                     if (hidden.Gradient is null)
                         throw new InvalidOperationException("The output head did not propagate its input gradient.");
-                    upstream = new float[hiddenElements];
-                    lastLane.Read(hidden.Gradient, upstream);
+                    if (_options.TrainingHostCheckpointGpuGradients)
+                    {
+                        if (backwardHandoff)
+                            upstreamGpu = hidden.DetachGradient();
+                        else
+                        {
+                            upstreamGpu = lastLane.Allocate(hiddenElements);
+                            CopyLoraHidden(lastLane, hidden.Gradient, lastLane, upstreamGpu,
+                                hiddenElements, checked(hiddenElements * sizeof(float)));
+                        }
+                        upstreamGpuLane = lastLane;
+                    }
+                    else
+                    {
+                        upstream = new float[hiddenElements];
+                        lastLane.Read(hidden.Gradient, upstream);
+                    }
                 }
             }
+            carriedForwardRead?.Dispose();
+            carriedForwardRead = null;
+            carriedForward?.Dispose();
+            carriedForward = null;
+            carriedForwardLane = null;
 
             if (backward)
             {
@@ -260,24 +380,100 @@ public sealed partial class Qwen35QuantizedModel
                 {
                     ArcExecutionLane lane = _states[layer].Lane;
                     using var tape = new Qwen35TrainingTape();
-                    using ArcBuffer source = lane.Upload(checkpoints[layer]);
+                    using ArcBuffer source = gpuCheckpoints[layer] is { } saved
+                        ? saved.Borrow() : lane.Upload(checkpoints[layer]);
                     V input = tape.Add(lane, source, rows, d.EmbeddingLength, true, ownsData: false);
-                    V output = ForwardLoraLayer(tape, layer, input, rows);
-                    lane.Write(output.Grad(), upstream!);
+                    V output = ForwardLoraLayer(tape, layer, input, rows,
+                        iq2Cache: iq2Cache);
+                    if (_options.TrainingHostCheckpointGpuGradients)
+                    {
+                        if (backwardHandoff && ReferenceEquals(upstreamGpuLane, lane))
+                        {
+                            output.AdoptGradient(lane, upstreamGpu!);
+                            upstreamGpu = null;
+                            upstreamGpuLane = null;
+                        }
+                        else
+                        {
+                            CopyLoraHidden(upstreamGpuLane!, upstreamGpu!, lane, output.Grad(),
+                                hiddenElements, checked(hiddenElements * sizeof(float)));
+                            upstreamGpu!.Dispose();
+                            upstreamGpu = null;
+                            upstreamGpuLane = null;
+                        }
+                    }
+                    else lane.Write(output.Grad(), upstream!);
                     tape.Backward();
+                    iq2Cache?.ReleaseLayer(layer);
                     if (layer > 0)
                     {
                         if (input.Gradient is null)
                             throw new InvalidOperationException($"LoRA layer {layer} did not propagate its input gradient.");
-                        upstream = new float[hiddenElements];
-                        lane.Read(input.Gradient, upstream);
+                        if (_options.TrainingHostCheckpointGpuGradients)
+                        {
+                            if (backwardHandoff)
+                                upstreamGpu = input.DetachGradient();
+                            else
+                            {
+                                upstreamGpu = lane.Allocate(hiddenElements);
+                                CopyLoraHidden(lane, input.Gradient, lane, upstreamGpu,
+                                    hiddenElements, checked(hiddenElements * sizeof(float)));
+                            }
+                            upstreamGpuLane = lane;
+                        }
+                        else
+                        {
+                            upstream = new float[hiddenElements];
+                            lane.Read(input.Gradient, upstream);
+                        }
                     }
                     checkpoints[layer + 1] = null!;
+                    gpuCheckpoints[layer + 1]?.Dispose();
+                    gpuCheckpoints[layer + 1] = null;
                 }
             }
             return loss;
         }
         catch { _faulted = true; throw; }
+        finally
+        {
+            carriedForwardRead?.Dispose();
+            carriedForward?.Dispose();
+            upstreamGpu?.Dispose();
+            foreach (ArcBuffer? checkpoint in gpuCheckpoints) checkpoint?.Dispose();
+            LastIq2ProjectionCacheStats = (iq2Cache?.Captured ?? 0,
+                iq2Cache?.Reused ?? 0, iq2Cache?.PeakBytes ?? 0);
+            iq2Cache?.Clear();
+        }
+    }
+
+    private bool[] SelectHybridHostCheckpoints(int rows)
+    {
+        int layers = Descriptor.LayerCount;
+        var keep = new bool[layers + 1];
+        if (_options.TrainingHybridCheckpointMiBPerDevice == 0) return keep;
+        long hiddenBytes = checked((long)rows * Descriptor.EmbeddingLength * sizeof(float));
+        long requested = LoraHybridCheckpointBudgetBytesOverride
+            ?? checked((long)_options.TrainingHybridCheckpointMiBPerDevice * 1024 * 1024);
+        foreach (ArcExecutionLane lane in _lanes)
+        {
+            long safeSpare = DeviceBudget(lane.Device) - lane.AllocatedBytes
+                - LoraTrainingWorkingReserveBytes() - WorkspaceReserveBytes;
+            long budget = Math.Min(requested, Math.Max(0, safeSpare));
+            long remaining = budget / hiddenBytes;
+            // The last inputs on each device live for the shortest span and
+            // are consumed first during backward. A cross-device boundary
+            // always keeps its host checkpoint for explicit staging.
+            for (int inputIndex = layers - 1; inputIndex >= 1 && remaining > 0; inputIndex--)
+            {
+                ArcExecutionLane producer = _states[inputIndex - 1].Lane;
+                ArcExecutionLane consumer = _states[inputIndex].Lane;
+                if (!ReferenceEquals(producer, lane) || !ReferenceEquals(consumer, lane)) continue;
+                keep[inputIndex] = true;
+                remaining--;
+            }
+        }
+        return keep;
     }
 
     private bool CanKeepLoraCheckpointsOnGpu(int rows)
@@ -683,7 +879,11 @@ public sealed partial class Qwen35QuantizedModel
             V k = Project(p + "attn_k.weight", norm);
             V v = Project(p + "attn_v.weight", norm);
             var op = tape.Own(new Qwen35TrainingAttention(lane, q.Data, k.Data, v.Data,
-                _dense[p + "attn_q_norm.weight"], _dense[p + "attn_k_norm.weight"], d, rows));
+                _dense[p + "attn_q_norm.weight"], _dense[p + "attn_k_norm.weight"], d, rows,
+                _options.TrainingPackedAttentionScores,
+                _options.TrainingStreamedAttentionTileRows,
+                _options.TrainingFusedAttentionRows,
+                _options.TrainingFusedAttentionOutput));
             V attention = tape.Add(lane, op.Output, rows, d.HeadCount * d.HeadWidth,
                 q.Differentiable || k.Differentiable || v.Differentiable, ownsData: false);
             tape.Record(() => { if (attention.Gradient is not null) op.Backward(attention.Gradient, q.Grad(), k.Grad(), v.Grad()); });

@@ -49,23 +49,30 @@ public partial class Tensor
         EnsureHostDataCurrent();
         weight.EnsureHostDataCurrent();
         var values = new float[Numel];
-        var invRms = new float[rows];
+        var invRms = AutogradContext.IsRecordingEnabled ? new float[rows] : [];
         for (int r = 0; r < rows; ++r)
         {
-            float square = 0f;
             int offset = r * width;
-            for (int c = 0; c < width; ++c)
-            {
-                float value = _data[offset + c];
-                square += value * value;
-            }
+            float square = 0f;
+            if (CanUseSimd(width))
+                square = RmsSquareSum(_data, offset, width);
+            else
+                for (int c = 0; c < width; ++c)
+                {
+                    float value = _data[offset + c];
+                    square += value * value;
+                }
             float inv = 1f / MathF.Sqrt(square / width + epsilon);
-            invRms[r] = inv;
-            for (int c = 0; c < width; ++c)
-                values[offset + c] = _data[offset + c] * inv * weight._data[c];
+            if (invRms.Length != 0) invRms[r] = inv;
+            if (CanUseSimd(width))
+                RmsNormalizeValues(_data, weight._data, values, offset, width, inv);
+            else
+                for (int c = 0; c < width; ++c)
+                    values[offset + c] = _data[offset + c] * inv * weight._data[c];
         }
 
         var cpu = new Tensor(values, _shape, [this, weight]);
+        if (cpu.Node.IsDetached) return cpu;
         cpu.Node.BackwardAction = () =>
         {
             for (int r = 0; r < rows; ++r)
@@ -117,23 +124,12 @@ public partial class Tensor
         EnsureHostDataCurrent();
         up.EnsureHostDataCurrent();
         var values = new float[Numel];
-        for (int i = 0; i < Numel; ++i)
-        {
-            float sigmoid = 1f / (1f + MathF.Exp(-_data[i]));
-            values[i] = _data[i] * sigmoid * up._data[i];
-        }
+        SiluMultiplyValues(_data, up._data, values);
         var cpu = new Tensor(values, _shape, [this, up]);
+        if (cpu.Node.IsDetached) return cpu;
         cpu.Node.BackwardAction = () =>
         {
-            for (int i = 0; i < Numel; ++i)
-            {
-                float x = _data[i];
-                float sigmoid = 1f / (1f + MathF.Exp(-x));
-                float silu = x * sigmoid;
-                _grad[i] += cpu._grad[i] * up._data[i]
-                    * sigmoid * (1f + x * (1f - sigmoid));
-                up._grad[i] += cpu._grad[i] * silu;
-            }
+            SiluMultiplyGradients(_data, up._data, cpu._grad, _grad, up._grad);
         };
         return cpu;
     }

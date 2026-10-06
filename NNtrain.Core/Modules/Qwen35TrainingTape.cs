@@ -13,6 +13,7 @@ internal sealed class Qwen35TrainingTape : IDisposable
         internal readonly int Rows = rows, Width = width;
         internal readonly bool Differentiable = differentiable;
         internal ArcBuffer? Gradient;
+        private bool _ownsData = ownsData;
         internal ArcBuffer Grad()
         {
             if (Gradient is null)
@@ -22,7 +23,30 @@ internal sealed class Qwen35TrainingTape : IDisposable
             }
             return Gradient;
         }
-        public void Dispose() { Gradient?.Dispose(); if (ownsData) Data.Dispose(); }
+        internal ArcBuffer DetachData()
+        {
+            if (!_ownsData || !Data.IsAlive)
+                throw new InvalidOperationException("The tape does not own a live value buffer to detach.");
+            _ownsData = false;
+            return Data;
+        }
+        internal ArcBuffer DetachGradient()
+        {
+            ArcBuffer gradient = Gradient
+                ?? throw new InvalidOperationException("The value has no gradient buffer to detach.");
+            if (!gradient.IsAlive)
+                throw new InvalidOperationException("The value gradient buffer has been disposed.");
+            Gradient = null;
+            return gradient;
+        }
+        internal void AdoptGradient(ArcExecutionLane gradientLane, ArcBuffer gradient)
+        {
+            if (!ReferenceEquals(gradientLane, Lane) || Gradient is not null
+                || !gradient.IsAlive || gradient.ByteLength < checked((long)Rows * Width * sizeof(float)))
+                throw new ArgumentException("The gradient cannot be adopted by this value.", nameof(gradient));
+            Gradient = gradient;
+        }
+        public void Dispose() { Gradient?.Dispose(); if (_ownsData) Data.Dispose(); }
     }
     private readonly List<IDisposable> _owned = [];
     private readonly List<Action> _backward = [];

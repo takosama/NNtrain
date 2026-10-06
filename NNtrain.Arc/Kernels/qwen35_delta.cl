@@ -142,3 +142,91 @@ __kernel void q35d_gated_rmsnorm(
     for (int i = 0; i < width; ++i)
         output[offset + i] = input[offset + i] * inverse * norm[i] * q35d_silu(gate[offset + i]);
 }
+
+// Prompt convolution reads each row's original predecessor values directly.
+// One work item owns a channel, including its final persistent history.
+__kernel void q35d_convolution_rows(
+    __global const float* qkv, __global const float* weights,
+    __global float* history_state, __global float* mixed,
+    int channels, int conv_kernel, int rows)
+{
+    int c = get_global_id(0);
+    if (c >= channels) return;
+    int history = conv_kernel - 1;
+    int state_offset = c * history, weight_offset = c * conv_kernel;
+    for (int row = 0; row < rows; ++row)
+    {
+        float sum = 0.0f;
+        for (int tap = 0; tap < history; ++tap)
+        {
+            int previous_row = row + tap - history;
+            float previous = previous_row >= 0
+                ? qkv[previous_row * channels + c]
+                : history_state[state_offset + row + tap];
+            sum += previous * weights[weight_offset + tap];
+        }
+        sum += qkv[row * channels + c] * weights[weight_offset + history];
+        mixed[row * channels + c] = q35d_silu(sum);
+    }
+    for (int tap = 0; tap < history; ++tap)
+    {
+        int previous_row = rows + tap - history;
+        history_state[state_offset + tap] = previous_row >= 0
+            ? qkv[previous_row * channels + c]
+            : history_state[state_offset + rows + tap];
+    }
+}
+
+__kernel void q35d_normalize_qk_rows(
+    __global float* mixed, int key_heads, int channels, int width, float eps)
+{
+    int item = get_global_id(0), h = item % key_heads, row = item / key_heads;
+    int q_offset = row * channels + h * width;
+    int k_offset = q_offset + key_heads * width;
+    float q_sum = 0.0f, k_sum = 0.0f;
+    for (int i = 0; i < width; ++i)
+    {
+        float q = mixed[q_offset + i], k = mixed[k_offset + i];
+        q_sum += q * q;
+        k_sum += k * k;
+    }
+    float q_inverse = (1.0f / sqrt((float)width)) / sqrt(q_sum + eps);
+    float k_inverse = 1.0f / sqrt(k_sum + eps);
+    for (int i = 0; i < width; ++i)
+    {
+        mixed[q_offset + i] *= q_inverse;
+        mixed[k_offset + i] *= k_inverse;
+    }
+}
+
+__attribute__((reqd_work_group_size(128, 1, 1)))
+__kernel void q35d_normalize_qk_rows_coop128(
+    __global float* mixed, int key_heads, int channels, float eps)
+{
+    int item = get_group_id(0), h = item % key_heads, row = item / key_heads;
+    int tid = get_local_id(0);
+    int q_offset = row * channels + h * 128;
+    int k_offset = q_offset + key_heads * 128;
+    float q = mixed[q_offset + tid], k = mixed[k_offset + tid];
+    __local float q_sums[128], k_sums[128], q_inverse, k_inverse;
+    q_sums[tid] = q * q;
+    k_sums[tid] = k * k;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int stride = 64; stride > 0; stride >>= 1)
+    {
+        if (tid < stride)
+        {
+            q_sums[tid] += q_sums[tid + stride];
+            k_sums[tid] += k_sums[tid + stride];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    if (tid == 0)
+    {
+        q_inverse = (1.0f / sqrt(128.0f)) / sqrt(q_sums[0] + eps);
+        k_inverse = 1.0f / sqrt(k_sums[0] + eps);
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+    mixed[q_offset + tid] = q * q_inverse;
+    mixed[k_offset + tid] = k * k_inverse;
+}

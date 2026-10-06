@@ -11,6 +11,17 @@ public static class WikiParquetCorpus
 {
     internal const int ShuffledReaderCacheCapacity = 8;
 
+    // Bound allocations before Parquet.Net materializes a complete text column.
+    private static void ValidateRowGroup(ParquetRowGroupReader group, DataField field)
+    {
+        var metadata = group.GetMetadata(field)?.MetaData;
+        if (group.RowCount < 0 || group.RowCount > 1_000_000
+            || metadata is null || metadata.NumValues < 0 || metadata.NumValues > 1_000_000
+            || metadata.TotalCompressedSize < 0 || metadata.TotalCompressedSize > 64L * 1024 * 1024
+            || metadata.TotalUncompressedSize < 0 || metadata.TotalUncompressedSize > 256L * 1024 * 1024)
+            throw new InvalidDataException("Parquet text row group exceeds the bounded read budget.");
+    }
+
     public static async Task<long> CountRowsAsync(
         string directoryPath,
         CancellationToken cancellationToken = default)
@@ -112,6 +123,7 @@ public static class WikiParquetCorpus
                 cancellationToken.ThrowIfCancellationRequested();
                 using ParquetRowGroupReader rowGroup =
                     reader.OpenRowGroupReader(group);
+                ValidateRowGroup(rowGroup, field);
                 if (rowGroup.RowCount > int.MaxValue)
                 {
                     throw new InvalidDataException(
@@ -245,6 +257,7 @@ public static class WikiParquetCorpus
                     (ParquetReader reader, DataField field) = entry;
                     using ParquetRowGroupReader rowGroup =
                         reader.OpenRowGroupReader(location.GroupIndex);
+                    ValidateRowGroup(rowGroup, field);
                     if (rowGroup.RowCount > int.MaxValue)
                     {
                         throw new InvalidDataException(

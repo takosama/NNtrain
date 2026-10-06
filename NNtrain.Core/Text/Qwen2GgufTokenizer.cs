@@ -14,13 +14,13 @@ public sealed class Qwen2GgufTokenizer
     // characters before applying the selected architecture's UTF-16 regex.
     private static readonly Regex Qwen2SplitRegex = new(
         @"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        RegexOptions.Compiled | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(2));
 
     // Qwen3.5 keeps combining marks with letter runs. Matches the qwen35
     // pre-tokenizer in llama.cpp/src/llama-vocab.cpp.
     private static readonly Regex Qwen35SplitRegex = new(
         @"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+|\p{N}| ?[^\s\p{L}\p{M}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        RegexOptions.Compiled | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(2));
 
     private readonly Regex _splitRegex;
     private readonly string[] _tokens;
@@ -28,6 +28,9 @@ public sealed class Qwen2GgufTokenizer
     private readonly Dictionary<(string Left, string Right), int> _mergeRanks;
     private readonly Dictionary<char, byte> _byteDecoder;
     private readonly HashSet<string> _specialTokens;
+    private const int MaximumInputCharacters = 1024 * 1024;
+    private const int MaximumPieceBytes = 64 * 1024;
+    private const int MaximumMergeWork = 16 * 1024 * 1024;
 
     private Qwen2GgufTokenizer(
         string[] tokens,
@@ -62,7 +65,11 @@ public sealed class Qwen2GgufTokenizer
             for (int i = 0; i < Math.Min(tokenTypes.Count, tokens.Length); ++i)
                 // GGML CONTROL (3) and USER_DEFINED (4) are literal added
                 // tokens. Qwen3.5 marks <think> and tool delimiters as type 4.
-                if (tokenTypes[i] is 3 or 4) _specialTokens.Add(tokens[i]);
+                if (tokenTypes[i] is 3 or 4)
+                {
+                    if (tokens[i].Length == 0) throw new InvalidDataException("GGUF special tokens must not be empty.");
+                    _specialTokens.Add(tokens[i]);
+                }
         }
 
         BosTokenId = bosTokenId;
@@ -112,18 +119,27 @@ public sealed class Qwen2GgufTokenizer
     }
 
     public int[] Encode(string text)
+        => Encode(text, MaximumInputCharacters);
+
+    public int[] Encode(string text, int maximumTokens, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(text);
+        if (maximumTokens < 1) throw new ArgumentOutOfRangeException(nameof(maximumTokens));
+        if (text.Length > MaximumInputCharacters) throw new ArgumentException("Tokenizer input exceeds the character budget.", nameof(text));
+        ct.ThrowIfCancellationRequested();
         var ids = new List<int>();
+        int workRemaining = MaximumMergeWork;
         foreach (string piece in SplitSpecial(text))
         {
+            ct.ThrowIfCancellationRequested();
             if (_specialTokens.Contains(piece) && _vocabulary.TryGetValue(piece, out int special))
             {
+                if (ids.Count == maximumTokens) throw new ArgumentException("The prompt exceeds the token budget.", nameof(text));
                 ids.Add(special);
                 continue;
             }
             foreach (string ordinary in SplitOrdinary(piece))
-                EncodePiece(ordinary, ids);
+                EncodePiece(ordinary, ids, maximumTokens, ref workRemaining, ct);
         }
         return ids.ToArray();
     }
@@ -263,42 +279,62 @@ public sealed class Qwen2GgufTokenizer
         }
     }
 
-    private void EncodePiece(string piece, List<int> destination)
+    private void EncodePiece(string piece, List<int> destination, int maximumTokens, ref int workRemaining, CancellationToken ct)
     {
         if (piece.Length == 0) return;
+        if (Encoding.UTF8.GetByteCount(piece) > MaximumPieceBytes)
+            throw new ArgumentException("Tokenizer piece exceeds the byte budget.", nameof(piece));
         Dictionary<byte, char> byteEncoder = BuildByteEncoder();
         string encoded = string.Concat(Encoding.UTF8.GetBytes(piece).Select(b => byteEncoder[b]));
-        var symbols = encoded.Select(ch => ch.ToString()).ToList();
-
-        while (symbols.Count > 1)
+        string?[] symbols = encoded.Select(ch => (string?)ch.ToString()).ToArray();
+        int[] next = Enumerable.Range(1, symbols.Length).ToArray(); next[^1] = -1;
+        int[] previous = Enumerable.Range(-1, symbols.Length).ToArray();
+        int[] versions = new int[symbols.Length];
+        var queue = new PriorityQueue<(int Left, int Right, int LeftVersion, int RightVersion), (int Rank, int Position)>();
+        int work = workRemaining;
+        void Enqueue(int left)
         {
-            int bestRank = int.MaxValue, bestIndex = -1;
-            for (int i = 0; i + 1 < symbols.Count; ++i)
-            {
-                if (_mergeRanks.TryGetValue((symbols[i], symbols[i + 1]), out int rank)
-                    && rank < bestRank)
-                {
-                    bestRank = rank;
-                    bestIndex = i;
-                }
-            }
-            if (bestIndex < 0) break;
-            string left = symbols[bestIndex], right = symbols[bestIndex + 1];
-            for (int i = 0; i + 1 < symbols.Count;)
-            {
-                if (symbols[i] == left && symbols[i + 1] == right)
-                {
-                    symbols[i] += symbols[i + 1];
-                    symbols.RemoveAt(i + 1);
-                }
-                else ++i;
-            }
+            if (left < 0 || symbols[left] is null || next[left] < 0) return;
+            int right = next[left];
+            work -= symbols[left]!.Length + symbols[right]!.Length;
+            if (work < 0) throw new ArgumentException("Tokenizer merge work budget exceeded.", nameof(piece));
+            if (_mergeRanks.TryGetValue((symbols[left]!, symbols[right]!), out int rank))
+                queue.Enqueue((left, right, versions[left], versions[right]), (rank, left));
         }
-
-        foreach (string symbol in symbols)
+        bool Valid((int Left, int Right, int LeftVersion, int RightVersion) item)
+            => symbols[item.Left] is not null && symbols[item.Right] is not null && next[item.Left] == item.Right
+                && versions[item.Left] == item.LeftVersion && versions[item.Right] == item.RightVersion;
+        for (int i = 0; i < symbols.Length - 1; i++) Enqueue(i);
+        while (queue.TryDequeue(out var candidate, out var priority))
         {
+            ct.ThrowIfCancellationRequested();
+            if (!Valid(candidate)) continue;
+            // Merge all current occurrences of the selected pair left-to-right
+            // before considering newly created lower-rank pairs, matching HF BPE.
+            var batch = new List<(int Left, int Right, int LeftVersion, int RightVersion)> { candidate };
+            while (queue.TryPeek(out _, out var same) && same.Rank == priority.Rank)
+                batch.Add(queue.Dequeue());
+            var changed = new List<int>();
+            foreach (var item in batch)
+            {
+                if (!Valid(item)) continue;
+                int left = item.Left, right = item.Right;
+                work -= symbols[left]!.Length + symbols[right]!.Length;
+                if (work < 0) throw new ArgumentException("Tokenizer merge work budget exceeded.", nameof(piece));
+                symbols[left] += symbols[right]; symbols[right] = null;
+                next[left] = next[right]; if (next[right] >= 0) previous[next[right]] = left;
+                versions[left]++; versions[right]++;
+                changed.Add(left); changed.Add(previous[left]);
+            }
+            foreach (int left in changed) Enqueue(left);
+        }
+        workRemaining = work;
+        for (int node = 0; node >= 0; node = next[node])
+        {
+            string symbol = symbols[node]!;
             if (!_vocabulary.TryGetValue(symbol, out int id))
                 throw new InvalidDataException($"Qwen BPE symbol '{symbol}' is missing from the GGUF vocabulary.");
+            if (destination.Count == maximumTokens) throw new ArgumentException("The prompt exceeds the token budget.", nameof(piece));
             destination.Add(id);
         }
     }

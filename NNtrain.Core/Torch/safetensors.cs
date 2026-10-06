@@ -111,11 +111,23 @@ internal static partial class SafeTensorFile
         float[] Values);
 
     internal static IReadOnlyList<string> ReadKeys(string path)
-        => ReadEntries(path).Select(entry => entry.Key).ToArray();
+        {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1);
+        return ReadKeys(stream);
+    }
+    internal static IReadOnlyList<string> ReadKeys(Stream stream, SafeTensorReadLimits? limits = null)
+        => ReadDescriptors(stream, limits).Descriptors.Select(entry => entry.Key).ToArray();
 
     internal static ModuleState Load(string path)
     {
-        List<SafeTensorEntry> entries = ReadEntries(path);
+        return StateFromEntries(ReadEntries(path));
+    }
+
+    internal static ModuleState Load(Stream stream, SafeTensorReadLimits? limits = null)
+        => StateFromEntries(ReadEntries(stream, limits));
+
+    private static ModuleState StateFromEntries(List<SafeTensorEntry> entries)
+    {
         var parameters = new List<ModuleParameterState>(entries.Count);
         var seenIndexes = new HashSet<int>();
         foreach (SafeTensorEntry entry in entries)
@@ -157,7 +169,7 @@ internal static partial class SafeTensorFile
         if (keys is null
             && entries.All(entry => TrySplitIndexedKey(entry.Key, out _, out _)))
         {
-            return Load(path);
+            return StateFromEntries(entries);
         }
 
         Parameter[] parameters = model.Parameters().ToArray();
@@ -305,92 +317,21 @@ internal static partial class SafeTensorFile
             FileShare.Read,
             bufferSize: 1024 * 1024,
             FileOptions.RandomAccess);
-        Span<byte> prefix = stackalloc byte[LengthPrefixSize];
-        ReadExactly(stream, prefix);
-        ulong encodedHeaderLength =
-            BinaryPrimitives.ReadUInt64LittleEndian(prefix);
-        if (encodedHeaderLength == 0
-            || encodedHeaderLength > MaximumHeaderBytes
-            || encodedHeaderLength > (ulong)(stream.Length - LengthPrefixSize))
+        return ReadEntries(stream);
+    }
+    private static List<SafeTensorEntry> ReadEntries(Stream stream, SafeTensorReadLimits? limits = null)
+    {
+        var (dataStart, descriptors) = ReadDescriptors(stream, limits);
+        var entries = new List<SafeTensorEntry>(descriptors.Count);
+        foreach (var descriptor in descriptors)
         {
-            throw new InvalidDataException(
-                "SafeTensors header length is invalid.");
+            var values = new float[GetElementCount(descriptor.Shape)];
+            stream.Position = checked(dataStart + descriptor.Start);
+            ReadValues(stream, values, descriptor.DType);
+            entries.Add(new(descriptor.Key, descriptor.Shape, descriptor.DType, values));
         }
-
-        int headerLength = checked((int)encodedHeaderLength);
-        var header = new byte[headerLength];
-        ReadExactly(stream, header);
-        long dataStart = checked(LengthPrefixSize + (long)headerLength);
-        long dataLength = stream.Length - dataStart;
-        using JsonDocument document = ParseHeader(header);
-        var entries = new List<SafeTensorEntry>();
-        var seenKeys = new HashSet<string>(StringComparer.Ordinal);
-        foreach (JsonProperty property in
-            document.RootElement.EnumerateObject())
-        {
-            if (property.NameEquals("__metadata__"))
-                continue;
-            if (!seenKeys.Add(property.Name))
-            {
-                throw new InvalidDataException(
-                    $"SafeTensors key '{property.Name}' appears twice.");
-            }
-
-            JsonElement descriptor = property.Value;
-            string? dtype = descriptor.GetProperty("dtype").GetString();
-            TensorDType tensorDType = dtype switch
-            {
-                "F32" => TensorDType.Float32,
-                "F16" => TensorDType.Float16,
-                "BF16" => TensorDType.BFloat16,
-                _ => throw new InvalidDataException(
-                    $"SafeTensors parameter '{property.Name}' uses " +
-                    $"unsupported dtype '{dtype}'. Only F32, F16, and BF16 are " +
-                    "supported."),
-            };
-            int elementSize = GetElementSize(tensorDType);
-            int[] shape = descriptor.GetProperty("shape")
-                .EnumerateArray()
-                .Select(ReadDimension)
-                .ToArray();
-            JsonElement.ArrayEnumerator offsets = descriptor
-                .GetProperty("data_offsets")
-                .EnumerateArray();
-            if (!offsets.MoveNext())
-                throw InvalidOffsets(property.Name);
-            long start = offsets.Current.GetInt64();
-            if (!offsets.MoveNext())
-                throw InvalidOffsets(property.Name);
-            long end = offsets.Current.GetInt64();
-            if (offsets.MoveNext()
-                || start < 0
-                || end < start
-                || end > dataLength)
-            {
-                throw InvalidOffsets(property.Name);
-            }
-
-            int elementCount = GetElementCount(shape);
-            if (end - start != checked((long)elementCount * elementSize))
-            {
-                throw new InvalidDataException(
-                    $"SafeTensors parameter '{property.Name}' shape and " +
-                    "byte range do not match.");
-            }
-            var values = new float[elementCount];
-            stream.Position = checked(dataStart + start);
-            ReadValues(stream, values, tensorDType);
-            entries.Add(
-                new SafeTensorEntry(
-                    property.Name,
-                    shape,
-                    tensorDType,
-                    values));
-        }
-
         return entries;
     }
-
     private static byte[] CreateHeader(ModuleState state)
     {
         using var buffer = new MemoryStream();
@@ -512,7 +453,7 @@ internal static partial class SafeTensorFile
     private static int ReadDimension(JsonElement element)
     {
         int dimension = element.GetInt32();
-        if (dimension <= 0)
+        if (dimension < 0)
             throw new InvalidDataException("SafeTensors shape is invalid.");
         return dimension;
     }
@@ -520,12 +461,15 @@ internal static partial class SafeTensorFile
     private static int GetElementCount(int[] shape)
     {
         ArgumentNullException.ThrowIfNull(shape);
+        if (shape.Any(d => d < 0)) throw new InvalidDataException("Tensor shape is invalid.");
+        if (shape.Contains(0)) return 0;
         int count = 1;
         foreach (int dimension in shape)
         {
-            if (dimension <= 0)
+            if (dimension < 0)
                 throw new InvalidDataException("Tensor shape is invalid.");
-            count = checked(count * dimension);
+            try { count = checked(count * dimension); }
+            catch (OverflowException e) { throw new InvalidDataException("Tensor shape exceeds supported count.", e); }
         }
         return count;
     }

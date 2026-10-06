@@ -75,6 +75,46 @@ public sealed class Qwen35GpuAttentionTests
     }
 
     [Fact]
+    public void MultimodalRopeMatchesScalarReferenceAcrossImageGridPositions()
+    {
+        using ArcExecutionLane lane = CreateLane();
+        const int heads = 2, kvHeads = 1, width = 64, steps = 3;
+        const float epsilon = 1e-5f, theta = 10_000_000f;
+        int[] sections = [11, 11, 10, 0];
+        Qwen35Position[] positions = [new(5, 2, 3), new(5, 2, 4), new(5, 3, 3)];
+        float[] qWeights = Values(width, 101).Select(x => x + 2).ToArray();
+        float[] kWeights = Values(width, 103).Select(x => x + 2).ToArray();
+        using ArcBuffer qNorm = lane.Upload(qWeights), kNorm = lane.Upload(kWeights);
+        using ArcBuffer keysCache = lane.Allocate(steps * kvHeads * width);
+        using ArcBuffer valuesCache = lane.Allocate(steps * kvHeads * width);
+        var keys = new List<double[]>();
+        var values = new List<double[]>();
+        for (int time = 0; time < steps; time++)
+        {
+            float[] qAndGate = Values(2 * heads * width, 107 + time);
+            float[] key = Values(kvHeads * width, 113 + time);
+            float[] value = Values(kvHeads * width, 127 + time);
+            using ArcBuffer q = lane.Upload(qAndGate), k = lane.Upload(key), v = lane.Upload(value);
+
+            using ArcBuffer output = Qwen35Gpu.AttentionStep(lane, q, k, v, qNorm, kNorm,
+                keysCache, valuesCache, time, heads, kvHeads, width, width, theta, epsilon,
+                positions[time], sections);
+
+            double[] query = NormalizeAndRotateMrope(
+                Enumerable.Range(0, heads).SelectMany(h => qAndGate.Skip(2 * h * width).Take(width))
+                    .Select(x => (double)x).ToArray(), qWeights, width, positions[time], sections, theta, epsilon);
+            keys.Add(NormalizeAndRotateMrope(key.Select(x => (double)x).ToArray(),
+                kWeights, width, positions[time], sections, theta, epsilon));
+            values.Add(value.Select(x => (double)x).ToArray());
+
+            AssertClose(keys.SelectMany(x => x).ToArray(),
+                Read(lane, keysCache, (time + 1) * kvHeads * width), 5e-5);
+            AssertClose(AttentionReference(query, qAndGate, keys, values, heads, kvHeads, width),
+                Read(lane, output, heads * width), 5e-5);
+        }
+    }
+
+    [Fact]
     public void AttentionSupportsMoreThan4096CachedTokensAndStableSoftmax()
     {
         using ArcExecutionLane lane = CreateLane();
@@ -168,6 +208,31 @@ public sealed class Qwen35GpuAttentionTests
                 var pair = new System.Numerics.Complex(normalized[j], normalized[j + split]) * rotation;
                 normalized[j] = pair.Real;
                 normalized[j + split] = pair.Imaginary;
+            }
+            result.AddRange(normalized);
+        }
+        return result.ToArray();
+    }
+
+    private static double[] NormalizeAndRotateMrope(double[] data, float[] weight, int width,
+        Qwen35Position position, IReadOnlyList<int> sections, float theta, float epsilon)
+    {
+        var result = new List<double>();
+        foreach (double[] row in data.Chunk(width))
+        {
+            double denominator = Math.Sqrt(row.Select(x => x * x).Average() + epsilon);
+            double[] normalized = row.Select((x, j) => x / denominator * weight[j]).ToArray();
+            int pairs = width / 2;
+            for (int j = 0; j < pairs; j++)
+            {
+                int axis = j % 3 == 1 && j < sections[1] * 3 ? position.Height
+                    : j % 3 == 2 && j < sections[2] * 3 ? position.Width
+                    : position.Temporal;
+                double angle = axis / Math.Pow(theta, 2.0 * j / width);
+                double cosine = Math.Cos(angle), sine = Math.Sin(angle);
+                double first = normalized[j], second = normalized[j + pairs];
+                normalized[j] = first * cosine - second * sine;
+                normalized[j + pairs] = first * sine + second * cosine;
             }
             result.AddRange(normalized);
         }

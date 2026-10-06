@@ -17,12 +17,14 @@ internal static class QwenLoraCommand
         {
             string? modelPath = null, configPath = null;
             bool resume = false;
+            bool dryRun = false;
             var seen = new HashSet<string>(StringComparer.Ordinal);
             for (int i = 1; i < args.Length; ++i)
             {
                 string option = args[i];
                 if (!seen.Add(option)) throw new ArgumentException($"Duplicate qwen-lora option: {option}");
                 if (option == "--resume") { resume = true; continue; }
+                if (option == "--dry-run") { dryRun = true; continue; }
                 if (option is not ("--model" or "--config"))
                     throw new ArgumentException($"Unknown qwen-lora option: {option}");
                 if (++i == args.Length) throw new ArgumentException($"Missing value for {option}.");
@@ -30,7 +32,7 @@ internal static class QwenLoraCommand
                 else configPath = Path.GetFullPath(args[i]);
             }
             if (modelPath is null || configPath is null)
-                throw new ArgumentException("Usage: lora (or qwen-lora) --model <qwen35.gguf> --config <qwen-lora.json> [--resume]");
+                throw new ArgumentException("Usage: lora (or qwen-lora) --model <qwen35.gguf> --config <qwen-lora.json> [--resume] [--dry-run]");
             QwenLoraTrainingConfiguration config = QwenLoraTrainingConfiguration.Load(configPath);
             config.Validate();
             string directory = Path.GetDirectoryName(configPath)!;
@@ -72,16 +74,24 @@ internal static class QwenLoraCommand
                 }
             }
 
+            Qwen35ExecutionOptions executionOptions = config.ExecutionOptions(
+                examples.Select(example => example.Tokens.Length).ToArray(), resume);
+            output.WriteLine($"Resolved LoRA speed flags: row fusion={executionOptions.TrainingFusedAttentionRows}, "
+                + $"direct handoff={executionOptions.TrainingHostCheckpointBufferHandoff}, "
+                + $"streamed tile rows={executionOptions.TrainingStreamedAttentionTileRows}, "
+                + $"rolling transpose={executionOptions.TrainingIQ2RollingTranspose}. "
+                + "Measured speed evidence uses FP16/XMX and one synthetic update; epoch quality is unverified.");
+            if (dryRun)
+            {
+                if (resume && ReadCheckpointTrainingIdentity(adapterPath) != identity)
+                    throw new InvalidDataException("Resume checkpoint header does not match this dataset/training configuration.");
+                int[] counts = examples.Select(example => example.Tokens.Length).ToArray();
+                output.WriteLine($"CPU dry-run valid: examples={examples.Length}, total tokens including EOS={counts.Min()}..{counts.Max()}, context upper bound={config.ContextLength}, maxSteps={config.MaxSteps}, precision={config.Iq2ForwardPrecision}, resume={resume}.");
+                output.WriteLine("No padding, packing, truncation, GPU model load, optimizer update or checkpoint write.");
+                return 0;
+            }
             using Qwen35QuantizedModel model = Qwen35QuantizedModel.Load(modelPath, config.Devices,
-                output.WriteLine, options: new Qwen35ExecutionOptions
-                {
-                    LoraTraining = true,
-                    TrainingIQ2Fp16XmxForward = config.Iq2ForwardPrecision == "fp16",
-                    TrainingIQ2ProjectionCacheMiB = config.Iq2ProjectionCacheMiB,
-                    TrainingIQ2ProjectionCachePrioritize = config.Iq2ProjectionCachePrioritize,
-                    TrainingIQ2GpuProjectionCacheMiB = config.Iq2GpuProjectionCacheMiB,
-                    TrainingBufferPoolMiB = config.TrainingBufferPoolMiB
-                });
+                output.WriteLine, options: executionOptions);
             long[] encodedBeforeTraining = model.ResidentWeightBytes.ToArray();
             if (resume) model.LoadLora(adapterPath, identity);
             else model.AttachLora(config.AdapterOptions());

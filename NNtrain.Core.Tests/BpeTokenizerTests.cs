@@ -4,6 +4,23 @@ using Xunit;
 public sealed class BpeTokenizerTests
 {
     [Fact]
+    public void ExponentialMergeExpansionIsRejectedWithinSmallAllocationBudget()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"nntrain-bpe-limit-{Guid.NewGuid():N}.json");
+        try
+        {
+            var merges = Enumerable.Range(0, 21).Select(i => new
+            {
+                left = i == 0 ? BpeTokenizer.ByteTokenOffset : BpeTokenizer.BaseVocabularySize + i - 1,
+                right = i == 0 ? BpeTokenizer.ByteTokenOffset : BpeTokenizer.BaseVocabularySize + i - 1,
+                id = BpeTokenizer.BaseVocabularySize + i
+            }).ToArray();
+            File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new { formatVersion = 1, merges }));
+            Assert.Throws<InvalidDataException>(() => BpeTokenizer.Load(path));
+        }
+        finally { File.Delete(path); }
+    }
+    [Fact]
     public void SpecialTokensHaveStableReservedIds()
     {
         Assert.Equal("<pad>", BpeTokenizer.PadToken);

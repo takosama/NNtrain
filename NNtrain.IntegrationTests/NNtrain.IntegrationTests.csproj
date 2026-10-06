@@ -23,7 +23,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\NNtrain.Gui\HuggingFaceModelDownload.cs" Link="Gui\HuggingFaceModelDownload.cs" />
     <Compile Include="..\NNtrain.Gui\ThinkingStreamParser.cs" Link="Gui\ThinkingStreamParser.cs" />
+    <Compile Include="..\NNtrain.Gui\ChatImage.cs" Link="Gui\ChatImage.cs" />
+    <Compile Include="..\NNtrain.Gui\ChatTurn.cs" Link="Gui\ChatTurn.cs" />
+    <Compile Include="..\NNtrain.Gui\MultimodalPrompt.cs" Link="Gui\MultimodalPrompt.cs" />
   </ItemGroup>
 
 </Project>

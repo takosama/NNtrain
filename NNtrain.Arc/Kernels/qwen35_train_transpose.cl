@@ -129,4 +129,46 @@ Q35TX_VEC8_ROWS(q35t_xpose_q5_k_vec8_rows4, q35tx_q5_decode8, 176, 4)
 Q35TX_VEC8_ROWS(q35t_xpose_q5_k_vec8_rows8, q35tx_q5_decode8, 176, 8)
 Q35TX_VEC8_ROWS(q35t_xpose_q5_k_vec8_rows16, q35tx_q5_decode8, 176, 16)
 #undef Q35TX_VEC8_ROWS
+
+// Opt-in rolling split reduction. The caller zeros rolling, launches split
+// values in increasing order on the in-order queue, then adds rolling to dx.
+// This keeps the legacy per-split FMA and inter-split FP32 addition order.
+__attribute__((intel_reqd_sub_group_size(16)))
+__attribute__((reqd_work_group_size(32, 1, 1)))
+__kernel void q35t_xpose_iq2_s_vec8_rows8_rolling(
+    __global const float* dy, __global const uchar* weight,
+    __global float* rolling, int chunkRows, int firstRow,
+    int input, int output, int split, int tile)
+{
+    int i = get_global_id(0), columns = input >> 3;
+    if (i >= ((chunkRows + 7) / 8) * columns) return;
+    int column = i % columns, row = (i / columns) * 8;
+    int blocks = input >> 8, inputBlock = column >> 5, octet = column & 31;
+    float8 s0 = (float8)(0), s1 = (float8)(0), s2 = (float8)(0), s3 = (float8)(0);
+    float8 s4 = (float8)(0), s5 = (float8)(0), s6 = (float8)(0), s7 = (float8)(0);
+    int end = min(output, (split + 1) * tile);
+    for (int o = split * tile; o < end; ++o)
+    {
+        __global const uchar* block = weight + ((size_t)o * blocks + inputBlock) * 82;
+        float8 w = q35tx_iq2_decode8(block, octet);
+        s0 = fma((float8)(dy[(firstRow + row) * output + o]), w, s0);
+        if (row + 1 < chunkRows) s1 = fma((float8)(dy[(firstRow + row + 1) * output + o]), w, s1);
+        if (row + 2 < chunkRows) s2 = fma((float8)(dy[(firstRow + row + 2) * output + o]), w, s2);
+        if (row + 3 < chunkRows) s3 = fma((float8)(dy[(firstRow + row + 3) * output + o]), w, s3);
+        if (row + 4 < chunkRows) s4 = fma((float8)(dy[(firstRow + row + 4) * output + o]), w, s4);
+        if (row + 5 < chunkRows) s5 = fma((float8)(dy[(firstRow + row + 5) * output + o]), w, s5);
+        if (row + 6 < chunkRows) s6 = fma((float8)(dy[(firstRow + row + 6) * output + o]), w, s6);
+        if (row + 7 < chunkRows) s7 = fma((float8)(dy[(firstRow + row + 7) * output + o]), w, s7);
+    }
+    int offset = row * input + column * 8;
+    float8 prior = vload8(0, rolling + offset);
+    vstore8(prior + s0, 0, rolling + offset);
+    if (row + 1 < chunkRows) { prior = vload8(0, rolling + offset + input); vstore8(prior + s1, 0, rolling + offset + input); }
+    if (row + 2 < chunkRows) { prior = vload8(0, rolling + offset + 2 * input); vstore8(prior + s2, 0, rolling + offset + 2 * input); }
+    if (row + 3 < chunkRows) { prior = vload8(0, rolling + offset + 3 * input); vstore8(prior + s3, 0, rolling + offset + 3 * input); }
+    if (row + 4 < chunkRows) { prior = vload8(0, rolling + offset + 4 * input); vstore8(prior + s4, 0, rolling + offset + 4 * input); }
+    if (row + 5 < chunkRows) { prior = vload8(0, rolling + offset + 5 * input); vstore8(prior + s5, 0, rolling + offset + 5 * input); }
+    if (row + 6 < chunkRows) { prior = vload8(0, rolling + offset + 6 * input); vstore8(prior + s6, 0, rolling + offset + 6 * input); }
+    if (row + 7 < chunkRows) { prior = vload8(0, rolling + offset + 7 * input); vstore8(prior + s7, 0, rolling + offset + 7 * input); }
+}
 #endif

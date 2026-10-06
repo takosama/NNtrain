@@ -63,6 +63,27 @@ __kernel void q35a_rope(__global float* data, int heads, int width, int dimensio
     data[second] = a * sine + b * cosine;
 }
 
+// Qwen3.5 text MRoPE keeps temporal frequencies by default, replacing every
+// third frequency in the height and width sections with the matching grid axis.
+// The split-half pair layout is the same as q35a_rope above.
+__kernel void q35a_mrope(__global float* data, int heads, int width, int dimensions,
+    int temporal, int height, int image_width, int height_section, int width_section,
+    float theta)
+{
+    int pair = get_global_id(0), pairs = dimensions / 2;
+    if (pair >= heads * pairs) return;
+    int head = pair / pairs, j = pair % pairs;
+    int position = temporal;
+    if (j % 3 == 1 && j < height_section * 3) position = height;
+    else if (j % 3 == 2 && j < width_section * 3) position = image_width;
+    float angle = position * pow(theta, -2.0f * j / dimensions);
+    float cosine = cos(angle), sine = sin(angle);
+    int first = head * width + j, second = first + pairs;
+    float a = data[first], b = data[second];
+    data[first] = a * cosine - b * sine;
+    data[second] = a * sine + b * cosine;
+}
+
 __kernel void q35a_scores(__global const float* query, __global const float* keys,
     __global float* scores, int heads, int kv_heads, int width, int sequence)
 {
@@ -121,6 +142,94 @@ __kernel void q35a_attend(__global const float* scores, __global const float* va
     for (int t = 0; t < sequence; ++t)
         sum += scores[head * sequence + t] * values[(t * kv_heads + kv_head) * width + j];
     output[i] = sum * q35a_sigmoid(q_and_gate[(2 * head + 1) * width + j]);
+}
+
+// Chunked image/text prompt attention keeps the same FP32 dot-product and
+// reduction order as q35a_scores/q35a_softmax/q35a_attend for every row.
+__kernel void q35a_mrope_rows(__global float* data, __global const int* positions,
+    int rows, int heads, int width, int dimensions, int height_section,
+    int width_section, float theta)
+{
+    int pair = get_global_id(0), pairs = dimensions / 2;
+    if (pair >= rows * heads * pairs) return;
+    int row = pair / (heads * pairs), head = pair / pairs, j = pair % pairs;
+    int axis = 0;
+    if (j % 3 == 1 && j < height_section * 3) axis = 1;
+    else if (j % 3 == 2 && j < width_section * 3) axis = 2;
+    int position = positions[row * 3 + axis];
+    float angle = position * pow(theta, -2.0f * j / dimensions);
+    float cosine = cos(angle), sine = sin(angle);
+    int first = head * width + j, second = first + pairs;
+    float a = data[first], b = data[second];
+    data[first] = a * cosine - b * sine;
+    data[second] = a * sine + b * cosine;
+}
+
+__kernel void q35a_scores_rows(__global const float* query, __global const float* keys,
+    __global float* scores, int rows, int start_position, int heads, int kv_heads,
+    int width, int sequence, int score_stride)
+{
+    int i = get_global_id(0);
+    if (i >= rows * heads * sequence) return;
+    int row_head = i / sequence, row = row_head / heads;
+    int head = row_head % heads, time = i % sequence;
+    if (time > start_position + row) return;
+    int kv_head = head / (heads / kv_heads);
+    int key_offset = (time * kv_heads + kv_head) * width;
+    float dot = 0.0f;
+    for (int j = 0; j < width; ++j) dot += query[row_head * width + j] * keys[key_offset + j];
+    scores[row_head * score_stride + time] = dot / sqrt((float)width);
+}
+
+__kernel void q35a_softmax_rows(__global float* scores, int heads,
+    int start_position, int score_stride)
+{
+    int row_head = get_group_id(0), tid = get_local_id(0);
+    int sequence = start_position + row_head / heads + 1;
+    int start = row_head * score_stride;
+    __local float reduction[128];
+    float maximum = -INFINITY;
+    for (int t = tid; t < sequence; t += 128) maximum = fmax(maximum, scores[start + t]);
+    reduction[tid] = maximum;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int stride = 64; stride > 0; stride >>= 1)
+    {
+        if (tid < stride) reduction[tid] = fmax(reduction[tid], reduction[tid + stride]);
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    maximum = reduction[0];
+    barrier(CLK_LOCAL_MEM_FENCE);
+    float sum = 0.0f;
+    for (int t = tid; t < sequence; t += 128)
+    {
+        float p = exp(scores[start + t] - maximum);
+        scores[start + t] = p;
+        sum += p;
+    }
+    reduction[tid] = sum;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int stride = 64; stride > 0; stride >>= 1)
+    {
+        if (tid < stride) reduction[tid] += reduction[tid + stride];
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    sum = reduction[0];
+    for (int t = tid; t < sequence; t += 128) scores[start + t] /= sum;
+}
+
+__kernel void q35a_attend_rows(__global const float* scores, __global const float* values,
+    __global const float* q_and_gate, __global float* output, int rows,
+    int start_position, int heads, int kv_heads, int width, int score_stride)
+{
+    int i = get_global_id(0);
+    if (i >= rows * heads * width) return;
+    int row_head = i / width, row = row_head / heads;
+    int head = row_head % heads, j = i % width, kv_head = head / (heads / kv_heads);
+    int sequence = start_position + row + 1;
+    float sum = 0.0f;
+    for (int t = 0; t < sequence; ++t)
+        sum += scores[row_head * score_stride + t] * values[(t * kv_heads + kv_head) * width + j];
+    output[i] = sum * q35a_sigmoid(q_and_gate[(2 * row_head + 1) * width + j]);
 }
 
 // Both token selection and the all-logits finite check happen on the GPU.

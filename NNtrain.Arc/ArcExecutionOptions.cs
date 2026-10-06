@@ -3,6 +3,7 @@ namespace NNtrain.Arc;
 /// <summary>Immutable switches allow numerical/performance A/B checks in separate sessions.</summary>
 public sealed record ArcExecutionOptions
 {
+    public bool AsrKernelsOnly { get; init; }
     // Dedicated Qwen3.5 inference lanes can skip compiling unrelated training
     // kernels. General Arc sessions keep the complete program by default.
     public bool Qwen35TrainingKernels { get; init; }
@@ -22,6 +23,13 @@ public sealed record ArcExecutionOptions
     public bool Qwen35NativeHalfScale { get; init; }
     public bool Qwen35CooperativeDelta { get; init; }
     public bool Qwen35InferenceKernelsOnly { get; init; } = false;
+    // A vision encoder has its own lane; compile/cache only its three sources.
+    public bool Qwen35VisionKernelsOnly { get; init; } = false;
+    // Compile the optional online-softmax vision comparison only when selected.
+    public bool Qwen35VisionFlashAttention { get; init; }
+    // Dedicated Qwen inference can select the validated exact SG16 RMS path.
+    // General Arc and training lanes retain their original compiler resources.
+    public bool Qwen35DeltaSubgroupRms { get; init; }
 
     // Qwen GGUF inference keeps the original encoded Q4_K/Q6_K matrices.
     // Separate switches retain a same-binary reference for numerical and timing checks.
@@ -154,6 +162,8 @@ public sealed record ArcExecutionOptions
     public int MatrixPanelCacheMiB { get; init; } = 0;
     // Opt-in microbench kernels are excluded from production compilation.
     public bool ExperimentalOptimizationKernels { get; init; } = false;
+    public bool Qwen35ResidentIq2Panels { get; init; } = false;
+    public bool Qwen35GgufBslmPrefill { get; init; } = false;
     // Keep uploads visible to queue ordering/profiling even on a pool miss.
     // COPY_HOST_PTR otherwise hides its device transfer inside clCreateBuffer.
     public bool ExplicitHostUploads { get; init; } = true;

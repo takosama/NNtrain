@@ -82,18 +82,24 @@ public static class Qwen35Gguf
         if (gguf.Metadata.TryGetValue("qwen35.rope.scaling.type", out object? scaling)
             && scaling is not "none")
             throw new NotSupportedException("Qwen3.5 scaled RoPE is not implemented by the text loader.");
+        int[] ropeSections = ropeDimensions == 64 ? [11, 11, 10] : [];
         if (gguf.Metadata.TryGetValue("qwen35.rope.dimension_sections", out object? sections))
         {
             if (sections is not object[] values || values.Length == 0
                 || values.Sum(value => (long)NonnegativeInt(value, "qwen35.rope.dimension_sections")) * 2 != ropeDimensions)
                 throw new InvalidDataException("Qwen3.5 RoPE sections must sum to half the rotary dimension count.");
+            ropeSections = values.Select(value => NonnegativeInt(value,
+                "qwen35.rope.dimension_sections")).ToArray();
         }
 
         var descriptor = new Qwen35GgufDescriptor(
             vocabulary.Length, layers, width, heads, kvHeads, headWidth,
             context, feedForward, epsilon, theta, ropeDimensions,
             linearKeyHeads, linearValueHeads, linearHeadWidth, convKernel,
-            interval, gguf.Tensors.ToArray());
+            interval, gguf.Tensors.ToArray())
+        {
+            RopeDimensionSections = ropeSections
+        };
         ValidateRecurrentPattern(gguf, descriptor, "qwen35.recurrent_layers");
         ValidateRecurrentPattern(gguf, descriptor, "qwen35.attention.recurrent_layers");
         ValidateDirectory(gguf, descriptor);
@@ -267,5 +273,8 @@ public sealed record Qwen35GgufDescriptor(
     int FullAttentionInterval,
     IReadOnlyList<GgufTensorInfo> Tensors)
 {
+    /// <summary>Temporal/height/width interleaved MRoPE frequency sections.</summary>
+    public IReadOnlyList<int> RopeDimensionSections { get; init; } = [];
+
     public bool IsRecurrent(int layer) => (layer + 1) % FullAttentionInterval != 0;
 }

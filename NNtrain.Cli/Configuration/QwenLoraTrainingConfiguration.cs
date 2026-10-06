@@ -19,8 +19,23 @@ internal sealed record QwenLoraTrainingConfiguration
     public bool Iq2ProjectionCachePrioritize { get; init; }
     // Bounded per-Arc alternative to the host cache; outputs never leave VRAM.
     public int Iq2GpuProjectionCacheMiB { get; init; }
+    // Optional per-layer IQ2 transpose on a reusable GPU buffer.
+    public bool? Iq2RollingTranspose { get; init; }
     // Maximum reusable Arc training buffers retained per device.
     public int TrainingBufferPoolMiB { get; init; } = 2048;
+    // Experimental GPU retention of gradients in the host-checkpoint fallback.
+    public bool HostCheckpointGpuGradients { get; init; } = true;
+    public bool? HostCheckpointBufferHandoff { get; init; }
+    public bool HostCheckpointForwardCopyHandoff { get; init; }
+    public bool PackedAttentionScores { get; init; } = true;
+    // Zero uses ordinary packed attention; positive values bound the score
+    // workspace to that many query rows for long-context training.
+    public int? StreamedAttentionTileRows { get; init; }
+    public bool? FusedAttentionRows { get; init; }
+    // Resolve omitted speed flags only for fresh, homogeneous measured lengths.
+    // Explicit JSON values always win; resume retains the legacy omitted path.
+    public bool UseMeasuredLengthDefaults { get; init; } = true;
+    public bool FusedAttentionOutput { get; init; }
     public string? LossGraphPath { get; init; }
     public bool ShowLossGraph { get; init; } = true;
     public bool OpenLossGraph { get; init; } = true;
@@ -66,6 +81,12 @@ internal sealed record QwenLoraTrainingConfiguration
             throw new ArgumentException("iq2GpuProjectionCacheMiB must be between 0 and 1024 per Arc.");
         if (TrainingBufferPoolMiB is < 0 or > 2048)
             throw new ArgumentException("trainingBufferPoolMiB must be between 0 and 2048 per Arc.");
+        if (StreamedAttentionTileRows is not (null or 0 or 64 or 128 or 256 or 512 or 1024))
+            throw new ArgumentException("streamedAttentionTileRows must be 0, 64, 128, 256, 512, or 1024.");
+        if (FusedAttentionRows == true && !PackedAttentionScores)
+            throw new ArgumentException("fusedAttentionRows requires packedAttentionScores=true.");
+        if (FusedAttentionOutput && FusedAttentionRows == false)
+            throw new ArgumentException("fusedAttentionOutput requires fusedAttentionRows=true.");
         if (Iq2ProjectionCacheMiB > 0 && Iq2GpuProjectionCacheMiB > 0)
             throw new ArgumentException("Choose either the host or GPU IQ2 projection cache.");
         if (LossGraphEverySteps <= 0)
@@ -89,6 +110,36 @@ internal sealed record QwenLoraTrainingConfiguration
         if (PromptPrefix is null || ResponsePrefix is null)
             throw new ArgumentException("promptPrefix and responsePrefix must be strings.");
         AdapterOptions().Validate();
+    }
+
+    internal Qwen35ExecutionOptions ExecutionOptions(IReadOnlyList<int> tokenCounts, bool resume)
+    {
+        bool measured = UseMeasuredLengthDefaults && !resume
+            && ContextLength is 4096 or 8192 && tokenCounts.Count > 0
+            && tokenCounts.All(count => count == ContextLength);
+        bool fused = FusedAttentionRows ?? (measured && PackedAttentionScores);
+        bool longCombination = measured && ContextLength == 8192 && fused
+            && HostCheckpointGpuGradients && !HostCheckpointForwardCopyHandoff;
+        var options = new Qwen35ExecutionOptions
+        {
+            LoraTraining = true,
+            TrainingIQ2Fp16XmxForward = Iq2ForwardPrecision == "fp16",
+            TrainingIQ2ProjectionCacheMiB = Iq2ProjectionCacheMiB,
+            TrainingIQ2ProjectionCachePrioritize = Iq2ProjectionCachePrioritize,
+            TrainingIQ2GpuProjectionCacheMiB = Iq2GpuProjectionCacheMiB,
+            TrainingIQ2RollingTranspose = Iq2RollingTranspose ?? longCombination,
+            TrainingBufferPoolMiB = TrainingBufferPoolMiB,
+            TrainingHostCheckpointGpuGradients = HostCheckpointGpuGradients,
+            TrainingHostCheckpointBufferHandoff = HostCheckpointBufferHandoff ?? longCombination,
+            TrainingHostCheckpointForwardCopyHandoff = HostCheckpointForwardCopyHandoff,
+            TrainingPackedAttentionScores = PackedAttentionScores,
+            TrainingStreamedAttentionTileRows = StreamedAttentionTileRows ?? (longCombination ? 512 : 0),
+            TrainingFusedAttentionRows = fused,
+            TrainingFusedAttentionOutput = FusedAttentionOutput
+        };
+        if (options.TrainingFusedAttentionOutput && !options.TrainingFusedAttentionRows)
+            throw new ArgumentException("fusedAttentionOutput requires fusedAttentionRows=true.");
+        return options;
     }
 
     internal Qwen35LoraOptions AdapterOptions() => new()

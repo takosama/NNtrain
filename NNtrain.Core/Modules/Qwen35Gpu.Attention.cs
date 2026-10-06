@@ -65,9 +65,13 @@ internal static partial class Qwen35Gpu
     internal static ArcBuffer AttentionStep(ArcExecutionLane lane, ArcBuffer qAndGate,
         ArcBuffer key, ArcBuffer value, ArcBuffer qNorm, ArcBuffer kNorm,
         ArcBuffer keysCache, ArcBuffer valuesCache, int position, int heads, int kvHeads,
-        int headWidth, int ropeDimensions, float theta, float eps)
+        int headWidth, int ropeDimensions, float theta, float eps,
+        Qwen35Position? ropePosition = null, IReadOnlyList<int>? ropeSections = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(position);
+        if (ropePosition is { } suppliedPosition &&
+            (suppliedPosition.Temporal < 0 || suppliedPosition.Height < 0 || suppliedPosition.Width < 0))
+            throw new ArgumentOutOfRangeException(nameof(ropePosition));
         if (heads <= 0 || kvHeads <= 0 || heads % kvHeads != 0 || headWidth <= 0)
             throw new ArgumentException("Invalid grouped-query attention dimensions.");
         if (ropeDimensions < 0 || ropeDimensions > headWidth || (ropeDimensions & 1) != 0)
@@ -89,10 +93,30 @@ internal static partial class Qwen35Gpu
         using ArcBuffer normalizedKey = RmsNorm(lane, key, kNorm, kvHeads, headWidth, eps);
         if (ropeDimensions > 0)
         {
-            lane.Run("q35a_rope", (long)heads * (ropeDimensions / 2), AttentionReductionSize,
-                query, heads, headWidth, ropeDimensions, position, theta);
-            lane.Run("q35a_rope", (long)kvHeads * (ropeDimensions / 2), AttentionReductionSize,
-                normalizedKey, kvHeads, headWidth, ropeDimensions, position, theta);
+            Qwen35Position coordinates = ropePosition ?? Qwen35Position.Scalar(position);
+            if (coordinates.Temporal == coordinates.Height && coordinates.Temporal == coordinates.Width)
+            {
+                // Preserve the existing text kernel and its exact arithmetic.
+                lane.Run("q35a_rope", (long)heads * (ropeDimensions / 2), AttentionReductionSize,
+                    query, heads, headWidth, ropeDimensions, coordinates.Temporal, theta);
+                lane.Run("q35a_rope", (long)kvHeads * (ropeDimensions / 2), AttentionReductionSize,
+                    normalizedKey, kvHeads, headWidth, ropeDimensions, coordinates.Temporal, theta);
+            }
+            else
+            {
+                if (ropeSections is null || ropeSections.Count < 3
+                    || ropeSections[1] < 0 || ropeSections[2] < 0
+                    || ropeSections[1] > ropeDimensions / 2 || ropeSections[2] > ropeDimensions / 2)
+                    throw new NotSupportedException("Qwen3.5 multimodal RoPE sections are missing or invalid.");
+                lane.Run("q35a_mrope", (long)heads * (ropeDimensions / 2), AttentionReductionSize,
+                    query, heads, headWidth, ropeDimensions,
+                    coordinates.Temporal, coordinates.Height, coordinates.Width,
+                    ropeSections[1], ropeSections[2], theta);
+                lane.Run("q35a_mrope", (long)kvHeads * (ropeDimensions / 2), AttentionReductionSize,
+                    normalizedKey, kvHeads, headWidth, ropeDimensions,
+                    coordinates.Temporal, coordinates.Height, coordinates.Width,
+                    ropeSections[1], ropeSections[2], theta);
+            }
         }
         int cacheOffset = checked(position * kvSize * sizeof(float)), kvBytes = checked(kvSize * sizeof(float));
         lane.CopyBytes(normalizedKey, keysCache, 0, cacheOffset, kvBytes);

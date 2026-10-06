@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -23,6 +25,18 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
     private static readonly TimeSpan IdleLimit = TimeSpan.FromMinutes(5);
     private readonly InferenceSession _session = new();
     private readonly SemaphoreSlim _requestGate = new(1, 1);
+    private readonly SemaphoreSlim _admission = new(4, 4);
+    private readonly byte[] _authenticationBytes;
+    public const string TokenEnvironmentVariable = "NNTRAIN_GUI_SERVER_TOKEN";
+    public string AuthenticationToken { get; }
+
+    public LocalOpenAiServer(string? authenticationToken = null)
+    {
+        AuthenticationToken = authenticationToken ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        if (AuthenticationToken.Length < 32 || AuthenticationToken.Any(c => !char.IsAsciiLetterOrDigit(c)))
+            throw new ArgumentException("The session token must contain at least 32 ASCII letters or digits.", nameof(authenticationToken));
+        _authenticationBytes = Encoding.ASCII.GetBytes("Bearer " + AuthenticationToken);
+    }
     private readonly CancellationTokenSource _lifetime = new();
     private WebApplication? _app;
     private Task? _idleTask;
@@ -48,11 +62,45 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
         builder.WebHost.ConfigureKestrel(options =>
         {
             options.Listen(IPAddress.Loopback, port);
-            options.Limits.MaxRequestBodySize = 4 * 1024 * 1024;
+            options.Limits.MaxRequestBodySize = 40 * 1024 * 1024;
+            options.Limits.MaxConcurrentConnections = 16;
+            options.Limits.MaxRequestHeadersTotalSize = 16 * 1024;
+            options.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(15);
+            options.Limits.KeepAliveTimeout = TimeSpan.FromSeconds(30);
         });
         builder.Logging.ClearProviders();
         builder.Logging.AddConsole();
         WebApplication app = builder.Build();
+        app.Use(async (context, next) =>
+        {
+            string host = context.Request.Host.Host;
+            if (context.Connection.RemoteIpAddress is not { } remote || !IPAddress.IsLoopback(remote)
+                || !(host.Equals("localhost", StringComparison.OrdinalIgnoreCase) || host == "127.0.0.1")
+                || context.Request.Headers.ContainsKey("Origin"))
+            {
+                context.Response.StatusCode = 403;
+                return;
+            }
+            byte[] supplied = Encoding.ASCII.GetBytes(context.Request.Headers.Authorization.ToString());
+            if (!CryptographicOperations.FixedTimeEquals(supplied, _authenticationBytes))
+            {
+                context.Response.StatusCode = 401;
+                return;
+            }
+            if (HttpMethods.IsPost(context.Request.Method) && !context.Request.HasJsonContentType())
+            {
+                context.Response.StatusCode = 415;
+                return;
+            }
+            if (!await _admission.WaitAsync(0, context.RequestAborted).ConfigureAwait(false))
+            {
+                context.Response.StatusCode = 429;
+                context.Response.Headers.RetryAfter = "1";
+                return;
+            }
+            try { await next(context).ConfigureAwait(false); }
+            finally { _admission.Release(); }
+        });
         MapEndpoints(app);
         app.Lifetime.ApplicationStopping.Register(() => _lifetime.Cancel());
         try
@@ -96,13 +144,15 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
         }));
         app.MapGet("/internal/state", () => Results.Json(State()));
         app.MapPost("/internal/load", context => ExecuteAsync(context, LoadAsync));
+        app.MapPost("/internal/prepare-image", context => ExecuteAsync(context, PrepareImageAsync));
         app.MapPost("/internal/unload", context => ExecuteAsync(context, UnloadAsync));
-        app.MapPost("/internal/shutdown", async context =>
+        app.MapPost("/internal/shutdown", context => ExecuteAsync(context, async (context, ct) =>
         {
+            await ReadObjectAsync(context, ct).ConfigureAwait(false);
             Log("Shutdown requested.");
             await context.Response.WriteAsJsonAsync(new { status = "stopping" }).ConfigureAwait(false);
             _app?.Lifetime.StopApplication();
-        });
+        }));
         app.MapPost("/v1/chat/completions", context => ExecuteAsync(context, ChatAsync));
     }
 
@@ -130,7 +180,8 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
             {
                 ApiException api => api.StatusCode,
                 JsonException or BadHttpRequestException or ArgumentException
-                    or FileNotFoundException or InvalidDataException or NotSupportedException => 400,
+                    or FileNotFoundException or InvalidDataException or NotSupportedException
+                    or System.Text.RegularExpressions.RegexMatchTimeoutException => 400,
                 _ => 500
             };
             object body = new
@@ -165,11 +216,12 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
         JsonElement json = await ReadObjectAsync(context, ct).ConfigureAwait(false);
         string model = ValidateFilePath(RequiredString(json, "model"), ".gguf", "model");
         string? lora = ResolveLora(json);
+        string? mmproj = ResolveMmproj(json);
         int[]? devices = OptionalDevices(json);
         await _requestGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            await LoadCoreAsync(model, lora, devices, ct).ConfigureAwait(false);
+            await LoadCoreAsync(model, lora, devices, ct, mmproj).ConfigureAwait(false);
             await context.Response.WriteAsJsonAsync(State(), ct).ConfigureAwait(false);
         }
         finally { _requestGate.Release(); }
@@ -197,6 +249,7 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
         JsonElement json = await ReadObjectAsync(context, ct).ConfigureAwait(false);
         string model = ValidateFilePath(RequiredString(json, "model"), ".gguf", "model");
         string? lora = ResolveLora(json);
+        string? mmproj = ResolveMmproj(json);
         int[]? devices = OptionalDevices(json);
         ChatTurn[] messages = RequiredMessages(json);
         int maxTokens = OptionalInt(json, "max_completion_tokens")
@@ -223,7 +276,7 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
         double gateWaitMilliseconds = requestTimer.Elapsed.TotalMilliseconds;
         try
         {
-            await LoadCoreAsync(model, lora, devices, ct).ConfigureAwait(false);
+            await LoadCoreAsync(model, lora, devices, ct, mmproj).ConfigureAwait(false);
             Log($"Chat {id}: model={model}, lora={lora ?? "none"}, stream={stream}, think={think}, " +
                 $"max_tokens={maxTokens}, temperature={temperature.ToString(CultureInfo.InvariantCulture)}, " +
                 $"top_p={topP.ToString(CultureInfo.InvariantCulture)}, top_k={topK}");
@@ -349,10 +402,12 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
         MarkCompleted();
     }
 
-    private async Task LoadCoreAsync(string model, string? lora, int[]? devices, CancellationToken ct)
+    private async Task LoadCoreAsync(string model, string? lora, int[]? devices, CancellationToken ct,
+        string? mmproj = null)
     {
         if (_session.IsLoaded && string.Equals(_session.LoadedModelPath, model, StringComparison.OrdinalIgnoreCase)
             && string.Equals(_session.LoadedAdapterPath, lora, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(_session.LoadedMmprojPath, mmproj, StringComparison.OrdinalIgnoreCase)
             && (devices is null || _session.LoadedDevices is { } loaded && loaded.SequenceEqual(devices)))
         {
             MarkCompleted();
@@ -361,7 +416,16 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
         Log($"Loading model: {model}; LoRA: {lora ?? "none"}; devices: " +
             (devices is null ? "automatic" : string.Join(',', devices)));
         Stopwatch timer = Stopwatch.StartNew();
-        await _session.LoadAsync(model, lora, new Progress<string>(Log), ct, devices).ConfigureAwait(false);
+        try
+        {
+            await _session.LoadAsync(model, lora, new Progress<string>(Log), ct, devices, mmproj).ConfigureAwait(false);
+        }
+        finally
+        {
+            // A rejected vision tower can leave a useful text model resident.
+            // Keep its normal idle lifetime even when the load request fails.
+            if (_session.IsLoaded) MarkCompleted();
+        }
         timer.Stop();
         Log($"Model loaded in {timer.Elapsed.TotalSeconds:F2}s.");
         MarkCompleted();
@@ -379,6 +443,7 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
             is_loaded = _session.IsLoaded,
             model = _session.LoadedModelPath,
             lora = _session.LoadedAdapterPath,
+            mmproj = _session.LoadedMmprojPath,
             devices = _session.LoadedDevices,
             last_completed_utc = when,
             idle_seconds_remaining = idle
@@ -431,6 +496,10 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new ApiException(400, $"{parameter} path is required.", parameter);
+        string normalized = path.Replace('/', '\\');
+        if (normalized.StartsWith("\\\\", StringComparison.Ordinal)
+            || normalized.StartsWith("\\", StringComparison.Ordinal))
+            throw new ApiException(400, "Only local drive paths are accepted.", parameter);
         if (path.Split(['/', '\\']).Any(segment => segment == ".."))
             throw new ApiException(400, $"{parameter} path must not contain '..' segments.", parameter);
         string fullPath;
@@ -439,6 +508,10 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
         {
             throw new ApiException(400, $"Invalid {parameter} path.", parameter);
         }
+        string? root = Path.GetPathRoot(fullPath);
+        if (root is null || root.StartsWith("\\\\", StringComparison.Ordinal)
+            || new DriveInfo(root).DriveType == DriveType.Network)
+            throw new ApiException(400, "Network model paths are not accepted.", parameter);
         string actualExtension = Path.GetExtension(fullPath);
         bool accepted = actualExtension.Equals(extension, StringComparison.OrdinalIgnoreCase) ||
             parameter == "lora" && actualExtension.Equals(".gguf", StringComparison.OrdinalIgnoreCase);
@@ -456,7 +529,11 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
         if (!context.Request.HasJsonContentType())
             throw new ApiException(415, "Content-Type must be application/json.");
         JsonElement json;
-        try { json = await context.Request.ReadFromJsonAsync<JsonElement>(cancellationToken: ct).ConfigureAwait(false); }
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(15));
+        try { json = await context.Request.ReadFromJsonAsync<JsonElement>(cancellationToken: timeout.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        { throw new ApiException(408, "Request body read timed out."); }
         catch (JsonException error) { throw new ApiException(400, $"Invalid JSON: {error.Message}"); }
         if (json.ValueKind != JsonValueKind.Object)
             throw new ApiException(400, "Request body must be a JSON object.");
@@ -528,6 +605,9 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
     {
         if (!json.TryGetProperty("messages", out JsonElement value) || value.ValueKind != JsonValueKind.Array)
             throw new ApiException(400, "messages must be an array.", "messages");
+        if (value.GetArrayLength() > 4096)
+            throw new ApiException(400, "Too many messages.", "messages");
+        long textCharacters = 0;
         ChatTurn[] turns = value.EnumerateArray().Select(item =>
         {
             if (item.ValueKind != JsonValueKind.Object)
@@ -536,13 +616,85 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
             if (role == "developer") role = "system";
             if (role is not ("system" or "user" or "assistant"))
                 throw new ApiException(400, "Only system, developer, user and assistant roles are supported.", "messages");
-            if (!item.TryGetProperty("content", out JsonElement content) || content.ValueKind != JsonValueKind.String)
-                throw new ApiException(400, "Only text message content is supported.", "messages");
-            return new ChatTurn(role, content.GetString() ?? "", OptionalString(item, "assistant_prefix"));
+            if (!item.TryGetProperty("content", out JsonElement content))
+                throw new ApiException(400, "Message content is required.", "messages");
+            string text;
+            ChatImage? image = null;
+            if (content.ValueKind == JsonValueKind.String) text = content.GetString() ?? "";
+            else if (content.ValueKind == JsonValueKind.Array)
+            {
+                var parts = new List<string>();
+                foreach (JsonElement part in content.EnumerateArray())
+                {
+                    string type = RequiredString(part, "type");
+                    if (type == "text") parts.Add(RequiredString(part, "text"));
+                    else if (type == "image_url" && role == "user" && image is null)
+                    {
+                        if (!part.TryGetProperty("image_url", out var source) || source.ValueKind != JsonValueKind.Object)
+                            throw new ApiException(400, "image_url must contain a data URL.", "messages");
+                        try { image = ChatImage.FromDataUrl(RequiredString(source, "url")); }
+                        catch (Exception ex) when (ex is ArgumentException or FormatException)
+                        { throw new ApiException(400, ex.Message, "messages"); }
+                    }
+                    else throw new ApiException(400, "Use text and at most one local PNG/JPEG image per user turn.", "messages");
+                }
+                text = string.Join("\n", parts);
+            }
+            else throw new ApiException(400, "content must be text or text/image parts.", "messages");
+            string? prefix = OptionalString(item, "assistant_prefix");
+            textCharacters += text.Length + (long)(prefix?.Length ?? 0);
+            if (textCharacters > 1024 * 1024)
+                throw new ApiException(400, "Conversation exceeds the text character budget.", "messages");
+            return new ChatTurn(role, text, prefix, image);
         }).ToArray();
         if (turns.Length == 0 || turns[^1].Role != "user")
             throw new ApiException(400, "messages must end with a user message.", "messages");
         return turns;
+    }
+
+    private async Task PrepareImageAsync(HttpContext context, CancellationToken ct)
+    {
+        JsonElement json = await ReadObjectAsync(context, ct).ConfigureAwait(false);
+        string model = ValidateFilePath(RequiredString(json, "model"), ".gguf", "model");
+        string? lora = ResolveLora(json);
+        string? mmproj = ResolveMmproj(json);
+        if (mmproj is null) throw new ApiException(400, "mmproj is required to prepare an image.", "mmproj");
+        int[]? devices = OptionalDevices(json);
+        ChatTurn[]? messages = json.TryGetProperty("messages", out _) ? RequiredMessages(json) : null;
+        string? imageUrl = OptionalString(json, "image_url");
+        // A history request already contains the attachment. Avoid sending its
+        // base64 twice, which can exceed the 40 MiB limit for one 16 MiB image.
+        ChatImage image = imageUrl is not null ? ChatImage.FromDataUrl(imageUrl)
+            : messages is { Length: > 0 } && messages[^1].Image is { } attached ? attached
+            : throw new ApiException(400, "image_url or a final image message is required.", "image_url");
+        if (messages is not null && (messages[^1].Content.Length != 0 || messages[^1].Image?.Hash != image.Hash))
+            throw new ApiException(400, "Preparation messages must end with the same image and empty user text.", "messages");
+        await _requestGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await LoadCoreAsync(model, lora, devices, ct, mmproj).ConfigureAwait(false);
+            ImagePreparationStats result = await _session.PrepareImageAsync(image, messages, ct).ConfigureAwait(false);
+            MarkCompleted();
+            await context.Response.WriteAsJsonAsync(new
+            {
+                image_hash = image.Hash,
+                grid_width = result.GridWidth,
+                grid_height = result.GridHeight,
+                cached = result.Cached,
+                image_preparation_ms = _session.LastImagePreparationMilliseconds,
+                primed_prompt_tokens = result.PrimedPromptTokens,
+                reused_prompt_tokens = result.ReusedPromptTokens,
+                prefix_cached = result.PrefixCached,
+                prefix_preparation_ms = result.PrefixPreparationMilliseconds
+            }, ct).ConfigureAwait(false);
+        }
+        finally { _requestGate.Release(); }
+    }
+
+    private static string? ResolveMmproj(JsonElement json)
+    {
+        string? path = OptionalString(json, "mmproj");
+        return string.IsNullOrWhiteSpace(path) ? null : ValidateFilePath(path, ".gguf", "mmproj");
     }
 
     private IEnumerable<string> EnumerateModels()
@@ -560,7 +712,8 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
                     try
                     {
                         foreach (string path in Directory.EnumerateFiles(models, "*.gguf", SearchOption.AllDirectories))
-                            if (!Path.GetFileName(path).StartsWith("lora_", StringComparison.OrdinalIgnoreCase))
+                            if (!Path.GetFileName(path).StartsWith("lora_", StringComparison.OrdinalIgnoreCase)
+                                && !HuggingFaceModelDownload.IsMmproj(path))
                                 paths.Add(Path.GetFullPath(path));
                     }
                     catch (IOException) { }

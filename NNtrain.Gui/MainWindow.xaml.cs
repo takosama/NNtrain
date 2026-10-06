@@ -21,6 +21,7 @@ namespace NNtrain.Gui;
 public partial class MainWindow : Window
 {
     private readonly GuiLaunchOptions _launchOptions;
+    private readonly string _serverToken = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
     private readonly HttpClient _client = new() { Timeout = Timeout.InfiniteTimeSpan };
     private readonly ObservableCollection<FileChoice> _models = [];
     private readonly ObservableCollection<FileChoice> _adapters = [];
@@ -36,12 +37,13 @@ public partial class MainWindow : Window
     private int[]? _loadedDevices;
     private double? _idleSecondsRemaining;
     private string? _modelsDirectory;
-    private bool _busy, _refreshing, _pendingUnload, _closingFinished;
+    private bool _busy, _refreshing, _pendingUnload, _closingFinished, _closingStarted;
     private int _streamingGeneration;
 
     internal MainWindow(GuiLaunchOptions launchOptions)
     {
         _launchOptions = launchOptions;
+        _client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _serverToken);
         InitializeComponent();
         ModelComboBox.ItemsSource = _models;
         AdapterComboBox.ItemsSource = _adapters;
@@ -50,6 +52,8 @@ public partial class MainWindow : Window
         _idleTimer.Tick += IdleTimer_Tick;
         RefreshGpuChoices();
         RefreshChoices();
+        InitializeHuggingFaceTab();
+        InitializeAudio();
         ApplyLaunchOptions();
         UpdateControls();
         Loaded += async (_, _) => await StartServerAsync();
@@ -88,9 +92,10 @@ public partial class MainWindow : Window
                 ?? throw new InvalidOperationException("実行ファイルの場所を取得できません。");
             var start = new ProcessStartInfo(executable)
             {
-                UseShellExecute = true,
+                UseShellExecute = false,
                 WindowStyle = ProcessWindowStyle.Normal
             };
+            start.Environment[LocalOpenAiServer.TokenEnvironmentVariable] = _serverToken;
             if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
                 start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "NNtrain.Gui.dll"));
             start.ArgumentList.Add("--server");
@@ -161,6 +166,7 @@ public partial class MainWindow : Window
             foreach (FileChoice item in manualAdapters) AddChoice(_adapters, item.FilePath!, true);
             ModelComboBox.SelectedItem = FindChoice(_models, selectedModel) ?? _models.FirstOrDefault();
             AdapterComboBox.SelectedItem = FindChoice(_adapters, selectedAdapter) ?? _adapters[0];
+            RefreshMmprojChoices();
             if (_models.Count == 0)
                 SetStatus("models フォルダーに GGUF がありません。参照からモデルを選択してください。");
         }
@@ -197,7 +203,8 @@ public partial class MainWindow : Window
         catch (IOException) { yield break; }
         catch (UnauthorizedAccessException) { yield break; }
         foreach (string path in files.Order(StringComparer.OrdinalIgnoreCase))
-            if (!Path.GetFileName(path).StartsWith("lora_", StringComparison.OrdinalIgnoreCase))
+            if (!Path.GetFileName(path).StartsWith("lora_", StringComparison.OrdinalIgnoreCase)
+                && !HuggingFaceModelDownload.IsMmproj(path))
                 yield return path;
     }
 
@@ -211,7 +218,8 @@ public partial class MainWindow : Window
         }
         catch (IOException) { yield break; }
         catch (UnauthorizedAccessException) { yield break; }
-        foreach (string path in files.Order(StringComparer.OrdinalIgnoreCase)) yield return path;
+        foreach (string path in files.Order(StringComparer.OrdinalIgnoreCase))
+            if (!HuggingFaceModelDownload.IsMmproj(path)) yield return path;
     }
 
     private static string? FindModelsDirectory()
@@ -249,11 +257,26 @@ public partial class MainWindow : Window
     private async void ModelOrAdapter_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_refreshing || _closingFinished) return;
+        CancelAudio();
+        CancelPendingImagePreparation();
+        if (ReferenceEquals(sender, MmprojComboBox) && _isLoaded && SelectionMatchesLoadedBase())
+        {
+            await ExecuteAsync(async ct =>
+            {
+                await EnsureLoadedAsync(_loadedModelPath!, _loadedAdapterPath, _loadedDevices!, ct);
+                await PreparePendingImageAsync(ct);
+            });
+            return;
+        }
         if (_isLoaded && !SelectionMatchesLoaded()) await ReleaseForSelectionChangeAsync();
         UpdateControls();
     }
 
     private bool SelectionMatchesLoaded() =>
+        SelectionMatchesLoadedBase() &&
+        string.Equals(_loadedMmprojPath, SelectedMmprojPath, StringComparison.OrdinalIgnoreCase);
+
+    private bool SelectionMatchesLoadedBase() =>
         string.Equals(_loadedModelPath, (ModelComboBox.SelectedItem as FileChoice)?.FilePath,
             StringComparison.OrdinalIgnoreCase) &&
         string.Equals(_loadedAdapterPath, (AdapterComboBox.SelectedItem as FileChoice)?.FilePath,
@@ -291,9 +314,10 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog(this) == true)
         {
             App.RejectParentTraversal(dialog.FileName);
-            if (Path.GetFileName(dialog.FileName).StartsWith("lora_", StringComparison.OrdinalIgnoreCase))
+            if (Path.GetFileName(dialog.FileName).StartsWith("lora_", StringComparison.OrdinalIgnoreCase)
+                || HuggingFaceModelDownload.IsMmproj(dialog.FileName))
             {
-                SetStatus("選択したファイルは LoRA アダプターです。ベースの GGUF モデルを選んでください。");
+                SetStatus("LoRA や mmproj ではなく、ベースの GGUF モデルを選んでください。");
                 return;
             }
             ModelComboBox.SelectedItem = AddChoice(_models, dialog.FileName, true);
@@ -313,6 +337,11 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog(this) == true)
         {
             App.RejectParentTraversal(dialog.FileName);
+            if (HuggingFaceModelDownload.IsMmproj(dialog.FileName))
+            {
+                SetStatus("mmproj ではなく LoRA アダプターを選んでください。");
+                return;
+            }
             AdapterComboBox.SelectedItem = AddChoice(_adapters, dialog.FileName, true);
         }
     }
@@ -341,7 +370,11 @@ public partial class MainWindow : Window
     private async void Preload_Click(object sender, RoutedEventArgs e)
     {
         if (!TrySelectedFiles(out string? modelPath, out string? adapterPath, out GpuChoice? gpu)) return;
-        await ExecuteAsync(ct => EnsureLoadedAsync(modelPath!, adapterPath, gpu!.DeviceIndices, ct));
+        await ExecuteAsync(async ct =>
+        {
+            await EnsureLoadedAsync(modelPath!, adapterPath, gpu!.DeviceIndices, ct);
+            await PreparePendingImageAsync(ct);
+        });
     }
 
     private async Task EnsureLoadedAsync(string modelPath, string? adapterPath,
@@ -350,16 +383,17 @@ public partial class MainWindow : Window
         await RestartServerIfStoppedAsync(ct);
         if (_isLoaded && string.Equals(_loadedModelPath, modelPath, StringComparison.OrdinalIgnoreCase)
             && string.Equals(_loadedAdapterPath, adapterPath, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(_loadedMmprojPath, SelectedMmprojPath, StringComparison.OrdinalIgnoreCase)
             && _loadedDevices is { } loadedDevices && loadedDevices.SequenceEqual(deviceIndices))
         {
-            await PostAsync("internal/load", new { model = modelPath, lora = adapterPath, devices = deviceIndices }, ct);
+            await PostAsync("internal/load", new { model = modelPath, lora = adapterPath, mmproj = SelectedMmprojPath, devices = deviceIndices }, ct);
             await RefreshServerStateAsync(ct);
             SetStatus("選択中のモデルはプリロード済みです。");
             return;
         }
         ct.ThrowIfCancellationRequested();
         SetStatus($"読み込み中: {Path.GetFileName(modelPath)}");
-        await PostAsync("internal/load", new { model = modelPath, lora = adapterPath, devices = deviceIndices }, ct);
+        await PostAsync("internal/load", new { model = modelPath, lora = adapterPath, mmproj = SelectedMmprojPath, devices = deviceIndices }, ct);
         ct.ThrowIfCancellationRequested();
         await RefreshServerStateAsync(ct);
         string gpu = $"Arc {string.Join(",", deviceIndices)}";
@@ -381,6 +415,7 @@ public partial class MainWindow : Window
         _isLoaded = false;
         _loadedModelPath = null;
         _loadedAdapterPath = null;
+        _loadedMmprojPath = null;
         _loadedDevices = null;
         _serverProcess?.Dispose();
         _serverProcess = null;
@@ -418,6 +453,7 @@ public partial class MainWindow : Window
         _isLoaded = ReadBoolean(state, "is_loaded");
         _loadedModelPath = ReadString(state, "model");
         _loadedAdapterPath = ReadString(state, "lora");
+        _loadedMmprojPath = ReadString(state, "mmproj");
         _loadedDevices = state.TryGetProperty("devices", out JsonElement devices) && devices.ValueKind == JsonValueKind.Array
             ? devices.EnumerateArray().Select(value => value.GetInt32()).ToArray() : null;
         _idleSecondsRemaining = state.TryGetProperty("idle_seconds_remaining", out JsonElement idle) && idle.ValueKind == JsonValueKind.Number
@@ -491,9 +527,17 @@ public partial class MainWindow : Window
 
     private async Task SendMessageAsync()
     {
+        if (_asrActive) return;
         string message = MessageBox.Text.Trim();
+        ChatImage? image = _pendingImage;
+        if (message.Length == 0 && image is not null) message = "この画像について説明してください。";
         if (message.Length == 0 ||
             !TrySelectedFiles(out string? modelPath, out string? adapterPath, out GpuChoice? gpu)) return;
+        if ((image is not null || _conversation.Any(turn => turn.Image is not null)) && SelectedMmprojPath is null)
+        {
+            SetStatus("画像を使うにはモデルに対応する mmproj GGUF を選択してください。");
+            return;
+        }
         if (!int.TryParse(MaxTokensBox.Text, out int maxNewTokens) || maxNewTokens is < 1 or > 8192)
         {
             SetStatus("最大生成数は 1 ～ 8192 の整数で指定してください。");
@@ -519,12 +563,15 @@ public partial class MainWindow : Window
         var sampling = new GenerationSampling(temperature, topP, topK);
         await ExecuteAsync(async ct =>
         {
+            await WaitForPendingImagePreparationAsync(image, ct);
             await EnsureLoadedAsync(modelPath!, adapterPath, gpu!.DeviceIndices, ct);
             ct.ThrowIfCancellationRequested();
             MessageBox.Clear();
+            _pendingImage = null;
+            UpdateImageAttachment();
             int conversationCountBeforeMessage = _conversation.Count;
-            _conversation.Add(new ChatTurn("user", message));
-            var question = new ChatBubble("あなた", message);
+            _conversation.Add(new ChatTurn("user", message, Image: image));
+            var question = new ChatBubble("あなた", image is null ? message : $"[画像: {image.Name}]\n{message}");
             _messages.Add(question);
             bool thinking = ThinkingCheckBox.IsChecked == true;
             bool stream = StreamCheckBox.IsChecked == true;
@@ -631,6 +678,8 @@ public partial class MainWindow : Window
                     _conversation.RemoveRange(conversationCountBeforeMessage,
                         _conversation.Count - conversationCountBeforeMessage);
                     MessageBox.Text = message;
+                    _pendingImage = image;
+                    UpdateImageAttachment();
                     _messages.Remove(answer);
                     _messages.Remove(question);
                 }
@@ -673,7 +722,7 @@ public partial class MainWindow : Window
             messages = conversation.Select(turn => new
             {
                 role = turn.Role,
-                content = turn.Content,
+                content = MessageContent(turn),
                 assistant_prefix = turn.AssistantPrefix
             }).ToArray(),
             max_tokens = maxNewTokens,
@@ -684,6 +733,7 @@ public partial class MainWindow : Window
             prime_history = stream,
             think = thinking,
             lora = adapterPath,
+            mmproj = SelectedMmprojPath,
             devices
         };
         using var request = new HttpRequestMessage(HttpMethod.Post, "v1/chat/completions")
@@ -777,6 +827,7 @@ public partial class MainWindow : Window
     private void Stop_Click(object sender, RoutedEventArgs e)
     {
         _activeCancellation?.Cancel();
+        CancelPendingImagePreparation();
         SetStatus("停止しています…");
     }
 
@@ -867,8 +918,13 @@ public partial class MainWindow : Window
 
     private void UpdateControls()
     {
+        UpdateAudioControls();
         ModelComboBox.IsEnabled = !_busy;
         AdapterComboBox.IsEnabled = !_busy;
+        MmprojComboBox.IsEnabled = !_busy;
+        AttachImageButton.IsEnabled = !_busy && !_asrActive;
+        NewConversationButton.IsEnabled = !_busy && !_asrActive;
+        UpdateImageAttachment();
         GpuComboBox.IsEnabled = !_busy;
         MessageBox.IsEnabled = !_busy;
         MaxTokensBox.IsEnabled = !_busy;
@@ -877,9 +933,9 @@ public partial class MainWindow : Window
         TopKBox.IsEnabled = !_busy;
         ThinkingCheckBox.IsEnabled = !_busy;
         StreamCheckBox.IsEnabled = !_busy;
-        PreloadButton.IsEnabled = _serverReady && !_busy && ModelComboBox.SelectedItem is FileChoice
+        PreloadButton.IsEnabled = _serverReady && !_busy && !_asrActive && ModelComboBox.SelectedItem is FileChoice
             && GpuComboBox.SelectedItem is GpuChoice;
-        SendButton.IsEnabled = _serverReady && !_busy && ModelComboBox.SelectedItem is FileChoice
+        SendButton.IsEnabled = _serverReady && !_busy && !_asrActive && ModelComboBox.SelectedItem is FileChoice
             && GpuComboBox.SelectedItem is GpuChoice;
         StopButton.IsEnabled = _busy;
         UpdateMemoryStatus();
@@ -905,9 +961,18 @@ public partial class MainWindow : Window
     {
         if (_closingFinished) return;
         e.Cancel = true;
+        if (_closingStarted) return;
+        _closingStarted = true;
         IsEnabled = false;
         _idleTimer.Stop();
+        CancelAudio();
+        if (_asrTask is { } audioTask)
+        {
+            try { await audioTask; } catch { }
+        }
         _activeCancellation?.Cancel();
+        _hfOperationCancellation?.Cancel();
+        CancelPendingImagePreparation();
         try
         {
             if (_serverReady && _serverProcess is { HasExited: false })
@@ -928,9 +993,11 @@ public partial class MainWindow : Window
                 catch (System.ComponentModel.Win32Exception) { }
             }
             _serverProcess?.Dispose();
+            _asrModel?.Dispose();
             _client.Dispose();
+            _hfClient.Dispose();
             _closingFinished = true;
-            Close();
+            _ = Dispatcher.BeginInvoke(new Action(Close));
         }
     }
 

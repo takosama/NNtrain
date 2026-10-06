@@ -62,14 +62,18 @@ public sealed class Qwen35LoraCheckpointParityTests
     }
 
     [Theory]
-    [InlineData(1, true, 1, true)]
-    [InlineData(1, true, 1, false)]
-    [InlineData(3, true, 1, true)]
-    [InlineData(3, false, 1, true)]
-    [InlineData(3, true, 2, true)]
-    [InlineData(3, true, 2, false)]
+    [InlineData(1, true, 1, true, false)]
+    [InlineData(1, true, 1, false, false)]
+    [InlineData(3, true, 1, true, false)]
+    [InlineData(3, false, 1, true, false)]
+    [InlineData(3, true, 2, true, false)]
+    [InlineData(3, true, 2, false, false)]
+    [InlineData(1, true, 1, false, true)]
+    [InlineData(3, false, 1, false, true)]
+    [InlineData(3, true, 2, false, true)]
     public void RecomputedLayersMatchFullTapeLossGradientsAndUpdate(
-        int responseStart, bool responseOnlyHead, int deviceCount, bool gpuCheckpoints)
+        int responseStart, bool responseOnlyHead, int deviceCount, bool gpuCheckpoints,
+        bool hostCheckpointGpuGradients)
     {
         Assert.SkipWhen(ArcDevices.Enumerate().Count < deviceCount, "Required Intel Arc GPUs are unavailable.");
         using TemporaryQwenGguf fixture = Qwen35ResidentModelTests.CreateFixture(tiedOutput: false);
@@ -78,7 +82,8 @@ public sealed class Qwen35LoraCheckpointParityTests
         {
             LoraTraining = true,
             TrainingResponseOnlyHead = responseOnlyHead,
-            TrainingGpuCheckpoints = gpuCheckpoints
+            TrainingGpuCheckpoints = gpuCheckpoints,
+            TrainingHostCheckpointGpuGradients = hostCheckpointGpuGradients
         };
         using Qwen35QuantizedModel reference = Qwen35QuantizedModel.Load(fixture.Path, devices, options: execution);
         using Qwen35QuantizedModel recomputed = Qwen35QuantizedModel.Load(fixture.Path, devices, options: execution);
@@ -128,6 +133,76 @@ public sealed class Qwen35LoraCheckpointParityTests
             float[][] b = recomputed.LoraMatrices[pair.Key].ReadState();
             for (int field = 0; field < a.Length; field++)
                 for (int i = 0; i < a[field].Length; i++) Close(a[field][i], b[field][i]);
+        }
+    }
+
+    [Theory]
+    [InlineData(1, true, false, false, false, false)]
+    [InlineData(1, false, true, false, false, false)]
+    [InlineData(1, false, false, true, false, false)]
+    [InlineData(1, false, false, false, true, false)]
+    [InlineData(2, true, false, false, false, false)]
+    [InlineData(2, false, true, false, false, false)]
+    [InlineData(2, false, false, true, false, false)]
+    [InlineData(2, false, false, false, true, false)]
+    [InlineData(1, true, false, false, false, true)]
+    [InlineData(2, true, false, false, false, true)]
+    [InlineData(1, false, false, true, false, true)]
+    [InlineData(2, false, false, true, false, true)]
+    public void HostCheckpointBufferHandoffPreservesLoraUpdate(
+        int deviceCount, bool forward, bool backward, bool combined, bool forwardCopy, bool asyncRead)
+    {
+        Assert.SkipWhen(ArcDevices.Enumerate().Count < deviceCount, "Required Intel Arc GPUs are unavailable.");
+        using TemporaryQwenGguf fixture = Qwen35ResidentModelTests.CreateFixture(tiedOutput: false);
+        int[] devices = Enumerable.Range(0, deviceCount).ToArray();
+        var execution = new Qwen35ExecutionOptions
+        {
+            LoraTraining = true,
+            TrainingGpuCheckpoints = false,
+            TrainingHostCheckpointGpuGradients = true
+        };
+        using Qwen35QuantizedModel reference = Qwen35QuantizedModel.Load(
+            fixture.Path, devices, options: execution);
+        using Qwen35QuantizedModel handoff = Qwen35QuantizedModel.Load(
+            fixture.Path, devices, options: execution with
+            {
+                TrainingHostCheckpointBufferHandoff = combined,
+                TrainingHostCheckpointForwardBufferHandoff = forward,
+                TrainingHostCheckpointBackwardBufferHandoff = backward,
+                TrainingHostCheckpointForwardCopyHandoff = forwardCopy,
+                TrainingHostCheckpointAsyncRead = asyncRead
+            });
+        var adapter = new Qwen35LoraOptions
+        {
+            Rank = 2, Alpha = 4, IncludeOutput = true, Seed = 94, LearningRate = .001f
+        };
+        reference.AttachLora(adapter);
+        handoff.AttachLora(adapter);
+        reference.LoraCheckpointThresholdRows = 0;
+        handoff.LoraCheckpointThresholdRows = 0;
+        int[] tokens = [1, 2, 3, 0, 1, 2];
+        long referenceUpload = reference.UploadedBytes.Sum();
+        long handoffUpload = handoff.UploadedBytes.Sum();
+
+        Qwen35LoraStepResult expected = reference.TrainLora(tokens, 3);
+        Qwen35LoraStepResult actual = handoff.TrainLora(tokens, 3);
+
+        Assert.Equal(expected.Step, actual.Step);
+        Close(expected.Loss, actual.Loss);
+        Close(expected.GradientNorm, actual.GradientNorm);
+        referenceUpload = reference.UploadedBytes.Sum() - referenceUpload;
+        handoffUpload = handoff.UploadedBytes.Sum() - handoffUpload;
+        if (forward || combined || forwardCopy)
+            Assert.True(handoffUpload < referenceUpload,
+                $"Expected forward handoff to reduce H2D: {handoffUpload} versus {referenceUpload} bytes.");
+        else Assert.Equal(referenceUpload, handoffUpload);
+        foreach (var pair in reference.LoraMatrices)
+        {
+            float[][] baseline = pair.Value.ReadState();
+            float[][] observed = handoff.LoraMatrices[pair.Key].ReadState();
+            for (int field = 0; field < baseline.Length; field++)
+                for (int i = 0; i < baseline[field].Length; i++)
+                    Close(baseline[field][i], observed[field][i]);
         }
     }
 
@@ -222,6 +297,137 @@ public sealed class Qwen35LoraCheckpointParityTests
                 cached.LastIq2ProjectionCacheStats.PeakBytes);
         Assert.Equal(cached.LastIq2ProjectionCacheStats.PeakBytes, cachedUpload - recomputedUpload);
         Assert.Equal(cached.LastIq2ProjectionCacheStats.PeakBytes, cachedDownload - recomputedDownload);
+        foreach (var pair in recomputed.LoraMatrices)
+        {
+            float[][] expected = pair.Value.ReadState();
+            float[][] observed = cached.LoraMatrices[pair.Key].ReadState();
+            for (int field = 0; field < expected.Length; field++)
+                for (int i = 0; i < expected[field].Length; i++) Close(expected[field][i], observed[field][i]);
+        }
+    }
+
+    [Theory]
+    [InlineData(1, false, 1)]
+    [InlineData(2, true, 2)]
+    public void HybridLayerCheckpointsMatchHostUpdateWithinPerDeviceBudget(
+        int deviceCount, bool forwardHandoff, int expectedGpuCheckpoints)
+    {
+        Assert.SkipWhen(ArcDevices.Enumerate().Count < deviceCount, "Required Intel Arc GPUs are unavailable.");
+        using TemporaryQwenGguf fixture = Qwen35ResidentModelTests.CreateFixture(
+            tiedOutput: false, layerCount: 4);
+        int[] devices = Enumerable.Range(0, deviceCount).ToArray();
+        var execution = new Qwen35ExecutionOptions
+        {
+            LoraTraining = true,
+            TrainingGpuCheckpoints = false,
+            TrainingHostCheckpointGpuGradients = true,
+            TrainingHostCheckpointForwardBufferHandoff = forwardHandoff
+        };
+        using Qwen35QuantizedModel host = Qwen35QuantizedModel.Load(
+            fixture.Path, devices, options: execution);
+        using Qwen35QuantizedModel hybrid = Qwen35QuantizedModel.Load(
+            fixture.Path, devices, options: execution with
+            {
+                TrainingHybridCheckpointMiBPerDevice = 256
+            });
+        var adapter = new Qwen35LoraOptions
+        {
+            Rank = 2, Alpha = 4, IncludeOutput = true, Seed = 94, LearningRate = .001f
+        };
+        host.AttachLora(adapter);
+        hybrid.AttachLora(adapter);
+        host.LoraCheckpointThresholdRows = 0;
+        hybrid.LoraCheckpointThresholdRows = 0;
+        const long hiddenBytes = 5L * 256 * sizeof(float);
+        hybrid.LoraHybridCheckpointBudgetBytesOverride = hiddenBytes;
+        int[] tokens = [1, 2, 3, 0, 1, 2];
+        long hostDownload = host.DownloadedBytes.Sum();
+        long hybridDownload = hybrid.DownloadedBytes.Sum();
+
+        Qwen35LoraStepResult expected = host.TrainLora(tokens, 3);
+        Qwen35LoraStepResult actual = hybrid.TrainLora(tokens, 3);
+
+        Assert.Equal(expected.Step, actual.Step);
+        Close(expected.Loss, actual.Loss);
+        Close(expected.GradientNorm, actual.GradientNorm);
+        Assert.Equal(expectedGpuCheckpoints, hybrid.LastHybridCheckpointCount);
+        Assert.All(hybrid.LastHybridCheckpointBytesByDevice, bytes => Assert.Equal(hiddenBytes, bytes));
+        hostDownload = host.DownloadedBytes.Sum() - hostDownload;
+        hybridDownload = hybrid.DownloadedBytes.Sum() - hybridDownload;
+        Assert.True(hybridDownload < hostDownload,
+            $"Expected hybrid checkpoints to reduce D2H: {hybridDownload} versus {hostDownload} bytes.");
+        foreach (var pair in host.LoraMatrices)
+        {
+            float[][] baseline = pair.Value.ReadState();
+            float[][] observed = hybrid.LoraMatrices[pair.Key].ReadState();
+            for (int field = 0; field < baseline.Length; field++)
+                for (int i = 0; i < baseline[field].Length; i++)
+                    Close(baseline[field][i], observed[field][i]);
+        }
+    }
+
+    [Fact]
+    public void HybridCheckpointRejectsExcessiveBudgetAndConflictingCopyMode()
+    {
+        using TemporaryQwenGguf fixture = Qwen35ResidentModelTests.CreateFixture(tiedOutput: false);
+        using var reader = new GgufReader(fixture.Path);
+        Assert.Throws<ArgumentException>(() => Qwen35QuantizedModel.Load(
+            reader, options: new() { TrainingHybridCheckpointMiBPerDevice = 1025 }));
+        Assert.Throws<ArgumentException>(() => Qwen35QuantizedModel.Load(
+            reader, options: new()
+            {
+                TrainingHybridCheckpointMiBPerDevice = 256,
+                TrainingHostCheckpointForwardCopyHandoff = true
+            }));
+    }
+
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    public void HostCheckpointIq2BaseCacheMatchesRecomputation(int deviceCount, bool bufferHandoff)
+    {
+        Assert.SkipWhen(ArcDevices.Enumerate().Count < deviceCount, "Required Intel Arc GPUs are unavailable.");
+        using TemporaryQwenGguf fixture = Qwen35ResidentModelTests.CreateFixture(
+            tiedOutput: false, iq2Qkv: true);
+        int[] devices = Enumerable.Range(0, deviceCount).ToArray();
+        var execution = new Qwen35ExecutionOptions
+        {
+            LoraTraining = true,
+            TrainingGpuCheckpoints = false,
+            TrainingHostCheckpointGpuGradients = true,
+            TrainingHostCheckpointBufferHandoff = bufferHandoff
+        };
+        using Qwen35QuantizedModel recomputed = Qwen35QuantizedModel.Load(
+            fixture.Path, devices, options: execution);
+        using Qwen35QuantizedModel cached = Qwen35QuantizedModel.Load(
+            fixture.Path, devices, options: execution with
+            {
+                TrainingIQ2ProjectionCacheMiB = 1,
+                TrainingIQ2ProjectionCachePrioritize = true
+            });
+        var adapter = new Qwen35LoraOptions
+        {
+            Rank = 2, Alpha = 4, IncludeOutput = true, Seed = 94, LearningRate = .001f
+        };
+        recomputed.AttachLora(adapter);
+        cached.AttachLora(adapter);
+        recomputed.LoraCheckpointThresholdRows = 0;
+        cached.LoraCheckpointThresholdRows = 0;
+        int[] tokens = [1, 2, 3, 0, 1, 2];
+
+        Qwen35LoraStepResult reference = recomputed.TrainLora(tokens, 3);
+        Qwen35LoraStepResult actual = cached.TrainLora(tokens, 3);
+
+        Assert.Equal(reference.Step, actual.Step);
+        Close(reference.Loss, actual.Loss);
+        Close(reference.GradientNorm, actual.GradientNorm);
+        Assert.Equal(0, recomputed.LastIq2ProjectionCacheStats.Captured);
+        Assert.Equal(1, cached.LastIq2ProjectionCacheStats.Captured);
+        Assert.Equal(1, cached.LastIq2ProjectionCacheStats.Reused);
+        Assert.Equal((long)(tokens.Length - 1) * 512 * sizeof(float),
+            cached.LastIq2ProjectionCacheStats.PeakBytes);
         foreach (var pair in recomputed.LoraMatrices)
         {
             float[][] expected = pair.Value.ReadState();

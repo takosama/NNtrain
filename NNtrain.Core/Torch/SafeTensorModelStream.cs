@@ -207,7 +207,8 @@ internal static partial class SafeTensorFile
         string path,
         Module model,
         IReadOnlyList<string>? keys = null,
-        Action<int>? stagingChunkObserved = null)
+        Action<int>? stagingChunkObserved = null,
+        SafeTensorReadLimits? limits = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(model);
@@ -221,7 +222,7 @@ internal static partial class SafeTensorFile
             bufferSize: 1024 * 1024,
             FileOptions.RandomAccess);
         (long dataStart, List<SafeTensorDescriptor> descriptors) =
-            ReadDescriptors(stream);
+            ReadDescriptors(stream, limits);
         Parameter[] parameters = model.Parameters().ToArray();
         SafeTensorDescriptor[] mapped = MapDescriptors(
             fullPath,
@@ -230,6 +231,22 @@ internal static partial class SafeTensorFile
             keys);
 
         using var staging = new CheckpointFloatStagingBuffer();
+        // Preflight all values before writing any parameter. Bounded memory,
+        // at the cost of a second payload read; not rollback for device/I/O faults.
+        for (int index = 0; index < parameters.Length; index++)
+        {
+            var descriptor = mapped[index];
+            stream.Position = checked(dataStart + descriptor.Start);
+            int remaining = parameters[index].T.Numel;
+            while (remaining > 0)
+            {
+                int count = Math.Min(CheckpointFloatStagingBuffer.MaximumElementCount, remaining);
+                var values = staging.GetManagedSpan(count);
+                ReadStreamedValues(stream, values, descriptor.Codec);
+                ValidateRestoredValues(values, descriptor.Key, parameters[index].T.DType);
+                remaining -= count;
+            }
+        }
         ushort[]? packedStaging = null;
         for (int parameterIndex = 0;
             parameterIndex < parameters.Length;
@@ -340,14 +357,24 @@ internal static partial class SafeTensorFile
     private static (
         long DataStart,
         List<SafeTensorDescriptor> Descriptors)
-        ReadDescriptors(FileStream stream)
+        ReadDescriptors(Stream stream, SafeTensorReadLimits? limits = null)
     {
+        try { return ReadDescriptorsCore(stream, limits); }
+        catch (Exception e) when (e is JsonException or InvalidOperationException or KeyNotFoundException or FormatException or OverflowException)
+        { throw new InvalidDataException("SafeTensors descriptor is invalid.", e); }
+    }
+
+    private static (long DataStart, List<SafeTensorDescriptor> Descriptors)
+        ReadDescriptorsCore(Stream stream, SafeTensorReadLimits? limits)
+    {
+        limits ??= new SafeTensorReadLimits();
+        limits.Validate();
         Span<byte> prefix = stackalloc byte[LengthPrefixSize];
         ReadExactly(stream, prefix);
         ulong encodedHeaderLength =
             BinaryPrimitives.ReadUInt64LittleEndian(prefix);
         if (encodedHeaderLength == 0
-            || encodedHeaderLength > MaximumHeaderBytes
+            || encodedHeaderLength > (ulong)limits.MaximumHeaderBytes
             || encodedHeaderLength
                 > (ulong)(stream.Length - LengthPrefixSize))
         {
@@ -362,6 +389,9 @@ internal static partial class SafeTensorFile
         long dataLength = stream.Length - dataStart;
         using JsonDocument document = ParseHeader(header);
         var descriptors = new List<SafeTensorDescriptor>();
+        long decodedBytes = 0;
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("SafeTensors header must be an object.");
         var seenKeys = new HashSet<string>(StringComparer.Ordinal);
         foreach (JsonProperty property in
             document.RootElement.EnumerateObject())
@@ -374,6 +404,8 @@ internal static partial class SafeTensorFile
                     $"SafeTensors key '{property.Name}' appears twice.");
             }
 
+            if (descriptors.Count >= limits.MaximumTensors)
+                throw new InvalidDataException("SafeTensors tensor count exceeds limit.");
             JsonElement descriptor = property.Value;
             string? dtype = descriptor.GetProperty("dtype").GetString();
             SafeTensorDTypeCodec codec;
@@ -389,6 +421,8 @@ internal static partial class SafeTensorFile
                     "are supported.",
                     exception);
             }
+            if (descriptor.GetProperty("shape").GetArrayLength() > limits.MaximumRank)
+                throw new InvalidDataException("SafeTensors rank exceeds limit.");
             int[] shape = descriptor.GetProperty("shape")
                 .EnumerateArray()
                 .Select(ReadDimension)
@@ -418,6 +452,10 @@ internal static partial class SafeTensorFile
                     $"SafeTensors parameter '{property.Name}' shape and " +
                     "byte range do not match.");
             }
+            long expanded = checked((long)elementCount * sizeof(float));
+            if (expanded > limits.MaximumDecodedBytes - decodedBytes)
+                throw new InvalidDataException("SafeTensors expanded payload exceeds limit.");
+            decodedBytes = checked(decodedBytes + expanded);
             descriptors.Add(
                 new SafeTensorDescriptor(
                     property.Name,
@@ -425,6 +463,13 @@ internal static partial class SafeTensorFile
                     codec,
                     start,
                     end));
+        }
+        long previousEnd = 0;
+        foreach (var descriptor in descriptors.Where(d => d.End > d.Start).OrderBy(d => d.Start))
+        {
+            if (descriptor.Start < previousEnd)
+                throw new InvalidDataException("SafeTensors non-empty tensor ranges overlap.");
+            previousEnd = descriptor.End;
         }
         return (dataStart, descriptors);
     }

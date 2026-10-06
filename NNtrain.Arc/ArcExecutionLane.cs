@@ -15,11 +15,15 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
     [
         ".qwen.cl", ".qwen35_attention.cl", ".qwen35_delta.cl",
         ".qwen35_delta_fused.cl", ".qwen35_linear_fast.cl", ".qwen35_iq.cl", ".qwen35_lora.cl", ".qwen35_prism.cl",
-        ".qwen35_projection_pair.cl", ".qwen35_norm_fast.cl"
+        ".qwen35_projection_pair.cl", ".qwen35_norm_fast.cl", ".qwen35_prefill_linear.cl", ".qwen35_prefill_xmx.cl", ".qwen35_prefill_xmx_tiles.cl", ".qwen35_vision.cl",
+        ".qwen35_vision_attention_fast.cl", ".qwen35_vision_attention_xmx.cl", ".qwen35_vision_linear_fast.cl"
     ];
 
     private static readonly string[] Qwen35TrainingResourceSuffixes =
-        [".qwen35_train.cl", ".qwen35_train_attention.cl", ".qwen35_train_delta.cl", ".qwen35_train_linear.cl", ".qwen35_train_embedding.cl", ".qwen35_train_transpose.cl"];
+        [".qwen35_train.cl", ".qwen35_train_attention.cl", ".qwen35_train_attention_packed.cl", ".qwen35_train_attention_streamed.cl", ".qwen35_train_attention_rowfused.cl", ".qwen35_train_attention_streamed_rowfused.cl", ".qwen35_train_delta.cl", ".qwen35_train_linear.cl", ".qwen35_train_embedding.cl", ".qwen35_train_transpose.cl"];
+
+    private static readonly string[] Qwen35VisionResourceSuffixes =
+        [".qwen35_vision.cl", ".qwen35_vision_attention_fast.cl", ".qwen35_vision_attention_xmx.cl", ".qwen35_vision_linear_fast.cl"];
 
     private readonly object _sync = new();
     private readonly Dictionary<string, nint> _kernels = [];
@@ -95,7 +99,8 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
                 if (_numericStatus is null)
                 {
                     _numericStatus = Allocate(1);
-                    Run(Options.Qwen35InferenceKernelsOnly ? "q35a_zero" : "resident_zero",
+                    Run(Options.Qwen35VisionKernelsOnly ? "q35v_zero"
+                        : Options.Qwen35InferenceKernelsOnly ? "q35a_zero" : "resident_zero",
                         1, 0, _numericStatus, 1);
                 }
                 return _numericStatus;
@@ -109,13 +114,18 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
         var status = new int[1]; ReadRaw(_numericStatus, status);
         if (status[0] != 0) throw new ArithmeticException("Arc BFP8 publication encountered non-finite values. The optimizer must not commit this step.");
     }
-    public bool Supports(string feature) => Options.Qwen35InferenceKernelsOnly
+    public bool Supports(string feature) => Options.Qwen35VisionKernelsOnly
+        ? feature is "qwen35-vision" or "float32" : Options.Qwen35InferenceKernelsOnly
         ? feature is "qwen35-inference" or "float32"
         : feature is "transformer" or "float32" or "mix16_32" or "mix8_32" or "mix8_16";
 
     public ArcExecutionLane(int deviceIndex = 0, ArcExecutionOptions? options = null)
     {
         Options = options ?? new();
+        if (Options.AsrKernelsOnly && (!Options.Qwen35InferenceKernelsOnly || Options.Qwen35VisionKernelsOnly || Options.Qwen35TrainingKernels))
+            throw new ArgumentException("An ASR lane requires inference-only kernels without vision/training sources.", nameof(options));
+        if (Options.Qwen35VisionKernelsOnly && (!Options.Qwen35InferenceKernelsOnly || Options.Qwen35TrainingKernels))
+            throw new ArgumentException("A vision-only lane must select inference kernels without training kernels.", nameof(options));
         DetailedProfiler = Options.DetailedProfiling ? new() : null;
         ArgumentOutOfRangeException.ThrowIfNegative(Options.BufferPoolBytes);
         ArgumentOutOfRangeException.ThrowIfNegative(Options.DeferredReleaseBytes);
@@ -148,10 +158,13 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
             var sourceText = new StringBuilder();
             var assembly = typeof(ArcExecutionLane).Assembly;
             int resourceCount = 0;
+            string[] selectedResources = Options.AsrKernelsOnly ? [".asr_linear.cl"] : Options.Qwen35VisionKernelsOnly
+                ? Qwen35VisionResourceSuffixes : Qwen35KernelResourceSuffixes;
             foreach (string resourceName in assembly.GetManifestResourceNames().Where(n => n.EndsWith(".cl", StringComparison.Ordinal)).Order(StringComparer.Ordinal))
             {
+                if (!Options.AsrKernelsOnly && resourceName.EndsWith(".asr_linear.cl", StringComparison.Ordinal)) continue;
                 if (Options.Qwen35InferenceKernelsOnly
-                    && !Qwen35KernelResourceSuffixes.Any(suffix => resourceName.EndsWith(suffix, StringComparison.Ordinal))
+                    && !selectedResources.Any(suffix => resourceName.EndsWith(suffix, StringComparison.Ordinal))
                     && !(Options.Qwen35TrainingKernels && Qwen35TrainingResourceSuffixes.Any(suffix => resourceName.EndsWith(suffix, StringComparison.Ordinal))))
                     continue;
                 // Flash has its own compiler policy; never change GEMM/codec
@@ -164,15 +177,19 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
                 resourceCount++;
             }
             if (sourceText.Length == 0) throw new InvalidOperationException("Arc OpenCL kernels are missing.");
-            if (Options.Qwen35InferenceKernelsOnly && resourceCount != Qwen35KernelResourceSuffixes.Length + (Options.Qwen35TrainingKernels ? Qwen35TrainingResourceSuffixes.Length : 0))
+            if (Options.Qwen35InferenceKernelsOnly && resourceCount != selectedResources.Length + (Options.Qwen35TrainingKernels ? Qwen35TrainingResourceSuffixes.Length : 0))
                 throw new InvalidOperationException("The dedicated Qwen3.5 OpenCL kernel resources are incomplete.");
             byte[] source = Encoding.UTF8.GetBytes(sourceText.ToString());
             string buildOptions = "-cl-std=CL1.2 -cl-fp32-correctly-rounded-divide-sqrt";
             buildOptions += $" -DQ35_PROJECTION_WG={Options.Qwen35ProjectionWorkgroupSize}";
             if (Options.Qwen35UnrollQ4) buildOptions += " -DQ35_Q4_UNROLL=1";
             if (Options.Qwen35NativeHalfScale) buildOptions += " -DQ35_NATIVE_HALF=1";
+            if (Options.Qwen35VisionFlashAttention) buildOptions += " -DARC_VISION_FLASH=1";
+            if (Options.Qwen35DeltaSubgroupRms) buildOptions += " -DARC_DELTA_SUBGROUP_RMS=1";
             if (Options.Qwen35TrainingKernels || !Options.Qwen35InferenceKernelsOnly) buildOptions += " -DARC_QWEN35_TRAINING=1";
             if (Options.ExperimentalOptimizationKernels) buildOptions += " -DARC_OPTIMIZATION_PROBES=1";
+            if (Options.Qwen35ResidentIq2Panels) buildOptions += " -DARC_Q35_RESIDENT_IQ2=1";
+            if (Options.Qwen35GgufBslmPrefill) buildOptions += " -DARC_Q35_GGUF_BSLM=1";
             if (Options.Mix8_16Int8Linear) buildOptions += " -DARC_INT8_LINEAR=1";
             if (Device.SupportsXmx && Options.XmxMatrices)
                 buildOptions += $" -DARC_XMX=1 -DARC_SG={Device.MinimumSubgroupSize}";
@@ -201,6 +218,12 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
 
     private nint ProgramForRequestedKernel(string name)
     {
+        if (Options.AsrKernelsOnly)
+            return name.StartsWith("asr_", StringComparison.Ordinal) ? _program
+                : throw new NotSupportedException("This Arc lane only contains ASR kernels.");
+        if (Options.Qwen35VisionKernelsOnly)
+            return name.StartsWith("q35v_", StringComparison.Ordinal) ? _program
+                : throw new NotSupportedException("This Arc lane only contains Qwen3.5 vision kernels.");
         if (!Options.Qwen35InferenceKernelsOnly) return ProgramForKernel(name);
         // Do not silently compile standalone training programs when a caller
         // requests a kernel outside the explicitly selected inference workload.
@@ -208,7 +231,8 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
             || name.StartsWith("qwen_", StringComparison.Ordinal)
             || name.StartsWith("q35a_", StringComparison.Ordinal)
             || name.StartsWith("q35d_", StringComparison.Ordinal)
-            || name.StartsWith("q35l_", StringComparison.Ordinal)) return _program;
+            || name.StartsWith("q35l_", StringComparison.Ordinal)
+            || name.StartsWith("q35v_", StringComparison.Ordinal)) return _program;
         throw new NotSupportedException("This Arc lane only contains Qwen3.5 inference kernels.");
     }
 
@@ -304,6 +328,114 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
         lock (_sync) Transfer(buffer, values, read: true);
     }
 
+    /// <summary>
+    /// Queue a readback on this lane's in-order queue without waiting for the
+    /// preceding kernels. The destination stays pinned until the returned
+    /// handle is completed or disposed. The source buffer must also remain
+    /// undisposed until then. The caller may enqueue later kernels before
+    /// waiting, provided it does not inspect the host array early.
+    /// </summary>
+    public unsafe PendingRead ReadAsync(ArcBuffer buffer, float[] values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (buffer.Owner != this || !buffer.IsAlive || (long)values.Length * sizeof(float) > buffer.Bytes)
+                throw new ArgumentException("Arc transfer buffer is disposed, too small, or belongs to a different lane.", nameof(buffer));
+            if (values.Length == 0) throw new ArgumentException("Asynchronous Arc read requires a nonempty destination.", nameof(values));
+            GCHandle pin = GCHandle.Alloc(values, GCHandleType.Pinned);
+            nint evt = 0;
+            bool queued = false;
+            try
+            {
+                long bytes = checked((long)values.Length * sizeof(float));
+                using (Timeline?.Host("queue-submit", "D2H-async"))
+                    OpenClNative.Check(OpenClNative.clEnqueueReadBuffer(_queue, buffer.Handle, 0,
+                        0, (nuint)bytes, pin.AddrOfPinnedObject(), 0, 0, (nint)(&evt)), "queue asynchronous download");
+                queued = true;
+                if (evt == 0) throw new InvalidOperationException("OpenCL did not return a readback event.");
+                _queuedCopies = true;
+                D2HBytes += bytes;
+                return new PendingRead(this, buffer, values, pin, evt, bytes);
+            }
+            catch
+            {
+                bool completed = !queued;
+                if (queued)
+                {
+                    nint pending = evt;
+                    if (pending != 0)
+                    {
+                        OpenClNative.clFlush(_queue);
+                        completed = OpenClNative.clWaitForEvents(1, (nint)(&pending)) == 0;
+                    }
+                    if (!completed) completed = OpenClNative.clFinish(_queue) == 0;
+                }
+                if (completed)
+                {
+                    if (evt != 0) OpenClNative.clReleaseEvent(evt);
+                    pin.Free();
+                }
+                throw;
+            }
+        }
+    }
+
+    public sealed class PendingRead : IDisposable
+    {
+        private readonly ArcExecutionLane _lane;
+        private readonly ArcBuffer _source;
+        // Retain the managed destination as well as its pin until the event completes.
+        private readonly float[] _destination;
+        private GCHandle _pin;
+        private nint _event;
+        private readonly long _bytes;
+
+        internal PendingRead(ArcExecutionLane lane, ArcBuffer source, float[] destination,
+            GCHandle pin, nint evt, long bytes)
+            => (_lane, _source, _destination, _pin, _event, _bytes) = (lane, source, destination, pin, evt, bytes);
+
+        public unsafe void Wait()
+        {
+            lock (_lane._sync)
+            {
+                if (_event == 0) return;
+                long start = Stopwatch.GetTimestamp();
+                bool completed = false;
+                try
+                {
+                    OpenClNative.Check(OpenClNative.clFlush(_lane._queue), "flush asynchronous download");
+                    nint evt = _event;
+                    OpenClNative.Check(OpenClNative.clWaitForEvents(1, (nint)(&evt)), "wait asynchronous download");
+                    completed = true;
+                    _lane.Timeline?.Device("D2H", _lane.DetailedProfiler?.Phase, _event, "D2H", _bytes);
+                    _lane.TransferMilliseconds += Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+                    _lane.DetailedProfiler?.Add("D2H-async-wait", $"{_lane.DetailedProfiler.Phase}/{_bytes}B",
+                        Stopwatch.GetElapsedTime(start).TotalMilliseconds, _bytes);
+                    GC.KeepAlive(_source);
+                    GC.KeepAlive(_destination);
+                }
+                finally
+                {
+                    if (!completed && _lane._queue != 0)
+                        completed = OpenClNative.clFinish(_lane._queue) == 0;
+                    // If OpenCL cannot establish completion, keep the array
+                    // pinned and the source referenced rather than risking a
+                    // native DMA into relocated managed memory.
+                    if (completed)
+                    {
+                        OpenClNative.clReleaseEvent(_event);
+                        _event = 0;
+                        _pin.Free();
+                    }
+                }
+            }
+        }
+
+        public void Dispose() => Wait();
+    }
+
     private unsafe void Transfer(ArcBuffer buffer, Array values, bool read, long offset = 0)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -359,6 +491,9 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
             else
             {
                 TrimCacheForAllocation(bytes);
+                if (_externalMemoryReservationBytes > 0
+                    && AllocatedBytes + CachedBytes + RetiredBytes + bytes > EffectivePhysicalBufferBudgetBytes)
+                    throw new InvalidOperationException("Arc allocation exceeds the device budget after external memory reservation.");
                 // COPY_HOST_PTR copies the full allocation, not the array length.
                 // Tiny packed payloads must not read padding beyond their managed array.
                 if (!Options.ExplicitHostUploads && data is { Length: > 0 } && Buffer.ByteLength(data) == bytes)
@@ -687,22 +822,11 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
 
     private void TrimCacheForAllocation(long bytes)
     {
-        long budget = Options.PhysicalBufferBudgetBytes > 0
-            ? Options.PhysicalBufferBudgetBytes : checked((long)(Device.GlobalMemoryBytes / 10 * 9));
-        if (!Options.LruBufferPool) return;
+        if (!Options.LruBufferPool && _externalMemoryReservationBytes == 0) return;
         // Retired bytes can be reclaimed at the single fence below. Do not
         // evict additional useful cache entries merely because that fence has
         // not yet completed.
-        while (AllocatedBytes + CachedBytes + bytes > budget && _freeLru.First is { } node)
-        {
-            CachedBuffer victim = node.Value;
-            RemoveLruEntry(victim);
-            CachedBytes -= victim.Bytes;
-            RetireOrRelease(victim.Handle, victim.Bytes, "physical-budget");
-            DetailedProfiler?.Add("cache-budget-trim", $"{DetailedProfiler.Phase}/{victim.Bytes}B", bytes: victim.Bytes);
-        }
-        if (RetiredBytes > 0 && AllocatedBytes + CachedBytes + RetiredBytes + bytes > budget)
-            SynchronizeCore("physical-budget-retired");
+        TrimCacheToPhysicalBudget(bytes, EffectivePhysicalBufferBudgetBytes, "physical-budget");
     }
 
     // Called only under _sync after an exact-size pool miss. Retired entries

@@ -7,13 +7,20 @@ namespace NNtrain.Core.Tests;
 public sealed class Qwen35TrainingAttentionTests
 {
     [Theory]
-    [InlineData(0)]
-    [InlineData(4)]
-    [InlineData(6)]
-    public void FullSequenceForwardMatchesIncrementalAttentionAndKeepsInputsOwnedByCaller(int ropeDimensions)
+    [InlineData(0, false)]
+    [InlineData(4, false)]
+    [InlineData(6, false)]
+    [InlineData(0, true)]
+    [InlineData(4, true)]
+    [InlineData(6, true)]
+    [InlineData(4, false, 129)]
+    [InlineData(4, true, 129)]
+    [InlineData(4, false, 1)]
+    [InlineData(4, true, 1)]
+    public void FullSequenceForwardMatchesIncrementalAttentionAndKeepsInputsOwnedByCaller(int ropeDimensions, bool packedScores, int sequence = 5)
     {
         using ArcExecutionLane lane = CreateLane();
-        const int sequence = 5, heads = 4, kvHeads = 2, width = 6;
+        const int heads = 4, kvHeads = 2, width = 6;
         Qwen35GgufDescriptor d = Descriptor(sequence, heads, kvHeads, width, ropeDimensions);
         float[] queries = Values(sequence * 2 * heads * width, 13);
         float[] keys = Values(sequence * kvHeads * width, 17);
@@ -25,7 +32,7 @@ public sealed class Qwen35TrainingAttentionTests
         using ArcBuffer qNorm = lane.Upload(qWeights), kNorm = lane.Upload(kWeights);
         long uploads = lane.H2DBytes, downloads = lane.D2HBytes;
         float[] actual;
-        using (var attention = new Qwen35TrainingAttention(lane, q, k, v, qNorm, kNorm, d, sequence))
+        using (var attention = new Qwen35TrainingAttention(lane, q, k, v, qNorm, kNorm, d, sequence, packedScores))
         {
             Assert.Equal(uploads, lane.H2DBytes);
             Assert.Equal(downloads, lane.D2HBytes);
@@ -50,10 +57,13 @@ public sealed class Qwen35TrainingAttentionTests
     }
 
     [Theory]
-    [InlineData(0)]
-    [InlineData(2)]
-    [InlineData(4)]
-    public void BackwardMatchesIndependentFiniteDifferencesAndAccumulates(int ropeDimensions)
+    [InlineData(0, false)]
+    [InlineData(2, false)]
+    [InlineData(4, false)]
+    [InlineData(0, true)]
+    [InlineData(2, true)]
+    [InlineData(4, true)]
+    public void BackwardMatchesIndependentFiniteDifferencesAndAccumulates(int ropeDimensions, bool packedScores)
     {
         using ArcExecutionLane lane = CreateLane();
         const int sequence = 3, heads = 4, kvHeads = 2, width = 4;
@@ -70,7 +80,7 @@ public sealed class Qwen35TrainingAttentionTests
         using ArcBuffer dk = lane.Upload(Enumerable.Repeat(-.125f, keys.Length).ToArray());
         using ArcBuffer dv = lane.Upload(Enumerable.Repeat(.5f, values.Length).ToArray());
         long uploads = lane.H2DBytes, downloads = lane.D2HBytes;
-        using var attention = new Qwen35TrainingAttention(lane, q, k, v, qNorm, kNorm, d, sequence);
+        using var attention = new Qwen35TrainingAttention(lane, q, k, v, qNorm, kNorm, d, sequence, packedScores);
         attention.Backward(dy, dq, dk, dv);
         Assert.Equal(uploads, lane.H2DBytes);
         Assert.Equal(downloads, lane.D2HBytes);
@@ -93,8 +103,10 @@ public sealed class Qwen35TrainingAttentionTests
         Assert.Equal(kWeights, Read(lane, kNorm, width));
     }
 
-    [Fact]
-    public void BackwardOfFirstPositionDoesNotReachFutureInputs()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BackwardOfFirstPositionDoesNotReachFutureInputs(bool packedScores)
     {
         using ArcExecutionLane lane = CreateLane();
         const int sequence = 3, heads = 2, kvHeads = 1, width = 4;
@@ -109,12 +121,122 @@ public sealed class Qwen35TrainingAttentionTests
         using ArcBuffer dq = lane.Upload(new float[sequence * 2 * heads * width]);
         using ArcBuffer dk = lane.Upload(new float[sequence * kvHeads * width]);
         using ArcBuffer dv = lane.Upload(new float[sequence * kvHeads * width]);
-        using var attention = new Qwen35TrainingAttention(lane, q, k, v, norm, norm, d, sequence);
+        using var attention = new Qwen35TrainingAttention(lane, q, k, v, norm, norm, d, sequence, packedScores);
         attention.Backward(dy, dq, dk, dv);
         Assert.All(Read(lane, dq, sequence * 2 * heads * width).Skip(2 * heads * width), x => Assert.Equal(0f, x));
         // At position zero softmax has one item, so all Q/K score gradients vanish.
         Assert.All(Read(lane, dk, sequence * kvHeads * width), x => Assert.Equal(0f, x));
         Assert.All(Read(lane, dv, sequence * kvHeads * width).Skip(kvHeads * width), x => Assert.Equal(0f, x));
+    }
+
+    [Theory]
+    [InlineData(1, false, false)]
+    [InlineData(63, false, false)]
+    [InlineData(64, false, false)]
+    [InlineData(65, false, false)]
+    [InlineData(129, false, false)]
+    [InlineData(1, true, false)]
+    [InlineData(63, true, false)]
+    [InlineData(64, true, false)]
+    [InlineData(65, true, false)]
+    [InlineData(129, true, false)]
+    [InlineData(1, true, true)]
+    [InlineData(63, true, true)]
+    [InlineData(64, true, true)]
+    [InlineData(65, true, true)]
+    [InlineData(129, true, true)]
+    [InlineData(65, true, true, 136)]
+    public void StreamedTilesMatchPackedForwardAndAllInputGradients(
+        int sequence, bool fusedRows, bool fusedOutput, int width = 4)
+    {
+        using ArcExecutionLane lane = CreateLane();
+        const int heads = 4, kvHeads = 2;
+        Qwen35GgufDescriptor d = Descriptor(sequence, heads, kvHeads, width, 2);
+        float[] queries = Values(sequence * 2 * heads * width, 73);
+        float[] keys = Values(sequence * kvHeads * width, 79);
+        float[] values = Values(keys.Length, 83);
+        float[] upstream = Values(sequence * heads * width, 89);
+        using ArcBuffer q = lane.Upload(queries), k = lane.Upload(keys), v = lane.Upload(values);
+        using ArcBuffer norm = lane.Upload(Enumerable.Repeat(1f, width).ToArray());
+        using ArcBuffer dy = lane.Upload(upstream);
+
+        (float[] Output, float[] Q, float[] K, float[] V) Compute(
+            int tileRows, bool fuseRows, bool fuseOutput)
+        {
+            using ArcBuffer dq = lane.Upload(Enumerable.Repeat(.25f, queries.Length).ToArray());
+            using ArcBuffer dk = lane.Upload(Enumerable.Repeat(-.125f, keys.Length).ToArray());
+            using ArcBuffer dv = lane.Upload(Enumerable.Repeat(.5f, values.Length).ToArray());
+            using var attention = new Qwen35TrainingAttention(lane, q, k, v, norm, norm,
+                d, sequence, packedScores: true, streamedTileRows: tileRows,
+                fusedRows: fuseRows, fusedOutput: fuseOutput);
+            float[] output = Read(lane, attention.Output, sequence * heads * width);
+            attention.Backward(dy, dq, dk, dv);
+            return (output, Read(lane, dq, queries.Length), Read(lane, dk, keys.Length),
+                Read(lane, dv, values.Length));
+        }
+
+        var packed = Compute(0, false, false);
+        var streamed = Compute(64, fusedRows, fusedOutput);
+        void Match(float[] expected, float[] actual)
+        {
+            Assert.Equal(expected.Length, actual.Length);
+            for (int i = 0; i < expected.Length; i++) Close(expected[i], actual[i], 1e-5);
+        }
+        Match(packed.Output, streamed.Output);
+        Match(packed.Q, streamed.Q);
+        Match(packed.K, streamed.K);
+        Match(packed.V, streamed.V);
+    }
+
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(3, false)]
+    [InlineData(64, false)]
+    [InlineData(65, false)]
+    [InlineData(129, false)]
+    [InlineData(1, true)]
+    [InlineData(3, true)]
+    [InlineData(64, true)]
+    [InlineData(65, true)]
+    [InlineData(129, true)]
+    public void RowFusedMatchesPackedForwardAndAllInputGradients(int sequence, bool fusedOutput)
+    {
+        using ArcExecutionLane lane = CreateLane();
+        const int heads = 4, kvHeads = 2, width = 8;
+        Qwen35GgufDescriptor d = Descriptor(sequence, heads, kvHeads, width, 4);
+        float[] queries = Values(sequence * 2 * heads * width, 97);
+        float[] keys = Values(sequence * kvHeads * width, 101);
+        float[] values = Values(keys.Length, 103);
+        float[] upstream = Values(sequence * heads * width, 107);
+        using ArcBuffer q = lane.Upload(queries), k = lane.Upload(keys), v = lane.Upload(values);
+        using ArcBuffer norm = lane.Upload(Enumerable.Repeat(1f, width).ToArray());
+        using ArcBuffer dy = lane.Upload(upstream);
+
+        (float[] Output, float[] Q, float[] K, float[] V) Compute(bool fused, bool fuseOutput)
+        {
+            using ArcBuffer dq = lane.Upload(Enumerable.Repeat(.25f, queries.Length).ToArray());
+            using ArcBuffer dk = lane.Upload(Enumerable.Repeat(-.125f, keys.Length).ToArray());
+            using ArcBuffer dv = lane.Upload(Enumerable.Repeat(.5f, values.Length).ToArray());
+            using var attention = new Qwen35TrainingAttention(lane, q, k, v, norm, norm,
+                d, sequence, packedScores: true, fusedRows: fused,
+                fusedOutput: fuseOutput);
+            float[] output = Read(lane, attention.Output, sequence * heads * width);
+            attention.Backward(dy, dq, dk, dv);
+            return (output, Read(lane, dq, queries.Length), Read(lane, dk, keys.Length),
+                Read(lane, dv, values.Length));
+        }
+
+        var packed = Compute(false, false);
+        var fused = Compute(true, fusedOutput);
+        void Match(float[] expected, float[] actual)
+        {
+            Assert.Equal(expected.Length, actual.Length);
+            for (int i = 0; i < expected.Length; i++) Close(expected[i], actual[i], 1e-5);
+        }
+        Match(packed.Output, fused.Output);
+        Match(packed.Q, fused.Q);
+        Match(packed.K, fused.K);
+        Match(packed.V, fused.V);
     }
 
     private static double[] FiniteDifferences(double[] input, Func<double> loss)

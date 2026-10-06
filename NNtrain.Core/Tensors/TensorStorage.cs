@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
 
 namespace NNtrain;
@@ -615,6 +616,21 @@ internal sealed class TensorStorage : IList<float>, IReadOnlyList<float>
             return TensorStorageCodec.LoadFloat16Vector256(_float16, offset);
         if (_bfloat16 is not null)
             return TensorStorageCodec.LoadBFloat16Vector256(_bfloat16, offset);
+        if (Tensor.SimdEnabled && Avx2.IsSupported)
+        {
+            // Read exactly eight bytes, including at the final vector of a row.
+            // A vector crossing a scale boundary keeps the per-lane decoder.
+            int blockSize = _bfp8!.Descriptor.GetEffectiveBlockSize(Count);
+            bool singleScale = _bfp8.ScaleArray.Length == 1;
+            int block = singleScale ? 0 : offset / blockSize;
+            if (singleScale || (offset + Vector256<float>.Count - 1) / blockSize == block)
+            {
+                var bytes = Vector64.LoadUnsafe(ref _bfp8.PayloadArray[offset]).ToVector128();
+                var integers = Avx2.ConvertToVector256Int32(bytes);
+                return Avx.ConvertToVector256Single(integers)
+                    * Vector256.Create(_bfp8.ScaleArray[block]);
+            }
+        }
         return Vector256.Create(
             DecodeBfp8Value(offset),
             DecodeBfp8Value(offset + 1),

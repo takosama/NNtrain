@@ -9,6 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\NNtrain.Runtime\NNtrain.Runtime.csproj" />
+    <EmbeddedResource Include="Kernels\asr_linear.cl" />
     <EmbeddedResource Include="Kernels\training.cl" />
     <EmbeddedResource Include="Kernels\qwen.cl" />
     <EmbeddedResource Include="Kernels\qwen_quantized_fast.cl" />
@@ -18,13 +19,24 @@
     <EmbeddedResource Include="Kernels\qwen35_attention.cl" />
     <EmbeddedResource Include="Kernels\qwen35_delta.cl" />
     <EmbeddedResource Include="Kernels\qwen35_linear_fast.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_prefill_linear.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_prefill_xmx.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_prefill_xmx_tiles.cl" />
     <EmbeddedResource Include="Kernels\qwen35_iq.cl" />
     <EmbeddedResource Include="Kernels\qwen35_prism.cl" />
     <EmbeddedResource Include="Kernels\qwen35_projection_pair.cl" />
     <EmbeddedResource Include="Kernels\qwen35_norm_fast.cl" />
     <EmbeddedResource Include="Kernels\qwen35_lora.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_vision.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_vision_attention_fast.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_vision_attention_xmx.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_vision_linear_fast.cl" />
     <EmbeddedResource Include="Kernels\qwen35_train.cl" />
     <EmbeddedResource Include="Kernels\qwen35_train_attention.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_train_attention_packed.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_train_attention_streamed.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_train_attention_rowfused.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_train_attention_streamed_rowfused.cl" />
     <EmbeddedResource Include="Kernels\qwen35_train_delta.cl" />
     <EmbeddedResource Include="Kernels\qwen35_train_linear.cl" />
     <EmbeddedResource Include="Kernels\qwen35_train_embedding.cl" />

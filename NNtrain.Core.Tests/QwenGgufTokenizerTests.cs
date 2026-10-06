@@ -6,6 +6,35 @@ namespace NNtrain.Core.Tests;
 public sealed class QwenGgufTokenizerTests
 {
     [Fact]
+    public void EncodingRejectsExcessiveInputAndHonorsTokenBudgetAndCancellation()
+    {
+        using TemporaryQwenGguf file = CreateTokenizerFixture(out _);
+        Qwen2GgufTokenizer tokenizer = Qwen2GgufTokenizer.Load(file.Path);
+        Assert.Throws<ArgumentException>(() => tokenizer.Encode(new string('a', 1_048_577)));
+        Assert.Throws<ArgumentException>(() => tokenizer.Encode(new string('a', 65_537)));
+        Assert.Throws<ArgumentException>(() => tokenizer.Encode("123", 2, TestContext.Current.CancellationToken));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        Assert.Throws<OperationCanceledException>(() => tokenizer.Encode("hello", 100, cancellation.Token));
+        Assert.Equal("hello", tokenizer.Decode(tokenizer.Encode("hello", 1, TestContext.Current.CancellationToken)));
+    }
+
+    [Theory]
+    [InlineData(3)]
+    [InlineData(4)]
+    public void EmptySpecialTokenIsRejectedBeforeEncoding(int type)
+    {
+        using var file = new TemporaryQwenGguf(new Dictionary<string, object>
+        {
+            ["tokenizer.ggml.model"] = "gpt2",
+            ["tokenizer.ggml.tokens"] = new[] { "" },
+            ["tokenizer.ggml.merges"] = Array.Empty<string>(),
+            ["tokenizer.ggml.token_type"] = new[] { type },
+            ["tokenizer.ggml.eos_token_id"] = 0u
+        });
+        Assert.Throws<InvalidDataException>(() => Qwen2GgufTokenizer.Load(file.Path));
+    }
+    [Fact]
     public void EncodeUsesBpeWithinQwenUnicodeAndDigitBoundaries()
     {
         using TemporaryQwenGguf file = CreateTokenizerFixture(out Dictionary<string, int> ids);

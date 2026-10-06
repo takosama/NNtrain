@@ -489,6 +489,10 @@ public sealed class BpeTokenizer
 
     private static byte[][] BuildTokenBytes(IReadOnlyList<MergeRule> merges)
     {
+        const int maximumMerges = 1024 * 1024, maximumTokenBytes = 1024 * 1024;
+        const long maximumDecodedBytes = 128L * 1024 * 1024;
+        if (merges.Count > maximumMerges) throw new InvalidDataException("BPE merge count exceeds the limit.");
+        long decodedBytes = 256;
         var result = new byte[BaseVocabularySize + merges.Count][];
         result[PadTokenId] = [];
         result[BosTokenId] = [];
@@ -502,7 +506,11 @@ public sealed class BpeTokenizer
             MergeRule merge = merges[index];
             byte[] left = result[merge.Left];
             byte[] right = result[merge.Right];
-            byte[] combined = new byte[left.Length + right.Length];
+            long length = (long)left.Length + right.Length;
+            if (length > maximumTokenBytes || length > maximumDecodedBytes - decodedBytes)
+                throw new InvalidDataException("BPE decoded token bytes exceed the limit.");
+            decodedBytes += length;
+            byte[] combined = new byte[(int)length];
             left.CopyTo(combined, 0);
             right.CopyTo(combined, left.Length);
             result[merge.Id] = combined;
