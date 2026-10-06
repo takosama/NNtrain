@@ -41,10 +41,12 @@ internal static class RealtimeAudioGuiChecks
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(4));
         CancellationToken ct = timeout.Token;
         var window = new MainWindow(GuiLaunchOptions.Parse([]));
+        bool parakeet = Environment.GetEnvironmentVariable("NNTRAIN_ASR_REALTIME_MODEL") == "parakeet";
         using var memory = new AsrGpuMemoryProbe();
         using var model = await Task.Run(() =>
         {
-            var m = NemotronAsrModel.Load(Environment.GetEnvironmentVariable("NNTRAIN_ASR_MODEL")!, ct);
+            ILocalAsrModel m = parakeet ? ParakeetCtcModel.Load(Environment.GetEnvironmentVariable("NNTRAIN_ASR_MODEL")!, ct)
+                : NemotronAsrModel.Load(Environment.GetEnvironmentVariable("NNTRAIN_ASR_MODEL")!, ct);
             try { m.EnableArc(0, ct); return m; } catch { m.Dispose(); throw; }
         }, ct);
         Set(window, "_asrModel", model);
@@ -52,23 +54,39 @@ internal static class RealtimeAudioGuiChecks
         {
             using var file = System.IO.File.OpenRead(Environment.GetEnvironmentVariable("NNTRAIN_ASR_TEST_WAV")!);
             float[] speech = Pcm16Wave.Read(file).To16Khz(ct);
-            float[] repeated = Enumerable.Range(0, 5).SelectMany(_ => speech.Concat(new float[16000])).ToArray();
+            float[] repeated = parakeet ? speech : Enumerable.Range(0, 5).SelectMany(_ => speech.Concat(new float[16000])).ToArray();
             var longInput = await Measure(window, repeated, cancelAfter: null, ct);
             Console.WriteLine("Long paced input complete: " + longInput.AudioSeconds + " s.");
-            var cancelled = await Measure(window, speech, cancelAfter: 3.2, ct);
+            if (Environment.GetEnvironmentVariable("NNTRAIN_ASR_REALTIME_SINGLE") == "1")
+            {
+                if (longInput.FinalQueue != 0 || !longInput.DoubleStartRejected || longInput.UpdatesBeforeStop < 2
+                    || longInput.DispatcherMaxTickGapSeconds > .5)
+                    throw new InvalidOperationException("Paced ASR queue or dispatcher regression.");
+                string singleReference = System.IO.File.ReadAllText(Environment.GetEnvironmentVariable("NNTRAIN_ASR_REFERENCE")!);
+                System.IO.File.WriteAllText(Environment.GetEnvironmentVariable("NNTRAIN_ASR_REALTIME_REPORT")!, JsonSerializer.Serialize(new
+                {
+                    longInput, characterErrorRate = CharacterErrorRate(singleReference, longInput.FinalText),
+                    osDedicatedGpuPeakBytes = memory.DedicatedPeakBytes, osSharedGpuPeakBytes = memory.SharedPeakBytes,
+                    osMemoryError = memory.Error, microphoneOpened = false, serverStarted = false,
+                    model.PeakDeviceBufferBytes
+                }, new JsonSerializerOptions { WriteIndented = true }));
+                return;
+            }
+            var cancelled = await Measure(window, speech, cancelAfter: parakeet ? 3.84 : 3.2, ct);
             if (!string.IsNullOrEmpty(((TextBox)window.FindName("MessageBox")).Text)) throw new InvalidOperationException("Cancelled transcript remained.");
             var restart = await Measure(window, speech, cancelAfter: null, ct);
             string reference = System.IO.File.ReadAllText(Environment.GetEnvironmentVariable("NNTRAIN_ASR_REFERENCE")!);
-            if (longInput.UpdatesBeforeStop < 10 || longInput.FirstTextSeconds is null || longInput.FirstTextSeconds >= longInput.AudioSeconds)
+            if (longInput.UpdatesBeforeStop < (parakeet ? 2 : 10) || longInput.FirstTextSeconds is null || longInput.FirstTextSeconds >= longInput.AudioSeconds)
                 throw new InvalidOperationException("No live GUI updates before stop.");
-            if (longInput.TailMaxProcessingLagSeconds > 1.5 || longInput.StopToFinalSeconds > 1.5 || longInput.FinalQueue != 0)
+            if (longInput.TailMaxProcessingLagSeconds > (parakeet ? 4 : 1.5) || longInput.StopToFinalSeconds > (parakeet ? 5 : 1.5) || longInput.FinalQueue != 0)
                 throw new InvalidOperationException("Recognition backlog did not settle.");
-            if (restart.FinalText.Length > longInput.FinalText.Length / 2 || restart.FinalText.Length == 0)
+            if ((!parakeet && restart.FinalText.Length > longInput.FinalText.Length / 2)
+                || (parakeet && restart.FinalText != longInput.FinalText) || restart.FinalText.Length == 0)
                 throw new InvalidOperationException("Restart inherited the old utterance.");
             if (!longInput.DoubleStartRejected || !restart.DoubleStartRejected)
                 throw new InvalidOperationException("Double start was not rejected.");
             string json = JsonSerializer.Serialize(new { longInput, cancelled, restart,
-                longCharacterErrorRate = CharacterErrorRate(string.Concat(Enumerable.Repeat(reference, 5)), longInput.FinalText),
+                longCharacterErrorRate = CharacterErrorRate(string.Concat(Enumerable.Repeat(reference, parakeet ? 1 : 5)), longInput.FinalText),
                 restartCharacterErrorRate = CharacterErrorRate(reference, restart.FinalText),
                 microphoneOpened = Get(window, "_microphone") is not null, serverStarted = Get(window, "_serverProcess") is not null,
                 osDedicatedGpuPeakBytes = memory.DedicatedPeakBytes, osSharedGpuPeakBytes = memory.SharedPeakBytes,
@@ -97,12 +115,18 @@ internal static class RealtimeAudioGuiChecks
     private sealed record Update(double Seconds, int Characters);
     private sealed record Result(double AudioSeconds, bool Cancelled, double? FirstTextSeconds, int UpdatesBeforeStop,
         double StopToFinalSeconds, int MaxQueue, int FinalQueue, double MaxProcessingLagSeconds, double TailMaxProcessingLagSeconds,
-        string FinalText, Update[] Updates, Observation[] Observations, bool DoubleStartRejected);
+        string FinalText, Update[] Updates, Observation[] Observations, bool DoubleStartRejected, double DispatcherMaxTickGapSeconds,
+        Dictionary<string, double> StreamPassMilliseconds);
 
     private static async Task<Result> Measure(MainWindow window, float[] samples, double? cancelAfter, CancellationToken ct)
     {
         var channel = Channel.CreateBounded<float[]>(new BoundedChannelOptions(16) { SingleReader = true, SingleWriter = true });
         var clock = Stopwatch.StartNew();
+        var passes = new Dictionary<string, double>();
+        var model = Get(window, "_asrModel");
+        var timing = model?.GetType().GetProperty("TimingObserver", BindingFlags.Instance | BindingFlags.NonPublic);
+        timing?.SetValue(model, new Action<string, double>((name, milliseconds) =>
+        { if (name.StartsWith("stream.")) passes[name] = passes.GetValueOrDefault(name) + milliseconds; }));
         var updates = new List<Update>(); var observations = new List<Observation>();
         var box = (TextBox)window.FindName("MessageBox");
         box.Clear();
@@ -127,7 +151,16 @@ internal static class RealtimeAudioGuiChecks
                     if (!channel.Writer.TryWrite(samples.AsSpan(offset, count).ToArray())) throw new InvalidOperationException("Capture queue overflow.");
                 }
             }
-            finally { if (cancelAfter is null) channel.Writer.TryComplete(); stoppedAt = clock.Elapsed.TotalSeconds; }
+            finally
+            {
+                if (cancelAfter is null)
+                {
+                    if (Environment.GetEnvironmentVariable("NNTRAIN_ASR_REALTIME_MODEL") == "parakeet")
+                        await window.Dispatcher.InvokeAsync(() => Call(window, "AsrStop_Click", window, new System.Windows.RoutedEventArgs()));
+                    channel.Writer.TryComplete();
+                }
+                stoppedAt = clock.Elapsed.TotalSeconds;
+            }
         }, ct);
         try
         {
@@ -141,14 +174,23 @@ internal static class RealtimeAudioGuiChecks
             }
             await producer;
             if (cancelAfter is not null) { Call(window, "CancelAudio"); channel.Writer.TryComplete(); }
+            double dispatcherGap = observations.Zip(observations.Skip(1), (a, b) => b.Seconds - a.Seconds).DefaultIfEmpty(0).Max();
+            double previousTick = observations.Count == 0 ? clock.Elapsed.TotalSeconds : observations[^1].Seconds;
+            while (!operation.IsCompleted)
+            {
+                await Task.Delay(20, ct);
+                double tick = clock.Elapsed.TotalSeconds;
+                dispatcherGap = Math.Max(dispatcherGap, tick - previousTick); previousTick = tick;
+            }
             await operation;
             await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             double duration = cancelAfter ?? samples.Length / 16000d;
             return new(duration, cancelAfter is not null, updates.Count == 0 ? null : updates[0].Seconds,
                 updates.Count(x => x.Seconds < stoppedAt), clock.Elapsed.TotalSeconds - stoppedAt, maxQueue, channel.Reader.Count,
                 observations.Max(x => x.ProcessingLagSeconds), observations.Where(x => x.Seconds > duration - Math.Min(20, duration / 2)).Max(x => x.ProcessingLagSeconds),
-                box.Text, updates.ToArray(), observations.ToArray(), !secondStarted);
+                box.Text, updates.ToArray(), observations.ToArray(), !secondStarted,
+                dispatcherGap, new Dictionary<string, double>(passes));
         }
-        finally { box.TextChanged -= onText; }
+        finally { box.TextChanged -= onText; timing?.SetValue(model, null); }
     }
 }

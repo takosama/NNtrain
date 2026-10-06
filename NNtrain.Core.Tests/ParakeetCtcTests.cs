@@ -33,7 +33,8 @@ public sealed class ParakeetCtcTests
         using var fixture = new Fixture(); using var model = ParakeetCtcModel.Load(fixture.Directory, TestContext.Current.CancellationToken);
         float[] samples = Enumerable.Range(0, 16000).Select(i => .1f * MathF.Sin(i * .1f)).ToArray();
         Assert.Equal("あ", model.Transcribe(samples, TestContext.Current.CancellationToken));
-        var stream = model.CreateStream(); Assert.Empty(stream.Append(samples, ct: TestContext.Current.CancellationToken));
+        var stream = model.CreateStream(); Assert.Empty(stream.Append(samples.AsSpan(0, 8000), ct: TestContext.Current.CancellationToken));
+        Assert.Equal("あ", stream.Append(samples.AsSpan(8000), ct: TestContext.Current.CancellationToken));
         Assert.Equal("あ", stream.Append([], final: true, ct: TestContext.Current.CancellationToken));
         Assert.Throws<InvalidOperationException>(() => stream.Append([], ct: TestContext.Current.CancellationToken));
     }
@@ -45,6 +46,49 @@ public sealed class ParakeetCtcTests
         Assert.Throws<OperationCanceledException>(() => stream.Append([], ct: new CancellationToken(true)));
         Assert.Throws<InvalidOperationException>(() => stream.Append([], ct: TestContext.Current.CancellationToken));
         Assert.Throws<InvalidOperationException>(() => model.CreateStream().Append(new float[16000 * 31], ct: TestContext.Current.CancellationToken));
+    }
+    [Fact]
+    public void PreviewStartsEarlyAndFinalReusesOnlyAnIdenticalCompletePrefix()
+    {
+        using var fixture = new Fixture(); using var model = ParakeetCtcModel.Load(fixture.Directory, TestContext.Current.CancellationToken);
+        var stream = model.CreateStream(); int previews = 0, projections = 0;
+        var passes = new List<string>();
+        model.TimingObserver = (name, _) => { if (name.StartsWith("linear:")) projections++; if (name.StartsWith("stream.")) passes.Add(name); };
+        float[] audio = Enumerable.Range(0, 16000).Select(i => .1f * MathF.Sin(i * .1f)).ToArray();
+        string first = stream.Append(audio, partial: _ => previews++, ct: TestContext.Current.CancellationToken);
+        Assert.Equal(1, previews); Assert.NotEmpty(first);
+        int previousProjections = projections;
+        Assert.Equal(first, stream.Append([], final: true, ct: TestContext.Current.CancellationToken));
+        Assert.Equal(previousProjections, projections);
+        Assert.Contains("stream.finalReused:16000", passes);
+        var tailStream = model.CreateStream(); tailStream.Append(audio, ct: TestContext.Current.CancellationToken);
+        tailStream.Append(new float[100], final: true, ct: TestContext.Current.CancellationToken);
+        Assert.True(projections > previousProjections * 2);
+    }
+    [Fact]
+    public void StoppingAnInFlightPreviewRetainsAllAudioIncludingTheTail()
+    {
+        using var fixture = new Fixture(); using var model = ParakeetCtcModel.Load(fixture.Directory, TestContext.Current.CancellationToken);
+        var stream = model.CreateStream(); using var lifetime = stream as IDisposable;
+        var control = Assert.IsAssignableFrom<ILocalAsrPreviewControl>(stream);
+        bool interrupted = false;
+        var passes = new List<string>();
+        model.TimingObserver = (name, _) =>
+        {
+            if (name.StartsWith("stream.")) passes.Add(name);
+            if (!interrupted && name.StartsWith("linear:")) { interrupted = true; control.RequestFinalization(); }
+        };
+        float[] speech = Enumerable.Range(0, 16000).Select(i => .1f * MathF.Sin(i * .1f)).ToArray();
+        Assert.Empty(stream.Append(speech, ct: TestContext.Current.CancellationToken));
+        Assert.True(interrupted);
+        float[] tail = new float[117];
+        Assert.Empty(stream.Append(tail, ct: TestContext.Current.CancellationToken));
+        string final = stream.Append([], true, ct: TestContext.Current.CancellationToken);
+        Assert.Equal(model.Transcribe([.. speech, .. tail], TestContext.Current.CancellationToken), final);
+        Assert.Equal((speech.Length + tail.Length) * 4L, stream.CacheBytes);
+        Assert.Contains("stream.previewCancelled:16000", passes);
+        Assert.Equal("stream.final:16117", Assert.Single(passes, name => name.StartsWith("stream.final:")));
+        control.RequestFinalization(); // Repeated Stop after finalization is harmless.
     }
     [Fact]
     public void FrontendHasTerminalFrameAndFinitePerFeatureNormalization()

@@ -10,6 +10,38 @@ namespace NNtrain.Gui.Tests;
 public sealed class AudioGuiTests
 {
     [Fact]
+    public void FinalResultReachesComposerBeforeEditingIsReenabled()
+        => OnSta(window =>
+        {
+            SynchronizationContext? previous = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(window.Dispatcher));
+            try
+            {
+                Box(window, "MessageBox").Text = "Original draft";
+                Box(window, "MessageBox").CaretIndex = Box(window, "MessageBox").Text.Length;
+                Task operation = (Task)Invoke(window, "RunAudioAsync", new Func<long, CancellationToken, Task>((epoch, _) =>
+                {
+                    Invoke(window, "BeginAudioChatInput");
+                    return (Task)Invoke(window, "CompleteAudio", epoch, "Final recognized text", 0L)!;
+                }))!;
+                Assert.False(operation.IsCompleted);
+                Assert.True(Box(window, "MessageBox").IsReadOnly);
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                while (!operation.IsCompleted && clock.Elapsed.TotalSeconds < 5)
+                {
+                    window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                    Thread.Yield();
+                }
+                Assert.True(operation.IsCompleted); operation.GetAwaiter().GetResult();
+                Assert.False(Box(window, "MessageBox").IsReadOnly);
+                Assert.Equal("Original draft\nFinal recognized text", Box(window, "MessageBox").Text);
+                Box(window, "MessageBox").Text += " edited";
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Assert.EndsWith(" edited", Box(window, "MessageBox").Text);
+            }
+            finally { SynchronizationContext.SetSynchronizationContext(previous); }
+        });
+    [Fact]
     public void JapaneseModelSelectorChangesBackendFolderAndReleasesPreviousModel()
         => OnSta(window =>
         {

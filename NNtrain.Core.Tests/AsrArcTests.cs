@@ -7,6 +7,30 @@ namespace NNtrain.Core.Tests;
 public sealed class AsrArcTests(ITestOutputHelper output)
 {
     [Fact]
+    public void ParakeetWholePrefixArcAttentionMatchesCpuOnIrregularLengths()
+    {
+        Assert.SkipWhen(Environment.GetEnvironmentVariable("NNTRAIN_ASR_ARC_TEST") != "1", "Explicit ASR-only Arc test.");
+        using var fixture = new ParakeetCtcTests.Fixture();
+        using var cpu = ParakeetCtcModel.Load(fixture.Directory, TestContext.Current.CancellationToken);
+        var devices = ArcDevices.Enumerate();
+        Assert.SkipWhen(devices.Count == 0, "Intel Arc required.");
+        foreach (var device in devices)
+        {
+            using var arc = ParakeetCtcModel.Load(fixture.Directory, TestContext.Current.CancellationToken);
+            arc.EnableArc(device.Index, TestContext.Current.CancellationToken);
+            foreach (int count in new[] { 8, 19, 101 })
+            {
+                float[][] mel = Enumerable.Range(0, count).Select(t => Enumerable.Range(0, 80).Select(f => MathF.Sin(t * .1f + f * .03f)).ToArray()).ToArray();
+                float[][] expected = cpu.Encode(mel, TestContext.Current.CancellationToken);
+                float[][] actual = arc.Encode(mel, TestContext.Current.CancellationToken);
+                float maximum = 0;
+                for (int t = 0; t < expected.Length; t++) for (int d = 0; d < expected[t].Length; d++) maximum = Math.Max(maximum, Math.Abs(expected[t][d] - actual[t][d]));
+                Assert.InRange(maximum, 0, 2e-5f);
+                output.WriteLine($"Arc {device.Index}, {count} mel frames: CPU/Arc encoder max error {maximum}");
+            }
+        }
+    }
+    [Fact]
     public void MiniConformerMatchesCpuWithResidentArcProjections()
     {
         Assert.SkipWhen(Environment.GetEnvironmentVariable("NNTRAIN_ASR_ARC_TEST") != "1", "Explicit Arc test only.");

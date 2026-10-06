@@ -28,9 +28,12 @@ public sealed partial class NemotronAsrModel : ILocalAsrModel
     public long PeakDeviceBufferBytes => _arc?.PeakDeviceBufferBytes ?? 0;
     public long ResidentDeviceBytes => _arc?.ResidentDeviceBytes ?? 0;
     public void EnableArc(int deviceIndex, CancellationToken ct = default)
+        => EnableArc(deviceIndex, ct, null);
+
+    internal void EnableArc(int deviceIndex, CancellationToken ct, Action<string, double>? loadingObserver)
     {
         if (_arc is not null) throw new InvalidOperationException("Arc already enabled.");
-        _arc = new(_checkpoint.Weights, deviceIndex, ct);
+        _arc = new(_checkpoint.Weights, deviceIndex, ct, loadingObserver);
     }
     public void Dispose() { _arc?.Dispose(); _arc = null; }
 
@@ -94,13 +97,25 @@ public sealed partial class NemotronAsrModel : ILocalAsrModel
     }
 
     public static NemotronAsrModel Load(string directory, CancellationToken ct = default)
+        => Load(directory, ct, null);
+
+    internal static NemotronAsrModel Load(string directory, CancellationToken ct, Action<string, double>? timingObserver)
     {
+        ct.ThrowIfCancellationRequested();
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
         using var config = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "config.json")));
         if (config.RootElement.GetProperty("model_type").GetString() != "nemotron3_5_asr")
             throw new InvalidDataException("Expected Nemotron 3.5 ASR checkpoint.");
+        timingObserver?.Invoke("config", System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        started = System.Diagnostics.Stopwatch.GetTimestamp();
         using var tokenizer = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "tokenizer.json")));
-        var checkpoint = AsrHalfCheckpoint.Load(Path.Combine(directory, "model.safetensors"), 2L * 1024 * 1024 * 1024, ct);
-        return new(checkpoint, config.RootElement, tokenizer.RootElement);
+        timingObserver?.Invoke("tokenizer", System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        var checkpoint = AsrHalfCheckpoint.Load(Path.Combine(directory, "model.safetensors"), 2L * 1024 * 1024 * 1024, ct, timingObserver);
+        started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var model = new NemotronAsrModel(checkpoint, config.RootElement, tokenizer.RootElement);
+        ct.ThrowIfCancellationRequested();
+        timingObserver?.Invoke("initialization", System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        return model;
     }
 
     internal AsrHalfCheckpoint.Weight Weight(string name)
