@@ -1,0 +1,21 @@
+{
+  "InferencePrefillChunkTokens": 1024,
+  "InferenceBatchMixedAttention": true,
+  "InferenceBatchTextAttention": true,
+  "CollectKernelTimings": false,
+  "InferenceProjectionRows": 4,
+  "InferenceXmxPrefill": true,
+  "InferenceXmxPackedPrefill": false,
+  "InferenceXmxFactoredPrefill": true,
+  "InferenceXmxGgufBslmPrefill": true,
+  "InferenceResidentIq2Panels": false,
+  "InferenceSubgroupRecurrentRms": true,
+  "InferenceBufferPoolMiB": 512,
+  "InferenceDeferredReleaseMiB": 256,
+  "InferenceBatchRecurrent": true,
+  "IQ2TiledForward": true,
+  "IQ2TiledBackward": false,
+  "InferenceFusedResidualRms": false,
+  "InferenceCachedDeltaDecode": false,
+  "InferenceSplitOutputHead": true
+}

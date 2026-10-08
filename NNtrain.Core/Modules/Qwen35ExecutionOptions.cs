@@ -5,6 +5,9 @@ public enum Qwen35QuantizedKernel { Reference, Cooperative, Subgroup, Auto }
 
 public sealed record Qwen35ExecutionOptions
 {
+    // Opt-in: overlap the two vocabulary halves of an SG16 Q5_K output head
+    // on two GPUs. Keep the original full head for unsupported/LoRA fallback.
+    public bool InferenceSplitOutputHead { get; init; }
     public Qwen35QuantizedKernel QuantizedKernel { get; init; } = Qwen35QuantizedKernel.Auto;
     public bool LoraTraining { get; init; }
     public bool ParallelModelLoad { get; init; } = true;

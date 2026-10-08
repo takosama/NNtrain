@@ -1,0 +1,6130 @@
+{
+  "SchemaVersion": 2,
+  "StartedUtc": "2026-10-08T07:59:35.4565044+00:00",
+  "CompletedUtc": "2026-10-08T08:00:18.5777333+00:00",
+  "CommandArguments": [
+    "--model",
+    "models/Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf",
+    "--output",
+    "benchmark-results/qwen-generation-split-head-20261008/final-sampling-split.json",
+    "--devices",
+    "0,1",
+    "--tokens",
+    "128",
+    "--runs",
+    "4",
+    "--logits",
+    "16",
+    "--options",
+    "benchmark-results/qwen-generation-split-head-20261008/split-options.json",
+    "--profile",
+    "off",
+    "--temperature",
+    "0.6",
+    "--top-p",
+    "0.95",
+    "--top-k",
+    "20",
+    "--seed",
+    "5429"
+  ],
+  "Model": {
+    "Path": "C:\\Users\\takos\\source\\repos\\NNtrain\\models\\Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf",
+    "Bytes": 10173451200,
+    "LastWriteUtc": "2026-09-20T21:37:56.9527558Z",
+    "Sha256": "676db8ccd38035117e705858fd591964005cb0a921b39255b0691d8339a8dfe2"
+  },
+  "Adapter": null,
+  "BinarySha256": {
+    "NNtrain.Core": "d1a35498a0c5fbb6ab58896c30a490d935be935225c12510b8e94d74e74c7cef",
+    "NNtrain.Arc": "b5da050044efffbca061b864fd59d1d18d1b2c9cf448df9e5047f89377ee61b9",
+    "NNtrain.Benchmarks": "1f4c6dfd85edf4b832467474c9843ee802e335a24c20f48274a8dcc74abe6b85"
+  },
+  "Runtime": {
+    "Framework": ".NET 10.0.11",
+    "OperatingSystem": "Microsoft Windows 10.0.26200",
+    "Architecture": "X64"
+  },
+  "Devices": [
+    {
+      "Index": 0,
+      "Name": "Intel(R) Arc(TM) B580 Graphics",
+      "DriverVersion": "32.0.101.9030",
+      "GlobalMemoryBytes": 12452507648,
+      "MaximumAllocationBytes": 12452507648,
+      "MinimumSubgroupSize": 16
+    },
+    {
+      "Index": 1,
+      "Name": "Intel(R) Arc(TM) B580 Graphics",
+      "DriverVersion": "32.0.101.9030",
+      "GlobalMemoryBytes": 12452507648,
+      "MaximumAllocationBytes": 12452507648,
+      "MinimumSubgroupSize": 16
+    }
+  ],
+  "Options": {
+    "InferenceSplitOutputHead": true,
+    "QuantizedKernel": "Auto",
+    "LoraTraining": false,
+    "ParallelModelLoad": true,
+    "ComputeModelFingerprintOnLoad": false,
+    "InferencePairedProjection": false,
+    "InferencePairedProjectionTypes": 5,
+    "InferenceIq2DecodePair4": false,
+    "InferenceIq2DecodeLevel3": false,
+    "InferencePairedLoraProjection": false,
+    "CacheKernelArguments": true,
+    "CacheProgramBinary": true,
+    "InferenceFastRmsNorm": true,
+    "InferenceFusedResidualRms": false,
+    "InferenceCachedDeltaDecode": false,
+    "InferenceCooperativeLora": true,
+    "ProjectionWorkgroupSize": 32,
+    "ParallelArgmax": true,
+    "ParallelDeltaNorm": true,
+    "InferenceFusedLora": true,
+    "InferencePrefillChunkTokens": 1024,
+    "InferenceProjectionRows": 4,
+    "InferenceXmxPrefill": true,
+    "InferenceXmxPackedPrefill": false,
+    "InferenceXmxFactoredPrefill": true,
+    "InferenceXmxGgufBslmPrefill": true,
+    "IQ2TiledForward": true,
+    "IQ2TiledBackward": false,
+    "InferenceResidentIq2Panels": false,
+    "InferenceBufferPoolMiB": 512,
+    "InferenceDeferredReleaseMiB": 256,
+    "InferenceBatchMixedAttention": true,
+    "InferenceBatchTextAttention": true,
+    "InferenceTextAttentionTileRows": 0,
+    "InferenceBatchRecurrent": true,
+    "InferenceSubgroupRecurrentRms": true,
+    "LoraReductionSize": 1024,
+    "UnrollQ4": false,
+    "NativeHalfScale": true,
+    "CollectKernelTimings": false,
+    "TrainingBatchGradientNorm": true,
+    "TrainingNormSplits": 8,
+    "TrainingCooperativeLora": true,
+    "TrainingCooperativeDelta": true,
+    "TrainingResponseOnlyHead": true,
+    "TrainingGpuCheckpoints": true,
+    "TrainingHostCheckpointGpuGradients": true,
+    "TrainingHostCheckpointBufferHandoff": false,
+    "TrainingHostCheckpointForwardBufferHandoff": false,
+    "TrainingHostCheckpointBackwardBufferHandoff": false,
+    "TrainingHostCheckpointForwardCopyHandoff": false,
+    "TrainingHostCheckpointAsyncRead": false,
+    "TrainingHybridCheckpointMiBPerDevice": 0,
+    "TrainingPackedAttentionScores": true,
+    "TrainingStreamedAttentionTileRows": 0,
+    "TrainingFusedAttentionRows": false,
+    "TrainingFusedAttentionOutput": false,
+    "TrainingIQ2ProjectionCacheMiB": 0,
+    "TrainingIQ2ProjectionCachePrioritize": false,
+    "TrainingIQ2GpuProjectionCacheMiB": 0,
+    "TrainingIQ2Bf16XmxForward": false,
+    "TrainingIQ2Fp16XmxForward": false,
+    "TrainingTransposeRows": 16,
+    "TrainingTransposeOctetRows": 8,
+    "TrainingIQ2RollingTranspose": false,
+    "TrainingQ4TransposeOctetRows": 8,
+    "TrainingIQ3TransposeOctetRows": 8,
+    "TrainingQ5TransposeOctetRows": 8,
+    "TrainingForwardRows": 4,
+    "TrainingQ5ForwardRows": 8,
+    "TrainingBufferPoolMiB": 2048,
+    "DetailedProfiling": false,
+    "FusedDelta": true,
+    "QueuedKernelLimit": 4096
+  },
+  "Shape": {
+    "LayerCount": 64,
+    "EmbeddingLength": 5120,
+    "FeedForwardLength": 17408,
+    "ContextLength": 262144,
+    "VocabularySize": 248320,
+    "HeadCount": 24,
+    "KvHeadCount": 4,
+    "HeadWidth": 256,
+    "LinearKeyHeads": 16,
+    "LinearValueHeads": 48,
+    "LinearHeadWidth": 128,
+    "ConvKernel": 4,
+    "FullAttentionInterval": 4
+  },
+  "Prompt": "\u003C|im_start|\u003Euser\n\u56FD\u4F1A\u8B70\u4E8B\u5802\u3078\u306E\u884C\u304D\u65B9\u3092\u6559\u3048\u3066\u003C|im_end|\u003E\n\u003C|im_start|\u003Eassistant\n",
+  "PromptTokenIds": [
+    248045,
+    846,
+    198,
+    120683,
+    98358,
+    95924,
+    97131,
+    170872,
+    184700,
+    180014,
+    162066,
+    248046,
+    198,
+    248045,
+    74455,
+    198
+  ],
+  "RequestedNewTokens": 128,
+  "MeasuredRuns": 4,
+  "Sampling": {
+    "Method": "Seeded CPU top-k/top-p",
+    "Temperature": 0.6,
+    "TopP": 0.95,
+    "TopK": 20,
+    "RandomSeed": 5429,
+    "EosTokenId": null,
+    "Policy": "Emit exactly the requested count, including tokens after EOS; no early EOS stop."
+  },
+  "InspectionMilliseconds": 158.1467,
+  "TokenizerLoadAndEncodeMilliseconds": 101.4237,
+  "LoadMilliseconds": 4586.5523,
+  "AdapterLoadMilliseconds": 0,
+  "LoadProgress": [
+    {
+      "Milliseconds": 28.3444,
+      "Message": "Preparing Arc 0: Intel(R) Arc(TM) B580 Graphics"
+    },
+    {
+      "Milliseconds": 28.4298,
+      "Message": "Preparing Arc 1: Intel(R) Arc(TM) B580 Graphics"
+    },
+    {
+      "Milliseconds": 298.4912,
+      "Message": "Loading tensors: 100/851"
+    },
+    {
+      "Milliseconds": 306.871,
+      "Message": "Loading tensors: 200/851"
+    },
+    {
+      "Milliseconds": 314.7603,
+      "Message": "Loading tensors: 300/851"
+    },
+    {
+      "Milliseconds": 1133.048,
+      "Message": "Loading tensors: 400/851"
+    },
+    {
+      "Milliseconds": 1776.8872,
+      "Message": "Loading tensors: 500/851"
+    },
+    {
+      "Milliseconds": 2386.3838,
+      "Message": "Loading tensors: 600/851"
+    },
+    {
+      "Milliseconds": 3000.6246,
+      "Message": "Loading tensors: 700/851"
+    },
+    {
+      "Milliseconds": 3749.0176,
+      "Message": "Loading tensors: 800/851"
+    },
+    {
+      "Milliseconds": 4584.2601,
+      "Message": "Output Q5_K head: 124,160 vocabulary rows on Arc 0, 124,160 on Arc 1; 416.8 MiB additional resident weights."
+    },
+    {
+      "Milliseconds": 4586.2666,
+      "Message": "Arc 0: quantized weights = 5472512000 bytes (5.10 GiB), GPU state = 79495168 bytes, live device allocation = 5559294976 bytes"
+    },
+    {
+      "Milliseconds": 4586.5438,
+      "Message": "Arc 1: quantized weights = 5116405760 bytes (4.77 GiB), GPU state = 79495168 bytes, live device allocation = 5202195456 bytes"
+    }
+  ],
+  "ReadyMilliseconds": 4846.1227,
+  "AfterLoad": {
+    "ResidentWeightBytes": [
+      5472512000,
+      5116405760
+    ],
+    "ResidentAuxiliaryWeightBytes": [
+      5280768,
+      5301248
+    ],
+    "ResidentStateBytes": [
+      79495168,
+      79495168
+    ],
+    "LiveDeviceBytes": [
+      5559294976,
+      5202195456
+    ],
+    "PeakDeviceBytes": [
+      5559294976,
+      5202195456
+    ],
+    "UploadedBytes": [
+      5477792768,
+      5121707008
+    ],
+    "DownloadedBytes": [
+      0,
+      0
+    ],
+    "Lanes": [
+      {
+        "DeviceIndex": 0,
+        "AllocationCount": 494,
+        "RequestedBytes": 5559294976,
+        "NativeAllocatedBytes": 5559294976,
+        "NativeReleasedBytes": 0,
+        "NativeReleaseCount": 0,
+        "AllocatedBytes": 5559294976,
+        "KernelLaunchCount": 50,
+        "CachedBytes": 0,
+        "RetiredBytes": 0,
+        "PoolHits": 0,
+        "RetiredReuseCount": 0,
+        "H2DBytes": 5477792768,
+        "D2HBytes": 0,
+        "PeakAllocatedBytes": 5559294976,
+        "KernelMilliseconds": 0,
+        "TransferMilliseconds": 2086.805199999999,
+        "AllocationMilliseconds": 46.780499999999975,
+        "ProgramBinaryCacheHit": true,
+        "KernelArgumentSetCount": 100,
+        "KernelArgumentCacheHitCount": 0,
+        "ProfileEntries": []
+      },
+      {
+        "DeviceIndex": 1,
+        "AllocationCount": 491,
+        "RequestedBytes": 5202195456,
+        "NativeAllocatedBytes": 5202195456,
+        "NativeReleasedBytes": 0,
+        "NativeReleaseCount": 0,
+        "AllocatedBytes": 5202195456,
+        "KernelLaunchCount": 49,
+        "CachedBytes": 0,
+        "RetiredBytes": 0,
+        "PoolHits": 0,
+        "RetiredReuseCount": 0,
+        "H2DBytes": 5121707008,
+        "D2HBytes": 0,
+        "PeakAllocatedBytes": 5202195456,
+        "KernelMilliseconds": 0,
+        "TransferMilliseconds": 979.3894000000007,
+        "AllocationMilliseconds": 45.41319999999997,
+        "ProgramBinaryCacheHit": true,
+        "KernelArgumentSetCount": 98,
+        "KernelArgumentCacheHitCount": 0,
+        "ProfileEntries": []
+      }
+    ]
+  },
+  "AfterAdapter": {
+    "ResidentWeightBytes": [
+      5472512000,
+      5116405760
+    ],
+    "ResidentAuxiliaryWeightBytes": [
+      5280768,
+      5301248
+    ],
+    "ResidentStateBytes": [
+      79495168,
+      79495168
+    ],
+    "LiveDeviceBytes": [
+      5559294976,
+      5202195456
+    ],
+    "PeakDeviceBytes": [
+      5559294976,
+      5202195456
+    ],
+    "UploadedBytes": [
+      5477792768,
+      5121707008
+    ],
+    "DownloadedBytes": [
+      0,
+      0
+    ],
+    "Lanes": [
+      {
+        "DeviceIndex": 0,
+        "AllocationCount": 494,
+        "RequestedBytes": 5559294976,
+        "NativeAllocatedBytes": 5559294976,
+        "NativeReleasedBytes": 0,
+        "NativeReleaseCount": 0,
+        "AllocatedBytes": 5559294976,
+        "KernelLaunchCount": 50,
+        "CachedBytes": 0,
+        "RetiredBytes": 0,
+        "PoolHits": 0,
+        "RetiredReuseCount": 0,
+        "H2DBytes": 5477792768,
+        "D2HBytes": 0,
+        "PeakAllocatedBytes": 5559294976,
+        "KernelMilliseconds": 0,
+        "TransferMilliseconds": 2086.805199999999,
+        "AllocationMilliseconds": 46.780499999999975,
+        "ProgramBinaryCacheHit": true,
+        "KernelArgumentSetCount": 100,
+        "KernelArgumentCacheHitCount": 0,
+        "ProfileEntries": []
+      },
+      {
+        "DeviceIndex": 1,
+        "AllocationCount": 491,
+        "RequestedBytes": 5202195456,
+        "NativeAllocatedBytes": 5202195456,
+        "NativeReleasedBytes": 0,
+        "NativeReleaseCount": 0,
+        "AllocatedBytes": 5202195456,
+        "KernelLaunchCount": 49,
+        "CachedBytes": 0,
+        "RetiredBytes": 0,
+        "PoolHits": 0,
+        "RetiredReuseCount": 0,
+        "H2DBytes": 5121707008,
+        "D2HBytes": 0,
+        "PeakAllocatedBytes": 5202195456,
+        "KernelMilliseconds": 0,
+        "TransferMilliseconds": 979.3894000000007,
+        "AllocationMilliseconds": 45.41319999999997,
+        "ProgramBinaryCacheHit": true,
+        "KernelArgumentSetCount": 98,
+        "KernelArgumentCacheHitCount": 0,
+        "ProfileEntries": []
+      }
+    ]
+  },
+  "RunsHaveIdenticalGeneratedTokenIds": true,
+  "Samples": [
+    {
+      "RunIndex": 0,
+      "Kind": "first run after process-local model load",
+      "StartedUtc": "2026-10-08T07:59:40.7139415+00:00",
+      "TotalMilliseconds": 7720.8548,
+      "PrefillThroughFirstTokenMilliseconds": 499.5387,
+      "PrefillTokensPerSecond": 32.0295504632574,
+      "DecodeMilliseconds": 7221.3135,
+      "DecodeTokensPerSecond": 17.586828213454517,
+      "OverallGeneratedTokensPerSecond": 16.578475222717568,
+      "AllTokenIds": [
+        248045,
+        846,
+        198,
+        120683,
+        98358,
+        95924,
+        97131,
+        170872,
+        184700,
+        180014,
+        162066,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198,
+        760,
+        1156,
+        369,
+        9859,
+        364,
+        17425,
+        310,
+        279,
+        4893,
+        25376,
+        16366,
+        318,
+        120683,
+        98358,
+        95924,
+        97131,
+        8,
+        303,
+        10452,
+        13,
+        6558,
+        728,
+        3300,
+        10631,
+        17425,
+        13,
+        561,
+        4893,
+        25376,
+        16366,
+        369,
+        7172,
+        303,
+        28113,
+        450,
+        928,
+        11,
+        882,
+        15742,
+        13591,
+        11,
+        25358,
+        13,
+        6558,
+        728,
+        1683,
+        883,
+        279,
+        1786,
+        5337,
+        310,
+        615,
+        1017,
+        13,
+        271,
+        1536,
+        2528,
+        3387,
+        25,
+        198,
+        12,
+        50795,
+        783,
+        12350,
+        1227,
+        6863,
+        25,
+        783,
+        2333,
+        43066,
+        16140,
+        318,
+        96301,
+        148772,
+        96060,
+        174016,
+        3008,
+        8,
+        369,
+        279,
+        17554,
+        198,
+        12,
+        882,
+        15742,
+        13591,
+        6863,
+        318,
+        51076,
+        15560,
+        20317,
+        1590,
+        496,
+        844,
+        29375,
+        16140,
+        318,
+        120266,
+        108200,
+        158369,
+        8,
+        471,
+        18422,
+        220,
+        17,
+        466,
+        220,
+        18,
+        198,
+        12,
+        2783,
+        354,
+        2930,
+        72,
+        6863,
+        318,
+        51076,
+        15560,
+        20317,
+        1590,
+        496,
+        844,
+        29375,
+        16140,
+        198,
+        12
+      ],
+      "GeneratedTokenIds": [
+        248068,
+        198,
+        760,
+        1156,
+        369,
+        9859,
+        364,
+        17425,
+        310,
+        279,
+        4893,
+        25376,
+        16366,
+        318,
+        120683,
+        98358,
+        95924,
+        97131,
+        8,
+        303,
+        10452,
+        13,
+        6558,
+        728,
+        3300,
+        10631,
+        17425,
+        13,
+        561,
+        4893,
+        25376,
+        16366,
+        369,
+        7172,
+        303,
+        28113,
+        450,
+        928,
+        11,
+        882,
+        15742,
+        13591,
+        11,
+        25358,
+        13,
+        6558,
+        728,
+        1683,
+        883,
+        279,
+        1786,
+        5337,
+        310,
+        615,
+        1017,
+        13,
+        271,
+        1536,
+        2528,
+        3387,
+        25,
+        198,
+        12,
+        50795,
+        783,
+        12350,
+        1227,
+        6863,
+        25,
+        783,
+        2333,
+        43066,
+        16140,
+        318,
+        96301,
+        148772,
+        96060,
+        174016,
+        3008,
+        8,
+        369,
+        279,
+        17554,
+        198,
+        12,
+        882,
+        15742,
+        13591,
+        6863,
+        318,
+        51076,
+        15560,
+        20317,
+        1590,
+        496,
+        844,
+        29375,
+        16140,
+        318,
+        120266,
+        108200,
+        158369,
+        8,
+        471,
+        18422,
+        220,
+        17,
+        466,
+        220,
+        18,
+        198,
+        12,
+        2783,
+        354,
+        2930,
+        72,
+        6863,
+        318,
+        51076,
+        15560,
+        20317,
+        1590,
+        496,
+        844,
+        29375,
+        16140,
+        198,
+        12
+      ],
+      "GeneratedText": "\u003Cthink\u003E\nThe user is asking for directions to the National Diet Building (\u56FD\u4F1A\u8B70\u4E8B\u5802) in Japanese. Let me provide helpful directions. The National Diet Building is located in Nagatacho, Chiyoda, Tokyo. Let me think about the best ways to get there.\n\nKey access points:\n- JR Yamanote Line: Yotsuya Station (\u56DB\u30C4\u76EE\u901A\u308A side) is the closest\n- Chiyoda Line (Tokyo Metro): Otemachi Station (\u5927\u624B\u753A\u99C5) - Exit 2 or 3\n- Marunouchi Line (Tokyo Metro): Otemachi Station\n-",
+      "MatchesFirstRunTokenIds": true,
+      "Tokens": [
+        {
+          "GeneratedIndex": 0,
+          "TokenId": 248068,
+          "ElapsedMilliseconds": 499.5387,
+          "SincePreviousTokenMilliseconds": null
+        },
+        {
+          "GeneratedIndex": 1,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 557.788,
+          "SincePreviousTokenMilliseconds": 58.249300000000005
+        },
+        {
+          "GeneratedIndex": 2,
+          "TokenId": 760,
+          "ElapsedMilliseconds": 614.1378,
+          "SincePreviousTokenMilliseconds": 56.34979999999996
+        },
+        {
+          "GeneratedIndex": 3,
+          "TokenId": 1156,
+          "ElapsedMilliseconds": 670.47,
+          "SincePreviousTokenMilliseconds": 56.33220000000006
+        },
+        {
+          "GeneratedIndex": 4,
+          "TokenId": 369,
+          "ElapsedMilliseconds": 726.8479,
+          "SincePreviousTokenMilliseconds": 56.377899999999954
+        },
+        {
+          "GeneratedIndex": 5,
+          "TokenId": 9859,
+          "ElapsedMilliseconds": 783.3494,
+          "SincePreviousTokenMilliseconds": 56.501499999999965
+        },
+        {
+          "GeneratedIndex": 6,
+          "TokenId": 364,
+          "ElapsedMilliseconds": 839.8236,
+          "SincePreviousTokenMilliseconds": 56.47420000000011
+        },
+        {
+          "GeneratedIndex": 7,
+          "TokenId": 17425,
+          "ElapsedMilliseconds": 896.3706,
+          "SincePreviousTokenMilliseconds": 56.54699999999991
+        },
+        {
+          "GeneratedIndex": 8,
+          "TokenId": 310,
+          "ElapsedMilliseconds": 953.8991,
+          "SincePreviousTokenMilliseconds": 57.52850000000001
+        },
+        {
+          "GeneratedIndex": 9,
+          "TokenId": 279,
+          "ElapsedMilliseconds": 1010.4143,
+          "SincePreviousTokenMilliseconds": 56.51520000000005
+        },
+        {
+          "GeneratedIndex": 10,
+          "TokenId": 4893,
+          "ElapsedMilliseconds": 1066.6597,
+          "SincePreviousTokenMilliseconds": 56.245399999999904
+        },
+        {
+          "GeneratedIndex": 11,
+          "TokenId": 25376,
+          "ElapsedMilliseconds": 1123.0125,
+          "SincePreviousTokenMilliseconds": 56.352800000000116
+        },
+        {
+          "GeneratedIndex": 12,
+          "TokenId": 16366,
+          "ElapsedMilliseconds": 1179.3721,
+          "SincePreviousTokenMilliseconds": 56.3596
+        },
+        {
+          "GeneratedIndex": 13,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 1235.7383,
+          "SincePreviousTokenMilliseconds": 56.366199999999935
+        },
+        {
+          "GeneratedIndex": 14,
+          "TokenId": 120683,
+          "ElapsedMilliseconds": 1292.2328,
+          "SincePreviousTokenMilliseconds": 56.494500000000016
+        },
+        {
+          "GeneratedIndex": 15,
+          "TokenId": 98358,
+          "ElapsedMilliseconds": 1348.5874,
+          "SincePreviousTokenMilliseconds": 56.35459999999989
+        },
+        {
+          "GeneratedIndex": 16,
+          "TokenId": 95924,
+          "ElapsedMilliseconds": 1404.8942,
+          "SincePreviousTokenMilliseconds": 56.30680000000007
+        },
+        {
+          "GeneratedIndex": 17,
+          "TokenId": 97131,
+          "ElapsedMilliseconds": 1463.4491,
+          "SincePreviousTokenMilliseconds": 58.55490000000009
+        },
+        {
+          "GeneratedIndex": 18,
+          "TokenId": 8,
+          "ElapsedMilliseconds": 1520.0351,
+          "SincePreviousTokenMilliseconds": 56.58600000000001
+        },
+        {
+          "GeneratedIndex": 19,
+          "TokenId": 303,
+          "ElapsedMilliseconds": 1576.5842,
+          "SincePreviousTokenMilliseconds": 56.54909999999995
+        },
+        {
+          "GeneratedIndex": 20,
+          "TokenId": 10452,
+          "ElapsedMilliseconds": 1632.9859,
+          "SincePreviousTokenMilliseconds": 56.40169999999989
+        },
+        {
+          "GeneratedIndex": 21,
+          "TokenId": 13,
+          "ElapsedMilliseconds": 1689.3512,
+          "SincePreviousTokenMilliseconds": 56.36530000000016
+        },
+        {
+          "GeneratedIndex": 22,
+          "TokenId": 6558,
+          "ElapsedMilliseconds": 1745.7088,
+          "SincePreviousTokenMilliseconds": 56.35760000000005
+        },
+        {
+          "GeneratedIndex": 23,
+          "TokenId": 728,
+          "ElapsedMilliseconds": 1802.185,
+          "SincePreviousTokenMilliseconds": 56.476199999999835
+        },
+        {
+          "GeneratedIndex": 24,
+          "TokenId": 3300,
+          "ElapsedMilliseconds": 1858.5547,
+          "SincePreviousTokenMilliseconds": 56.369699999999966
+        },
+        {
+          "GeneratedIndex": 25,
+          "TokenId": 10631,
+          "ElapsedMilliseconds": 1914.9484,
+          "SincePreviousTokenMilliseconds": 56.39370000000008
+        },
+        {
+          "GeneratedIndex": 26,
+          "TokenId": 17425,
+          "ElapsedMilliseconds": 1971.4372,
+          "SincePreviousTokenMilliseconds": 56.48880000000008
+        },
+        {
+          "GeneratedIndex": 27,
+          "TokenId": 13,
+          "ElapsedMilliseconds": 2027.9757,
+          "SincePreviousTokenMilliseconds": 56.538499999999885
+        },
+        {
+          "GeneratedIndex": 28,
+          "TokenId": 561,
+          "ElapsedMilliseconds": 2084.3786,
+          "SincePreviousTokenMilliseconds": 56.402900000000045
+        },
+        {
+          "GeneratedIndex": 29,
+          "TokenId": 4893,
+          "ElapsedMilliseconds": 2140.9021,
+          "SincePreviousTokenMilliseconds": 56.523499999999785
+        },
+        {
+          "GeneratedIndex": 30,
+          "TokenId": 25376,
+          "ElapsedMilliseconds": 2197.4127,
+          "SincePreviousTokenMilliseconds": 56.51060000000007
+        },
+        {
+          "GeneratedIndex": 31,
+          "TokenId": 16366,
+          "ElapsedMilliseconds": 2253.9578,
+          "SincePreviousTokenMilliseconds": 56.545100000000275
+        },
+        {
+          "GeneratedIndex": 32,
+          "TokenId": 369,
+          "ElapsedMilliseconds": 2310.4179,
+          "SincePreviousTokenMilliseconds": 56.460099999999784
+        },
+        {
+          "GeneratedIndex": 33,
+          "TokenId": 7172,
+          "ElapsedMilliseconds": 2367.0807,
+          "SincePreviousTokenMilliseconds": 56.66280000000006
+        },
+        {
+          "GeneratedIndex": 34,
+          "TokenId": 303,
+          "ElapsedMilliseconds": 2423.5851,
+          "SincePreviousTokenMilliseconds": 56.504399999999805
+        },
+        {
+          "GeneratedIndex": 35,
+          "TokenId": 28113,
+          "ElapsedMilliseconds": 2484.6408,
+          "SincePreviousTokenMilliseconds": 61.05570000000034
+        },
+        {
+          "GeneratedIndex": 36,
+          "TokenId": 450,
+          "ElapsedMilliseconds": 2541.5004,
+          "SincePreviousTokenMilliseconds": 56.85959999999977
+        },
+        {
+          "GeneratedIndex": 37,
+          "TokenId": 928,
+          "ElapsedMilliseconds": 2598.1899,
+          "SincePreviousTokenMilliseconds": 56.68949999999995
+        },
+        {
+          "GeneratedIndex": 38,
+          "TokenId": 11,
+          "ElapsedMilliseconds": 2654.8312,
+          "SincePreviousTokenMilliseconds": 56.64130000000023
+        },
+        {
+          "GeneratedIndex": 39,
+          "TokenId": 882,
+          "ElapsedMilliseconds": 2711.3213,
+          "SincePreviousTokenMilliseconds": 56.490099999999984
+        },
+        {
+          "GeneratedIndex": 40,
+          "TokenId": 15742,
+          "ElapsedMilliseconds": 2767.7705,
+          "SincePreviousTokenMilliseconds": 56.44920000000002
+        },
+        {
+          "GeneratedIndex": 41,
+          "TokenId": 13591,
+          "ElapsedMilliseconds": 2824.4336,
+          "SincePreviousTokenMilliseconds": 56.66309999999976
+        },
+        {
+          "GeneratedIndex": 42,
+          "TokenId": 11,
+          "ElapsedMilliseconds": 2881.0055,
+          "SincePreviousTokenMilliseconds": 56.57190000000037
+        },
+        {
+          "GeneratedIndex": 43,
+          "TokenId": 25358,
+          "ElapsedMilliseconds": 2937.5782,
+          "SincePreviousTokenMilliseconds": 56.57269999999971
+        },
+        {
+          "GeneratedIndex": 44,
+          "TokenId": 13,
+          "ElapsedMilliseconds": 2994.8817,
+          "SincePreviousTokenMilliseconds": 57.303499999999985
+        },
+        {
+          "GeneratedIndex": 45,
+          "TokenId": 6558,
+          "ElapsedMilliseconds": 3051.3747,
+          "SincePreviousTokenMilliseconds": 56.49299999999994
+        },
+        {
+          "GeneratedIndex": 46,
+          "TokenId": 728,
+          "ElapsedMilliseconds": 3108.3165,
+          "SincePreviousTokenMilliseconds": 56.94180000000006
+        },
+        {
+          "GeneratedIndex": 47,
+          "TokenId": 1683,
+          "ElapsedMilliseconds": 3164.8347,
+          "SincePreviousTokenMilliseconds": 56.51819999999998
+        },
+        {
+          "GeneratedIndex": 48,
+          "TokenId": 883,
+          "ElapsedMilliseconds": 3221.2983,
+          "SincePreviousTokenMilliseconds": 56.46360000000004
+        },
+        {
+          "GeneratedIndex": 49,
+          "TokenId": 279,
+          "ElapsedMilliseconds": 3281.2687,
+          "SincePreviousTokenMilliseconds": 59.970400000000154
+        },
+        {
+          "GeneratedIndex": 50,
+          "TokenId": 1786,
+          "ElapsedMilliseconds": 3337.7776,
+          "SincePreviousTokenMilliseconds": 56.50889999999981
+        },
+        {
+          "GeneratedIndex": 51,
+          "TokenId": 5337,
+          "ElapsedMilliseconds": 3394.426,
+          "SincePreviousTokenMilliseconds": 56.64840000000004
+        },
+        {
+          "GeneratedIndex": 52,
+          "TokenId": 310,
+          "ElapsedMilliseconds": 3450.8912,
+          "SincePreviousTokenMilliseconds": 56.465200000000095
+        },
+        {
+          "GeneratedIndex": 53,
+          "TokenId": 615,
+          "ElapsedMilliseconds": 3507.5629,
+          "SincePreviousTokenMilliseconds": 56.67169999999987
+        },
+        {
+          "GeneratedIndex": 54,
+          "TokenId": 1017,
+          "ElapsedMilliseconds": 3564.1683,
+          "SincePreviousTokenMilliseconds": 56.60539999999992
+        },
+        {
+          "GeneratedIndex": 55,
+          "TokenId": 13,
+          "ElapsedMilliseconds": 3620.8548,
+          "SincePreviousTokenMilliseconds": 56.68650000000025
+        },
+        {
+          "GeneratedIndex": 56,
+          "TokenId": 271,
+          "ElapsedMilliseconds": 3677.3715,
+          "SincePreviousTokenMilliseconds": 56.51670000000013
+        },
+        {
+          "GeneratedIndex": 57,
+          "TokenId": 1536,
+          "ElapsedMilliseconds": 3734.1478,
+          "SincePreviousTokenMilliseconds": 56.77629999999999
+        },
+        {
+          "GeneratedIndex": 58,
+          "TokenId": 2528,
+          "ElapsedMilliseconds": 3790.8028,
+          "SincePreviousTokenMilliseconds": 56.654999999999745
+        },
+        {
+          "GeneratedIndex": 59,
+          "TokenId": 3387,
+          "ElapsedMilliseconds": 3847.4615,
+          "SincePreviousTokenMilliseconds": 56.65869999999995
+        },
+        {
+          "GeneratedIndex": 60,
+          "TokenId": 25,
+          "ElapsedMilliseconds": 3903.9909,
+          "SincePreviousTokenMilliseconds": 56.529399999999896
+        },
+        {
+          "GeneratedIndex": 61,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 3962.0282,
+          "SincePreviousTokenMilliseconds": 58.037300000000414
+        },
+        {
+          "GeneratedIndex": 62,
+          "TokenId": 12,
+          "ElapsedMilliseconds": 4018.6718,
+          "SincePreviousTokenMilliseconds": 56.64359999999988
+        },
+        {
+          "GeneratedIndex": 63,
+          "TokenId": 50795,
+          "ElapsedMilliseconds": 4075.4171,
+          "SincePreviousTokenMilliseconds": 56.74530000000004
+        },
+        {
+          "GeneratedIndex": 64,
+          "TokenId": 783,
+          "ElapsedMilliseconds": 4132.1921,
+          "SincePreviousTokenMilliseconds": 56.77500000000009
+        },
+        {
+          "GeneratedIndex": 65,
+          "TokenId": 12350,
+          "ElapsedMilliseconds": 4188.755,
+          "SincePreviousTokenMilliseconds": 56.5628999999999
+        },
+        {
+          "GeneratedIndex": 66,
+          "TokenId": 1227,
+          "ElapsedMilliseconds": 4245.3967,
+          "SincePreviousTokenMilliseconds": 56.64170000000013
+        },
+        {
+          "GeneratedIndex": 67,
+          "TokenId": 6863,
+          "ElapsedMilliseconds": 4301.9934,
+          "SincePreviousTokenMilliseconds": 56.596700000000055
+        },
+        {
+          "GeneratedIndex": 68,
+          "TokenId": 25,
+          "ElapsedMilliseconds": 4358.533,
+          "SincePreviousTokenMilliseconds": 56.539600000000064
+        },
+        {
+          "GeneratedIndex": 69,
+          "TokenId": 783,
+          "ElapsedMilliseconds": 4415.0727,
+          "SincePreviousTokenMilliseconds": 56.53969999999936
+        },
+        {
+          "GeneratedIndex": 70,
+          "TokenId": 2333,
+          "ElapsedMilliseconds": 4471.7124,
+          "SincePreviousTokenMilliseconds": 56.63970000000063
+        },
+        {
+          "GeneratedIndex": 71,
+          "TokenId": 43066,
+          "ElapsedMilliseconds": 4528.4486,
+          "SincePreviousTokenMilliseconds": 56.73619999999937
+        },
+        {
+          "GeneratedIndex": 72,
+          "TokenId": 16140,
+          "ElapsedMilliseconds": 4585.2626,
+          "SincePreviousTokenMilliseconds": 56.814000000000306
+        },
+        {
+          "GeneratedIndex": 73,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 4641.8878,
+          "SincePreviousTokenMilliseconds": 56.625200000000405
+        },
+        {
+          "GeneratedIndex": 74,
+          "TokenId": 96301,
+          "ElapsedMilliseconds": 4698.4239,
+          "SincePreviousTokenMilliseconds": 56.53609999999935
+        },
+        {
+          "GeneratedIndex": 75,
+          "TokenId": 148772,
+          "ElapsedMilliseconds": 4754.975,
+          "SincePreviousTokenMilliseconds": 56.55110000000059
+        },
+        {
+          "GeneratedIndex": 76,
+          "TokenId": 96060,
+          "ElapsedMilliseconds": 4811.6833,
+          "SincePreviousTokenMilliseconds": 56.708299999999326
+        },
+        {
+          "GeneratedIndex": 77,
+          "TokenId": 174016,
+          "ElapsedMilliseconds": 4868.3267,
+          "SincePreviousTokenMilliseconds": 56.64339999999993
+        },
+        {
+          "GeneratedIndex": 78,
+          "TokenId": 3008,
+          "ElapsedMilliseconds": 4924.9192,
+          "SincePreviousTokenMilliseconds": 56.592500000000655
+        },
+        {
+          "GeneratedIndex": 79,
+          "TokenId": 8,
+          "ElapsedMilliseconds": 4981.8117,
+          "SincePreviousTokenMilliseconds": 56.89249999999993
+        },
+        {
+          "GeneratedIndex": 80,
+          "TokenId": 369,
+          "ElapsedMilliseconds": 5038.5383,
+          "SincePreviousTokenMilliseconds": 56.72659999999996
+        },
+        {
+          "GeneratedIndex": 81,
+          "TokenId": 279,
+          "ElapsedMilliseconds": 5095.1732,
+          "SincePreviousTokenMilliseconds": 56.634900000000016
+        },
+        {
+          "GeneratedIndex": 82,
+          "TokenId": 17554,
+          "ElapsedMilliseconds": 5151.8064,
+          "SincePreviousTokenMilliseconds": 56.633200000000215
+        },
+        {
+          "GeneratedIndex": 83,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 5208.7405,
+          "SincePreviousTokenMilliseconds": 56.93409999999949
+        },
+        {
+          "GeneratedIndex": 84,
+          "TokenId": 12,
+          "ElapsedMilliseconds": 5265.5038,
+          "SincePreviousTokenMilliseconds": 56.76330000000053
+        },
+        {
+          "GeneratedIndex": 85,
+          "TokenId": 882,
+          "ElapsedMilliseconds": 5322.2783,
+          "SincePreviousTokenMilliseconds": 56.774499999999534
+        },
+        {
+          "GeneratedIndex": 86,
+          "TokenId": 15742,
+          "ElapsedMilliseconds": 5379.0746,
+          "SincePreviousTokenMilliseconds": 56.796299999999974
+        },
+        {
+          "GeneratedIndex": 87,
+          "TokenId": 13591,
+          "ElapsedMilliseconds": 5435.7146,
+          "SincePreviousTokenMilliseconds": 56.64000000000033
+        },
+        {
+          "GeneratedIndex": 88,
+          "TokenId": 6863,
+          "ElapsedMilliseconds": 5492.5509,
+          "SincePreviousTokenMilliseconds": 56.83629999999994
+        },
+        {
+          "GeneratedIndex": 89,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 5549.4526,
+          "SincePreviousTokenMilliseconds": 56.90169999999944
+        },
+        {
+          "GeneratedIndex": 90,
+          "TokenId": 51076,
+          "ElapsedMilliseconds": 5606.4079,
+          "SincePreviousTokenMilliseconds": 56.955300000000534
+        },
+        {
+          "GeneratedIndex": 91,
+          "TokenId": 15560,
+          "ElapsedMilliseconds": 5663.3823,
+          "SincePreviousTokenMilliseconds": 56.97440000000006
+        },
+        {
+          "GeneratedIndex": 92,
+          "TokenId": 20317,
+          "ElapsedMilliseconds": 5720.2418,
+          "SincePreviousTokenMilliseconds": 56.85949999999957
+        },
+        {
+          "GeneratedIndex": 93,
+          "TokenId": 1590,
+          "ElapsedMilliseconds": 5777.2466,
+          "SincePreviousTokenMilliseconds": 57.004800000000614
+        },
+        {
+          "GeneratedIndex": 94,
+          "TokenId": 496,
+          "ElapsedMilliseconds": 5834.2739,
+          "SincePreviousTokenMilliseconds": 57.02729999999974
+        },
+        {
+          "GeneratedIndex": 95,
+          "TokenId": 844,
+          "ElapsedMilliseconds": 5891.14,
+          "SincePreviousTokenMilliseconds": 56.86610000000019
+        },
+        {
+          "GeneratedIndex": 96,
+          "TokenId": 29375,
+          "ElapsedMilliseconds": 5948.1877,
+          "SincePreviousTokenMilliseconds": 57.04770000000008
+        },
+        {
+          "GeneratedIndex": 97,
+          "TokenId": 16140,
+          "ElapsedMilliseconds": 6006.1689,
+          "SincePreviousTokenMilliseconds": 57.98119999999926
+        },
+        {
+          "GeneratedIndex": 98,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 6063.825,
+          "SincePreviousTokenMilliseconds": 57.65610000000015
+        },
+        {
+          "GeneratedIndex": 99,
+          "TokenId": 120266,
+          "ElapsedMilliseconds": 6120.7396,
+          "SincePreviousTokenMilliseconds": 56.914600000000064
+        },
+        {
+          "GeneratedIndex": 100,
+          "TokenId": 108200,
+          "ElapsedMilliseconds": 6177.6821,
+          "SincePreviousTokenMilliseconds": 56.94250000000011
+        },
+        {
+          "GeneratedIndex": 101,
+          "TokenId": 158369,
+          "ElapsedMilliseconds": 6234.6423,
+          "SincePreviousTokenMilliseconds": 56.96020000000044
+        },
+        {
+          "GeneratedIndex": 102,
+          "TokenId": 8,
+          "ElapsedMilliseconds": 6291.4231,
+          "SincePreviousTokenMilliseconds": 56.780799999999545
+        },
+        {
+          "GeneratedIndex": 103,
+          "TokenId": 471,
+          "ElapsedMilliseconds": 6348.3352,
+          "SincePreviousTokenMilliseconds": 56.912100000000464
+        },
+        {
+          "GeneratedIndex": 104,
+          "TokenId": 18422,
+          "ElapsedMilliseconds": 6405.1067,
+          "SincePreviousTokenMilliseconds": 56.77149999999983
+        },
+        {
+          "GeneratedIndex": 105,
+          "TokenId": 220,
+          "ElapsedMilliseconds": 6462.1987,
+          "SincePreviousTokenMilliseconds": 57.09199999999964
+        },
+        {
+          "GeneratedIndex": 106,
+          "TokenId": 17,
+          "ElapsedMilliseconds": 6519.1045,
+          "SincePreviousTokenMilliseconds": 56.905800000000454
+        },
+        {
+          "GeneratedIndex": 107,
+          "TokenId": 466,
+          "ElapsedMilliseconds": 6576.0186,
+          "SincePreviousTokenMilliseconds": 56.91409999999996
+        },
+        {
+          "GeneratedIndex": 108,
+          "TokenId": 220,
+          "ElapsedMilliseconds": 6632.8637,
+          "SincePreviousTokenMilliseconds": 56.84509999999955
+        },
+        {
+          "GeneratedIndex": 109,
+          "TokenId": 18,
+          "ElapsedMilliseconds": 6689.8886,
+          "SincePreviousTokenMilliseconds": 57.02490000000034
+        },
+        {
+          "GeneratedIndex": 110,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 6746.7739,
+          "SincePreviousTokenMilliseconds": 56.885299999999916
+        },
+        {
+          "GeneratedIndex": 111,
+          "TokenId": 12,
+          "ElapsedMilliseconds": 6803.6498,
+          "SincePreviousTokenMilliseconds": 56.8759
+        },
+        {
+          "GeneratedIndex": 112,
+          "TokenId": 2783,
+          "ElapsedMilliseconds": 6860.7244,
+          "SincePreviousTokenMilliseconds": 57.07459999999992
+        },
+        {
+          "GeneratedIndex": 113,
+          "TokenId": 354,
+          "ElapsedMilliseconds": 6923.2592,
+          "SincePreviousTokenMilliseconds": 62.53480000000036
+        },
+        {
+          "GeneratedIndex": 114,
+          "TokenId": 2930,
+          "ElapsedMilliseconds": 6980.2807,
+          "SincePreviousTokenMilliseconds": 57.02149999999983
+        },
+        {
+          "GeneratedIndex": 115,
+          "TokenId": 72,
+          "ElapsedMilliseconds": 7037.2847,
+          "SincePreviousTokenMilliseconds": 57.003999999999905
+        },
+        {
+          "GeneratedIndex": 116,
+          "TokenId": 6863,
+          "ElapsedMilliseconds": 7094.2733,
+          "SincePreviousTokenMilliseconds": 56.98859999999968
+        },
+        {
+          "GeneratedIndex": 117,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 7151.1823,
+          "SincePreviousTokenMilliseconds": 56.90900000000056
+        },
+        {
+          "GeneratedIndex": 118,
+          "TokenId": 51076,
+          "ElapsedMilliseconds": 7208.0191,
+          "SincePreviousTokenMilliseconds": 56.83680000000004
+        },
+        {
+          "GeneratedIndex": 119,
+          "TokenId": 15560,
+          "ElapsedMilliseconds": 7264.978,
+          "SincePreviousTokenMilliseconds": 56.95889999999963
+        },
+        {
+          "GeneratedIndex": 120,
+          "TokenId": 20317,
+          "ElapsedMilliseconds": 7321.8778,
+          "SincePreviousTokenMilliseconds": 56.89980000000014
+        },
+        {
+          "GeneratedIndex": 121,
+          "TokenId": 1590,
+          "ElapsedMilliseconds": 7378.907,
+          "SincePreviousTokenMilliseconds": 57.029199999999946
+        },
+        {
+          "GeneratedIndex": 122,
+          "TokenId": 496,
+          "ElapsedMilliseconds": 7435.8308,
+          "SincePreviousTokenMilliseconds": 56.923799999999574
+        },
+        {
+          "GeneratedIndex": 123,
+          "TokenId": 844,
+          "ElapsedMilliseconds": 7492.9196,
+          "SincePreviousTokenMilliseconds": 57.08880000000045
+        },
+        {
+          "GeneratedIndex": 124,
+          "TokenId": 29375,
+          "ElapsedMilliseconds": 7549.9294,
+          "SincePreviousTokenMilliseconds": 57.009799999999814
+        },
+        {
+          "GeneratedIndex": 125,
+          "TokenId": 16140,
+          "ElapsedMilliseconds": 7606.9968,
+          "SincePreviousTokenMilliseconds": 57.06739999999991
+        },
+        {
+          "GeneratedIndex": 126,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 7663.8374,
+          "SincePreviousTokenMilliseconds": 56.84060000000045
+        },
+        {
+          "GeneratedIndex": 127,
+          "TokenId": 12,
+          "ElapsedMilliseconds": 7720.8522,
+          "SincePreviousTokenMilliseconds": 57.01479999999992
+        }
+      ],
+      "UploadedBytes": [
+        2623452,
+        66500000
+      ],
+      "DownloadedBytes": [
+        66498560,
+        129761280
+      ],
+      "Before": {
+        "ResidentWeightBytes": [
+          5472512000,
+          5116405760
+        ],
+        "ResidentAuxiliaryWeightBytes": [
+          5280768,
+          5301248
+        ],
+        "ResidentStateBytes": [
+          79495168,
+          79495168
+        ],
+        "LiveDeviceBytes": [
+          5559294976,
+          5202195456
+        ],
+        "PeakDeviceBytes": [
+          5559294976,
+          5202195456
+        ],
+        "UploadedBytes": [
+          5477792768,
+          5121707008
+        ],
+        "DownloadedBytes": [
+          0,
+          0
+        ],
+        "Lanes": [
+          {
+            "DeviceIndex": 0,
+            "AllocationCount": 494,
+            "RequestedBytes": 5559294976,
+            "NativeAllocatedBytes": 5559294976,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0,
+            "AllocatedBytes": 5559294976,
+            "KernelLaunchCount": 50,
+            "CachedBytes": 0,
+            "RetiredBytes": 0,
+            "PoolHits": 0,
+            "RetiredReuseCount": 0,
+            "H2DBytes": 5477792768,
+            "D2HBytes": 0,
+            "PeakAllocatedBytes": 5559294976,
+            "KernelMilliseconds": 0,
+            "TransferMilliseconds": 2086.805199999999,
+            "AllocationMilliseconds": 46.780499999999975,
+            "ProgramBinaryCacheHit": true,
+            "KernelArgumentSetCount": 100,
+            "KernelArgumentCacheHitCount": 0,
+            "ProfileEntries": []
+          },
+          {
+            "DeviceIndex": 1,
+            "AllocationCount": 491,
+            "RequestedBytes": 5202195456,
+            "NativeAllocatedBytes": 5202195456,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0,
+            "AllocatedBytes": 5202195456,
+            "KernelLaunchCount": 49,
+            "CachedBytes": 0,
+            "RetiredBytes": 0,
+            "PoolHits": 0,
+            "RetiredReuseCount": 0,
+            "H2DBytes": 5121707008,
+            "D2HBytes": 0,
+            "PeakAllocatedBytes": 5202195456,
+            "KernelMilliseconds": 0,
+            "TransferMilliseconds": 979.3894000000007,
+            "AllocationMilliseconds": 45.41319999999997,
+            "ProgramBinaryCacheHit": true,
+            "KernelArgumentSetCount": 98,
+            "KernelArgumentCacheHitCount": 0,
+            "ProfileEntries": []
+          }
+        ]
+      },
+      "After": {
+        "ResidentWeightBytes": [
+          5472512000,
+          5116405760
+        ],
+        "ResidentAuxiliaryWeightBytes": [
+          5280768,
+          5301248
+        ],
+        "ResidentStateBytes": [
+          95223808,
+          95223808
+        ],
+        "LiveDeviceBytes": [
+          5575023616,
+          5217924096
+        ],
+        "PeakDeviceBytes": [
+          5598890168,
+          5242783924
+        ],
+        "UploadedBytes": [
+          5480416220,
+          5188207008
+        ],
+        "DownloadedBytes": [
+          66498560,
+          129761280
+        ],
+        "Lanes": [
+          {
+            "DeviceIndex": 0,
+            "AllocationCount": 602,
+            "RequestedBytes": 7513841628,
+            "NativeAllocatedBytes": 5598890168,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0,
+            "AllocatedBytes": 5575023616,
+            "KernelLaunchCount": 69513,
+            "CachedBytes": 23866552,
+            "RetiredBytes": 0,
+            "PoolHits": 54947,
+            "RetiredReuseCount": 0,
+            "H2DBytes": 5480416220,
+            "D2HBytes": 66498560,
+            "PeakAllocatedBytes": 5598890168,
+            "KernelMilliseconds": 0,
+            "TransferMilliseconds": 5315.900900000007,
+            "AllocationMilliseconds": 52.20140000009903,
+            "ProgramBinaryCacheHit": true,
+            "KernelArgumentSetCount": 177538,
+            "KernelArgumentCacheHitCount": 243622,
+            "ProfileEntries": []
+          },
+          {
+            "DeviceIndex": 1,
+            "AllocationCount": 599,
+            "RequestedBytes": 7286195616,
+            "NativeAllocatedBytes": 5242783924,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0,
+            "AllocatedBytes": 5217924096,
+            "KernelLaunchCount": 69497,
+            "CachedBytes": 24859828,
+            "RetiredBytes": 0,
+            "PoolHits": 55045,
+            "RetiredReuseCount": 0,
+            "H2DBytes": 5188207008,
+            "D2HBytes": 129761280,
+            "PeakAllocatedBytes": 5242783924,
+            "KernelMilliseconds": 0,
+            "TransferMilliseconds": 1251.0044999999996,
+            "AllocationMilliseconds": 50.51200000010277,
+            "ProgramBinaryCacheHit": true,
+            "KernelArgumentSetCount": 181525,
+            "KernelArgumentCacheHitCount": 239829,
+            "ProfileEntries": []
+          }
+        ]
+      },
+      "KernelMilliseconds": {}
+    },
+    {
+      "RunIndex": 1,
+      "Kind": "reused model with sequence state reset",
+      "StartedUtc": "2026-10-08T07:59:48.4452416+00:00",
+      "TotalMilliseconds": 7650.1509,
+      "PrefillThroughFirstTokenMilliseconds": 455.2102,
+      "PrefillTokensPerSecond": 35.14859728538596,
+      "DecodeMilliseconds": 7194.938099999999,
+      "DecodeTokensPerSecond": 17.65129848719616,
+      "OverallGeneratedTokensPerSecond": 16.731696102883408,
+      "AllTokenIds": [
+        248045,
+        846,
+        198,
+        120683,
+        98358,
+        95924,
+        97131,
+        170872,
+        184700,
+        180014,
+        162066,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198,
+        760,
+        1156,
+        369,
+        9859,
+        364,
+        17425,
+        310,
+        279,
+        4893,
+        25376,
+        16366,
+        318,
+        120683,
+        98358,
+        95924,
+        97131,
+        8,
+        303,
+        10452,
+        13,
+        6558,
+        728,
+        3300,
+        10631,
+        17425,
+        13,
+        561,
+        4893,
+        25376,
+        16366,
+        369,
+        7172,
+        303,
+        28113,
+        450,
+        928,
+        11,
+        882,
+        15742,
+        13591,
+        11,
+        25358,
+        13,
+        6558,
+        728,
+        1683,
+        883,
+        279,
+        1786,
+        5337,
+        310,
+        615,
+        1017,
+        13,
+        271,
+        1536,
+        2528,
+        3387,
+        25,
+        198,
+        12,
+        50795,
+        783,
+        12350,
+        1227,
+        6863,
+        25,
+        783,
+        2333,
+        43066,
+        16140,
+        318,
+        96301,
+        148772,
+        96060,
+        174016,
+        3008,
+        8,
+        369,
+        279,
+        17554,
+        198,
+        12,
+        882,
+        15742,
+        13591,
+        6863,
+        318,
+        51076,
+        15560,
+        20317,
+        1590,
+        496,
+        844,
+        29375,
+        16140,
+        318,
+        120266,
+        108200,
+        158369,
+        8,
+        471,
+        18422,
+        220,
+        17,
+        466,
+        220,
+        18,
+        198,
+        12,
+        2783,
+        354,
+        2930,
+        72,
+        6863,
+        318,
+        51076,
+        15560,
+        20317,
+        1590,
+        496,
+        844,
+        29375,
+        16140,
+        198,
+        12
+      ],
+      "GeneratedTokenIds": [
+        248068,
+        198,
+        760,
+        1156,
+        369,
+        9859,
+        364,
+        17425,
+        310,
+        279,
+        4893,
+        25376,
+        16366,
+        318,
+        120683,
+        98358,
+        95924,
+        97131,
+        8,
+        303,
+        10452,
+        13,
+        6558,
+        728,
+        3300,
+        10631,
+        17425,
+        13,
+        561,
+        4893,
+        25376,
+        16366,
+        369,
+        7172,
+        303,
+        28113,
+        450,
+        928,
+        11,
+        882,
+        15742,
+        13591,
+        11,
+        25358,
+        13,
+        6558,
+        728,
+        1683,
+        883,
+        279,
+        1786,
+        5337,
+        310,
+        615,
+        1017,
+        13,
+        271,
+        1536,
+        2528,
+        3387,
+        25,
+        198,
+        12,
+        50795,
+        783,
+        12350,
+        1227,
+        6863,
+        25,
+        783,
+        2333,
+        43066,
+        16140,
+        318,
+        96301,
+        148772,
+        96060,
+        174016,
+        3008,
+        8,
+        369,
+        279,
+        17554,
+        198,
+        12,
+        882,
+        15742,
+        13591,
+        6863,
+        318,
+        51076,
+        15560,
+        20317,
+        1590,
+        496,
+        844,
+        29375,
+        16140,
+        318,
+        120266,
+        108200,
+        158369,
+        8,
+        471,
+        18422,
+        220,
+        17,
+        466,
+        220,
+        18,
+        198,
+        12,
+        2783,
+        354,
+        2930,
+        72,
+        6863,
+        318,
+        51076,
+        15560,
+        20317,
+        1590,
+        496,
+        844,
+        29375,
+        16140,
+        198,
+        12
+      ],
+      "GeneratedText": "\u003Cthink\u003E\nThe user is asking for directions to the National Diet Building (\u56FD\u4F1A\u8B70\u4E8B\u5802) in Japanese. Let me provide helpful directions. The National Diet Building is located in Nagatacho, Chiyoda, Tokyo. Let me think about the best ways to get there.\n\nKey access points:\n- JR Yamanote Line: Yotsuya Station (\u56DB\u30C4\u76EE\u901A\u308A side) is the closest\n- Chiyoda Line (Tokyo Metro): Otemachi Station (\u5927\u624B\u753A\u99C5) - Exit 2 or 3\n- Marunouchi Line (Tokyo Metro): Otemachi Station\n-",
+      "MatchesFirstRunTokenIds": true,
+      "Tokens": [
+        {
+          "GeneratedIndex": 0,
+          "TokenId": 248068,
+          "ElapsedMilliseconds": 455.2102,
+          "SincePreviousTokenMilliseconds": null
+        },
+        {
+          "GeneratedIndex": 1,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 511.4068,
+          "SincePreviousTokenMilliseconds": 56.19659999999999
+        },
+        {
+          "GeneratedIndex": 2,
+          "TokenId": 760,
+          "ElapsedMilliseconds": 567.6184,
+          "SincePreviousTokenMilliseconds": 56.211599999999976
+        },
+        {
+          "GeneratedIndex": 3,
+          "TokenId": 1156,
+          "ElapsedMilliseconds": 623.9284,
+          "SincePreviousTokenMilliseconds": 56.31000000000006
+        },
+        {
+          "GeneratedIndex": 4,
+          "TokenId": 369,
+          "ElapsedMilliseconds": 680.3524,
+          "SincePreviousTokenMilliseconds": 56.42399999999998
+        },
+        {
+          "GeneratedIndex": 5,
+          "TokenId": 9859,
+          "ElapsedMilliseconds": 736.7278,
+          "SincePreviousTokenMilliseconds": 56.37540000000001
+        },
+        {
+          "GeneratedIndex": 6,
+          "TokenId": 364,
+          "ElapsedMilliseconds": 793.0364,
+          "SincePreviousTokenMilliseconds": 56.308599999999956
+        },
+        {
+          "GeneratedIndex": 7,
+          "TokenId": 17425,
+          "ElapsedMilliseconds": 849.3775,
+          "SincePreviousTokenMilliseconds": 56.3411000000001
+        },
+        {
+          "GeneratedIndex": 8,
+          "TokenId": 310,
+          "ElapsedMilliseconds": 905.6395,
+          "SincePreviousTokenMilliseconds": 56.261999999999944
+        },
+        {
+          "GeneratedIndex": 9,
+          "TokenId": 279,
+          "ElapsedMilliseconds": 961.8577,
+          "SincePreviousTokenMilliseconds": 56.218200000000024
+        },
+        {
+          "GeneratedIndex": 10,
+          "TokenId": 4893,
+          "ElapsedMilliseconds": 1018.0502,
+          "SincePreviousTokenMilliseconds": 56.192499999999995
+        },
+        {
+          "GeneratedIndex": 11,
+          "TokenId": 25376,
+          "ElapsedMilliseconds": 1074.4756,
+          "SincePreviousTokenMilliseconds": 56.42539999999997
+        },
+        {
+          "GeneratedIndex": 12,
+          "TokenId": 16366,
+          "ElapsedMilliseconds": 1130.7299,
+          "SincePreviousTokenMilliseconds": 56.25430000000006
+        },
+        {
+          "GeneratedIndex": 13,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 1187.2039,
+          "SincePreviousTokenMilliseconds": 56.47399999999993
+        },
+        {
+          "GeneratedIndex": 14,
+          "TokenId": 120683,
+          "ElapsedMilliseconds": 1243.6017,
+          "SincePreviousTokenMilliseconds": 56.39779999999996
+        },
+        {
+          "GeneratedIndex": 15,
+          "TokenId": 98358,
+          "ElapsedMilliseconds": 1300.6674,
+          "SincePreviousTokenMilliseconds": 57.065700000000106
+        },
+        {
+          "GeneratedIndex": 16,
+          "TokenId": 95924,
+          "ElapsedMilliseconds": 1356.9396,
+          "SincePreviousTokenMilliseconds": 56.272199999999884
+        },
+        {
+          "GeneratedIndex": 17,
+          "TokenId": 97131,
+          "ElapsedMilliseconds": 1413.2301,
+          "SincePreviousTokenMilliseconds": 56.290500000000065
+        },
+        {
+          "GeneratedIndex": 18,
+          "TokenId": 8,
+          "ElapsedMilliseconds": 1469.5856,
+          "SincePreviousTokenMilliseconds": 56.35550000000012
+        },
+        {
+          "GeneratedIndex": 19,
+          "TokenId": 303,
+          "ElapsedMilliseconds": 1525.9485,
+          "SincePreviousTokenMilliseconds": 56.362899999999854
+        },
+        {
+          "GeneratedIndex": 20,
+          "TokenId": 10452,
+          "ElapsedMilliseconds": 1582.4606,
+          "SincePreviousTokenMilliseconds": 56.512100000000146
+        },
+        {
+          "GeneratedIndex": 21,
+          "TokenId": 13,
+          "ElapsedMilliseconds": 1638.835,
+          "SincePreviousTokenMilliseconds": 56.37439999999992
+        },
+        {
+          "GeneratedIndex": 22,
+          "TokenId": 6558,
+          "ElapsedMilliseconds": 1695.1253,
+          "SincePreviousTokenMilliseconds": 56.29029999999989
+        },
+        {
+          "GeneratedIndex": 23,
+          "TokenId": 728,
+          "ElapsedMilliseconds": 1751.7137,
+          "SincePreviousTokenMilliseconds": 56.58840000000009
+        },
+        {
+          "GeneratedIndex": 24,
+          "TokenId": 3300,
+          "ElapsedMilliseconds": 1808.1646,
+          "SincePreviousTokenMilliseconds": 56.45090000000005
+        },
+        {
+          "GeneratedIndex": 25,
+          "TokenId": 10631,
+          "ElapsedMilliseconds": 1864.622,
+          "SincePreviousTokenMilliseconds": 56.45740000000001
+        },
+        {
+          "GeneratedIndex": 26,
+          "TokenId": 17425,
+          "ElapsedMilliseconds": 1920.9296,
+          "SincePreviousTokenMilliseconds": 56.307599999999866
+        },
+        {
+          "GeneratedIndex": 27,
+          "TokenId": 13,
+          "ElapsedMilliseconds": 1977.2151,
+          "SincePreviousTokenMilliseconds": 56.285499999999956
+        },
+        {
+          "GeneratedIndex": 28,
+          "TokenId": 561,
+          "ElapsedMilliseconds": 2033.4881,
+          "SincePreviousTokenMilliseconds": 56.27300000000014
+        },
+        {
+          "GeneratedIndex": 29,
+          "TokenId": 4893,
+          "ElapsedMilliseconds": 2089.7758,
+          "SincePreviousTokenMilliseconds": 56.28769999999986
+        },
+        {
+          "GeneratedIndex": 30,
+          "TokenId": 25376,
+          "ElapsedMilliseconds": 2146.1102,
+          "SincePreviousTokenMilliseconds": 56.33440000000019
+        },
+        {
+          "GeneratedIndex": 31,
+          "TokenId": 16366,
+          "ElapsedMilliseconds": 2202.4621,
+          "SincePreviousTokenMilliseconds": 56.351900000000114
+        },
+        {
+          "GeneratedIndex": 32,
+          "TokenId": 369,
+          "ElapsedMilliseconds": 2259.9171,
+          "SincePreviousTokenMilliseconds": 57.45499999999993
+        },
+        {
+          "GeneratedIndex": 33,
+          "TokenId": 7172,
+          "ElapsedMilliseconds": 2316.4663,
+          "SincePreviousTokenMilliseconds": 56.54919999999993
+        },
+        {
+          "GeneratedIndex": 34,
+          "TokenId": 303,
+          "ElapsedMilliseconds": 2372.863,
+          "SincePreviousTokenMilliseconds": 56.39669999999978
+        },
+        {
+          "GeneratedIndex": 35,
+          "TokenId": 28113,
+          "ElapsedMilliseconds": 2429.296,
+          "SincePreviousTokenMilliseconds": 56.43299999999999
+        },
+        {
+          "GeneratedIndex": 36,
+          "TokenId": 450,
+          "ElapsedMilliseconds": 2485.5932,
+          "SincePreviousTokenMilliseconds": 56.297199999999975
+        },
+        {
+          "GeneratedIndex": 37,
+          "TokenId": 928,
+          "ElapsedMilliseconds": 2541.987,
+          "SincePreviousTokenMilliseconds": 56.39380000000028
+        },
+        {
+          "GeneratedIndex": 38,
+          "TokenId": 11,
+          "ElapsedMilliseconds": 2598.3176,
+          "SincePreviousTokenMilliseconds": 56.33059999999978
+        },
+        {
+          "GeneratedIndex": 39,
+          "TokenId": 882,
+          "ElapsedMilliseconds": 2654.7566,
+          "SincePreviousTokenMilliseconds": 56.439000000000306
+        },
+        {
+          "GeneratedIndex": 40,
+          "TokenId": 15742,
+          "ElapsedMilliseconds": 2711.1787,
+          "SincePreviousTokenMilliseconds": 56.42209999999977
+        },
+        {
+          "GeneratedIndex": 41,
+          "TokenId": 13591,
+          "ElapsedMilliseconds": 2767.731,
+          "SincePreviousTokenMilliseconds": 56.55230000000029
+        },
+        {
+          "GeneratedIndex": 42,
+          "TokenId": 11,
+          "ElapsedMilliseconds": 2824.3046,
+          "SincePreviousTokenMilliseconds": 56.573599999999715
+        },
+        {
+          "GeneratedIndex": 43,
+          "TokenId": 25358,
+          "ElapsedMilliseconds": 2880.8193,
+          "SincePreviousTokenMilliseconds": 56.514700000000175
+        },
+        {
+          "GeneratedIndex": 44,
+          "TokenId": 13,
+          "ElapsedMilliseconds": 2937.2482,
+          "SincePreviousTokenMilliseconds": 56.428899999999885
+        },
+        {
+          "GeneratedIndex": 45,
+          "TokenId": 6558,
+          "ElapsedMilliseconds": 2993.7402,
+          "SincePreviousTokenMilliseconds": 56.49200000000019
+        },
+        {
+          "GeneratedIndex": 46,
+          "TokenId": 728,
+          "ElapsedMilliseconds": 3050.104,
+          "SincePreviousTokenMilliseconds": 56.36379999999963
+        },
+        {
+          "GeneratedIndex": 47,
+          "TokenId": 1683,
+          "ElapsedMilliseconds": 3106.5493,
+          "SincePreviousTokenMilliseconds": 56.445300000000316
+        },
+        {
+          "GeneratedIndex": 48,
+          "TokenId": 883,
+          "ElapsedMilliseconds": 3163.0675,
+          "SincePreviousTokenMilliseconds": 56.51819999999998
+        },
+        {
+          "GeneratedIndex": 49,
+          "TokenId": 279,
+          "ElapsedMilliseconds": 3219.7681,
+          "SincePreviousTokenMilliseconds": 56.70059999999967
+        },
+        {
+          "GeneratedIndex": 50,
+          "TokenId": 1786,
+          "ElapsedMilliseconds": 3276.6163,
+          "SincePreviousTokenMilliseconds": 56.84820000000036
+        },
+        {
+          "GeneratedIndex": 51,
+          "TokenId": 5337,
+          "ElapsedMilliseconds": 3333.2003,
+          "SincePreviousTokenMilliseconds": 56.58399999999983
+        },
+        {
+          "GeneratedIndex": 52,
+          "TokenId": 310,
+          "ElapsedMilliseconds": 3389.7572,
+          "SincePreviousTokenMilliseconds": 56.55690000000004
+        },
+        {
+          "GeneratedIndex": 53,
+          "TokenId": 615,
+          "ElapsedMilliseconds": 3446.3942,
+          "SincePreviousTokenMilliseconds": 56.63700000000017
+        },
+        {
+          "GeneratedIndex": 54,
+          "TokenId": 1017,
+          "ElapsedMilliseconds": 3503.0481,
+          "SincePreviousTokenMilliseconds": 56.653899999999794
+        },
+        {
+          "GeneratedIndex": 55,
+          "TokenId": 13,
+          "ElapsedMilliseconds": 3559.5319,
+          "SincePreviousTokenMilliseconds": 56.483799999999974
+        },
+        {
+          "GeneratedIndex": 56,
+          "TokenId": 271,
+          "ElapsedMilliseconds": 3616.1629,
+          "SincePreviousTokenMilliseconds": 56.63099999999986
+        },
+        {
+          "GeneratedIndex": 57,
+          "TokenId": 1536,
+          "ElapsedMilliseconds": 3672.9272,
+          "SincePreviousTokenMilliseconds": 56.764300000000276
+        },
+        {
+          "GeneratedIndex": 58,
+          "TokenId": 2528,
+          "ElapsedMilliseconds": 3729.5801,
+          "SincePreviousTokenMilliseconds": 56.652900000000045
+        },
+        {
+          "GeneratedIndex": 59,
+          "TokenId": 3387,
+          "ElapsedMilliseconds": 3786.4786,
+          "SincePreviousTokenMilliseconds": 56.898499999999785
+        },
+        {
+          "GeneratedIndex": 60,
+          "TokenId": 25,
+          "ElapsedMilliseconds": 3843.0136,
+          "SincePreviousTokenMilliseconds": 56.53500000000031
+        },
+        {
+          "GeneratedIndex": 61,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 3899.6396,
+          "SincePreviousTokenMilliseconds": 56.62599999999975
+        },
+        {
+          "GeneratedIndex": 62,
+          "TokenId": 12,
+          "ElapsedMilliseconds": 3956.1389,
+          "SincePreviousTokenMilliseconds": 56.49929999999995
+        },
+        {
+          "GeneratedIndex": 63,
+          "TokenId": 50795,
+          "ElapsedMilliseconds": 4012.7168,
+          "SincePreviousTokenMilliseconds": 56.57790000000023
+        },
+        {
+          "GeneratedIndex": 64,
+          "TokenId": 783,
+          "ElapsedMilliseconds": 4069.2205,
+          "SincePreviousTokenMilliseconds": 56.50369999999975
+        },
+        {
+          "GeneratedIndex": 65,
+          "TokenId": 12350,
+          "ElapsedMilliseconds": 4125.8196,
+          "SincePreviousTokenMilliseconds": 56.59909999999991
+        },
+        {
+          "GeneratedIndex": 66,
+          "TokenId": 1227,
+          "ElapsedMilliseconds": 4182.3796,
+          "SincePreviousTokenMilliseconds": 56.5600000000004
+        },
+        {
+          "GeneratedIndex": 67,
+          "TokenId": 6863,
+          "ElapsedMilliseconds": 4239.1556,
+          "SincePreviousTokenMilliseconds": 56.77599999999984
+        },
+        {
+          "GeneratedIndex": 68,
+          "TokenId": 25,
+          "ElapsedMilliseconds": 4296.1019,
+          "SincePreviousTokenMilliseconds": 56.94629999999961
+        },
+        {
+          "GeneratedIndex": 69,
+          "TokenId": 783,
+          "ElapsedMilliseconds": 4352.7797,
+          "SincePreviousTokenMilliseconds": 56.67780000000039
+        },
+        {
+          "GeneratedIndex": 70,
+          "TokenId": 2333,
+          "ElapsedMilliseconds": 4409.4606,
+          "SincePreviousTokenMilliseconds": 56.68090000000029
+        },
+        {
+          "GeneratedIndex": 71,
+          "TokenId": 43066,
+          "ElapsedMilliseconds": 4466.2883,
+          "SincePreviousTokenMilliseconds": 56.82769999999982
+        },
+        {
+          "GeneratedIndex": 72,
+          "TokenId": 16140,
+          "ElapsedMilliseconds": 4522.9639,
+          "SincePreviousTokenMilliseconds": 56.67559999999958
+        },
+        {
+          "GeneratedIndex": 73,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 4579.6723,
+          "SincePreviousTokenMilliseconds": 56.70840000000044
+        },
+        {
+          "GeneratedIndex": 74,
+          "TokenId": 96301,
+          "ElapsedMilliseconds": 4636.3531,
+          "SincePreviousTokenMilliseconds": 56.68080000000009
+        },
+        {
+          "GeneratedIndex": 75,
+          "TokenId": 148772,
+          "ElapsedMilliseconds": 4692.9675,
+          "SincePreviousTokenMilliseconds": 56.61439999999948
+        },
+        {
+          "GeneratedIndex": 76,
+          "TokenId": 96060,
+          "ElapsedMilliseconds": 4749.6658,
+          "SincePreviousTokenMilliseconds": 56.69830000000002
+        },
+        {
+          "GeneratedIndex": 77,
+          "TokenId": 174016,
+          "ElapsedMilliseconds": 4806.4763,
+          "SincePreviousTokenMilliseconds": 56.8105000000005
+        },
+        {
+          "GeneratedIndex": 78,
+          "TokenId": 3008,
+          "ElapsedMilliseconds": 4863.434,
+          "SincePreviousTokenMilliseconds": 56.95769999999993
+        },
+        {
+          "GeneratedIndex": 79,
+          "TokenId": 8,
+          "ElapsedMilliseconds": 4920.2132,
+          "SincePreviousTokenMilliseconds": 56.779199999999946
+        },
+        {
+          "GeneratedIndex": 80,
+          "TokenId": 369,
+          "ElapsedMilliseconds": 4976.8731,
+          "SincePreviousTokenMilliseconds": 56.65989999999965
+        },
+        {
+          "GeneratedIndex": 81,
+          "TokenId": 279,
+          "ElapsedMilliseconds": 5033.4872,
+          "SincePreviousTokenMilliseconds": 56.61409999999978
+        },
+        {
+          "GeneratedIndex": 82,
+          "TokenId": 17554,
+          "ElapsedMilliseconds": 5090.128,
+          "SincePreviousTokenMilliseconds": 56.64080000000013
+        },
+        {
+          "GeneratedIndex": 83,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 5146.7961,
+          "SincePreviousTokenMilliseconds": 56.66809999999987
+        },
+        {
+          "GeneratedIndex": 84,
+          "TokenId": 12,
+          "ElapsedMilliseconds": 5203.4741,
+          "SincePreviousTokenMilliseconds": 56.67800000000079
+        },
+        {
+          "GeneratedIndex": 85,
+          "TokenId": 882,
+          "ElapsedMilliseconds": 5260.7091,
+          "SincePreviousTokenMilliseconds": 57.23499999999967
+        },
+        {
+          "GeneratedIndex": 86,
+          "TokenId": 15742,
+          "ElapsedMilliseconds": 5318.289,
+          "SincePreviousTokenMilliseconds": 57.579899999999725
+        },
+        {
+          "GeneratedIndex": 87,
+          "TokenId": 13591,
+          "ElapsedMilliseconds": 5375.178,
+          "SincePreviousTokenMilliseconds": 56.889000000000124
+        },
+        {
+          "GeneratedIndex": 88,
+          "TokenId": 6863,
+          "ElapsedMilliseconds": 5431.9747,
+          "SincePreviousTokenMilliseconds": 56.79669999999987
+        },
+        {
+          "GeneratedIndex": 89,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 5488.9896,
+          "SincePreviousTokenMilliseconds": 57.014900000000125
+        },
+        {
+          "GeneratedIndex": 90,
+          "TokenId": 51076,
+          "ElapsedMilliseconds": 5545.663,
+          "SincePreviousTokenMilliseconds": 56.673399999999674
+        },
+        {
+          "GeneratedIndex": 91,
+          "TokenId": 15560,
+          "ElapsedMilliseconds": 5602.6155,
+          "SincePreviousTokenMilliseconds": 56.95250000000033
+        },
+        {
+          "GeneratedIndex": 92,
+          "TokenId": 20317,
+          "ElapsedMilliseconds": 5659.3412,
+          "SincePreviousTokenMilliseconds": 56.72569999999996
+        },
+        {
+          "GeneratedIndex": 93,
+          "TokenId": 1590,
+          "ElapsedMilliseconds": 5715.9752,
+          "SincePreviousTokenMilliseconds": 56.634000000000015
+        },
+        {
+          "GeneratedIndex": 94,
+          "TokenId": 496,
+          "ElapsedMilliseconds": 5772.8483,
+          "SincePreviousTokenMilliseconds": 56.873099999999795
+        },
+        {
+          "GeneratedIndex": 95,
+          "TokenId": 844,
+          "ElapsedMilliseconds": 5829.7972,
+          "SincePreviousTokenMilliseconds": 56.94890000000032
+        },
+        {
+          "GeneratedIndex": 96,
+          "TokenId": 29375,
+          "ElapsedMilliseconds": 5886.5734,
+          "SincePreviousTokenMilliseconds": 56.776200000000244
+        },
+        {
+          "GeneratedIndex": 97,
+          "TokenId": 16140,
+          "ElapsedMilliseconds": 5943.4258,
+          "SincePreviousTokenMilliseconds": 56.85239999999976
+        },
+        {
+          "GeneratedIndex": 98,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 6000.0827,
+          "SincePreviousTokenMilliseconds": 56.65689999999995
+        },
+        {
+          "GeneratedIndex": 99,
+          "TokenId": 120266,
+          "ElapsedMilliseconds": 6056.8262,
+          "SincePreviousTokenMilliseconds": 56.743500000000495
+        },
+        {
+          "GeneratedIndex": 100,
+          "TokenId": 108200,
+          "ElapsedMilliseconds": 6113.4719,
+          "SincePreviousTokenMilliseconds": 56.645699999999124
+        },
+        {
+          "GeneratedIndex": 101,
+          "TokenId": 158369,
+          "ElapsedMilliseconds": 6170.3271,
+          "SincePreviousTokenMilliseconds": 56.85520000000088
+        },
+        {
+          "GeneratedIndex": 102,
+          "TokenId": 8,
+          "ElapsedMilliseconds": 6227.0663,
+          "SincePreviousTokenMilliseconds": 56.73919999999998
+        },
+        {
+          "GeneratedIndex": 103,
+          "TokenId": 471,
+          "ElapsedMilliseconds": 6284.4255,
+          "SincePreviousTokenMilliseconds": 57.35919999999987
+        },
+        {
+          "GeneratedIndex": 104,
+          "TokenId": 18422,
+          "ElapsedMilliseconds": 6341.8558,
+          "SincePreviousTokenMilliseconds": 57.43029999999999
+        },
+        {
+          "GeneratedIndex": 105,
+          "TokenId": 220,
+          "ElapsedMilliseconds": 6398.6401,
+          "SincePreviousTokenMilliseconds": 56.78429999999935
+        },
+        {
+          "GeneratedIndex": 106,
+          "TokenId": 17,
+          "ElapsedMilliseconds": 6455.3494,
+          "SincePreviousTokenMilliseconds": 56.70930000000044
+        },
+        {
+          "GeneratedIndex": 107,
+          "TokenId": 466,
+          "ElapsedMilliseconds": 6512.4,
+          "SincePreviousTokenMilliseconds": 57.05059999999958
+        },
+        {
+          "GeneratedIndex": 108,
+          "TokenId": 220,
+          "ElapsedMilliseconds": 6569.1385,
+          "SincePreviousTokenMilliseconds": 56.738500000000386
+        },
+        {
+          "GeneratedIndex": 109,
+          "TokenId": 18,
+          "ElapsedMilliseconds": 6625.8946,
+          "SincePreviousTokenMilliseconds": 56.756099999999606
+        },
+        {
+          "GeneratedIndex": 110,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 6682.698,
+          "SincePreviousTokenMilliseconds": 56.80340000000069
+        },
+        {
+          "GeneratedIndex": 111,
+          "TokenId": 12,
+          "ElapsedMilliseconds": 6739.7387,
+          "SincePreviousTokenMilliseconds": 57.04069999999956
+        },
+        {
+          "GeneratedIndex": 112,
+          "TokenId": 2783,
+          "ElapsedMilliseconds": 6796.6614,
+          "SincePreviousTokenMilliseconds": 56.92270000000008
+        },
+        {
+          "GeneratedIndex": 113,
+          "TokenId": 354,
+          "ElapsedMilliseconds": 6853.6745,
+          "SincePreviousTokenMilliseconds": 57.01310000000012
+        },
+        {
+          "GeneratedIndex": 114,
+          "TokenId": 2930,
+          "ElapsedMilliseconds": 6910.4681,
+          "SincePreviousTokenMilliseconds": 56.79359999999997
+        },
+        {
+          "GeneratedIndex": 115,
+          "TokenId": 72,
+          "ElapsedMilliseconds": 6967.2323,
+          "SincePreviousTokenMilliseconds": 56.76419999999962
+        },
+        {
+          "GeneratedIndex": 116,
+          "TokenId": 6863,
+          "ElapsedMilliseconds": 7024.0371,
+          "SincePreviousTokenMilliseconds": 56.80479999999989
+        },
+        {
+          "GeneratedIndex": 117,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 7080.9724,
+          "SincePreviousTokenMilliseconds": 56.9353000000001
+        },
+        {
+          "GeneratedIndex": 118,
+          "TokenId": 51076,
+          "ElapsedMilliseconds": 7137.7694,
+          "SincePreviousTokenMilliseconds": 56.79700000000048
+        },
+        {
+          "GeneratedIndex": 119,
+          "TokenId": 15560,
+          "ElapsedMilliseconds": 7194.7748,
+          "SincePreviousTokenMilliseconds": 57.00540000000001
+        },
+        {
+          "GeneratedIndex": 120,
+          "TokenId": 20317,
+          "ElapsedMilliseconds": 7251.5421,
+          "SincePreviousTokenMilliseconds": 56.76729999999952
+        },
+        {
+          "GeneratedIndex": 121,
+          "TokenId": 1590,
+          "ElapsedMilliseconds": 7308.7528,
+          "SincePreviousTokenMilliseconds": 57.21070000000054
+        },
+        {
+          "GeneratedIndex": 122,
+          "TokenId": 496,
+          "ElapsedMilliseconds": 7365.6596,
+          "SincePreviousTokenMilliseconds": 56.90679999999975
+        },
+        {
+          "GeneratedIndex": 123,
+          "TokenId": 844,
+          "ElapsedMilliseconds": 7422.5646,
+          "SincePreviousTokenMilliseconds": 56.904999999999745
+        },
+        {
+          "GeneratedIndex": 124,
+          "TokenId": 29375,
+          "ElapsedMilliseconds": 7479.4242,
+          "SincePreviousTokenMilliseconds": 56.85960000000068
+        },
+        {
+          "GeneratedIndex": 125,
+          "TokenId": 16140,
+          "ElapsedMilliseconds": 7536.3472,
+          "SincePreviousTokenMilliseconds": 56.922999999999774
+        },
+        {
+          "GeneratedIndex": 126,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 7593.2745,
+          "SincePreviousTokenMilliseconds": 56.92730000000029
+        },
+        {
+          "GeneratedIndex": 127,
+          "TokenId": 12,
+          "ElapsedMilliseconds": 7650.1483,
+          "SincePreviousTokenMilliseconds": 56.87379999999939
+        }
+      ],
+      "UploadedBytes": [
+        2623452,
+        66500000
+      ],
+      "DownloadedBytes": [
+        66498560,
+        129761280
+      ],
+      "Before": {
+        "ResidentWeightBytes": [
+          5472512000,
+          5116405760
+        ],
+        "ResidentAuxiliaryWeightBytes": [
+          5280768,
+          5301248
+        ],
+        "ResidentStateBytes": [
+          95223808,
+          95223808
+        ],
+        "LiveDeviceBytes": [
+          5575023616,
+          5217924096
+        ],
+        "PeakDeviceBytes": [
+          5598890168,
+          5242783924
+        ],
+        "UploadedBytes": [
+          5480416220,
+          5188207008
+        ],
+        "DownloadedBytes": [
+          66498560,
+          129761280
+        ],
+        "Lanes": [
+          {
+            "DeviceIndex": 0,
+            "AllocationCount": 602,
+            "RequestedBytes": 7513841628,
+            "NativeAllocatedBytes": 5598890168,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0,
+            "AllocatedBytes": 5575023616,
+            "KernelLaunchCount": 69513,
+            "CachedBytes": 23866552,
+            "RetiredBytes": 0,
+            "PoolHits": 54947,
+            "RetiredReuseCount": 0,
+            "H2DBytes": 5480416220,
+            "D2HBytes": 66498560,
+            "PeakAllocatedBytes": 5598890168,
+            "KernelMilliseconds": 0,
+            "TransferMilliseconds": 5315.900900000007,
+            "AllocationMilliseconds": 52.20140000009903,
+            "ProgramBinaryCacheHit": true,
+            "KernelArgumentSetCount": 177538,
+            "KernelArgumentCacheHitCount": 243622,
+            "ProfileEntries": []
+          },
+          {
+            "DeviceIndex": 1,
+            "AllocationCount": 599,
+            "RequestedBytes": 7286195616,
+            "NativeAllocatedBytes": 5242783924,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0,
+            "AllocatedBytes": 5217924096,
+            "KernelLaunchCount": 69497,
+            "CachedBytes": 24859828,
+            "RetiredBytes": 0,
+            "PoolHits": 55045,
+            "RetiredReuseCount": 0,
+            "H2DBytes": 5188207008,
+            "D2HBytes": 129761280,
+            "PeakAllocatedBytes": 5242783924,
+            "KernelMilliseconds": 0,
+            "TransferMilliseconds": 1251.0044999999996,
+            "AllocationMilliseconds": 50.51200000010277,
+            "ProgramBinaryCacheHit": true,
+            "KernelArgumentSetCount": 181525,
+            "KernelArgumentCacheHitCount": 239829,
+            "ProfileEntries": []
+          }
+        ]
+      },
+      "After": {
+        "ResidentWeightBytes": [
+          5472512000,
+          5116405760
+        ],
+        "ResidentAuxiliaryWeightBytes": [
+          5280768,
+          5301248
+        ],
+        "ResidentStateBytes": [
+          95223808,
+          95223808
+        ],
+        "LiveDeviceBytes": [
+          5575023616,
+          5217924096
+        ],
+        "PeakDeviceBytes": [
+          5598890168,
+          5242783924
+        ],
+        "UploadedBytes": [
+          5483039672,
+          5254707008
+        ],
+        "DownloadedBytes": [
+          132997120,
+          259522560
+        ],
+        "Lanes": [
+          {
+            "DeviceIndex": 0,
+            "AllocationCount": 602,
+            "RequestedBytes": 9436931000,
+            "NativeAllocatedBytes": 5598890168,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0,
+            "AllocatedBytes": 5575023616,
+            "KernelLaunchCount": 138976,
+            "CachedBytes": 23866552,
+            "RetiredBytes": 0,
+            "PoolHits": 109938,
+            "RetiredReuseCount": 0,
+            "H2DBytes": 5483039672,
+            "D2HBytes": 132997120,
+            "PeakAllocatedBytes": 5598890168,
+            "KernelMilliseconds": 0,
+            "TransferMilliseconds": 8558.918800000021,
+            "AllocationMilliseconds": 55.736800000196055,
+            "ProgramBinaryCacheHit": true,
+            "KernelArgumentSetCount": 354875,
+            "KernelArgumentCacheHitCount": 487345,
+            "ProfileEntries": []
+          },
+          {
+            "DeviceIndex": 1,
+            "AllocationCount": 599,
+            "RequestedBytes": 9338738496,
+            "NativeAllocatedBytes": 5242783924,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0,
+            "AllocatedBytes": 5217924096,
+            "KernelLaunchCount": 138945,
+            "CachedBytes": 24859828,
+            "RetiredBytes": 0,
+            "PoolHits": 110134,
+            "RetiredReuseCount": 0,
+            "H2DBytes": 5254707008,
+            "D2HBytes": 259522560,
+            "PeakAllocatedBytes": 5242783924,
+            "KernelMilliseconds": 0,
+            "TransferMilliseconds": 1525.339400000003,
+            "AllocationMilliseconds": 54.254400000204726,
+            "ProgramBinaryCacheHit": true,
+            "KernelArgumentSetCount": 362853,
+            "KernelArgumentCacheHitCount": 479757,
+            "ProfileEntries": []
+          }
+        ]
+      },
+      "KernelMilliseconds": {}
+    },
+    {
+      "RunIndex": 2,
+      "Kind": "reused model with sequence state reset",
+      "StartedUtc": "2026-10-08T07:59:56.0958228+00:00",
+      "TotalMilliseconds": 7650.9905,
+      "PrefillThroughFirstTokenMilliseconds": 454.8063,
+      "PrefillTokensPerSecond": 35.17981171325023,
+      "DecodeMilliseconds": 7196.181799999999,
+      "DecodeTokensPerSecond": 17.648247852771036,
+      "OverallGeneratedTokensPerSecond": 16.72986000962882,
+      "AllTokenIds": [
+        248045,
+        846,
+        198,
+        120683,
+        98358,
+        95924,
+        97131,
+        170872,
+        184700,
+        180014,
+        162066,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198,
+        760,
+        1156,
+        369,
+        9859,
+        364,
+        17425,
+        310,
+        279,
+        4893,
+        25376,
+        16366,
+        318,
+        120683,
+        98358,
+        95924,
+        97131,
+        8,
+        303,
+        10452,
+        13,
+        6558,
+        728,
+        3300,
+        10631,
+        17425,
+        13,
+        561,
+        4893,
+        25376,
+        16366,
+        369,
+        7172,
+        303,
+        28113,
+        450,
+        928,
+        11,
+        882,
+        15742,
+        13591,
+        11,
+        25358,
+        13,
+        6558,
+        728,
+        1683,
+        883,
+        279,
+        1786,
+        5337,
+        310,
+        615,
+        1017,
+        13,
+        271,
+        1536,
+        2528,
+        3387,
+        25,
+        198,
+        12,
+        50795,
+        783,
+        12350,
+        1227,
+        6863,
+        25,
+        783,
+        2333,
+        43066,
+        16140,
+        318,
+        96301,
+        148772,
+        96060,
+        174016,
+        3008,
+        8,
+        369,
+        279,
+        17554,
+        198,
+        12,
+        882,
+        15742,
+        13591,
+        6863,
+        318,
+        51076,
+        15560,
+        20317,
+        1590,
+        496,
+        844,
+        29375,
+        16140,
+        318,
+        120266,
+        108200,
+        158369,
+        8,
+        471,
+        18422,
+        220,
+        17,
+        466,
+        220,
+        18,
+        198,
+        12,
+        2783,
+        354,
+        2930,
+        72,
+        6863,
+        318,
+        51076,
+        15560,
+        20317,
+        1590,
+        496,
+        844,
+        29375,
+        16140,
+        198,
+        12
+      ],
+      "GeneratedTokenIds": [
+        248068,
+        198,
+        760,
+        1156,
+        369,
+        9859,
+        364,
+        17425,
+        310,
+        279,
+        4893,
+        25376,
+        16366,
+        318,
+        120683,
+        98358,
+        95924,
+        97131,
+        8,
+        303,
+        10452,
+        13,
+        6558,
+        728,
+        3300,
+        10631,
+        17425,
+        13,
+        561,
+        4893,
+        25376,
+        16366,
+        369,
+        7172,
+        303,
+        28113,
+        450,
+        928,
+        11,
+        882,
+        15742,
+        13591,
+        11,
+        25358,
+        13,
+        6558,
+        728,
+        1683,
+        883,
+        279,
+        1786,
+        5337,
+        310,
+        615,
+        1017,
+        13,
+        271,
+        1536,
+        2528,
+        3387,
+        25,
+        198,
+        12,
+        50795,
+        783,
+        12350,
+        1227,
+        6863,
+        25,
+        783,
+        2333,
+        43066,
+        16140,
+        318,
+        96301,
+        148772,
+        96060,
+        174016,
+        3008,
+        8,
+        369,
+        279,
+        17554,
+        198,
+        12,
+        882,
+        15742,
+        13591,
+        6863,
+        318,
+        51076,
+        15560,
+        20317,
+        1590,
+        496,
+        844,
+        29375,
+        16140,
+        318,
+        120266,
+        108200,
+        158369,
+        8,
+        471,
+        18422,
+        220,
+        17,
+        466,
+        220,
+        18,
+        198,
+        12,
+        2783,
+        354,
+        2930,
+        72,
+        6863,
+        318,
+        51076,
+        15560,
+        20317,
+        1590,
+        496,
+        844,
+        29375,
+        16140,
+        198,
+        12
+      ],
+      "GeneratedText": "\u003Cthink\u003E\nThe user is asking for directions to the National Diet Building (\u56FD\u4F1A\u8B70\u4E8B\u5802) in Japanese. Let me provide helpful directions. The National Diet Building is located in Nagatacho, Chiyoda, Tokyo. Let me think about the best ways to get there.\n\nKey access points:\n- JR Yamanote Line: Yotsuya Station (\u56DB\u30C4\u76EE\u901A\u308A side) is the closest\n- Chiyoda Line (Tokyo Metro): Otemachi Station (\u5927\u624B\u753A\u99C5) - Exit 2 or 3\n- Marunouchi Line (Tokyo Metro): Otemachi Station\n-",
+      "MatchesFirstRunTokenIds": true,
+      "Tokens": [
+        {
+          "GeneratedIndex": 0,
+          "TokenId": 248068,
+          "ElapsedMilliseconds": 454.8063,
+          "SincePreviousTokenMilliseconds": null
+        },
+        {
+          "GeneratedIndex": 1,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 511.1091,
+          "SincePreviousTokenMilliseconds": 56.30279999999999
+        },
+        {
+          "GeneratedIndex": 2,
+          "TokenId": 760,
+          "ElapsedMilliseconds": 567.2739,
+          "SincePreviousTokenMilliseconds": 56.164800000000014
+        },
+        {
+          "GeneratedIndex": 3,
+          "TokenId": 1156,
+          "ElapsedMilliseconds": 623.659,
+          "SincePreviousTokenMilliseconds": 56.385099999999966
+        },
+        {
+          "GeneratedIndex": 4,
+          "TokenId": 369,
+          "ElapsedMilliseconds": 680.9062,
+          "SincePreviousTokenMilliseconds": 57.24720000000002
+        },
+        {
+          "GeneratedIndex": 5,
+          "TokenId": 9859,
+          "ElapsedMilliseconds": 737.4547,
+          "SincePreviousTokenMilliseconds": 56.54849999999999
+        },
+        {
+          "GeneratedIndex": 6,
+          "TokenId": 364,
+          "ElapsedMilliseconds": 793.6775,
+          "SincePreviousTokenMilliseconds": 56.22280000000001
+        },
+        {
+          "GeneratedIndex": 7,
+          "TokenId": 17425,
+          "ElapsedMilliseconds": 850.0574,
+          "SincePreviousTokenMilliseconds": 56.37990000000002
+        },
+        {
+          "GeneratedIndex": 8,
+          "TokenId": 310,
+          "ElapsedMilliseconds": 906.2652,
+          "SincePreviousTokenMilliseconds": 56.20780000000002
+        },
+        {
+          "GeneratedIndex": 9,
+          "TokenId": 279,
+          "ElapsedMilliseconds": 962.5556,
+          "SincePreviousTokenMilliseconds": 56.29039999999998
+        },
+        {
+          "GeneratedIndex": 10,
+          "TokenId": 4893,
+          "ElapsedMilliseconds": 1018.8876,
+          "SincePreviousTokenMilliseconds": 56.331999999999994
+        },
+        {
+          "GeneratedIndex": 11,
+          "TokenId": 25376,
+          "ElapsedMilliseconds": 1075.298,
+          "SincePreviousTokenMilliseconds": 56.41039999999998
+        },
+        {
+          "GeneratedIndex": 12,
+          "TokenId": 16366,
+          "ElapsedMilliseconds": 1131.7469,
+          "SincePreviousTokenMilliseconds": 56.448900000000094
+        },
+        {
+          "GeneratedIndex": 13,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 1188.0848,
+          "SincePreviousTokenMilliseconds": 56.33789999999999
+        },
+        {
+          "GeneratedIndex": 14,
+          "TokenId": 120683,
+          "ElapsedMilliseconds": 1244.6231,
+          "SincePreviousTokenMilliseconds": 56.538299999999936
+        },
+        {
+          "GeneratedIndex": 15,
+          "TokenId": 98358,
+          "ElapsedMilliseconds": 1301.4769,
+          "SincePreviousTokenMilliseconds": 56.853799999999865
+        },
+        {
+          "GeneratedIndex": 16,
+          "TokenId": 95924,
+          "ElapsedMilliseconds": 1357.7939,
+          "SincePreviousTokenMilliseconds": 56.31700000000001
+        },
+        {
+          "GeneratedIndex": 17,
+          "TokenId": 97131,
+          "ElapsedMilliseconds": 1414.0648,
+          "SincePreviousTokenMilliseconds": 56.27090000000021
+        },
+        {
+          "GeneratedIndex": 18,
+          "TokenId": 8,
+          "ElapsedMilliseconds": 1470.3349,
+          "SincePreviousTokenMilliseconds": 56.27009999999996
+        },
+        {
+          "GeneratedIndex": 19,
+          "TokenId": 303,
+          "ElapsedMilliseconds": 1526.6799,
+          "SincePreviousTokenMilliseconds": 56.34500000000003
+        },
+        {
+          "GeneratedIndex": 20,
+          "TokenId": 10452,
+          "ElapsedMilliseconds": 1583.1283,
+          "SincePreviousTokenMilliseconds": 56.44839999999999
+        },
+        {
+          "GeneratedIndex": 21,
+          "TokenId": 13,
+          "ElapsedMilliseconds": 1639.5908,
+          "SincePreviousTokenMilliseconds": 56.462499999999864
+        },
+        {
+          "GeneratedIndex": 22,
+          "TokenId": 6558,
+          "ElapsedMilliseconds": 1696.9912,
+          "SincePreviousTokenMilliseconds": 57.40039999999999
+        },
+        {
+          "GeneratedIndex": 23,
+          "TokenId": 728,
+          "ElapsedMilliseconds": 1753.3106,
+          "SincePreviousTokenMilliseconds": 56.31940000000009
+        },
+        {
+          "GeneratedIndex": 24,
+          "TokenId": 3300,
+          "ElapsedMilliseconds": 1809.621,
+          "SincePreviousTokenMilliseconds": 56.31040000000007
+        },
+        {
+          "GeneratedIndex": 25,
+          "TokenId": 10631,
+          "ElapsedMilliseconds": 1866.2629,
+          "SincePreviousTokenMilliseconds": 56.64189999999985
+        },
+        {
+          "GeneratedIndex": 26,
+          "TokenId": 17425,
+          "ElapsedMilliseconds": 1922.5732,
+          "SincePreviousTokenMilliseconds": 56.3103000000001
+        },
+        {
+          "GeneratedIndex": 27,
+          "TokenId": 13,
+          "ElapsedMilliseconds": 1979.2442,
+          "SincePreviousTokenMilliseconds": 56.67100000000005
+        },
+        {
+          "GeneratedIndex": 28,
+          "TokenId": 561,
+          "ElapsedMilliseconds": 2035.6428,
+          "SincePreviousTokenMilliseconds": 56.39859999999999
+        },
+        {
+          "GeneratedIndex": 29,
+          "TokenId": 4893,
+          "ElapsedMilliseconds": 2092.2441,
+          "SincePreviousTokenMilliseconds": 56.60129999999981
+        },
+        {
+          "GeneratedIndex": 30,
+          "TokenId": 25376,
+          "ElapsedMilliseconds": 2148.65,
+          "SincePreviousTokenMilliseconds": 56.4059000000002
+        },
+        {
+          "GeneratedIndex": 31,
+          "TokenId": 16366,
+          "ElapsedMilliseconds": 2205.0708,
+          "SincePreviousTokenMilliseconds": 56.42079999999987
+        },
+        {
+          "GeneratedIndex": 32,
+          "TokenId": 369,
+          "ElapsedMilliseconds": 2261.5548,
+          "SincePreviousTokenMilliseconds": 56.483999999999924
+        },
+        {
+          "GeneratedIndex": 33,
+          "TokenId": 7172,
+          "ElapsedMilliseconds": 2317.9566,
+          "SincePreviousTokenMilliseconds": 56.401800000000094
+        },
+        {
+          "GeneratedIndex": 34,
+          "TokenId": 303,
+          "ElapsedMilliseconds": 2374.4893,
+          "SincePreviousTokenMilliseconds": 56.532700000000204
+        },
+        {
+          "GeneratedIndex": 35,
+          "TokenId": 28113,
+          "ElapsedMilliseconds": 2430.8696,
+          "SincePreviousTokenMilliseconds": 56.38029999999981
+        },
+        {
+          "GeneratedIndex": 36,
+          "TokenId": 450,
+          "ElapsedMilliseconds": 2487.2792,
+          "SincePreviousTokenMilliseconds": 56.409599999999955
+        },
+        {
+          "GeneratedIndex": 37,
+          "TokenId": 928,
+          "ElapsedMilliseconds": 2543.7728,
+          "SincePreviousTokenMilliseconds": 56.49360000000024
+        },
+        {
+          "GeneratedIndex": 38,
+          "TokenId": 11,
+          "ElapsedMilliseconds": 2600.0055,
+          "SincePreviousTokenMilliseconds": 56.23270000000002
+        },
+        {
+          "GeneratedIndex": 39,
+          "TokenId": 882,
+          "ElapsedMilliseconds": 2656.6279,
+          "SincePreviousTokenMilliseconds": 56.62239999999974
+        },
+        {
+          "GeneratedIndex": 40,
+          "TokenId": 15742,
+          "ElapsedMilliseconds": 2713.2045,
+          "SincePreviousTokenMilliseconds": 56.57659999999987
+        },
+        {
+          "GeneratedIndex": 41,
+          "TokenId": 13591,
+          "ElapsedMilliseconds": 2769.5827,
+          "SincePreviousTokenMilliseconds": 56.378200000000106
+        },
+        {
+          "GeneratedIndex": 42,
+          "TokenId": 11,
+          "ElapsedMilliseconds": 2826.0921,
+          "SincePreviousTokenMilliseconds": 56.509399999999914
+        },
+        {
+          "GeneratedIndex": 43,
+          "TokenId": 25358,
+          "ElapsedMilliseconds": 2882.4455,
+          "SincePreviousTokenMilliseconds": 56.353399999999965
+        },
+        {
+          "GeneratedIndex": 44,
+          "TokenId": 13,
+          "ElapsedMilliseconds": 2938.8981,
+          "SincePreviousTokenMilliseconds": 56.452600000000075
+        },
+        {
+          "GeneratedIndex": 45,
+          "TokenId": 6558,
+          "ElapsedMilliseconds": 2995.3795,
+          "SincePreviousTokenMilliseconds": 56.48140000000012
+        },
+        {
+          "GeneratedIndex": 46,
+          "TokenId": 728,
+          "ElapsedMilliseconds": 3051.8775,
+          "SincePreviousTokenMilliseconds": 56.49800000000005
+        },
+        {
+          "GeneratedIndex": 47,
+          "TokenId": 1683,
+          "ElapsedMilliseconds": 3108.4107,
+          "SincePreviousTokenMilliseconds": 56.53319999999985
+        },
+        {
+          "GeneratedIndex": 48,
+          "TokenId": 883,
+          "ElapsedMilliseconds": 3164.89,
+          "SincePreviousTokenMilliseconds": 56.47929999999997
+        },
+        {
+          "GeneratedIndex": 49,
+          "TokenId": 279,
+          "ElapsedMilliseconds": 3221.3768,
+          "SincePreviousTokenMilliseconds": 56.48680000000013
+        },
+        {
+          "GeneratedIndex": 50,
+          "TokenId": 1786,
+          "ElapsedMilliseconds": 3277.9929,
+          "SincePreviousTokenMilliseconds": 56.61610000000019
+        },
+        {
+          "GeneratedIndex": 51,
+          "TokenId": 5337,
+          "ElapsedMilliseconds": 3334.4739,
+          "SincePreviousTokenMilliseconds": 56.48099999999977
+        },
+        {
+          "GeneratedIndex": 52,
+          "TokenId": 310,
+          "ElapsedMilliseconds": 3391.0928,
+          "SincePreviousTokenMilliseconds": 56.61889999999994
+        },
+        {
+          "GeneratedIndex": 53,
+          "TokenId": 615,
+          "ElapsedMilliseconds": 3447.5202,
+          "SincePreviousTokenMilliseconds": 56.427400000000034
+        },
+        {
+          "GeneratedIndex": 54,
+          "TokenId": 1017,
+          "ElapsedMilliseconds": 3503.9228,
+          "SincePreviousTokenMilliseconds": 56.40259999999989
+        },
+        {
+          "GeneratedIndex": 55,
+          "TokenId": 13,
+          "ElapsedMilliseconds": 3560.5097,
+          "SincePreviousTokenMilliseconds": 56.58690000000024
+        },
+        {
+          "GeneratedIndex": 56,
+          "TokenId": 271,
+          "ElapsedMilliseconds": 3617.0294,
+          "SincePreviousTokenMilliseconds": 56.51969999999983
+        },
+        {
+          "GeneratedIndex": 57,
+          "TokenId": 1536,
+          "ElapsedMilliseconds": 3674.1915,
+          "SincePreviousTokenMilliseconds": 57.16210000000001
+        },
+        {
+          "GeneratedIndex": 58,
+          "TokenId": 2528,
+          "ElapsedMilliseconds": 3730.7071,
+          "SincePreviousTokenMilliseconds": 56.51560000000018
+        },
+        {
+          "GeneratedIndex": 59,
+          "TokenId": 3387,
+          "ElapsedMilliseconds": 3787.2671,
+          "SincePreviousTokenMilliseconds": 56.559999999999945
+        },
+        {
+          "GeneratedIndex": 60,
+          "TokenId": 25,
+          "ElapsedMilliseconds": 3843.8813,
+          "SincePreviousTokenMilliseconds": 56.61419999999998
+        },
+        {
+          "GeneratedIndex": 61,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 3900.6109,
+          "SincePreviousTokenMilliseconds": 56.72960000000012
+        },
+        {
+          "GeneratedIndex": 62,
+          "TokenId": 12,
+          "ElapsedMilliseconds": 3957.2425,
+          "SincePreviousTokenMilliseconds": 56.63159999999971
+        },
+        {
+          "GeneratedIndex": 63,
+          "TokenId": 50795,
+          "ElapsedMilliseconds": 4013.8033,
+          "SincePreviousTokenMilliseconds": 56.5608000000002
+        },
+        {
+          "GeneratedIndex": 64,
+          "TokenId": 783,
+          "ElapsedMilliseconds": 4070.303,
+          "SincePreviousTokenMilliseconds": 56.49969999999985
+        },
+        {
+          "GeneratedIndex": 65,
+          "TokenId": 12350,
+          "ElapsedMilliseconds": 4127.2423,
+          "SincePreviousTokenMilliseconds": 56.9393
+        },
+        {
+          "GeneratedIndex": 66,
+          "TokenId": 1227,
+          "ElapsedMilliseconds": 4183.9302,
+          "SincePreviousTokenMilliseconds": 56.6878999999999
+        },
+        {
+          "GeneratedIndex": 67,
+          "TokenId": 6863,
+          "ElapsedMilliseconds": 4240.5288,
+          "SincePreviousTokenMilliseconds": 56.59860000000026
+        },
+        {
+          "GeneratedIndex": 68,
+          "TokenId": 25,
+          "ElapsedMilliseconds": 4297.0785,
+          "SincePreviousTokenMilliseconds": 56.549699999999575
+        },
+        {
+          "GeneratedIndex": 69,
+          "TokenId": 783,
+          "ElapsedMilliseconds": 4353.8073,
+          "SincePreviousTokenMilliseconds": 56.728800000000774
+        },
+        {
+          "GeneratedIndex": 70,
+          "TokenId": 2333,
+          "ElapsedMilliseconds": 4410.4355,
+          "SincePreviousTokenMilliseconds": 56.6281999999992
+        },
+        {
+          "GeneratedIndex": 71,
+          "TokenId": 43066,
+          "ElapsedMilliseconds": 4467.1616,
+          "SincePreviousTokenMilliseconds": 56.72610000000077
+        },
+        {
+          "GeneratedIndex": 72,
+          "TokenId": 16140,
+          "ElapsedMilliseconds": 4523.7472,
+          "SincePreviousTokenMilliseconds": 56.58559999999943
+        },
+        {
+          "GeneratedIndex": 73,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 4580.2843,
+          "SincePreviousTokenMilliseconds": 56.537100000000464
+        },
+        {
+          "GeneratedIndex": 74,
+          "TokenId": 96301,
+          "ElapsedMilliseconds": 4636.9323,
+          "SincePreviousTokenMilliseconds": 56.64800000000014
+        },
+        {
+          "GeneratedIndex": 75,
+          "TokenId": 148772,
+          "ElapsedMilliseconds": 4694.6772,
+          "SincePreviousTokenMilliseconds": 57.74489999999969
+        },
+        {
+          "GeneratedIndex": 76,
+          "TokenId": 96060,
+          "ElapsedMilliseconds": 4751.2527,
+          "SincePreviousTokenMilliseconds": 56.57549999999992
+        },
+        {
+          "GeneratedIndex": 77,
+          "TokenId": 174016,
+          "ElapsedMilliseconds": 4807.9027,
+          "SincePreviousTokenMilliseconds": 56.649999999999636
+        },
+        {
+          "GeneratedIndex": 78,
+          "TokenId": 3008,
+          "ElapsedMilliseconds": 4864.5547,
+          "SincePreviousTokenMilliseconds": 56.652000000000044
+        },
+        {
+          "GeneratedIndex": 79,
+          "TokenId": 8,
+          "ElapsedMilliseconds": 4921.2313,
+          "SincePreviousTokenMilliseconds": 56.67660000000069
+        },
+        {
+          "GeneratedIndex": 80,
+          "TokenId": 369,
+          "ElapsedMilliseconds": 4977.8489,
+          "SincePreviousTokenMilliseconds": 56.617599999999584
+        },
+        {
+          "GeneratedIndex": 81,
+          "TokenId": 279,
+          "ElapsedMilliseconds": 5034.4775,
+          "SincePreviousTokenMilliseconds": 56.628600000000006
+        },
+        {
+          "GeneratedIndex": 82,
+          "TokenId": 17554,
+          "ElapsedMilliseconds": 5091.2159,
+          "SincePreviousTokenMilliseconds": 56.73840000000018
+        },
+        {
+          "GeneratedIndex": 83,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 5148.0432,
+          "SincePreviousTokenMilliseconds": 56.82729999999992
+        },
+        {
+          "GeneratedIndex": 84,
+          "TokenId": 12,
+          "ElapsedMilliseconds": 5204.81,
+          "SincePreviousTokenMilliseconds": 56.76680000000033
+        },
+        {
+          "GeneratedIndex": 85,
+          "TokenId": 882,
+          "ElapsedMilliseconds": 5261.5008,
+          "SincePreviousTokenMilliseconds": 56.6907999999994
+        },
+        {
+          "GeneratedIndex": 86,
+          "TokenId": 15742,
+          "ElapsedMilliseconds": 5318.1456,
+          "SincePreviousTokenMilliseconds": 56.64480000000003
+        },
+        {
+          "GeneratedIndex": 87,
+          "TokenId": 13591,
+          "ElapsedMilliseconds": 5375.1053,
+          "SincePreviousTokenMilliseconds": 56.95970000000034
+        },
+        {
+          "GeneratedIndex": 88,
+          "TokenId": 6863,
+          "ElapsedMilliseconds": 5431.6801,
+          "SincePreviousTokenMilliseconds": 56.574799999999414
+        },
+        {
+          "GeneratedIndex": 89,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 5488.3712,
+          "SincePreviousTokenMilliseconds": 56.691100000000006
+        },
+        {
+          "GeneratedIndex": 90,
+          "TokenId": 51076,
+          "ElapsedMilliseconds": 5545.1204,
+          "SincePreviousTokenMilliseconds": 56.7492000000002
+        },
+        {
+          "GeneratedIndex": 91,
+          "TokenId": 15560,
+          "ElapsedMilliseconds": 5601.825,
+          "SincePreviousTokenMilliseconds": 56.70460000000003
+        },
+        {
+          "GeneratedIndex": 92,
+          "TokenId": 20317,
+          "ElapsedMilliseconds": 5659.9546,
+          "SincePreviousTokenMilliseconds": 58.12960000000021
+        },
+        {
+          "GeneratedIndex": 93,
+          "TokenId": 1590,
+          "ElapsedMilliseconds": 5716.8622,
+          "SincePreviousTokenMilliseconds": 56.90759999999955
+        },
+        {
+          "GeneratedIndex": 94,
+          "TokenId": 496,
+          "ElapsedMilliseconds": 5773.6744,
+          "SincePreviousTokenMilliseconds": 56.8122000000003
+        },
+        {
+          "GeneratedIndex": 95,
+          "TokenId": 844,
+          "ElapsedMilliseconds": 5830.5419,
+          "SincePreviousTokenMilliseconds": 56.86750000000029
+        },
+        {
+          "GeneratedIndex": 96,
+          "TokenId": 29375,
+          "ElapsedMilliseconds": 5887.4319,
+          "SincePreviousTokenMilliseconds": 56.88999999999942
+        },
+        {
+          "GeneratedIndex": 97,
+          "TokenId": 16140,
+          "ElapsedMilliseconds": 5944.2186,
+          "SincePreviousTokenMilliseconds": 56.786700000000565
+        },
+        {
+          "GeneratedIndex": 98,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 6000.9601,
+          "SincePreviousTokenMilliseconds": 56.74150000000009
+        },
+        {
+          "GeneratedIndex": 99,
+          "TokenId": 120266,
+          "ElapsedMilliseconds": 6057.8317,
+          "SincePreviousTokenMilliseconds": 56.87159999999949
+        },
+        {
+          "GeneratedIndex": 100,
+          "TokenId": 108200,
+          "ElapsedMilliseconds": 6114.841,
+          "SincePreviousTokenMilliseconds": 57.00930000000062
+        },
+        {
+          "GeneratedIndex": 101,
+          "TokenId": 158369,
+          "ElapsedMilliseconds": 6171.6743,
+          "SincePreviousTokenMilliseconds": 56.833299999999326
+        },
+        {
+          "GeneratedIndex": 102,
+          "TokenId": 8,
+          "ElapsedMilliseconds": 6228.5071,
+          "SincePreviousTokenMilliseconds": 56.832800000000134
+        },
+        {
+          "GeneratedIndex": 103,
+          "TokenId": 471,
+          "ElapsedMilliseconds": 6285.399,
+          "SincePreviousTokenMilliseconds": 56.89190000000053
+        },
+        {
+          "GeneratedIndex": 104,
+          "TokenId": 18422,
+          "ElapsedMilliseconds": 6342.4207,
+          "SincePreviousTokenMilliseconds": 57.02169999999933
+        },
+        {
+          "GeneratedIndex": 105,
+          "TokenId": 220,
+          "ElapsedMilliseconds": 6399.2443,
+          "SincePreviousTokenMilliseconds": 56.823600000000624
+        },
+        {
+          "GeneratedIndex": 106,
+          "TokenId": 17,
+          "ElapsedMilliseconds": 6455.9623,
+          "SincePreviousTokenMilliseconds": 56.71799999999985
+        },
+        {
+          "GeneratedIndex": 107,
+          "TokenId": 466,
+          "ElapsedMilliseconds": 6512.9163,
+          "SincePreviousTokenMilliseconds": 56.95399999999972
+        },
+        {
+          "GeneratedIndex": 108,
+          "TokenId": 220,
+          "ElapsedMilliseconds": 6569.7056,
+          "SincePreviousTokenMilliseconds": 56.78930000000037
+        },
+        {
+          "GeneratedIndex": 109,
+          "TokenId": 18,
+          "ElapsedMilliseconds": 6626.6195,
+          "SincePreviousTokenMilliseconds": 56.91389999999956
+        },
+        {
+          "GeneratedIndex": 110,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 6683.487,
+          "SincePreviousTokenMilliseconds": 56.86750000000029
+        },
+        {
+          "GeneratedIndex": 111,
+          "TokenId": 12,
+          "ElapsedMilliseconds": 6740.4133,
+          "SincePreviousTokenMilliseconds": 56.92630000000008
+        },
+        {
+          "GeneratedIndex": 112,
+          "TokenId": 2783,
+          "ElapsedMilliseconds": 6797.3182,
+          "SincePreviousTokenMilliseconds": 56.90489999999954
+        },
+        {
+          "GeneratedIndex": 113,
+          "TokenId": 354,
+          "ElapsedMilliseconds": 6854.2196,
+          "SincePreviousTokenMilliseconds": 56.90140000000065
+        },
+        {
+          "GeneratedIndex": 114,
+          "TokenId": 2930,
+          "ElapsedMilliseconds": 6911.0996,
+          "SincePreviousTokenMilliseconds": 56.8799999999992
+        },
+        {
+          "GeneratedIndex": 115,
+          "TokenId": 72,
+          "ElapsedMilliseconds": 6968.1136,
+          "SincePreviousTokenMilliseconds": 57.014000000000124
+        },
+        {
+          "GeneratedIndex": 116,
+          "TokenId": 6863,
+          "ElapsedMilliseconds": 7024.9825,
+          "SincePreviousTokenMilliseconds": 56.868900000000394
+        },
+        {
+          "GeneratedIndex": 117,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 7081.9847,
+          "SincePreviousTokenMilliseconds": 57.0021999999999
+        },
+        {
+          "GeneratedIndex": 118,
+          "TokenId": 51076,
+          "ElapsedMilliseconds": 7138.9064,
+          "SincePreviousTokenMilliseconds": 56.92169999999987
+        },
+        {
+          "GeneratedIndex": 119,
+          "TokenId": 15560,
+          "ElapsedMilliseconds": 7195.8538,
+          "SincePreviousTokenMilliseconds": 56.947400000000016
+        },
+        {
+          "GeneratedIndex": 120,
+          "TokenId": 20317,
+          "ElapsedMilliseconds": 7252.727,
+          "SincePreviousTokenMilliseconds": 56.8732
+        },
+        {
+          "GeneratedIndex": 121,
+          "TokenId": 1590,
+          "ElapsedMilliseconds": 7309.7531,
+          "SincePreviousTokenMilliseconds": 57.02610000000004
+        },
+        {
+          "GeneratedIndex": 122,
+          "TokenId": 496,
+          "ElapsedMilliseconds": 7366.6193,
+          "SincePreviousTokenMilliseconds": 56.86620000000039
+        },
+        {
+          "GeneratedIndex": 123,
+          "TokenId": 844,
+          "ElapsedMilliseconds": 7423.5656,
+          "SincePreviousTokenMilliseconds": 56.94629999999961
+        },
+        {
+          "GeneratedIndex": 124,
+          "TokenId": 29375,
+          "ElapsedMilliseconds": 7480.3748,
+          "SincePreviousTokenMilliseconds": 56.80919999999969
+        },
+        {
+          "GeneratedIndex": 125,
+          "TokenId": 16140,
+          "ElapsedMilliseconds": 7537.2911,
+          "SincePreviousTokenMilliseconds": 56.916300000000774
+        },
+        {
+          "GeneratedIndex": 126,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 7594.1013,
+          "SincePreviousTokenMilliseconds": 56.810199999999895
+        },
+        {
+          "GeneratedIndex": 127,
+          "TokenId": 12,
+          "ElapsedMilliseconds": 7650.9881,
+          "SincePreviousTokenMilliseconds": 56.88679999999931
+        }
+      ],
+      "UploadedBytes": [
+        2623452,
+        66500000
+      ],
+      "DownloadedBytes": [
+        66498560,
+        129761280
+      ],
+      "Before": {
+        "ResidentWeightBytes": [
+          5472512000,
+          5116405760
+        ],
+        "ResidentAuxiliaryWeightBytes": [
+          5280768,
+          5301248
+        ],
+        "ResidentStateBytes": [
+          95223808,
+          95223808
+        ],
+        "LiveDeviceBytes": [
+          5575023616,
+          5217924096
+        ],
+        "PeakDeviceBytes": [
+          5598890168,
+          5242783924
+        ],
+        "UploadedBytes": [
+          5483039672,
+          5254707008
+        ],
+        "DownloadedBytes": [
+          132997120,
+          259522560
+        ],
+        "Lanes": [
+          {
+            "DeviceIndex": 0,
+            "AllocationCount": 602,
+            "RequestedBytes": 9436931000,
+            "NativeAllocatedBytes": 5598890168,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0,
+            "AllocatedBytes": 5575023616,
+            "KernelLaunchCount": 138976,
+            "CachedBytes": 23866552,
+            "RetiredBytes": 0,
+            "PoolHits": 109938,
+            "RetiredReuseCount": 0,
+            "H2DBytes": 5483039672,
+            "D2HBytes": 132997120,
+            "PeakAllocatedBytes": 5598890168,
+            "KernelMilliseconds": 0,
+            "TransferMilliseconds": 8558.918800000021,
+            "AllocationMilliseconds": 55.736800000196055,
+            "ProgramBinaryCacheHit": true,
+            "KernelArgumentSetCount": 354875,
+            "KernelArgumentCacheHitCount": 487345,
+            "ProfileEntries": []
+          },
+          {
+            "DeviceIndex": 1,
+            "AllocationCount": 599,
+            "RequestedBytes": 9338738496,
+            "NativeAllocatedBytes": 5242783924,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0,
+            "AllocatedBytes": 5217924096,
+            "KernelLaunchCount": 138945,
+            "CachedBytes": 24859828,
+            "RetiredBytes": 0,
+            "PoolHits": 110134,
+            "RetiredReuseCount": 0,
+            "H2DBytes": 5254707008,
+            "D2HBytes": 259522560,
+            "PeakAllocatedBytes": 5242783924,
+            "KernelMilliseconds": 0,
+            "TransferMilliseconds": 1525.339400000003,
+            "AllocationMilliseconds": 54.254400000204726,
+            "ProgramBinaryCacheHit": true,
+            "KernelArgumentSetCount": 362853,
+            "KernelArgumentCacheHitCount": 479757,
+            "ProfileEntries": []
+          }
+        ]
+      },
+      "After": {
+        "ResidentWeightBytes": [
+          5472512000,
+          5116405760
+        ],
+        "ResidentAuxiliaryWeightBytes": [
+          5280768,
+          5301248
+        ],
+        "ResidentStateBytes": [
+          95223808,
+          95223808
+        ],
+        "LiveDeviceBytes": [
+          5575023616,
+          5217924096
+        ],
+        "PeakDeviceBytes": [
+          5598890168,
+          5242783924
+        ],
+        "UploadedBytes": [
+          5485663124,
+          5321207008
+        ],
+        "DownloadedBytes": [
+          199495680,
+          389283840
+        ],
+        "Lanes": [
+          {
+            "DeviceIndex": 0,
+            "AllocationCount": 602,
+            "RequestedBytes": 11360020372,
+            "NativeAllocatedBytes": 5598890168,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0,
+            "AllocatedBytes": 5575023616,
+            "KernelLaunchCount": 208439,
+            "CachedBytes": 23866552,
+            "RetiredBytes": 0,
+            "PoolHits": 164929,
+            "RetiredReuseCount": 0,
+            "H2DBytes": 5485663124,
+            "D2HBytes": 199495680,
+            "PeakAllocatedBytes": 5598890168,
+            "KernelMilliseconds": 0,
+            "TransferMilliseconds": 11805.318300000008,
+            "AllocationMilliseconds": 59.26550000029179,
+            "ProgramBinaryCacheHit": true,
+            "KernelArgumentSetCount": 532212,
+            "KernelArgumentCacheHitCount": 731068,
+            "ProfileEntries": []
+          },
+          {
+            "DeviceIndex": 1,
+            "AllocationCount": 599,
+            "RequestedBytes": 11391281376,
+            "NativeAllocatedBytes": 5242783924,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0,
+            "AllocatedBytes": 5217924096,
+            "KernelLaunchCount": 208393,
+            "CachedBytes": 24859828,
+            "RetiredBytes": 0,
+            "PoolHits": 165223,
+            "RetiredReuseCount": 0,
+            "H2DBytes": 5321207008,
+            "D2HBytes": 389283840,
+            "PeakAllocatedBytes": 5242783924,
+            "KernelMilliseconds": 0,
+            "TransferMilliseconds": 1799.697500000006,
+            "AllocationMilliseconds": 57.992500000306414,
+            "ProgramBinaryCacheHit": true,
+            "KernelArgumentSetCount": 544181,
+            "KernelArgumentCacheHitCount": 719685,
+            "ProfileEntries": []
+          }
+        ]
+      },
+      "KernelMilliseconds": {}
+    },
+    {
+      "RunIndex": 3,
+      "Kind": "reused model with sequence state reset",
+      "StartedUtc": "2026-10-08T08:00:03.7471272+00:00",
+      "TotalMilliseconds": 7660.2694,
+      "PrefillThroughFirstTokenMilliseconds": 455.3062,
+      "PrefillTokensPerSecond": 35.14118630495258,
+      "DecodeMilliseconds": 7204.9609,
+      "DecodeTokensPerSecond": 17.62674381758269,
+      "OverallGeneratedTokensPerSecond": 16.709595095963596,
+      "AllTokenIds": [
+        248045,
+        846,
+        198,
+        120683,
+        98358,
+        95924,
+        97131,
+        170872,
+        184700,
+        180014,
+        162066,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198,
+        760,
+        1156,
+        369,
+        9859,
+        364,
+        17425,
+        310,
+        279,
+        4893,
+        25376,
+        16366,
+        318,
+        120683,
+        98358,
+        95924,
+        97131,
+        8,
+        303,
+        10452,
+        13,
+        6558,
+        728,
+        3300,
+        10631,
+        17425,
+        13,
+        561,
+        4893,
+        25376,
+        16366,
+        369,
+        7172,
+        303,
+        28113,
+        450,
+        928,
+        11,
+        882,
+        15742,
+        13591,
+        11,
+        25358,
+        13,
+        6558,
+        728,
+        1683,
+        883,
+        279,
+        1786,
+        5337,
+        310,
+        615,
+        1017,
+        13,
+        271,
+        1536,
+        2528,
+        3387,
+        25,
+        198,
+        12,
+        50795,
+        783,
+        12350,
+        1227,
+        6863,
+        25,
+        783,
+        2333,
+        43066,
+        16140,
+        318,
+        96301,
+        148772,
+        96060,
+        174016,
+        3008,
+        8,
+        369,
+        279,
+        17554,
+        198,
+        12,
+        882,
+        15742,
+        13591,
+        6863,
+        318,
+        51076,
+        15560,
+        20317,
+        1590,
+        496,
+        844,
+        29375,
+        16140,
+        318,
+        120266,
+        108200,
+        158369,
+        8,
+        471,
+        18422,
+        220,
+        17,
+        466,
+        220,
+        18,
+        198,
+        12,
+        2783,
+        354,
+        2930,
+        72,
+        6863,
+        318,
+        51076,
+        15560,
+        20317,
+        1590,
+        496,
+        844,
+        29375,
+        16140,
+        198,
+        12
+      ],
+      "GeneratedTokenIds": [
+        248068,
+        198,
+        760,
+        1156,
+        369,
+        9859,
+        364,
+        17425,
+        310,
+        279,
+        4893,
+        25376,
+        16366,
+        318,
+        120683,
+        98358,
+        95924,
+        97131,
+        8,
+        303,
+        10452,
+        13,
+        6558,
+        728,
+        3300,
+        10631,
+        17425,
+        13,
+        561,
+        4893,
+        25376,
+        16366,
+        369,
+        7172,
+        303,
+        28113,
+        450,
+        928,
+        11,
+        882,
+        15742,
+        13591,
+        11,
+        25358,
+        13,
+        6558,
+        728,
+        1683,
+        883,
+        279,
+        1786,
+        5337,
+        310,
+        615,
+        1017,
+        13,
+        271,
+        1536,
+        2528,
+        3387,
+        25,
+        198,
+        12,
+        50795,
+        783,
+        12350,
+        1227,
+        6863,
+        25,
+        783,
+        2333,
+        43066,
+        16140,
+        318,
+        96301,
+        148772,
+        96060,
+        174016,
+        3008,
+        8,
+        369,
+        279,
+        17554,
+        198,
+        12,
+        882,
+        15742,
+        13591,
+        6863,
+        318,
+        51076,
+        15560,
+        20317,
+        1590,
+        496,
+        844,
+        29375,
+        16140,
+        318,
+        120266,
+        108200,
+        158369,
+        8,
+        471,
+        18422,
+        220,
+        17,
+        466,
+        220,
+        18,
+        198,
+        12,
+        2783,
+        354,
+        2930,
+        72,
+        6863,
+        318,
+        51076,
+        15560,
+        20317,
+        1590,
+        496,
+        844,
+        29375,
+        16140,
+        198,
+        12
+      ],
+      "GeneratedText": "\u003Cthink\u003E\nThe user is asking for directions to the National Diet Building (\u56FD\u4F1A\u8B70\u4E8B\u5802) in Japanese. Let me provide helpful directions. The National Diet Building is located in Nagatacho, Chiyoda, Tokyo. Let me think about the best ways to get there.\n\nKey access points:\n- JR Yamanote Line: Yotsuya Station (\u56DB\u30C4\u76EE\u901A\u308A side) is the closest\n- Chiyoda Line (Tokyo Metro): Otemachi Station (\u5927\u624B\u753A\u99C5) - Exit 2 or 3\n- Marunouchi Line (Tokyo Metro): Otemachi Station\n-",
+      "MatchesFirstRunTokenIds": true,
+      "Tokens": [
+        {
+          "GeneratedIndex": 0,
+          "TokenId": 248068,
+          "ElapsedMilliseconds": 455.3062,
+          "SincePreviousTokenMilliseconds": null
+        },
+        {
+          "GeneratedIndex": 1,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 511.6765,
+          "SincePreviousTokenMilliseconds": 56.370299999999986
+        },
+        {
+          "GeneratedIndex": 2,
+          "TokenId": 760,
+          "ElapsedMilliseconds": 567.9143,
+          "SincePreviousTokenMilliseconds": 56.23780000000005
+        },
+        {
+          "GeneratedIndex": 3,
+          "TokenId": 1156,
+          "ElapsedMilliseconds": 624.1526,
+          "SincePreviousTokenMilliseconds": 56.23829999999998
+        },
+        {
+          "GeneratedIndex": 4,
+          "TokenId": 369,
+          "ElapsedMilliseconds": 680.3669,
+          "SincePreviousTokenMilliseconds": 56.21429999999998
+        },
+        {
+          "GeneratedIndex": 5,
+          "TokenId": 9859,
+          "ElapsedMilliseconds": 736.6296,
+          "SincePreviousTokenMilliseconds": 56.262699999999995
+        },
+        {
+          "GeneratedIndex": 6,
+          "TokenId": 364,
+          "ElapsedMilliseconds": 792.946,
+          "SincePreviousTokenMilliseconds": 56.316400000000044
+        },
+        {
+          "GeneratedIndex": 7,
+          "TokenId": 17425,
+          "ElapsedMilliseconds": 849.1715,
+          "SincePreviousTokenMilliseconds": 56.22550000000001
+        },
+        {
+          "GeneratedIndex": 8,
+          "TokenId": 310,
+          "ElapsedMilliseconds": 905.2967,
+          "SincePreviousTokenMilliseconds": 56.12519999999995
+        },
+        {
+          "GeneratedIndex": 9,
+          "TokenId": 279,
+          "ElapsedMilliseconds": 961.4835,
+          "SincePreviousTokenMilliseconds": 56.18680000000006
+        },
+        {
+          "GeneratedIndex": 10,
+          "TokenId": 4893,
+          "ElapsedMilliseconds": 1017.8093,
+          "SincePreviousTokenMilliseconds": 56.32579999999996
+        },
+        {
+          "GeneratedIndex": 11,
+          "TokenId": 25376,
+          "ElapsedMilliseconds": 1075.1175,
+          "SincePreviousTokenMilliseconds": 57.308200000000056
+        },
+        {
+          "GeneratedIndex": 12,
+          "TokenId": 16366,
+          "ElapsedMilliseconds": 1131.442,
+          "SincePreviousTokenMilliseconds": 56.324499999999944
+        },
+        {
+          "GeneratedIndex": 13,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 1187.732,
+          "SincePreviousTokenMilliseconds": 56.289999999999964
+        },
+        {
+          "GeneratedIndex": 14,
+          "TokenId": 120683,
+          "ElapsedMilliseconds": 1244.169,
+          "SincePreviousTokenMilliseconds": 56.437000000000126
+        },
+        {
+          "GeneratedIndex": 15,
+          "TokenId": 98358,
+          "ElapsedMilliseconds": 1300.6014,
+          "SincePreviousTokenMilliseconds": 56.432399999999916
+        },
+        {
+          "GeneratedIndex": 16,
+          "TokenId": 95924,
+          "ElapsedMilliseconds": 1356.9737,
+          "SincePreviousTokenMilliseconds": 56.372299999999996
+        },
+        {
+          "GeneratedIndex": 17,
+          "TokenId": 97131,
+          "ElapsedMilliseconds": 1413.3586,
+          "SincePreviousTokenMilliseconds": 56.384900000000016
+        },
+        {
+          "GeneratedIndex": 18,
+          "TokenId": 8,
+          "ElapsedMilliseconds": 1469.8797,
+          "SincePreviousTokenMilliseconds": 56.52109999999993
+        },
+        {
+          "GeneratedIndex": 19,
+          "TokenId": 303,
+          "ElapsedMilliseconds": 1526.4334,
+          "SincePreviousTokenMilliseconds": 56.553699999999935
+        },
+        {
+          "GeneratedIndex": 20,
+          "TokenId": 10452,
+          "ElapsedMilliseconds": 1582.8866,
+          "SincePreviousTokenMilliseconds": 56.45320000000015
+        },
+        {
+          "GeneratedIndex": 21,
+          "TokenId": 13,
+          "ElapsedMilliseconds": 1639.3352,
+          "SincePreviousTokenMilliseconds": 56.44859999999994
+        },
+        {
+          "GeneratedIndex": 22,
+          "TokenId": 6558,
+          "ElapsedMilliseconds": 1695.6933,
+          "SincePreviousTokenMilliseconds": 56.35809999999992
+        },
+        {
+          "GeneratedIndex": 23,
+          "TokenId": 728,
+          "ElapsedMilliseconds": 1752.0153,
+          "SincePreviousTokenMilliseconds": 56.322000000000116
+        },
+        {
+          "GeneratedIndex": 24,
+          "TokenId": 3300,
+          "ElapsedMilliseconds": 1808.4784,
+          "SincePreviousTokenMilliseconds": 56.46309999999994
+        },
+        {
+          "GeneratedIndex": 25,
+          "TokenId": 10631,
+          "ElapsedMilliseconds": 1864.9655,
+          "SincePreviousTokenMilliseconds": 56.487100000000055
+        },
+        {
+          "GeneratedIndex": 26,
+          "TokenId": 17425,
+          "ElapsedMilliseconds": 1921.7768,
+          "SincePreviousTokenMilliseconds": 56.811300000000074
+        },
+        {
+          "GeneratedIndex": 27,
+          "TokenId": 13,
+          "ElapsedMilliseconds": 1978.3485,
+          "SincePreviousTokenMilliseconds": 56.571699999999964
+        },
+        {
+          "GeneratedIndex": 28,
+          "TokenId": 561,
+          "ElapsedMilliseconds": 2036.41,
+          "SincePreviousTokenMilliseconds": 58.061500000000024
+        },
+        {
+          "GeneratedIndex": 29,
+          "TokenId": 4893,
+          "ElapsedMilliseconds": 2093.3307,
+          "SincePreviousTokenMilliseconds": 56.9206999999999
+        },
+        {
+          "GeneratedIndex": 30,
+          "TokenId": 25376,
+          "ElapsedMilliseconds": 2149.9099,
+          "SincePreviousTokenMilliseconds": 56.57920000000013
+        },
+        {
+          "GeneratedIndex": 31,
+          "TokenId": 16366,
+          "ElapsedMilliseconds": 2206.3847,
+          "SincePreviousTokenMilliseconds": 56.47479999999996
+        },
+        {
+          "GeneratedIndex": 32,
+          "TokenId": 369,
+          "ElapsedMilliseconds": 2262.8781,
+          "SincePreviousTokenMilliseconds": 56.49339999999984
+        },
+        {
+          "GeneratedIndex": 33,
+          "TokenId": 7172,
+          "ElapsedMilliseconds": 2319.5692,
+          "SincePreviousTokenMilliseconds": 56.691100000000006
+        },
+        {
+          "GeneratedIndex": 34,
+          "TokenId": 303,
+          "ElapsedMilliseconds": 2376.184,
+          "SincePreviousTokenMilliseconds": 56.61480000000029
+        },
+        {
+          "GeneratedIndex": 35,
+          "TokenId": 28113,
+          "ElapsedMilliseconds": 2432.6405,
+          "SincePreviousTokenMilliseconds": 56.45649999999978
+        },
+        {
+          "GeneratedIndex": 36,
+          "TokenId": 450,
+          "ElapsedMilliseconds": 2489.1782,
+          "SincePreviousTokenMilliseconds": 56.53769999999986
+        },
+        {
+          "GeneratedIndex": 37,
+          "TokenId": 928,
+          "ElapsedMilliseconds": 2545.6983,
+          "SincePreviousTokenMilliseconds": 56.520100000000184
+        },
+        {
+          "GeneratedIndex": 38,
+          "TokenId": 11,
+          "ElapsedMilliseconds": 2602.1689,
+          "SincePreviousTokenMilliseconds": 56.470600000000104
+        },
+        {
+          "GeneratedIndex": 39,
+          "TokenId": 882,
+          "ElapsedMilliseconds": 2658.543,
+          "SincePreviousTokenMilliseconds": 56.3741
+        },
+        {
+          "GeneratedIndex": 40,
+          "TokenId": 15742,
+          "ElapsedMilliseconds": 2714.9992,
+          "SincePreviousTokenMilliseconds": 56.45620000000008
+        },
+        {
+          "GeneratedIndex": 41,
+          "TokenId": 13591,
+          "ElapsedMilliseconds": 2771.4525,
+          "SincePreviousTokenMilliseconds": 56.45329999999967
+        },
+        {
+          "GeneratedIndex": 42,
+          "TokenId": 11,
+          "ElapsedMilliseconds": 2827.9486,
+          "SincePreviousTokenMilliseconds": 56.4961000000003
+        },
+        {
+          "GeneratedIndex": 43,
+          "TokenId": 25358,
+          "ElapsedMilliseconds": 2884.4024,
+          "SincePreviousTokenMilliseconds": 56.453799999999774
+        },
+        {
+          "GeneratedIndex": 44,
+          "TokenId": 13,
+          "ElapsedMilliseconds": 2941.0531,
+          "SincePreviousTokenMilliseconds": 56.65070000000014
+        },
+        {
+          "GeneratedIndex": 45,
+          "TokenId": 6558,
+          "ElapsedMilliseconds": 2997.7002,
+          "SincePreviousTokenMilliseconds": 56.64710000000014
+        },
+        {
+          "GeneratedIndex": 46,
+          "TokenId": 728,
+          "ElapsedMilliseconds": 3054.2921,
+          "SincePreviousTokenMilliseconds": 56.591899999999896
+        },
+        {
+          "GeneratedIndex": 47,
+          "TokenId": 1683,
+          "ElapsedMilliseconds": 3110.9122,
+          "SincePreviousTokenMilliseconds": 56.62010000000009
+        },
+        {
+          "GeneratedIndex": 48,
+          "TokenId": 883,
+          "ElapsedMilliseconds": 3167.6647,
+          "SincePreviousTokenMilliseconds": 56.7524999999996
+        },
+        {
+          "GeneratedIndex": 49,
+          "TokenId": 279,
+          "ElapsedMilliseconds": 3224.2244,
+          "SincePreviousTokenMilliseconds": 56.55970000000025
+        },
+        {
+          "GeneratedIndex": 50,
+          "TokenId": 1786,
+          "ElapsedMilliseconds": 3280.7528,
+          "SincePreviousTokenMilliseconds": 56.52840000000015
+        },
+        {
+          "GeneratedIndex": 51,
+          "TokenId": 5337,
+          "ElapsedMilliseconds": 3337.6268,
+          "SincePreviousTokenMilliseconds": 56.873999999999796
+        },
+        {
+          "GeneratedIndex": 52,
+          "TokenId": 310,
+          "ElapsedMilliseconds": 3394.3828,
+          "SincePreviousTokenMilliseconds": 56.75599999999986
+        },
+        {
+          "GeneratedIndex": 53,
+          "TokenId": 615,
+          "ElapsedMilliseconds": 3451.1676,
+          "SincePreviousTokenMilliseconds": 56.78480000000036
+        },
+        {
+          "GeneratedIndex": 54,
+          "TokenId": 1017,
+          "ElapsedMilliseconds": 3507.8331,
+          "SincePreviousTokenMilliseconds": 56.66549999999961
+        },
+        {
+          "GeneratedIndex": 55,
+          "TokenId": 13,
+          "ElapsedMilliseconds": 3564.4012,
+          "SincePreviousTokenMilliseconds": 56.56809999999996
+        },
+        {
+          "GeneratedIndex": 56,
+          "TokenId": 271,
+          "ElapsedMilliseconds": 3621.3379,
+          "SincePreviousTokenMilliseconds": 56.9367000000002
+        },
+        {
+          "GeneratedIndex": 57,
+          "TokenId": 1536,
+          "ElapsedMilliseconds": 3678.4422,
+          "SincePreviousTokenMilliseconds": 57.10429999999997
+        },
+        {
+          "GeneratedIndex": 58,
+          "TokenId": 2528,
+          "ElapsedMilliseconds": 3735.1894,
+          "SincePreviousTokenMilliseconds": 56.74720000000025
+        },
+        {
+          "GeneratedIndex": 59,
+          "TokenId": 3387,
+          "ElapsedMilliseconds": 3791.7966,
+          "SincePreviousTokenMilliseconds": 56.60719999999992
+        },
+        {
+          "GeneratedIndex": 60,
+          "TokenId": 25,
+          "ElapsedMilliseconds": 3848.4867,
+          "SincePreviousTokenMilliseconds": 56.6900999999998
+        },
+        {
+          "GeneratedIndex": 61,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 3905.1246,
+          "SincePreviousTokenMilliseconds": 56.63790000000017
+        },
+        {
+          "GeneratedIndex": 62,
+          "TokenId": 12,
+          "ElapsedMilliseconds": 3961.6626,
+          "SincePreviousTokenMilliseconds": 56.53800000000001
+        },
+        {
+          "GeneratedIndex": 63,
+          "TokenId": 50795,
+          "ElapsedMilliseconds": 4018.3214,
+          "SincePreviousTokenMilliseconds": 56.6587999999997
+        },
+        {
+          "GeneratedIndex": 64,
+          "TokenId": 783,
+          "ElapsedMilliseconds": 4075.7615,
+          "SincePreviousTokenMilliseconds": 57.44010000000026
+        },
+        {
+          "GeneratedIndex": 65,
+          "TokenId": 12350,
+          "ElapsedMilliseconds": 4132.3613,
+          "SincePreviousTokenMilliseconds": 56.599799999999505
+        },
+        {
+          "GeneratedIndex": 66,
+          "TokenId": 1227,
+          "ElapsedMilliseconds": 4189.013,
+          "SincePreviousTokenMilliseconds": 56.651700000000346
+        },
+        {
+          "GeneratedIndex": 67,
+          "TokenId": 6863,
+          "ElapsedMilliseconds": 4245.7083,
+          "SincePreviousTokenMilliseconds": 56.695300000000316
+        },
+        {
+          "GeneratedIndex": 68,
+          "TokenId": 25,
+          "ElapsedMilliseconds": 4302.2922,
+          "SincePreviousTokenMilliseconds": 56.58389999999963
+        },
+        {
+          "GeneratedIndex": 69,
+          "TokenId": 783,
+          "ElapsedMilliseconds": 4358.9392,
+          "SincePreviousTokenMilliseconds": 56.646999999999935
+        },
+        {
+          "GeneratedIndex": 70,
+          "TokenId": 2333,
+          "ElapsedMilliseconds": 4415.5179,
+          "SincePreviousTokenMilliseconds": 56.578700000000026
+        },
+        {
+          "GeneratedIndex": 71,
+          "TokenId": 43066,
+          "ElapsedMilliseconds": 4472.3499,
+          "SincePreviousTokenMilliseconds": 56.832000000000335
+        },
+        {
+          "GeneratedIndex": 72,
+          "TokenId": 16140,
+          "ElapsedMilliseconds": 4529.3658,
+          "SincePreviousTokenMilliseconds": 57.01589999999942
+        },
+        {
+          "GeneratedIndex": 73,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 4586.2235,
+          "SincePreviousTokenMilliseconds": 56.85770000000048
+        },
+        {
+          "GeneratedIndex": 74,
+          "TokenId": 96301,
+          "ElapsedMilliseconds": 4642.8312,
+          "SincePreviousTokenMilliseconds": 56.60769999999957
+        },
+        {
+          "GeneratedIndex": 75,
+          "TokenId": 148772,
+          "ElapsedMilliseconds": 4699.744,
+          "SincePreviousTokenMilliseconds": 56.91280000000006
+        },
+        {
+          "GeneratedIndex": 76,
+          "TokenId": 96060,
+          "ElapsedMilliseconds": 4756.4316,
+          "SincePreviousTokenMilliseconds": 56.6876000000002
+        },
+        {
+          "GeneratedIndex": 77,
+          "TokenId": 174016,
+          "ElapsedMilliseconds": 4813.1644,
+          "SincePreviousTokenMilliseconds": 56.73279999999977
+        },
+        {
+          "GeneratedIndex": 78,
+          "TokenId": 3008,
+          "ElapsedMilliseconds": 4870.0108,
+          "SincePreviousTokenMilliseconds": 56.84640000000036
+        },
+        {
+          "GeneratedIndex": 79,
+          "TokenId": 8,
+          "ElapsedMilliseconds": 4926.831,
+          "SincePreviousTokenMilliseconds": 56.82020000000011
+        },
+        {
+          "GeneratedIndex": 80,
+          "TokenId": 369,
+          "ElapsedMilliseconds": 4983.7217,
+          "SincePreviousTokenMilliseconds": 56.890699999999924
+        },
+        {
+          "GeneratedIndex": 81,
+          "TokenId": 279,
+          "ElapsedMilliseconds": 5041.8963,
+          "SincePreviousTokenMilliseconds": 58.17460000000028
+        },
+        {
+          "GeneratedIndex": 82,
+          "TokenId": 17554,
+          "ElapsedMilliseconds": 5099.0648,
+          "SincePreviousTokenMilliseconds": 57.16849999999977
+        },
+        {
+          "GeneratedIndex": 83,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 5155.9348,
+          "SincePreviousTokenMilliseconds": 56.86999999999989
+        },
+        {
+          "GeneratedIndex": 84,
+          "TokenId": 12,
+          "ElapsedMilliseconds": 5212.6149,
+          "SincePreviousTokenMilliseconds": 56.680099999999584
+        },
+        {
+          "GeneratedIndex": 85,
+          "TokenId": 882,
+          "ElapsedMilliseconds": 5269.431,
+          "SincePreviousTokenMilliseconds": 56.816100000000006
+        },
+        {
+          "GeneratedIndex": 86,
+          "TokenId": 15742,
+          "ElapsedMilliseconds": 5326.062,
+          "SincePreviousTokenMilliseconds": 56.63100000000031
+        },
+        {
+          "GeneratedIndex": 87,
+          "TokenId": 13591,
+          "ElapsedMilliseconds": 5382.7233,
+          "SincePreviousTokenMilliseconds": 56.661299999999756
+        },
+        {
+          "GeneratedIndex": 88,
+          "TokenId": 6863,
+          "ElapsedMilliseconds": 5439.5091,
+          "SincePreviousTokenMilliseconds": 56.78580000000056
+        },
+        {
+          "GeneratedIndex": 89,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 5496.2686,
+          "SincePreviousTokenMilliseconds": 56.759500000000116
+        },
+        {
+          "GeneratedIndex": 90,
+          "TokenId": 51076,
+          "ElapsedMilliseconds": 5552.942,
+          "SincePreviousTokenMilliseconds": 56.673399999999674
+        },
+        {
+          "GeneratedIndex": 91,
+          "TokenId": 15560,
+          "ElapsedMilliseconds": 5609.6569,
+          "SincePreviousTokenMilliseconds": 56.71489999999994
+        },
+        {
+          "GeneratedIndex": 92,
+          "TokenId": 20317,
+          "ElapsedMilliseconds": 5666.4701,
+          "SincePreviousTokenMilliseconds": 56.8131999999996
+        },
+        {
+          "GeneratedIndex": 93,
+          "TokenId": 1590,
+          "ElapsedMilliseconds": 5723.2043,
+          "SincePreviousTokenMilliseconds": 56.73420000000078
+        },
+        {
+          "GeneratedIndex": 94,
+          "TokenId": 496,
+          "ElapsedMilliseconds": 5779.9265,
+          "SincePreviousTokenMilliseconds": 56.72219999999925
+        },
+        {
+          "GeneratedIndex": 95,
+          "TokenId": 844,
+          "ElapsedMilliseconds": 5836.6782,
+          "SincePreviousTokenMilliseconds": 56.75170000000071
+        },
+        {
+          "GeneratedIndex": 96,
+          "TokenId": 29375,
+          "ElapsedMilliseconds": 5893.5452,
+          "SincePreviousTokenMilliseconds": 56.86699999999928
+        },
+        {
+          "GeneratedIndex": 97,
+          "TokenId": 16140,
+          "ElapsedMilliseconds": 5950.481,
+          "SincePreviousTokenMilliseconds": 56.9358000000002
+        },
+        {
+          "GeneratedIndex": 98,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 6007.3232,
+          "SincePreviousTokenMilliseconds": 56.84220000000005
+        },
+        {
+          "GeneratedIndex": 99,
+          "TokenId": 120266,
+          "ElapsedMilliseconds": 6064.2562,
+          "SincePreviousTokenMilliseconds": 56.93299999999999
+        },
+        {
+          "GeneratedIndex": 100,
+          "TokenId": 108200,
+          "ElapsedMilliseconds": 6121.0893,
+          "SincePreviousTokenMilliseconds": 56.83309999999983
+        },
+        {
+          "GeneratedIndex": 101,
+          "TokenId": 158369,
+          "ElapsedMilliseconds": 6178.153,
+          "SincePreviousTokenMilliseconds": 57.06370000000061
+        },
+        {
+          "GeneratedIndex": 102,
+          "TokenId": 8,
+          "ElapsedMilliseconds": 6235.0812,
+          "SincePreviousTokenMilliseconds": 56.92819999999938
+        },
+        {
+          "GeneratedIndex": 103,
+          "TokenId": 471,
+          "ElapsedMilliseconds": 6292.1295,
+          "SincePreviousTokenMilliseconds": 57.04830000000038
+        },
+        {
+          "GeneratedIndex": 104,
+          "TokenId": 18422,
+          "ElapsedMilliseconds": 6348.9137,
+          "SincePreviousTokenMilliseconds": 56.784200000000055
+        },
+        {
+          "GeneratedIndex": 105,
+          "TokenId": 220,
+          "ElapsedMilliseconds": 6405.8101,
+          "SincePreviousTokenMilliseconds": 56.89639999999963
+        },
+        {
+          "GeneratedIndex": 106,
+          "TokenId": 17,
+          "ElapsedMilliseconds": 6462.779,
+          "SincePreviousTokenMilliseconds": 56.96890000000076
+        },
+        {
+          "GeneratedIndex": 107,
+          "TokenId": 466,
+          "ElapsedMilliseconds": 6519.7894,
+          "SincePreviousTokenMilliseconds": 57.01039999999921
+        },
+        {
+          "GeneratedIndex": 108,
+          "TokenId": 220,
+          "ElapsedMilliseconds": 6576.6127,
+          "SincePreviousTokenMilliseconds": 56.82330000000002
+        },
+        {
+          "GeneratedIndex": 109,
+          "TokenId": 18,
+          "ElapsedMilliseconds": 6633.4176,
+          "SincePreviousTokenMilliseconds": 56.80490000000009
+        },
+        {
+          "GeneratedIndex": 110,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 6690.3895,
+          "SincePreviousTokenMilliseconds": 56.97190000000046
+        },
+        {
+          "GeneratedIndex": 111,
+          "TokenId": 12,
+          "ElapsedMilliseconds": 6747.4956,
+          "SincePreviousTokenMilliseconds": 57.10609999999997
+        },
+        {
+          "GeneratedIndex": 112,
+          "TokenId": 2783,
+          "ElapsedMilliseconds": 6804.4182,
+          "SincePreviousTokenMilliseconds": 56.922599999999875
+        },
+        {
+          "GeneratedIndex": 113,
+          "TokenId": 354,
+          "ElapsedMilliseconds": 6861.3977,
+          "SincePreviousTokenMilliseconds": 56.97950000000037
+        },
+        {
+          "GeneratedIndex": 114,
+          "TokenId": 2930,
+          "ElapsedMilliseconds": 6918.1553,
+          "SincePreviousTokenMilliseconds": 56.75759999999991
+        },
+        {
+          "GeneratedIndex": 115,
+          "TokenId": 72,
+          "ElapsedMilliseconds": 6975.2934,
+          "SincePreviousTokenMilliseconds": 57.13809999999921
+        },
+        {
+          "GeneratedIndex": 116,
+          "TokenId": 6863,
+          "ElapsedMilliseconds": 7032.3448,
+          "SincePreviousTokenMilliseconds": 57.051400000000285
+        },
+        {
+          "GeneratedIndex": 117,
+          "TokenId": 318,
+          "ElapsedMilliseconds": 7089.5413,
+          "SincePreviousTokenMilliseconds": 57.196500000000015
+        },
+        {
+          "GeneratedIndex": 118,
+          "TokenId": 51076,
+          "ElapsedMilliseconds": 7146.4502,
+          "SincePreviousTokenMilliseconds": 56.90890000000036
+        },
+        {
+          "GeneratedIndex": 119,
+          "TokenId": 15560,
+          "ElapsedMilliseconds": 7203.4031,
+          "SincePreviousTokenMilliseconds": 56.95290000000023
+        },
+        {
+          "GeneratedIndex": 120,
+          "TokenId": 20317,
+          "ElapsedMilliseconds": 7260.4087,
+          "SincePreviousTokenMilliseconds": 57.005599999999504
+        },
+        {
+          "GeneratedIndex": 121,
+          "TokenId": 1590,
+          "ElapsedMilliseconds": 7317.5077,
+          "SincePreviousTokenMilliseconds": 57.09900000000016
+        },
+        {
+          "GeneratedIndex": 122,
+          "TokenId": 496,
+          "ElapsedMilliseconds": 7374.5835,
+          "SincePreviousTokenMilliseconds": 57.07579999999962
+        },
+        {
+          "GeneratedIndex": 123,
+          "TokenId": 844,
+          "ElapsedMilliseconds": 7431.7978,
+          "SincePreviousTokenMilliseconds": 57.21430000000055
+        },
+        {
+          "GeneratedIndex": 124,
+          "TokenId": 29375,
+          "ElapsedMilliseconds": 7488.9452,
+          "SincePreviousTokenMilliseconds": 57.147399999999834
+        },
+        {
+          "GeneratedIndex": 125,
+          "TokenId": 16140,
+          "ElapsedMilliseconds": 7546.0676,
+          "SincePreviousTokenMilliseconds": 57.1224000000002
+        },
+        {
+          "GeneratedIndex": 126,
+          "TokenId": 198,
+          "ElapsedMilliseconds": 7603.1753,
+          "SincePreviousTokenMilliseconds": 57.10769999999957
+        },
+        {
+          "GeneratedIndex": 127,
+          "TokenId": 12,
+          "ElapsedMilliseconds": 7660.2671,
+          "SincePreviousTokenMilliseconds": 57.09180000000015
+        }
+      ],
+      "UploadedBytes": [
+        2623452,
+        66500000
+      ],
+      "DownloadedBytes": [
+        66498560,
+        129761280
+      ],
+      "Before": {
+        "ResidentWeightBytes": [
+          5472512000,
+          5116405760
+        ],
+        "ResidentAuxiliaryWeightBytes": [
+          5280768,
+          5301248
+        ],
+        "ResidentStateBytes": [
+          95223808,
+          95223808
+        ],
+        "LiveDeviceBytes": [
+          5575023616,
+          5217924096
+        ],
+        "PeakDeviceBytes": [
+          5598890168,
+          5242783924
+        ],
+        "UploadedBytes": [
+          5485663124,
+          5321207008
+        ],
+        "DownloadedBytes": [
+          199495680,
+          389283840
+        ],
+        "Lanes": [
+          {
+            "DeviceIndex": 0,
+            "AllocationCount": 602,
+            "RequestedBytes": 11360020372,
+            "NativeAllocatedBytes": 5598890168,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0,
+            "AllocatedBytes": 5575023616,
+            "KernelLaunchCount": 208439,
+            "CachedBytes": 23866552,
+            "RetiredBytes": 0,
+            "PoolHits": 164929,
+            "RetiredReuseCount": 0,
+            "H2DBytes": 5485663124,
+            "D2HBytes": 199495680,
+            "PeakAllocatedBytes": 5598890168,
+            "KernelMilliseconds": 0,
+            "TransferMilliseconds": 11805.318300000008,
+            "AllocationMilliseconds": 59.26550000029179,
+            "ProgramBinaryCacheHit": true,
+            "KernelArgumentSetCount": 532212,
+            "KernelArgumentCacheHitCount": 731068,
+            "ProfileEntries": []
+          },
+          {
+            "DeviceIndex": 1,
+            "AllocationCount": 599,
+            "RequestedBytes": 11391281376,
+            "NativeAllocatedBytes": 5242783924,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0,
+            "AllocatedBytes": 5217924096,
+            "KernelLaunchCount": 208393,
+            "CachedBytes": 24859828,
+            "RetiredBytes": 0,
+            "PoolHits": 165223,
+            "RetiredReuseCount": 0,
+            "H2DBytes": 5321207008,
+            "D2HBytes": 389283840,
+            "PeakAllocatedBytes": 5242783924,
+            "KernelMilliseconds": 0,
+            "TransferMilliseconds": 1799.697500000006,
+            "AllocationMilliseconds": 57.992500000306414,
+            "ProgramBinaryCacheHit": true,
+            "KernelArgumentSetCount": 544181,
+            "KernelArgumentCacheHitCount": 719685,
+            "ProfileEntries": []
+          }
+        ]
+      },
+      "After": {
+        "ResidentWeightBytes": [
+          5472512000,
+          5116405760
+        ],
+        "ResidentAuxiliaryWeightBytes": [
+          5280768,
+          5301248
+        ],
+        "ResidentStateBytes": [
+          95223808,
+          95223808
+        ],
+        "LiveDeviceBytes": [
+          5575023616,
+          5217924096
+        ],
+        "PeakDeviceBytes": [
+          5598890168,
+          5242783924
+        ],
+        "UploadedBytes": [
+          5488286576,
+          5387707008
+        ],
+        "DownloadedBytes": [
+          265994240,
+          519045120
+        ],
+        "Lanes": [
+          {
+            "DeviceIndex": 0,
+            "AllocationCount": 602,
+            "RequestedBytes": 13283109744,
+            "NativeAllocatedBytes": 5598890168,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0,
+            "AllocatedBytes": 5575023616,
+            "KernelLaunchCount": 277902,
+            "CachedBytes": 23866552,
+            "RetiredBytes": 0,
+            "PoolHits": 219920,
+            "RetiredReuseCount": 0,
+            "H2DBytes": 5488286576,
+            "D2HBytes": 265994240,
+            "PeakAllocatedBytes": 5598890168,
+            "KernelMilliseconds": 0,
+            "TransferMilliseconds": 15049.31329999998,
+            "AllocationMilliseconds": 62.92810000038913,
+            "ProgramBinaryCacheHit": true,
+            "KernelArgumentSetCount": 709549,
+            "KernelArgumentCacheHitCount": 974791,
+            "ProfileEntries": []
+          },
+          {
+            "DeviceIndex": 1,
+            "AllocationCount": 599,
+            "RequestedBytes": 13443824256,
+            "NativeAllocatedBytes": 5242783924,
+            "NativeReleasedBytes": 0,
+            "NativeReleaseCount": 0,
+            "AllocatedBytes": 5217924096,
+            "KernelLaunchCount": 277841,
+            "CachedBytes": 24859828,
+            "RetiredBytes": 0,
+            "PoolHits": 220312,
+            "RetiredReuseCount": 0,
+            "H2DBytes": 5387707008,
+            "D2HBytes": 519045120,
+            "PeakAllocatedBytes": 5242783924,
+            "KernelMilliseconds": 0,
+            "TransferMilliseconds": 2076.1783000000073,
+            "AllocationMilliseconds": 61.71280000040508,
+            "ProgramBinaryCacheHit": true,
+            "KernelArgumentSetCount": 725509,
+            "KernelArgumentCacheHitCount": 959613,
+            "ProfileEntries": []
+          }
+        ]
+      },
+      "KernelMilliseconds": {}
+    }
+  ],
+  "Logits": {
+    "Path": "C:\\Users\\takos\\source\\repos\\NNtrain\\benchmark-results\\qwen-generation-split-head-20261008\\final-sampling-split.json.logits.f32",
+    "Sha256": "3cadb4f77d859c8e1a59a8f4f207dd93b1743834c27c4d845b75fb3b715c836a",
+    "Format": "little-endian float32, row-major [snapshot, vocabulary]",
+    "TeacherSource": "first generated run",
+    "Snapshots": [
+      {
+        "Step": 0,
+        "InputTokenId": 198,
+        "VocabularySize": 248320,
+        "ByteOffset": 0,
+        "GreedyTokenId": 248068,
+        "Rms": 1.9672496002956135,
+        "Top10": [
+          {
+            "TokenId": 248068,
+            "Logit": 24.6033
+          },
+          {
+            "TokenId": 248046,
+            "Logit": 20.01892
+          },
+          {
+            "TokenId": 179082,
+            "Logit": 18.060966
+          },
+          {
+            "TokenId": 81770,
+            "Logit": 16.75825
+          },
+          {
+            "TokenId": 96019,
+            "Logit": 15.9509735
+          },
+          {
+            "TokenId": 248045,
+            "Logit": 15.758478
+          },
+          {
+            "TokenId": 5865,
+            "Logit": 15.490165
+          },
+          {
+            "TokenId": 96709,
+            "Logit": 15.222882
+          },
+          {
+            "TokenId": 115197,
+            "Logit": 14.766435
+          },
+          {
+            "TokenId": 248058,
+            "Logit": 14.470375
+          }
+        ]
+      },
+      {
+        "Step": 1,
+        "InputTokenId": 248068,
+        "VocabularySize": 248320,
+        "ByteOffset": 993280,
+        "GreedyTokenId": 198,
+        "Rms": 2.4956157420043104,
+        "Top10": [
+          {
+            "TokenId": 198,
+            "Logit": 24.606745
+          },
+          {
+            "TokenId": 271,
+            "Logit": 23.327356
+          },
+          {
+            "TokenId": 1358,
+            "Logit": 13.033342
+          },
+          {
+            "TokenId": 760,
+            "Logit": 12.718229
+          },
+          {
+            "TokenId": 56963,
+            "Logit": 11.683248
+          },
+          {
+            "TokenId": 25952,
+            "Logit": 11.434999
+          },
+          {
+            "TokenId": 176034,
+            "Logit": 10.745012
+          },
+          {
+            "TokenId": 6987,
+            "Logit": 10.737396
+          },
+          {
+            "TokenId": 13488,
+            "Logit": 10.693506
+          },
+          {
+            "TokenId": 97237,
+            "Logit": 10.630838
+          }
+        ]
+      },
+      {
+        "Step": 2,
+        "InputTokenId": 198,
+        "VocabularySize": 248320,
+        "ByteOffset": 1986560,
+        "GreedyTokenId": 760,
+        "Rms": 1.9704460985543402,
+        "Top10": [
+          {
+            "TokenId": 760,
+            "Logit": 21.581825
+          },
+          {
+            "TokenId": 90700,
+            "Logit": 16.704967
+          },
+          {
+            "TokenId": 1596,
+            "Logit": 16.67164
+          },
+          {
+            "TokenId": 176034,
+            "Logit": 16.386559
+          },
+          {
+            "TokenId": 97237,
+            "Logit": 15.679561
+          },
+          {
+            "TokenId": 1421,
+            "Logit": 15.042133
+          },
+          {
+            "TokenId": 37405,
+            "Logit": 14.674576
+          },
+          {
+            "TokenId": 120508,
+            "Logit": 13.646221
+          },
+          {
+            "TokenId": 8160,
+            "Logit": 13.403015
+          },
+          {
+            "TokenId": 99496,
+            "Logit": 13.227772
+          }
+        ]
+      },
+      {
+        "Step": 3,
+        "InputTokenId": 760,
+        "VocabularySize": 248320,
+        "ByteOffset": 2979840,
+        "GreedyTokenId": 1156,
+        "Rms": 3.056681831741133,
+        "Top10": [
+          {
+            "TokenId": 1156,
+            "Logit": 28.548615
+          },
+          {
+            "TokenId": 10452,
+            "Logit": 17.025475
+          },
+          {
+            "TokenId": 97237,
+            "Logit": 14.836049
+          },
+          {
+            "TokenId": 3296,
+            "Logit": 14.288271
+          },
+          {
+            "TokenId": 3215,
+            "Logit": 14.252756
+          },
+          {
+            "TokenId": 176034,
+            "Logit": 14.044023
+          },
+          {
+            "TokenId": 846,
+            "Logit": 13.508782
+          },
+          {
+            "TokenId": 4137,
+            "Logit": 13.043722
+          },
+          {
+            "TokenId": 2570,
+            "Logit": 12.698639
+          },
+          {
+            "TokenId": 120508,
+            "Logit": 12.41197
+          }
+        ]
+      },
+      {
+        "Step": 4,
+        "InputTokenId": 1156,
+        "VocabularySize": 248320,
+        "ByteOffset": 3973120,
+        "GreedyTokenId": 369,
+        "Rms": 3.8760413075940585,
+        "Top10": [
+          {
+            "TokenId": 369,
+            "Logit": 26.532843
+          },
+          {
+            "TokenId": 16561,
+            "Logit": 17.606194
+          },
+          {
+            "TokenId": 4439,
+            "Logit": 14.464266
+          },
+          {
+            "TokenId": 579,
+            "Logit": 14.40159
+          },
+          {
+            "TokenId": 6587,
+            "Logit": 14.322319
+          },
+          {
+            "TokenId": 2640,
+            "Logit": 13.655902
+          },
+          {
+            "TokenId": 9859,
+            "Logit": 13.16333
+          },
+          {
+            "TokenId": 682,
+            "Logit": 13.152433
+          },
+          {
+            "TokenId": 5947,
+            "Logit": 12.355267
+          },
+          {
+            "TokenId": 513,
+            "Logit": 11.84602
+          }
+        ]
+      },
+      {
+        "Step": 5,
+        "InputTokenId": 369,
+        "VocabularySize": 248320,
+        "ByteOffset": 4966400,
+        "GreedyTokenId": 9859,
+        "Rms": 3.3132685697303637,
+        "Top10": [
+          {
+            "TokenId": 9859,
+            "Logit": 29.812054
+          },
+          {
+            "TokenId": 303,
+            "Logit": 17.525776
+          },
+          {
+            "TokenId": 4439,
+            "Logit": 16.27512
+          },
+          {
+            "TokenId": 16561,
+            "Logit": 16.062677
+          },
+          {
+            "TokenId": 4237,
+            "Logit": 15.217949
+          },
+          {
+            "TokenId": 91865,
+            "Logit": 14.654081
+          },
+          {
+            "TokenId": 68311,
+            "Logit": 14.553617
+          },
+          {
+            "TokenId": 5315,
+            "Logit": 14.21303
+          },
+          {
+            "TokenId": 3221,
+            "Logit": 13.619553
+          },
+          {
+            "TokenId": 328,
+            "Logit": 13.434404
+          }
+        ]
+      },
+      {
+        "Step": 6,
+        "InputTokenId": 9859,
+        "VocabularySize": 248320,
+        "ByteOffset": 5959680,
+        "GreedyTokenId": 364,
+        "Rms": 3.487097106493443,
+        "Top10": [
+          {
+            "TokenId": 364,
+            "Logit": 25.204803
+          },
+          {
+            "TokenId": 883,
+            "Logit": 24.318375
+          },
+          {
+            "TokenId": 1204,
+            "Logit": 23.62954
+          },
+          {
+            "TokenId": 303,
+            "Logit": 23.406267
+          },
+          {
+            "TokenId": 328,
+            "Logit": 23.37247
+          },
+          {
+            "TokenId": 728,
+            "Logit": 22.331314
+          },
+          {
+            "TokenId": 17425,
+            "Logit": 18.483433
+          },
+          {
+            "TokenId": 318,
+            "Logit": 16.315891
+          },
+          {
+            "TokenId": 1332,
+            "Logit": 14.718538
+          },
+          {
+            "TokenId": 25,
+            "Logit": 14.182229
+          }
+        ]
+      },
+      {
+        "Step": 7,
+        "InputTokenId": 364,
+        "VocabularySize": 248320,
+        "ByteOffset": 6952960,
+        "GreedyTokenId": 17425,
+        "Rms": 3.631060266758852,
+        "Top10": [
+          {
+            "TokenId": 17425,
+            "Logit": 32.24847
+          },
+          {
+            "TokenId": 279,
+            "Logit": 22.85325
+          },
+          {
+            "TokenId": 10895,
+            "Logit": 22.629845
+          },
+          {
+            "TokenId": 1204,
+            "Logit": 22.613527
+          },
+          {
+            "TokenId": 4944,
+            "Logit": 20.71074
+          },
+          {
+            "TokenId": 328,
+            "Logit": 19.393208
+          },
+          {
+            "TokenId": 264,
+            "Logit": 19.243292
+          },
+          {
+            "TokenId": 51692,
+            "Logit": 19.054663
+          },
+          {
+            "TokenId": 58289,
+            "Logit": 18.217516
+          },
+          {
+            "TokenId": 5337,
+            "Logit": 18.093988
+          }
+        ]
+      },
+      {
+        "Step": 8,
+        "InputTokenId": 17425,
+        "VocabularySize": 248320,
+        "ByteOffset": 7946240,
+        "GreedyTokenId": 310,
+        "Rms": 2.703711503324124,
+        "Top10": [
+          {
+            "TokenId": 310,
+            "Logit": 27.896114
+          },
+          {
+            "TokenId": 48637,
+            "Logit": 23.509985
+          },
+          {
+            "TokenId": 383,
+            "Logit": 22.678892
+          },
+          {
+            "TokenId": 17458,
+            "Logit": 22.039322
+          },
+          {
+            "TokenId": 14,
+            "Logit": 20.939606
+          },
+          {
+            "TokenId": 1204,
+            "Logit": 20.632698
+          },
+          {
+            "TokenId": 31358,
+            "Logit": 20.039642
+          },
+          {
+            "TokenId": 7148,
+            "Logit": 19.8365
+          },
+          {
+            "TokenId": 83548,
+            "Logit": 19.795254
+          },
+          {
+            "TokenId": 60846,
+            "Logit": 19.37247
+          }
+        ]
+      },
+      {
+        "Step": 9,
+        "InputTokenId": 310,
+        "VocabularySize": 248320,
+        "ByteOffset": 8939520,
+        "GreedyTokenId": 279,
+        "Rms": 2.3669747609504586,
+        "Top10": [
+          {
+            "TokenId": 279,
+            "Logit": 23.288048
+          },
+          {
+            "TokenId": 328,
+            "Logit": 18.3574
+          },
+          {
+            "TokenId": 264,
+            "Logit": 18.060822
+          },
+          {
+            "TokenId": 615,
+            "Logit": 15.082562
+          },
+          {
+            "TokenId": 710,
+            "Logit": 14.732308
+          },
+          {
+            "TokenId": 7741,
+            "Logit": 14.621525
+          },
+          {
+            "TokenId": 19121,
+            "Logit": 14.134173
+          },
+          {
+            "TokenId": 4893,
+            "Logit": 14.126748
+          },
+          {
+            "TokenId": 443,
+            "Logit": 14.059514
+          },
+          {
+            "TokenId": 1204,
+            "Logit": 13.936598
+          }
+        ]
+      },
+      {
+        "Step": 10,
+        "InputTokenId": 279,
+        "VocabularySize": 248320,
+        "ByteOffset": 9932800,
+        "GreedyTokenId": 4893,
+        "Rms": 3.1274572361294024,
+        "Top10": [
+          {
+            "TokenId": 4893,
+            "Logit": 20.778328
+          },
+          {
+            "TokenId": 10452,
+            "Logit": 18.57986
+          },
+          {
+            "TokenId": 328,
+            "Logit": 17.757374
+          },
+          {
+            "TokenId": 25376,
+            "Logit": 16.599447
+          },
+          {
+            "TokenId": 4526,
+            "Logit": 15.633169
+          },
+          {
+            "TokenId": 5145,
+            "Logit": 14.87669
+          },
+          {
+            "TokenId": 19121,
+            "Logit": 14.866974
+          },
+          {
+            "TokenId": 443,
+            "Logit": 14.700366
+          },
+          {
+            "TokenId": 28936,
+            "Logit": 14.4401865
+          },
+          {
+            "TokenId": 30495,
+            "Logit": 14.224361
+          }
+        ]
+      },
+      {
+        "Step": 11,
+        "InputTokenId": 4893,
+        "VocabularySize": 248320,
+        "ByteOffset": 10926080,
+        "GreedyTokenId": 25376,
+        "Rms": 2.8327956288741696,
+        "Top10": [
+          {
+            "TokenId": 25376,
+            "Logit": 25.817993
+          },
+          {
+            "TokenId": 19121,
+            "Logit": 16.735554
+          },
+          {
+            "TokenId": 7521,
+            "Logit": 16.44475
+          },
+          {
+            "TokenId": 7741,
+            "Logit": 15.962879
+          },
+          {
+            "TokenId": 30495,
+            "Logit": 15.757578
+          },
+          {
+            "TokenId": 9673,
+            "Logit": 14.273069
+          },
+          {
+            "TokenId": 11401,
+            "Logit": 14.195796
+          },
+          {
+            "TokenId": 17828,
+            "Logit": 14.1389885
+          },
+          {
+            "TokenId": 231539,
+            "Logit": 13.757521
+          },
+          {
+            "TokenId": 4526,
+            "Logit": 13.503787
+          }
+        ]
+      },
+      {
+        "Step": 12,
+        "InputTokenId": 25376,
+        "VocabularySize": 248320,
+        "ByteOffset": 11919360,
+        "GreedyTokenId": 16366,
+        "Rms": 3.2413894535923027,
+        "Top10": [
+          {
+            "TokenId": 16366,
+            "Logit": 25.219494
+          },
+          {
+            "TokenId": 4599,
+            "Logit": 19.426722
+          },
+          {
+            "TokenId": 318,
+            "Logit": 19.152094
+          },
+          {
+            "TokenId": 70661,
+            "Logit": 18.486504
+          },
+          {
+            "TokenId": 13308,
+            "Logit": 16.655983
+          },
+          {
+            "TokenId": 29149,
+            "Logit": 15.520409
+          },
+          {
+            "TokenId": 49669,
+            "Logit": 14.85081
+          },
+          {
+            "TokenId": 314,
+            "Logit": 13.577371
+          },
+          {
+            "TokenId": 67277,
+            "Logit": 13.28165
+          },
+          {
+            "TokenId": 110557,
+            "Logit": 13.075665
+          }
+        ]
+      },
+      {
+        "Step": 13,
+        "InputTokenId": 16366,
+        "VocabularySize": 248320,
+        "ByteOffset": 12912640,
+        "GreedyTokenId": 318,
+        "Rms": 2.8139550775428686,
+        "Top10": [
+          {
+            "TokenId": 318,
+            "Logit": 26.732517
+          },
+          {
+            "TokenId": 303,
+            "Logit": 20.756607
+          },
+          {
+            "TokenId": 314,
+            "Logit": 17.738474
+          },
+          {
+            "TokenId": 3376,
+            "Logit": 16.5623
+          },
+          {
+            "TokenId": 13,
+            "Logit": 15.802185
+          },
+          {
+            "TokenId": 120683,
+            "Logit": 15.354811
+          },
+          {
+            "TokenId": 14,
+            "Logit": 15.221755
+          },
+          {
+            "TokenId": 11,
+            "Logit": 15.204205
+          },
+          {
+            "TokenId": 9616,
+            "Logit": 14.047667
+          },
+          {
+            "TokenId": 31766,
+            "Logit": 13.114496
+          }
+        ]
+      },
+      {
+        "Step": 14,
+        "InputTokenId": 318,
+        "VocabularySize": 248320,
+        "ByteOffset": 13905920,
+        "GreedyTokenId": 120683,
+        "Rms": 2.171292171093717,
+        "Top10": [
+          {
+            "TokenId": 120683,
+            "Logit": 22.560911
+          },
+          {
+            "TokenId": 49732,
+            "Logit": 19.085003
+          },
+          {
+            "TokenId": 29805,
+            "Logit": 18.129013
+          },
+          {
+            "TokenId": 98823,
+            "Logit": 17.693176
+          },
+          {
+            "TokenId": 136362,
+            "Logit": 16.930365
+          },
+          {
+            "TokenId": 95871,
+            "Logit": 16.906141
+          },
+          {
+            "TokenId": 1719,
+            "Logit": 16.216822
+          },
+          {
+            "TokenId": 62669,
+            "Logit": 16.175385
+          },
+          {
+            "TokenId": 161607,
+            "Logit": 16.00021
+          },
+          {
+            "TokenId": 45,
+            "Logit": 15.869373
+          }
+        ]
+      },
+      {
+        "Step": 15,
+        "InputTokenId": 120683,
+        "VocabularySize": 248320,
+        "ByteOffset": 14899200,
+        "GreedyTokenId": 98358,
+        "Rms": 2.2724416162959775,
+        "Top10": [
+          {
+            "TokenId": 98358,
+            "Logit": 22.276613
+          },
+          {
+            "TokenId": 247304,
+            "Logit": 14.1602335
+          },
+          {
+            "TokenId": 246934,
+            "Logit": 13.616865
+          },
+          {
+            "TokenId": 15303,
+            "Logit": 12.863672
+          },
+          {
+            "TokenId": 8,
+            "Logit": 12.224896
+          },
+          {
+            "TokenId": 471,
+            "Logit": 12.210661
+          },
+          {
+            "TokenId": 95825,
+            "Logit": 11.843142
+          },
+          {
+            "TokenId": 8998,
+            "Logit": 11.547021
+          },
+          {
+            "TokenId": 116498,
+            "Logit": 11.382988
+          },
+          {
+            "TokenId": 247663,
+            "Logit": 11.379177
+          }
+        ]
+      }
+    ]
+  },
+  "Notes": "The model is loaded once per process. The first run has no generation warmup; later runs reuse weights and allocation capacity, and GenerateTokenIds resets sequence state. OS file caches and GPU driver caches are not flushed. PrefillThroughFirstTokenMilliseconds and PrefillTokensPerSecond include state reset, the full prompt, first head projection and argmax. Decode timing spans the first to last output callback and excludes the first generated token. Total includes generation cleanup; tokenization, loading, snapshots, console output, model hashing and JSON export are outside timed runs. Callback bookkeeping is included. Kernel durations are sums of completed per-device events and must not be added to wall-clock durations. Memory counters are backend allocation bytes; peaks are cumulative across the model lifetime and include cached or retired buffers. They are not driver-reported VRAM measurements. Upload/download differences include cross-context transport. A model SHA256 is computed after all runs. Generated IDs are retained because different kernel reduction orders can change greedy continuations. No equality across kernel modes is assumed. Adapter loading and optional fixed-continuation complete-logit downloads are outside all timed generation runs."
+}

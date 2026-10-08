@@ -38,6 +38,7 @@ public sealed class InferenceSession : IDisposable
     private readonly int _inferenceBufferPoolMiB;
     private readonly int _inferenceDeferredReleaseMiB;
     private readonly bool _inferenceBatchRecurrent;
+    private readonly bool _inferenceSplitOutputHead;
     private readonly bool _preloadVisionEncoder;
     private Qwen35QuantizedModel? _model;
     private Qwen2GgufTokenizer? _tokenizer;
@@ -57,7 +58,8 @@ public sealed class InferenceSession : IDisposable
         bool inferenceXmxPackedPrefill = false, bool useXmxVisionLinear = true,
         bool useXmxVisionAttention = true, bool inferenceXmxFactoredPrefill = true,
         bool useFlashVisionAttention = false, bool inferenceResidentIq2Panels = false,
-        bool inferenceSubgroupRecurrentRms = true, bool inferenceXmxGgufBslmPrefill = true)
+        bool inferenceSubgroupRecurrentRms = true, bool inferenceXmxGgufBslmPrefill = true,
+        bool inferenceSplitOutputHead = true)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(inferencePrefillChunkTokens);
         _inferencePrefillChunkTokens = inferencePrefillChunkTokens;
@@ -77,6 +79,7 @@ public sealed class InferenceSession : IDisposable
         _inferenceBufferPoolMiB = inferenceBufferPoolMiB;
         _inferenceDeferredReleaseMiB = inferenceDeferredReleaseMiB;
         _inferenceBatchRecurrent = inferenceBatchRecurrent;
+        _inferenceSplitOutputHead = inferenceSplitOutputHead;
         _preloadVisionEncoder = prepareVisionOnLoad;
     }
 
@@ -149,6 +152,9 @@ public sealed class InferenceSession : IDisposable
                         InferencePrefillChunkTokens = _inferencePrefillChunkTokens,
                         InferenceBatchMixedAttention = _inferenceBatchMixedAttention,
                         InferenceBatchTextAttention = true,
+                        // Use both GPUs for the Q5_K vocabulary projection when
+                        // the model's format, adapters and memory budget allow it.
+                        InferenceSplitOutputHead = _inferenceSplitOutputHead && devices.Length > 1,
                         CollectKernelTimings = _collectKernelTimings,
                         InferenceProjectionRows = _inferenceProjectionRows,
                         InferenceXmxPrefill = _inferenceXmxPrefill,

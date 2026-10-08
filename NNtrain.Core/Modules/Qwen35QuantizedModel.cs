@@ -34,7 +34,8 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
     public Qwen35GgufDescriptor Descriptor { get; }
     public IReadOnlyList<long> ResidentWeightBytes => _lanes.Select(lane =>
         _matrices.Values.Where(matrix => ReferenceEquals(matrix.Lane, lane))
-            .Sum(matrix => (long)matrix.StorageBytes)).ToArray();
+            .Sum(matrix => (long)matrix.StorageBytes)
+            + (_splitOutputHead is { } split && ReferenceEquals(split.Peer, lane) ? split.WeightBytes : 0)).ToArray();
     public IReadOnlyList<long> ResidentAuxiliaryWeightBytes => _lanes.Select(lane => _auxiliaryBytes.GetValueOrDefault(lane)).ToArray();
     public IReadOnlyList<long> ResidentStateBytes => _lanes.Select(lane =>
         _states.Where(state => ReferenceEquals(state.Lane, lane)).Sum(state => state.StorageBytes)).ToArray();
@@ -54,7 +55,9 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if ((uint)slot >= (uint)_lanes.Count) throw new ArgumentOutOfRangeException(nameof(slot));
-        _lanes[slot].SetExternalMemoryReservation(bytes);
+        ArcExecutionLane lane = _lanes[slot];
+        ReleaseSplitOutputHeadForReservation(lane, bytes);
+        lane.SetExternalMemoryReservation(bytes);
     }
     /// <summary>Prompt tokens skipped by the most recent prefix-reuse generation.</summary>
     public int LastReusedPromptTokens => _lastReusedPromptTokens;
@@ -295,6 +298,7 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                 state.Initialize();
                 model._layerBindings.Add(new LayerBindings(model, layer, state));
             }
+            model.InitializeSplitOutputHead(gguf, progress);
             for (int slot = 0; slot < selected.Length; slot++)
             {
                 model._lanes[slot].Synchronize();
@@ -499,7 +503,7 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                 hidden!.Dispose(); hidden = finalNorm;
             }
             MoveToLane(ref hidden, ref lane, OutputMatrix.Lane, d.EmbeddingLength);
-            ArcBuffer logits = ProjectMatrix("output.weight", OutputMatrix, hidden!);
+            ArcBuffer logits = TrySplitOutputHead(hidden!) ?? ProjectMatrix("output.weight", OutputMatrix, hidden!);
             _position++;
             return logits;
         }
@@ -907,6 +911,7 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         _disposed = true;
         foreach (var adapter in _lora.Values) adapter.Dispose();
         _lora.Clear();
+        _splitOutputHead?.Dispose(); _splitOutputHead = null;
         foreach (LayerState state in _states) state.Dispose();
         foreach (Matrix matrix in _matrices.Values) matrix.Dispose();
         foreach (ArcBuffer buffer in _dense.Values) buffer.Dispose();
@@ -1095,6 +1100,10 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
             && (_forwardRows > 1 || _inferenceXmxPrefill || _iq2TiledForward) && _kernel == Qwen35QuantizedKernel.Subgroup
             && _type is Qwen2Gguf.Q4KType or Qwen35Gguf.IQ2SType or Qwen35Gguf.IQ3SType;
         internal bool IsIq2S => _type == Qwen35Gguf.IQ2SType;
+        internal uint StorageType => _type;
+        internal bool SupportsSplitOutputHead => _type == Qwen35Gguf.Q5KType
+            && _kernel == Qwen35QuantizedKernel.Subgroup && !Lane.Options.Qwen35TrainingKernels;
+        internal ArcBuffer EncodedOutputHead => _encoded;
         internal Matrix(ArcExecutionLane lane, GgufTensorInfo info, byte[] payload, Qwen35QuantizedKernel kernel, int transposeRows, int forwardRows, int q5ForwardRows, bool trainingIq2Bf16XmxForward, bool trainingIq2Fp16XmxForward, bool trainingIq2RollingTranspose, int transposeOctetRows, bool inferenceXmxPrefill = false, bool inferenceXmxPackedPrefill = false, bool inferenceXmxFactoredPrefill = false, bool inferenceResidentIq2Panels = false, bool inferenceXmxGgufBslmPrefill = false, bool iq2TiledForward = false, bool iq2TiledBackward = false, bool inferenceIq2DecodePair4 = false, bool inferenceIq2DecodeLevel3 = false)
         {
             _transposeRows = transposeRows;

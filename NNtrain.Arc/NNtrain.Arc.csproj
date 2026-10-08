@@ -23,6 +23,7 @@
     <EmbeddedResource Include="Kernels\qwen35_prefill_xmx.cl" />
     <EmbeddedResource Include="Kernels\qwen35_prefill_xmx_tiles.cl" />
     <EmbeddedResource Include="Kernels\qwen35_iq.cl" />
+    <EmbeddedResource Include="Kernels\qwen35_output_head.cl" />
     <EmbeddedResource Include="Kernels\qwen35_iq2_decode132.cl" />
     <EmbeddedResource Include="Kernels\qwen35_iq2_tiles.cl" />
     <EmbeddedResource Include="Kernels\qwen35_prism.cl" />

@@ -17,6 +17,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 import statistics
@@ -117,7 +118,7 @@ def logits_check(path, document, required):
     require(isinstance(snapshots, list) and snapshots, f"{path}: logits snapshots missing")
     vocabulary = document["Shape"]["VocabularySize"]
     generated = document["Samples"][0]["GeneratedTokenIds"]
-    require(len(snapshots) <= len(generated), f"{path}: logits must follow the measured greedy continuation")
+    require(len(snapshots) <= len(generated), f"{path}: logits must follow the measured continuation")
     require(logits_path.stat().st_size == len(snapshots) * vocabulary * 4, f"{path}: wrong logits file length")
     with logits_path.open("rb") as stream:
         for index, snapshot in enumerate(snapshots):
@@ -132,7 +133,9 @@ def logits_check(path, document, required):
             require(len(values) == vocabulary and all(math.isfinite(value) for value in values),
                     f"{path}: nonfinite/truncated full logits")
             top = max(range(vocabulary), key=values.__getitem__)
-            require(snapshot.get("GreedyTokenId") == top == generated[index], f"{path}: logit greedy IDs differ from measured output")
+            require(snapshot.get("GreedyTokenId") == top, f"{path}: logit argmax metadata differs")
+            if document["Sampling"]["Method"] == "GPU greedy argmax":
+                require(top == generated[index], f"{path}: logit greedy IDs differ from measured output")
     return {"path": str(logits_path), "sha256": actual_hash, "bytes": logits_path.stat().st_size,
             "snapshotCount": len(snapshots), "vocabularySize": vocabulary,
             "allFinite": True, "matchesMeasuredContinuation": True, "metadata": metadata}
@@ -156,8 +159,18 @@ def validate(path, label, args):
     require(isinstance(devices, list) and devices and len({item["Index"] for item in devices}) == len(devices),
             f"{path}: distinct devices required")
     sampling = document.get("Sampling", {})
-    require(sampling.get("Method") == "GPU greedy argmax" and sampling.get("Temperature") == 0
-            and sampling.get("EosTokenId") is None, f"{path}: expected fixed-length greedy sampling")
+    require(sampling.get("EosTokenId") is None, f"{path}: expected fixed output length without EOS stop")
+    method = sampling.get("Method")
+    temperature = number(sampling.get("Temperature"), str(path) + ".Sampling.Temperature")
+    if method == "GPU greedy argmax":
+        require(temperature == 0 or sampling.get("TopK") == 1, f"{path}: inconsistent greedy sampling")
+    else:
+        require(method == "Seeded CPU top-k/top-p" and temperature > 0,
+                f"{path}: unsupported sampling policy")
+        integer(sampling.get("TopK"), str(path) + ".Sampling.TopK", 2)
+        integer(sampling.get("RandomSeed"), str(path) + ".Sampling.RandomSeed")
+        require(0 < number(sampling.get("TopP"), str(path) + ".Sampling.TopP") <= 1,
+                f"{path}: invalid nucleus sampling mass")
     vocabulary = integer(document.get("Shape", {}).get("VocabularySize"), str(path) + ".vocabulary", 1)
     prompt_ids = ids_check(document.get("PromptTokenIds"), str(path) + ".PromptTokenIds", vocabulary)
     requested = integer(document.get("RequestedNewTokens"), str(path) + ".RequestedNewTokens", 2)
@@ -308,8 +321,9 @@ def escape(value):
     return str(value).replace("|", "\\|").replace("\n", " ")
 
 
-def link(path):
-    return f"[{Path(path).name}](<{Path(path).as_posix()}>)"
+def link(path, relative_to):
+    target = Path(os.path.relpath(path, relative_to)).as_posix()
+    return f"[{Path(path).name}](<{target}>)"
 
 
 def table(headers, rows):
@@ -321,8 +335,11 @@ def render(summary, output):
     records = [summary["baseline"]] + summary["candidates"]
     raw = records[0]["raw"]
     device_text = "; ".join(f"GPU {item['Index']}: {item['Name']}" for item in raw["Devices"])
+    sampling = raw["Sampling"]
+    sampling_text = ("greedy生成" if sampling["Method"] == "GPU greedy argmax" else
+                     f"seed固定sampling（temperature={sampling['Temperature']}、top-p={sampling['TopP']}、top-k={sampling['TopK']}、seed={sampling['RandomSeed']}）")
     lines = ["# Qwen GGUF 生成速度の比較", "", "## 測定範囲", "",
-             f"同じベースモデル・{len(raw['Devices'])} GPU（{device_text}）・{len(raw['PromptTokenIds'])} tokenの同じprompt・greedy生成・LoRAなしで比較。各runで{raw['RequestedNewTokens']} tokenを生成。EOSによる早期終了はしない。",
+             f"同じベースモデル・{len(raw['Devices'])} GPU（{device_text}）・{len(raw['PromptTokenIds'])} tokenの同じprompt・{sampling_text}・LoRAなしで比較。各runで{raw['RequestedNewTokens']} tokenを生成。EOSによる早期終了はしない。",
              "最初の出力tokenから最後の出力tokenまでをdecode時間とし、`(生成数−1)×1000 / decode ms`でtok/sを再計算した。prompt処理と最初のtoken生成、モデルロード、logits保存はこの指標に含めない。",
              f"先頭{summary['discardFirstRuns']} runを速度集計から除外。除外runも生成ID・時刻・logits整合性の検証対象。実行順は各JSONの時刻に記録されており、別プロセス/別セッション間の変動を含む。",
              "全モデルのdecode測定であり、既存のprefillやIQ2演算単体の倍率とは別の値。", "",
@@ -340,7 +357,7 @@ def render(summary, output):
         lines += [f"### {escape(item['candidate'])}", "", "全run・全生成token ID：旧と完全一致。"]
         if item["fullLogitBytesEqual"]:
             record = next(value for value in records if value["label"] == item["candidate"])
-            lines += [f"全語彙logits：{record['logits']['snapshotCount']} snapshotの全バイトが旧と一致。SHA-256、サイズ、有限値、入力continuation、greedy IDを再検査。"]
+            lines += [f"全語彙logits：{record['logits']['snapshotCount']} snapshotの全バイトが旧と一致。SHA-256、サイズ、有限値、入力continuation、argmax IDを再検査。"]
         else:
             lines += ["全語彙logitsの比較は未実施。生成ID一致のみを検証。"]
         lines += [""] + table(["設定", "旧", "候補"], [[key, value["original"], value["candidate"]]
@@ -349,17 +366,17 @@ def render(summary, output):
         lines += ["## 参考：単一DeltaNet更新の実験", "",
                   "以下は別の単体測定。上の全モデルtok/sには加算・乗算しない。遅い候補は高速化候補として採用しない。", ""]
         for artifact in summary["deltaExperiments"]:
-            lines += [f"出典：{link(artifact['path'])}", ""]
+            lines += [f"出典：{link(artifact['path'], output)}", ""]
             lines += table(["profiling", "旧wall ms/更新", "候補wall ms/更新", "旧/候補倍率", "出力・状態"], [
                 [item["profile"], f"{item['originalWallPerUpdate']['median']:.6f}",
                  f"{item['candidateWallPerUpdate']['median']:.6f}", f"{item['hostWallMedianSpeedup']:.3f}×", "bit一致"]
                 for item in artifact["experiments"]]) + [""]
     lines += ["## 証拠と再現条件", "", f"モデルSHA-256：`{raw['Model']['Sha256']}`", ""]
     lines += table(["経路", "生JSON", "SHA-256", "開始UTC", "終了UTC"], [
-        [item["label"], link(item["path"]), item["sha256"], item["raw"]["StartedUtc"], item["raw"]["CompletedUtc"]] for item in records])
+        [item["label"], link(item["path"], output), item["sha256"], item["raw"]["StartedUtc"], item["raw"]["CompletedUtc"]] for item in records])
     lines += [""] + table(["測定バイナリ", "SHA-256"], raw["BinarySha256"].items())
     lines += ["", "元JSONとlogitsファイルは変更していない。全rawデータ、再計算した各run・token間隔、設定差、完全一致の結果は以下に保存。",
-              link(output / "decode-summary.json"), ""]
+              link(output / "decode-summary.json", output), ""]
     return "\n".join(lines)
 
 
@@ -389,7 +406,7 @@ def main(argv=None):
     comparisons = [compare(records[0], record, args) for record in records[1:]]
     summary = {"schemaVersion": 1, "validatedComplete": True,
                "generatedUtc": dt.datetime.now(dt.timezone.utc).isoformat(),
-               "scope": "Actual full-model greedy decode between first and last callbacks; prefill/first output excluded.",
+               "scope": "Actual full-model decode between first and last callbacks; prefill/first output excluded. Sampling method and seed are recorded in the raw results.",
                "minimumRunsRequired": args.minimum_runs, "discardFirstRuns": args.discard_first,
                "allowedOptionChanges": sorted(PLANNED_OPTION_CHANGES | set(args.allow_option_change)),
                "requireLogitBytesEqual": args.require_logits,

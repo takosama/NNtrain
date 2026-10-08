@@ -1,0 +1,130 @@
+{
+  "baseCommit": "a03813987e9b8093a4ef6b5f63fed5d31b2126f6",
+  "sourcePolicy": "Only these staged source changes were exported and built for the final measurements. Unrelated working-tree changes were excluded.",
+  "sourceFiles": {
+    "NNtrain.Arc/ArcExecutionLane.cs": {
+      "gitBlob": "d5880f0a10632817d881c553f16b7997b64a36c0",
+      "sha256": "8992b2f8ef8eb204930a8842df78bf210eaf84598f721b024bc1aaa11a272e1b"
+    },
+    "NNtrain.Arc/Kernels/qwen35_output_head.cl": {
+      "gitBlob": "667741b1d519afb4896c79322931e7c338f10100",
+      "sha256": "6e0a7f0bd7ca720b6c8a71ef5c02dba2a66a2e736a40ab4aa3e669841602c609"
+    },
+    "NNtrain.Arc/NNtrain.Arc.csproj": {
+      "gitBlob": "e343eb90ef86ac600c19fb4d78b41a97834bfec4",
+      "sha256": "1852e56b9cc25367eb48708cc67cbed376dd57fbde068e2bb5ba42420c09ee1e"
+    },
+    "NNtrain.Benchmarks/Qwen35GenerationProbe.cs": {
+      "gitBlob": "bd7072ad43041bf23be4fd751d8a18f6abe9bbec",
+      "sha256": "441166049640ef139f32104c09047f726f7c17f2c2f2a0ba28ed957d21f6ed4e"
+    },
+    "NNtrain.Core.Tests/Qwen35SplitOutputHeadTests.cs": {
+      "gitBlob": "fd31a4a60f2cb9b26017ccd741db88a72239616f",
+      "sha256": "9fdcff56c71d8a42c7ea1ebfa2a0dcab9b8f4a94b02b6a7f6593336bd7ade0ca"
+    },
+    "NNtrain.Core/Modules/Qwen35ExecutionOptions.cs": {
+      "gitBlob": "dfe85190e9a2e197a4fa1581bca02cacf34c13df",
+      "sha256": "5656d3946e48e03faefd54cb4ecadf5db6a427e6fd918586acc1b37963936ee9"
+    },
+    "NNtrain.Core/Modules/Qwen35QuantizedModel.OutputHead.cs": {
+      "gitBlob": "fcef3f1a615825ef96c8d8e6a90bed58835da4b8",
+      "sha256": "d39c3461e939a6afe827c12f6636f167f73dae177d302837ce9ad998d227779c"
+    },
+    "NNtrain.Core/Modules/Qwen35QuantizedModel.cs": {
+      "gitBlob": "cb4ff3150a4eb24f6ab03a20ea4538da01844243",
+      "sha256": "2a6c6cfd23bffd1311cfe8c6c0f4a895c6d3b4c4382c5e7fb3f1216eccdec323"
+    },
+    "NNtrain.Gui/InferenceSession.cs": {
+      "gitBlob": "8f2304dd0064aeef80cde66d2b3bec812d94cfec",
+      "sha256": "5ea90696c80ddccae9411d0dc5b504a92ec48c9ed9d01a66935da9a4c3fbdf38"
+    },
+    "tools/iq2s-production-bench/summarize_decode.py": {
+      "gitBlob": "3104553f781cb3f777edb1e25f302b26eb113bc6",
+      "sha256": "22e7e5fa7c5be30fb5d81a45506cc3b1a2073528d3ee2f3a03ad5ce539ec9c1a"
+    }
+  },
+  "measuredBinarySha256": {
+    "NNtrain.Core": "d1a35498a0c5fbb6ab58896c30a490d935be935225c12510b8e94d74e74c7cef",
+    "NNtrain.Arc": "b5da050044efffbca061b864fd59d1d18d1b2c9cf448df9e5047f89377ee61b9",
+    "NNtrain.Benchmarks": "1f4c6dfd85edf4b832467474c9843ee802e335a24c20f48274a8dcc74abe6b85"
+  },
+  "artifacts": {
+    "final-greedy-original.json": {
+      "sha256": "29ebda3aef2a19ed7a695ac0799f39576160851f947a96805d1ff632c3a6b93c",
+      "bytes": 171116
+    },
+    "final-greedy-split.json": {
+      "sha256": "230b067eeca93f638902e980cb47eb11c0e12ccd64a06ad5c2e12825950425f5",
+      "bytes": 171395
+    },
+    "final-sampling-original.json": {
+      "sha256": "9ff25933ad3513da9c882412c1ea3e118c7d1dd90be89f8bc1e292238db5f203",
+      "bytes": 171513
+    },
+    "final-sampling-split.json": {
+      "sha256": "e0caed02ce27b6b15b70440d39163379da2ad18efed09ed105d657f919570b6f",
+      "bytes": 171792
+    },
+    "final-greedy-report/decode-summary.json": {
+      "sha256": "c3b0df53be561daca8b37549005726d7354e7dea1cca6ab8f6e31c112c26239f",
+      "bytes": 492688
+    },
+    "final-greedy-report/report.decode.ja.md": {
+      "sha256": "ce7500ec53abe6dd391ecb164fb17c1d8bdbe17fe0a47a92dba499edfc85fc94",
+      "bytes": 3201
+    },
+    "final-sampling-report/decode-summary.json": {
+      "sha256": "3f3d66664aefab33ff484f8cb325f59c0a3a530e5d80a4fb884901ba0e8be6c7",
+      "bytes": 493657
+    },
+    "final-sampling-report/report.decode.ja.md": {
+      "sha256": "ad3091cd525dbcb95f6bdf8623bc70284e09f3a2985c71c328eae46f1f71a159",
+      "bytes": 3272
+    },
+    "original-options.json": {
+      "sha256": "85a5b3b4d01b459e5395515672eaf227b93216807c1b6e6fe632def3528daa5d",
+      "bytes": 710
+    },
+    "split-options.json": {
+      "sha256": "42275ccda1f01585d865ad7261e40aa62e841410b5af758d80d7e5788992cebd",
+      "bytes": 709
+    },
+    "report.ja.md": {
+      "sha256": "37cd7141720e1d323495c19ac7d9e86ef5f5b605b980d44d738c65d0eea98d58",
+      "bytes": 5431
+    },
+    "tests/split-output-head-final.trx": {
+      "sha256": "ead62851fc67d204efa90cf5d0ca2c31c5244e8a84f888567b2880bae2a738a7",
+      "bytes": 62473
+    }
+  },
+  "testCounters": {
+    "total": "37",
+    "executed": "37",
+    "passed": "37",
+    "failed": "0",
+    "error": "0",
+    "timeout": "0",
+    "aborted": "0",
+    "inconclusive": "0",
+    "passedButRunAborted": "0",
+    "notRunnable": "0",
+    "notExecuted": "0",
+    "disconnected": "0",
+    "warning": "0",
+    "completed": "0",
+    "inProgress": "0",
+    "pending": "0"
+  },
+  "builds": {
+    "stagedBenchmarks": "Release: 0 warnings, 0 errors",
+    "stagedGui": "Release: 0 warnings, 0 errors",
+    "workingGui": "Release: 0 warnings, 0 errors"
+  },
+  "localLogitsNotCommitted": {
+    "final-greedy-original.json.logits.f32": "3cadb4f77d859c8e1a59a8f4f207dd93b1743834c27c4d845b75fb3b715c836a",
+    "final-greedy-split.json.logits.f32": "3cadb4f77d859c8e1a59a8f4f207dd93b1743834c27c4d845b75fb3b715c836a",
+    "final-sampling-original.json.logits.f32": "3cadb4f77d859c8e1a59a8f4f207dd93b1743834c27c4d845b75fb3b715c836a",
+    "final-sampling-split.json.logits.f32": "3cadb4f77d859c8e1a59a8f4f207dd93b1743834c27c4d845b75fb3b715c836a"
+  }
+}

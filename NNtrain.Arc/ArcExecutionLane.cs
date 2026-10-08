@@ -14,7 +14,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
     private static readonly string[] Qwen35KernelResourceSuffixes =
     [
         ".qwen.cl", ".qwen35_attention.cl", ".qwen35_delta.cl",
-        ".qwen35_delta_fused.cl", ".qwen35_linear_fast.cl", ".qwen35_iq.cl", ".qwen35_iq2_decode132.cl", ".qwen35_iq2_tiles.cl", ".qwen35_lora.cl", ".qwen35_prism.cl",
+        ".qwen35_delta_fused.cl", ".qwen35_linear_fast.cl", ".qwen35_iq.cl", ".qwen35_output_head.cl", ".qwen35_iq2_decode132.cl", ".qwen35_iq2_tiles.cl", ".qwen35_lora.cl", ".qwen35_prism.cl",
         ".qwen35_projection_pair.cl", ".qwen35_norm_fast.cl", ".qwen35_prefill_linear.cl", ".qwen35_prefill_xmx.cl", ".qwen35_prefill_xmx_tiles.cl", ".qwen35_vision.cl",
         ".qwen35_vision_attention_fast.cl", ".qwen35_vision_attention_xmx.cl", ".qwen35_vision_linear_fast.cl"
     ];
@@ -287,6 +287,12 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
     public void ReadFloatRange(ArcBuffer buffer, int elementOffset, float[] values)
     {
         lock (_sync) Transfer(buffer, values, read: true, checked(elementOffset * 4L));
+    }
+
+    /// <summary>Write a contiguous FP32 range, completing the transfer before returning.</summary>
+    public void WriteFloatRange(ArcBuffer buffer, int elementOffset, float[] values)
+    {
+        lock (_sync) Transfer(buffer, values, read: false, checked(elementOffset * 4L));
     }
 
     public void ReadBFloat16Range(ArcBuffer buffer, int elementOffset, ushort[] values)

@@ -10,7 +10,7 @@ using NNtrain;
 
 namespace NNtrain.Benchmarks;
 
-/// <summary>Measures a real Qwen3.5 GGUF with fixed prompts, greedy output and reset state.</summary>
+/// <summary>Measures a real Qwen3.5 GGUF with fixed prompts, seeded sampling and reset state.</summary>
 internal static class Qwen35GenerationProbe
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -29,7 +29,8 @@ internal static class Qwen35GenerationProbe
             string flag = args[i];
             if (flag is not ("--model" or "--output" or "--prompt" or "--tokens" or "--runs"
                 or "--devices" or "--kernel" or "--fused-delta" or "--queue"
-                or "--adapter" or "--options" or "--profile" or "--teacher" or "--logits" or "--logits-only"))
+                or "--adapter" or "--options" or "--profile" or "--teacher" or "--logits" or "--logits-only"
+                or "--temperature" or "--top-p" or "--top-k" or "--seed"))
                 throw new ArgumentException($"Unknown Qwen3.5 generation probe argument: {flag}");
             if (++i >= args.Length || !flags.TryAdd(flag, args[i]))
                 throw new ArgumentException($"Missing value or repeated argument: {flag}");
@@ -59,6 +60,15 @@ internal static class Qwen35GenerationProbe
         int tokens = Number("--tokens", 64, 4096);
         int runs = Number("--runs", 3, 30);
         int logitsCount = Number("--logits", 0, 256, minimum: 0);
+        float temperature = flags.TryGetValue("--temperature", out string? temperatureText)
+            ? float.Parse(temperatureText, CultureInfo.InvariantCulture) : 0f;
+        float topP = flags.TryGetValue("--top-p", out string? topPText)
+            ? float.Parse(topPText, CultureInfo.InvariantCulture) : 1f;
+        int topK = Number("--top-k", 1, int.MaxValue);
+        int randomSeed = Number("--seed", 5429, int.MaxValue, minimum: 0);
+        if (!float.IsFinite(temperature) || temperature < 0f || !float.IsFinite(topP) || topP <= 0f || topP > 1f)
+            throw new ArgumentException("Temperature must be finite and nonnegative; top-p must be in (0,1].");
+        bool greedy = temperature == 0f || topK == 1;
         bool logitsOnly = Boolean("--logits-only", false);
         int[]? teacherIds = flags.TryGetValue("--teacher", out string? teacherPath)
             ? JsonSerializer.Deserialize<int[]>(File.ReadAllText(teacherPath)) ?? throw new ArgumentException("Teacher IDs are null.") : null;
@@ -170,7 +180,7 @@ internal static class Qwen35GenerationProbe
                         throw new InvalidOperationException("Generation emitted more tokens than requested.");
                     tokenTimes[callbackCount] = Stopwatch.GetElapsedTime(runStart).TotalMilliseconds;
                     callbackIds[callbackCount++] = tokenId;
-                });
+                }, temperature: temperature, topP: topP, topK: topK, random: new Random(randomSeed));
                 double totalMilliseconds = Stopwatch.GetElapsedTime(runStart).TotalMilliseconds;
                 MemorySnapshot after = Snapshot(model);
                 IReadOnlyDictionary<string, double> kernelsAfter = model.KernelMilliseconds;
@@ -258,7 +268,8 @@ internal static class Qwen35GenerationProbe
             PromptTokenIds = promptIds,
             RequestedNewTokens = tokens,
             MeasuredRuns = samples.Count,
-            Sampling = new { Method = "GPU greedy argmax", Temperature = 0, EosTokenId = (int?)null,
+            Sampling = new { Method = greedy ? "GPU greedy argmax" : "Seeded CPU top-k/top-p", Temperature = temperature,
+                TopP = topP, TopK = topK, RandomSeed = randomSeed, EosTokenId = (int?)null,
                 Policy = "Emit exactly the requested count, including tokens after EOS; no early EOS stop." },
             InspectionMilliseconds = inspectionMilliseconds,
             TokenizerLoadAndEncodeMilliseconds = tokenizerMilliseconds,
