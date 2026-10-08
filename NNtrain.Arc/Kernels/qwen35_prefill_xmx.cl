@@ -302,6 +302,25 @@ __kernel void q35l_prefill_xmx_pack_input_f16x2(__global const float* input,
     low[id] = as_ushort(convert_half_rte(value - convert_float(hi)));
 }
 
+// Original high/residual rounding, with no normalization or added quantization.
+// Panel order is [ceil(rows/8)][input_width/16][8 rows][16 K values], so one
+// row tile consumes adjacent K16 panels instead of striding across all rows.
+__kernel void q35l_prefill_xmx_pack_input_f16x2_rowmajor(__global const float* input,
+    __global ushort* high, __global ushort* low, __global int* range_status, int rows, int input_width) {
+    const int id = get_global_id(0), row_blocks = (rows + 7) / 8;
+    const int k_blocks = input_width / 16;
+    if (id >= row_blocks * k_blocks * 128) return;
+    const int k = ((id / 128) % k_blocks) * 16 + id % 16;
+    const int row = (id / (k_blocks * 128)) * 8 + (id % 128) / 16;
+    const float value = row < rows ? input[(size_t)row * input_width + k] : 0.0f;
+    if (!isfinite(value) || fabs(value) > 65504.0f) {
+        atomic_or(range_status, 1); high[id] = 0; low[id] = 0; return;
+    }
+    const half hi = convert_half_rte(value);
+    high[id] = as_ushort(hi);
+    low[id] = as_ushort(convert_half_rte(value - convert_float(hi)));
+}
+
 #if defined(ARC_OPTIMIZATION_PROBES) || defined(ARC_Q35_GGUF_BSLM)
 // Retain the original GGUF storage and decode B only once per workgroup.
 // The packed global A panel avoids the much larger A SLM allocation.
@@ -373,6 +392,105 @@ __kernel void q35l_prefill_xmx_iq2_s_gguf_bslm(__global const ushort* xhigh, __g
             output[(size_t)(row + r) * output_width + col] = accum[tile][r] + bias[col];
     }
 }
+// Wider B-only SLM stages retain the original BSLM arithmetic exactly:
+// signed grid and coefficient remain separate, and every K16 step performs
+// high MMA, residual MMA, then coefficient FMA in increasing K order.
+// Only the number of K16 panels decoded between barriers changes. K64 uses
+// 8 KiB grid + 1 KiB coefficients; K128 uses 16 KiB + 2 KiB. Both preserve
+// the original packed A layout and its range fallback.
+inline short8 q35p_bslm_staged_input(__global const ushort* panel, size_t offset, int lane) {
+#ifdef cl_intel_subgroups_short
+    return as_short8(intel_sub_group_block_read_us8(panel + offset));
+#else
+    short8 value;
+    #pragma unroll
+    for (int r = 0; r < 8; ++r) value[r] = as_short(panel[offset + r * 16 + lane]);
+    return value;
+#endif
+}
+
+#define Q35P_GGUF_BSLM_STAGED(NAME, KSTEP, COALESCED, ROW_MAJOR, UNROLL_PARTS) \
+__attribute__((intel_reqd_sub_group_size(16))) \
+__attribute__((reqd_work_group_size(16,16,1))) \
+__kernel void NAME(__global const ushort* xhigh, __global const ushort* xlow, \
+    __global const uchar* packed, __global const float* bias, __global float* output, \
+    int rows, int input_width, int output_width, __global const float* input, __global const int* range_status) { \
+    const int lane = get_local_id(0), subgroup = get_local_id(1), tid = subgroup * 16 + lane; \
+    const int row_base = get_group_id(1) * 128, row = row_base + subgroup * 8; \
+    const int col_base = get_group_id(0) * 64, row_blocks = (rows + 7) / 8; \
+    if (range_status[0] != 0) { \
+        q35p_xmx_fallback_iq2(input, packed, bias, output, rows, input_width, output_width, row_base, col_base); \
+        return; \
+    } \
+    __local uint grids[32 * KSTEP]; \
+    __local float coefficients[KSTEP / 16][64]; \
+    float8 accum[4] = {(float8)(0), (float8)(0), (float8)(0), (float8)(0)}; \
+    for (int base = 0; base < input_width; base += KSTEP) { \
+        for (int item = tid; item < 64 * (KSTEP / 8); item += 256) { \
+            const int col_inner = COALESCED ? item % 64 : item / (KSTEP / 8); \
+            const int col = col_base + col_inner; \
+            const int stage_octet = COALESCED ? item / 64 : item % (KSTEP / 8); \
+            const int octet = (base % 256) / 8 + stage_octet; \
+            ushort8 decoded = (ushort8)(0); \
+            float coefficient = 0.0f; \
+            if (col < output_width) { \
+                __global const uchar* block = packed + ((size_t)col * (input_width / 256) + base / 256) * 82; \
+                const float d = q35l_half_to_float((ushort)block[0] | ((ushort)block[1] << 8)); \
+                decoded = as_ushort8(convert_half8_rte(q35p_iq2_integer_grid(block, octet))); \
+                coefficient = q35p_iq2_integer_scale(block, octet, d); \
+            } \
+            if ((stage_octet & 1) == 0) coefficients[stage_octet / 2][col_inner] = coefficient; \
+            _Pragma("unroll") \
+            for (int pair = 0; pair < 4; ++pair) { \
+                const int kpair = stage_octet * 4 + pair; \
+                const int dst = ((col_inner / 16) * (KSTEP / 16) + kpair / 8) * 128 \
+                    + (kpair % 8) * 16 + col_inner % 16; \
+                grids[dst] = (uint)decoded[pair * 2] | ((uint)decoded[pair * 2 + 1] << 16); \
+            } \
+        } \
+        barrier(CLK_LOCAL_MEM_FENCE); \
+        _Pragma(UNROLL_PARTS) \
+        for (int part = 0; part < KSTEP / 16; ++part) { \
+            short8 ah = (short8)(0), al = (short8)(0); \
+            if (row < rows) { \
+                const size_t offset = ROW_MAJOR \
+                    ? ((size_t)(row / 8) * (input_width / 16) + base / 16 + part) * 128 \
+                    : ((size_t)(base / 16 + part) * row_blocks + row / 8) * 128; \
+                ah = q35p_bslm_staged_input(xhigh, offset, lane); \
+                al = q35p_bslm_staged_input(xlow, offset, lane); \
+            } \
+            _Pragma("unroll") \
+            for (int tile = 0; tile < 4; ++tile) { \
+                const int8 operand = q35p_xmx_panel(grids + (tile * (KSTEP / 16) + part) * 128, lane); \
+                float8 partial = intel_sub_group_f16_f16_matrix_mad_k16(ah, operand, (float8)(0)); \
+                partial = intel_sub_group_f16_f16_matrix_mad_k16(al, operand, partial); \
+                accum[tile] = fma(partial, (float8)(coefficients[part][tile * 16 + lane]), accum[tile]); \
+            } \
+        } \
+        barrier(CLK_LOCAL_MEM_FENCE); \
+    } \
+    _Pragma("unroll") \
+    for (int tile = 0; tile < 4; ++tile) { \
+        const int col = col_base + tile * 16 + lane; \
+        _Pragma("unroll") \
+        for (int r = 0; r < 8; ++r) if (row + r < rows && col < output_width) \
+            output[(size_t)(row + r) * output_width + col] = accum[tile][r] + bias[col]; \
+    } \
+}
+Q35P_GGUF_BSLM_STAGED(q35l_prefill_xmx_iq2_s_gguf_bslm_k64, 64, 0, 0, "unroll")
+Q35P_GGUF_BSLM_STAGED(q35l_prefill_xmx_iq2_s_gguf_bslm_k128, 128, 0, 0, "unroll")
+// Adjacent decode lanes write adjacent columns in each SLM operand. This
+// changes only which thread decodes an octet, leaving all values and the
+// ordered K16 arithmetic above identical to the corresponding stage width.
+Q35P_GGUF_BSLM_STAGED(q35l_prefill_xmx_iq2_s_gguf_bslm_k32c, 32, 1, 0, "unroll")
+Q35P_GGUF_BSLM_STAGED(q35l_prefill_xmx_iq2_s_gguf_bslm_k64c, 64, 1, 0, "unroll")
+Q35P_GGUF_BSLM_STAGED(q35l_prefill_xmx_iq2_s_gguf_bslm_k128c, 128, 1, 0, "unroll")
+// Layout-only variants use the rowmajor pack above. The no-unroll variant
+// independently limits live A/B operand ranges without changing reduction order.
+Q35P_GGUF_BSLM_STAGED(q35l_prefill_xmx_iq2_s_gguf_bslm_k32r, 32, 0, 1, "unroll")
+Q35P_GGUF_BSLM_STAGED(q35l_prefill_xmx_iq2_s_gguf_bslm_k64r, 64, 0, 1, "unroll")
+Q35P_GGUF_BSLM_STAGED(q35l_prefill_xmx_iq2_s_gguf_bslm_k64n, 64, 0, 0, "unroll 1")
+#undef Q35P_GGUF_BSLM_STAGED
 #endif // ARC_OPTIMIZATION_PROBES || ARC_Q35_GGUF_BSLM
 
 // Decode each original octet once into a temporary XMX panel. The temporary

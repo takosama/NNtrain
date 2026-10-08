@@ -148,6 +148,7 @@ public sealed class InferenceSession : IDisposable
                     {
                         InferencePrefillChunkTokens = _inferencePrefillChunkTokens,
                         InferenceBatchMixedAttention = _inferenceBatchMixedAttention,
+                        InferenceBatchTextAttention = true,
                         CollectKernelTimings = _collectKernelTimings,
                         InferenceProjectionRows = _inferenceProjectionRows,
                         InferenceXmxPrefill = _inferenceXmxPrefill,

@@ -1,0 +1,456 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="29d8249a-cae6-4958-a4f4-c55a4e96970d" name="takos@DESKTOP-Q9VA6H3 2026-10-08 14:45:38" runUser="DESKTOP-Q9VA6H3\takos" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-10-08T14:45:38.6381770+09:00" queuing="2026-10-08T14:45:38.6381771+09:00" start="2026-10-08T14:45:16.0742398+09:00" finish="2026-10-08T14:47:06.8894828+09:00" />
+  <TestSettings name="default" id="2497a260-b14d-4894-8884-d4bfdfaf3208">
+    <Deployment runDeploymentRoot="takos_DESKTOP-Q9VA6H3_2026-10-08_14_45_38" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="6cc38b51-70ed-41e6-b63f-ab1ca9ec4b24" testId="29c2a5a9-e4a7-b6c7-ada2-846480f260d7" testName="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests.TextBatchingRemainsAnIndependentOptIn" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.0002545" startTime="2026-10-08T14:47:04.9320797+09:00" endTime="2026-10-08T14:47:04.9323725+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="6cc38b51-70ed-41e6-b63f-ab1ca9ec4b24" />
+    <UnitTestResult executionId="a1539593-843f-4999-a107-abd3ea755073" testId="91ed85ac-1991-3928-a6ef-6ce6e6ed39d0" testName="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests.TextBatchesPreserveLogitsAndKvContinuationAcrossReusedPrefixes(chunkSize: 16, fastNorm: True, lora: False, tileRows: 0)" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.3540512" startTime="2026-10-08T14:47:06.4316236+09:00" endTime="2026-10-08T14:47:06.7857304+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="a1539593-843f-4999-a107-abd3ea755073" />
+    <UnitTestResult executionId="b12b03dc-cd28-471c-a855-8cb85dccf823" testId="5b21d7ab-2c96-281b-4147-6d37e4ead1f7" testName="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.TinyNormalRowsPreserveRelativePrecisionInBothDirections(amplitude: 9.99999968E-21)" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.3066604" startTime="2026-10-08T14:45:38.9606768+09:00" endTime="2026-10-08T14:45:39.2673940+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="b12b03dc-cd28-471c-a855-8cb85dccf823">
+      <Output>
+        <StdOut>tiny forward amplitude=1.000000E-020: relative L2=1.526109E-007, maximum absolute=2.423381E-027&#xD;
+tiny BSLM forward amplitude=1.000000E-020: relative L2=1.526109E-007, maximum absolute=2.423381E-027&#xD;
+tiny transpose amplitude=1.000000E-020: relative L2=1.962963E-007, maximum absolute=1.615587E-027</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="4a766331-75e5-48f6-9a84-777a39b3b84a" testId="5d451d68-1fe0-f6ee-9233-e5ba863d054d" testName="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.ForwardRowChunksPreserveBiasTailsAndGuardWithoutHostTransfers" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.2588226" startTime="2026-10-08T14:46:01.2232605+09:00" endTime="2026-10-08T14:46:01.4821330+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="4a766331-75e5-48f6-9a84-777a39b3b84a">
+      <Output>
+        <StdOut>forward row chunks with nonzero bias and final single-row chunk: relative L2=0.000000E+000, maximum absolute=0.000000E+000</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="a3babf70-4e24-4e36-b333-67b059a6a916" testId="11094876-b5a0-7c96-4154-e54af43248d6" testName="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.ModelPrefillAndLoraGradientsRemainCloseWithIndependentSwitches(forward: True, backward: False)" computerName="DESKTOP-Q9VA6H3" duration="00:00:17.9335006" startTime="2026-10-08T14:45:41.3502511+09:00" endTime="2026-10-08T14:45:59.2838079+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="a3babf70-4e24-4e36-b333-67b059a6a916">
+      <Output>
+        <StdOut>prefill logits: relative L2=0.000000E+000, maximum absolute=0.000000E+000&#xD;
+model forward=True, backward=False: loss=1.3650681264698505, gradient L2=3.346252E-007</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="253fa838-16d7-4159-b9fb-cd530b756d67" testId="be856d2f-4c3d-7c03-56dd-d636fe9c4852" testName="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.TinyNormalRowsPreserveRelativePrecisionInBothDirections(amplitude: 9.99999972E-10)" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.2942915" startTime="2026-10-08T14:45:39.2677415+09:00" endTime="2026-10-08T14:45:39.5620896+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="253fa838-16d7-4159-b9fb-cd530b756d67">
+      <Output>
+        <StdOut>tiny forward amplitude=1.000000E-009: relative L2=1.510448E-007, maximum absolute=2.220446E-016&#xD;
+tiny BSLM forward amplitude=1.000000E-009: relative L2=1.510448E-007, maximum absolute=2.220446E-016&#xD;
+tiny transpose amplitude=1.000000E-009: relative L2=1.906605E-007, maximum absolute=1.665335E-016</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="0da9ea7b-8eab-47ff-9d35-e46482a8c157" testId="5b6d0ea6-3bfd-c52e-7084-529892a33676" testName="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.ForwardTilesPreserveBiasedProjectionAndSplitPanelTails(rows: 129, inputWidth: 512)" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.3027910" startTime="2026-10-08T14:45:39.5634000+09:00" endTime="2026-10-08T14:45:39.8662559+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="0da9ea7b-8eab-47ff-9d35-e46482a8c157">
+      <Output>
+        <StdOut>forward 129x65x512, tile=(8, 16, False), panel=0: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(8, 16, False), panel=16: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(8, 16, False), panel=32: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(16, 16, False), panel=0: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(16, 16, False), panel=16: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(16, 16, False), panel=32: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(16, 32, False), panel=0: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(16, 32, False), panel=16: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(16, 32, False), panel=32: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(32, 32, False), panel=0: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(32, 32, False), panel=16: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(32, 32, False), panel=32: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(16, 32, True), panel=0: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(16, 32, True), panel=16: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(16, 32, True), panel=32: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(32, 32, True), panel=0: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(32, 32, True), panel=16: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(32, 32, True), panel=32: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(128, 64, False), panel=0: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(128, 64, False), panel=16: relative L2=9.256876E-008, maximum absolute=2.384186E-007&#xD;
+forward 129x65x512, tile=(128, 64, False), panel=32: relative L2=9.256876E-008, maximum absolute=2.384186E-007</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="480d95dc-db39-431e-8a13-0e9dc3745626" testId="73c12dcd-a7f5-64c5-b423-488b28044dc9" testName="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests.TextBatchesPreserveLogitsAndKvContinuationAcrossReusedPrefixes(chunkSize: 8, fastNorm: False, lora: False, tileRows: 0)" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.3703979" startTime="2026-10-08T14:47:06.0601563+09:00" endTime="2026-10-08T14:47:06.4306051+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="480d95dc-db39-431e-8a13-0e9dc3745626" />
+    <UnitTestResult executionId="7f577b30-1fc4-4588-b508-e7217580957d" testId="feb8ec7d-43fb-e2a8-c51d-4644a0d7c100" testName="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.BoundedBackwardRowChunksPreserveAccumulationAndGuards" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.2610813" startTime="2026-10-08T14:46:00.9610453+09:00" endTime="2026-10-08T14:46:01.2221728+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="7f577b30-1fc4-4588-b508-e7217580957d">
+      <Output>
+        <StdOut>bounded backward chunks versus full rows: relative L2=0.000000E+000, maximum absolute=0.000000E+000</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="0d0879d3-0abf-49f1-ab18-fb0a487e0e1d" testId="2f7f86eb-8807-9a89-194f-189634044e8a" testName="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.WideDynamicRangePreservesTinyActivationRows(extreme: -100000)" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.3442977" startTime="2026-10-08T14:45:38.6141768+09:00" endTime="2026-10-08T14:45:38.9585661+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="0d0879d3-0abf-49f1-ab18-fb0a487e0e1d">
+      <Output>
+        <StdOut>wide range extreme=-100000, panel=16: relative L2=4.955547E-007, maximum absolute=9.765625E-003&#xD;
+tiny row=1: relative L2=3.144214E-007, maximum absolute=2.710505E-019&#xD;
+tiny row=2: relative L2=4.968472E-007, maximum absolute=6.505213E-019&#xD;
+tiny row=3: relative L2=3.487966E-007, maximum absolute=2.439455E-019&#xD;
+tiny row=4: relative L2=4.016147E-007, maximum absolute=5.963112E-019&#xD;
+tiny row=5: relative L2=4.566472E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=6: relative L2=4.402153E-007, maximum absolute=5.421011E-019&#xD;
+tiny row=7: relative L2=2.859092E-007, maximum absolute=2.168404E-019&#xD;
+tiny row=8: relative L2=4.793432E-007, maximum absolute=5.421011E-019&#xD;
+tiny row=9: relative L2=3.412317E-007, maximum absolute=3.252607E-019&#xD;
+tiny row=10: relative L2=3.663453E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=11: relative L2=4.681409E-007, maximum absolute=7.318365E-019&#xD;
+tiny row=12: relative L2=5.781824E-007, maximum absolute=9.757820E-019&#xD;
+tiny row=13: relative L2=3.486376E-007, maximum absolute=4.878910E-019&#xD;
+tiny row=14: relative L2=4.552669E-007, maximum absolute=7.589415E-019&#xD;
+tiny row=15: relative L2=4.621886E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=16: relative L2=3.485324E-007, maximum absolute=3.252607E-019&#xD;
+wide range extreme=-100000, panel=32: relative L2=4.955547E-007, maximum absolute=9.765625E-003&#xD;
+tiny row=1: relative L2=3.144214E-007, maximum absolute=2.710505E-019&#xD;
+tiny row=2: relative L2=4.968472E-007, maximum absolute=6.505213E-019&#xD;
+tiny row=3: relative L2=3.487966E-007, maximum absolute=2.439455E-019&#xD;
+tiny row=4: relative L2=4.016147E-007, maximum absolute=5.963112E-019&#xD;
+tiny row=5: relative L2=4.566472E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=6: relative L2=4.402153E-007, maximum absolute=5.421011E-019&#xD;
+tiny row=7: relative L2=2.859092E-007, maximum absolute=2.168404E-019&#xD;
+tiny row=8: relative L2=4.793432E-007, maximum absolute=5.421011E-019&#xD;
+tiny row=9: relative L2=3.412317E-007, maximum absolute=3.252607E-019&#xD;
+tiny row=10: relative L2=3.663453E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=11: relative L2=4.681409E-007, maximum absolute=7.318365E-019&#xD;
+tiny row=12: relative L2=5.781824E-007, maximum absolute=9.757820E-019&#xD;
+tiny row=13: relative L2=3.486376E-007, maximum absolute=4.878910E-019&#xD;
+tiny row=14: relative L2=4.552669E-007, maximum absolute=7.589415E-019&#xD;
+tiny row=15: relative L2=4.621886E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=16: relative L2=3.485324E-007, maximum absolute=3.252607E-019&#xD;
+wide range extreme=-100000, panel=0: relative L2=4.955547E-007, maximum absolute=9.765625E-003&#xD;
+tiny row=1: relative L2=3.144214E-007, maximum absolute=2.710505E-019&#xD;
+tiny row=2: relative L2=4.968472E-007, maximum absolute=6.505213E-019&#xD;
+tiny row=3: relative L2=3.487966E-007, maximum absolute=2.439455E-019&#xD;
+tiny row=4: relative L2=4.016147E-007, maximum absolute=5.963112E-019&#xD;
+tiny row=5: relative L2=4.566472E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=6: relative L2=4.402153E-007, maximum absolute=5.421011E-019&#xD;
+tiny row=7: relative L2=2.859092E-007, maximum absolute=2.168404E-019&#xD;
+tiny row=8: relative L2=4.793432E-007, maximum absolute=5.421011E-019&#xD;
+tiny row=9: relative L2=3.412317E-007, maximum absolute=3.252607E-019&#xD;
+tiny row=10: relative L2=3.663453E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=11: relative L2=4.681409E-007, maximum absolute=7.318365E-019&#xD;
+tiny row=12: relative L2=5.781824E-007, maximum absolute=9.757820E-019&#xD;
+tiny row=13: relative L2=3.486376E-007, maximum absolute=4.878910E-019&#xD;
+tiny row=14: relative L2=4.552669E-007, maximum absolute=7.589415E-019&#xD;
+tiny row=15: relative L2=4.621886E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=16: relative L2=3.485324E-007, maximum absolute=3.252607E-019</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="afb9a72b-e4d2-447c-ac47-6399aab6e2aa" testId="89e5bfff-251c-076a-38d9-239e34368d6b" testName="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.ModelPrefillAndLoraGradientsRemainCloseWithIndependentSwitches(forward: False, backward: True)" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.8423535" startTime="2026-10-08T14:46:00.1174947+09:00" endTime="2026-10-08T14:46:00.9599030+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="afb9a72b-e4d2-447c-ac47-6399aab6e2aa">
+      <Output>
+        <StdOut>prefill logits: relative L2=0.000000E+000, maximum absolute=0.000000E+000&#xD;
+model forward=False, backward=True: loss=1.3650681301951408, gradient L2=0.000000E+000</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="ca0fccc7-959f-43f7-ad6e-e194c78c7111" testId="8a3edfa0-eacd-08e0-d985-cbd2b02b629c" testName="NNtrain.Core.Tests.Qwen35Iq2InferenceRoutingTests.DisabledInferenceXmxNeverSelectsFactoredTrainingProjection" computerName="DESKTOP-Q9VA6H3" duration="00:00:11.9704374" startTime="2026-10-08T14:46:13.6182817+09:00" endTime="2026-10-08T14:46:25.5887742+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="ca0fccc7-959f-43f7-ad6e-e194c78c7111" />
+    <UnitTestResult executionId="b51d0c46-2363-452c-9b47-b7ae71d2dc36" testId="84900efb-4d14-6529-ddca-964933f3ea64" testName="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests.TextBatchesPreserveLogitsAndKvContinuationAcrossReusedPrefixes(chunkSize: 33, fastNorm: True, lora: True, tileRows: 16)" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.3842166" startTime="2026-10-08T14:47:05.6748819+09:00" endTime="2026-10-08T14:47:06.0591438+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="b51d0c46-2363-452c-9b47-b7ae71d2dc36" />
+    <UnitTestResult executionId="1334217a-8151-482e-958c-ecac591cc3bd" testId="8af236f1-ec2a-7f05-e057-752b8618bcaa" testName="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.WideDynamicRangePreservesTinyActivationRows(extreme: 100000)" computerName="DESKTOP-Q9VA6H3" duration="00:00:20.3280304" startTime="2026-10-08T14:45:18.2739978+09:00" endTime="2026-10-08T14:45:38.6097304+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="1334217a-8151-482e-958c-ecac591cc3bd">
+      <Output>
+        <StdOut>wide range extreme=100000, panel=16: relative L2=4.955826E-007, maximum absolute=9.765625E-003&#xD;
+tiny row=1: relative L2=3.144214E-007, maximum absolute=2.710505E-019&#xD;
+tiny row=2: relative L2=4.968472E-007, maximum absolute=6.505213E-019&#xD;
+tiny row=3: relative L2=3.487966E-007, maximum absolute=2.439455E-019&#xD;
+tiny row=4: relative L2=4.016147E-007, maximum absolute=5.963112E-019&#xD;
+tiny row=5: relative L2=4.566472E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=6: relative L2=4.402153E-007, maximum absolute=5.421011E-019&#xD;
+tiny row=7: relative L2=2.859092E-007, maximum absolute=2.168404E-019&#xD;
+tiny row=8: relative L2=4.793432E-007, maximum absolute=5.421011E-019&#xD;
+tiny row=9: relative L2=3.412317E-007, maximum absolute=3.252607E-019&#xD;
+tiny row=10: relative L2=3.663453E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=11: relative L2=4.681409E-007, maximum absolute=7.318365E-019&#xD;
+tiny row=12: relative L2=5.781824E-007, maximum absolute=9.757820E-019&#xD;
+tiny row=13: relative L2=3.486376E-007, maximum absolute=4.878910E-019&#xD;
+tiny row=14: relative L2=4.552669E-007, maximum absolute=7.589415E-019&#xD;
+tiny row=15: relative L2=4.621886E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=16: relative L2=3.485324E-007, maximum absolute=3.252607E-019&#xD;
+wide range extreme=100000, panel=32: relative L2=4.955826E-007, maximum absolute=9.765625E-003&#xD;
+tiny row=1: relative L2=3.144214E-007, maximum absolute=2.710505E-019&#xD;
+tiny row=2: relative L2=4.968472E-007, maximum absolute=6.505213E-019&#xD;
+tiny row=3: relative L2=3.487966E-007, maximum absolute=2.439455E-019&#xD;
+tiny row=4: relative L2=4.016147E-007, maximum absolute=5.963112E-019&#xD;
+tiny row=5: relative L2=4.566472E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=6: relative L2=4.402153E-007, maximum absolute=5.421011E-019&#xD;
+tiny row=7: relative L2=2.859092E-007, maximum absolute=2.168404E-019&#xD;
+tiny row=8: relative L2=4.793432E-007, maximum absolute=5.421011E-019&#xD;
+tiny row=9: relative L2=3.412317E-007, maximum absolute=3.252607E-019&#xD;
+tiny row=10: relative L2=3.663453E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=11: relative L2=4.681409E-007, maximum absolute=7.318365E-019&#xD;
+tiny row=12: relative L2=5.781824E-007, maximum absolute=9.757820E-019&#xD;
+tiny row=13: relative L2=3.486376E-007, maximum absolute=4.878910E-019&#xD;
+tiny row=14: relative L2=4.552669E-007, maximum absolute=7.589415E-019&#xD;
+tiny row=15: relative L2=4.621886E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=16: relative L2=3.485324E-007, maximum absolute=3.252607E-019&#xD;
+wide range extreme=100000, panel=0: relative L2=4.955826E-007, maximum absolute=9.765625E-003&#xD;
+tiny row=1: relative L2=3.144214E-007, maximum absolute=2.710505E-019&#xD;
+tiny row=2: relative L2=4.968472E-007, maximum absolute=6.505213E-019&#xD;
+tiny row=3: relative L2=3.487966E-007, maximum absolute=2.439455E-019&#xD;
+tiny row=4: relative L2=4.016147E-007, maximum absolute=5.963112E-019&#xD;
+tiny row=5: relative L2=4.566472E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=6: relative L2=4.402153E-007, maximum absolute=5.421011E-019&#xD;
+tiny row=7: relative L2=2.859092E-007, maximum absolute=2.168404E-019&#xD;
+tiny row=8: relative L2=4.793432E-007, maximum absolute=5.421011E-019&#xD;
+tiny row=9: relative L2=3.412317E-007, maximum absolute=3.252607E-019&#xD;
+tiny row=10: relative L2=3.663453E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=11: relative L2=4.681409E-007, maximum absolute=7.318365E-019&#xD;
+tiny row=12: relative L2=5.781824E-007, maximum absolute=9.757820E-019&#xD;
+tiny row=13: relative L2=3.486376E-007, maximum absolute=4.878910E-019&#xD;
+tiny row=14: relative L2=4.552669E-007, maximum absolute=7.589415E-019&#xD;
+tiny row=15: relative L2=4.621886E-007, maximum absolute=3.794708E-019&#xD;
+tiny row=16: relative L2=3.485324E-007, maximum absolute=3.252607E-019</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="378bd3d4-f2d8-4671-a7f3-a2f92a0b85ed" testId="e3f212d6-94ac-1b0b-0527-e398ae8bcbbf" testName="NNtrain.Core.Tests.Qwen35AttentionMemoryGuardTests.PlentyOfHeadroomKeepsExistingTileSizesAndOneRowTail" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.0011073" startTime="2026-10-08T14:46:01.4913764+09:00" endTime="2026-10-08T14:46:01.4925032+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="378bd3d4-f2d8-4671-a7f3-a2f92a0b85ed" />
+    <UnitTestResult executionId="f2de288f-5a95-4037-acde-38823ae41add" testId="5ace6b5b-e00f-d743-eee9-4eaac399e7a0" testName="NNtrain.Core.Tests.Qwen35AttentionMemoryGuardTests.RejectedDirectBatchLeavesBothKvCachesAndAllocationCountUntouched" computerName="DESKTOP-Q9VA6H3" duration="00:00:12.1244383" startTime="2026-10-08T14:46:01.4930396+09:00" endTime="2026-10-08T14:46:13.6175181+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="f2de288f-5a95-4037-acde-38823ae41add" />
+    <UnitTestResult executionId="530595d9-68b8-4e7f-87db-a136ec1e8a2a" testId="e13daeaa-d4b7-731e-c3cc-874ace76fd49" testName="NNtrain.Core.Tests.Qwen35AttentionMemoryGuardTests.FullBatchAccountsForEverySimultaneouslyLiveBuffer" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.0004716" startTime="2026-10-08T14:46:01.4873684+09:00" endTime="2026-10-08T14:46:01.4878813+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="530595d9-68b8-4e7f-87db-a136ec1e8a2a" />
+    <UnitTestResult executionId="5551bb87-1e22-487e-be12-e09fbd012789" testId="4621cf43-982e-fca3-d555-93b79e6315d9" testName="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.TransposePanelsRetainGradientAddAndRowTails(rows: 17, inputWidth: 256, outputWidth: 80, add: False)" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.2762327" startTime="2026-10-08T14:45:40.7700930+09:00" endTime="2026-10-08T14:45:41.0463811+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="5551bb87-1e22-487e-be12-e09fbd012789">
+      <Output>
+        <StdOut>transpose 17x256x80, add=False, tile=(8, 16), panel=16: relative L2=1.887995E-007, maximum absolute=1.788139E-007&#xD;
+transpose 17x256x80, add=False, tile=(16, 32), panel=16: relative L2=1.887995E-007, maximum absolute=1.788139E-007&#xD;
+transpose 17x256x80, add=False, tile=(32, 32), panel=16: relative L2=1.887995E-007, maximum absolute=1.788139E-007&#xD;
+transpose 17x256x80, add=False, tile=(8, 16), panel=32: relative L2=1.887995E-007, maximum absolute=1.788139E-007&#xD;
+transpose 17x256x80, add=False, tile=(16, 32), panel=32: relative L2=1.887995E-007, maximum absolute=1.788139E-007&#xD;
+transpose 17x256x80, add=False, tile=(32, 32), panel=32: relative L2=1.887995E-007, maximum absolute=1.788139E-007&#xD;
+transpose 17x256x80, add=False, tile=(8, 16), panel=256: relative L2=1.887995E-007, maximum absolute=1.788139E-007&#xD;
+transpose 17x256x80, add=False, tile=(16, 32), panel=256: relative L2=1.887995E-007, maximum absolute=1.788139E-007&#xD;
+transpose 17x256x80, add=False, tile=(32, 32), panel=256: relative L2=1.887995E-007, maximum absolute=1.788139E-007</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="36c7b131-15cb-42b0-8026-e77d33adb764" testId="a778c83c-c83a-df6d-a7bf-d0f45dc3285f" testName="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.ForwardTilesPreserveBiasedProjectionAndSplitPanelTails(rows: 129, inputWidth: 5120)" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.3322028" startTime="2026-10-08T14:45:40.1523766+09:00" endTime="2026-10-08T14:45:40.4846345+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="36c7b131-15cb-42b0-8026-e77d33adb764">
+      <Output>
+        <StdOut>forward 129x65x5120, tile=(8, 16, False), panel=0: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(8, 16, False), panel=16: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(8, 16, False), panel=32: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(16, 16, False), panel=0: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(16, 16, False), panel=16: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(16, 16, False), panel=32: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(16, 32, False), panel=0: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(16, 32, False), panel=16: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(16, 32, False), panel=32: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(32, 32, False), panel=0: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(32, 32, False), panel=16: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(32, 32, False), panel=32: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(16, 32, True), panel=0: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(16, 32, True), panel=16: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(16, 32, True), panel=32: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(32, 32, True), panel=0: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(32, 32, True), panel=16: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(32, 32, True), panel=32: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(128, 64, False), panel=0: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(128, 64, False), panel=16: relative L2=1.801276E-007, maximum absolute=8.344650E-007&#xD;
+forward 129x65x5120, tile=(128, 64, False), panel=32: relative L2=1.801276E-007, maximum absolute=8.344650E-007</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="59064c44-3cd8-48b8-909c-1383d5db6a9b" testId="5a703122-dc34-6d98-e67f-d8f39b4e08bc" testName="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.ForwardTilesPreserveBiasedProjectionAndSplitPanelTails(rows: 17, inputWidth: 256)" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.2843035" startTime="2026-10-08T14:45:39.8668845+09:00" endTime="2026-10-08T14:45:40.1512494+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="59064c44-3cd8-48b8-909c-1383d5db6a9b">
+      <Output>
+        <StdOut>forward 17x65x256, tile=(8, 16, False), panel=0: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(8, 16, False), panel=16: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(8, 16, False), panel=32: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(16, 16, False), panel=0: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(16, 16, False), panel=16: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(16, 16, False), panel=32: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(16, 32, False), panel=0: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(16, 32, False), panel=16: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(16, 32, False), panel=32: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(32, 32, False), panel=0: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(32, 32, False), panel=16: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(32, 32, False), panel=32: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(16, 32, True), panel=0: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(16, 32, True), panel=16: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(16, 32, True), panel=32: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(32, 32, True), panel=0: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(32, 32, True), panel=16: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(32, 32, True), panel=32: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(128, 64, False), panel=0: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(128, 64, False), panel=16: relative L2=7.494809E-008, maximum absolute=1.788139E-007&#xD;
+forward 17x65x256, tile=(128, 64, False), panel=32: relative L2=7.494809E-008, maximum absolute=1.788139E-007</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="c30214f2-d8a6-43d8-84fc-38ecc9d13c62" testId="d2ae0e5e-b61f-ed32-7df6-91a3be9047de" testName="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.TransposePanelsRetainGradientAddAndRowTails(rows: 129, inputWidth: 512, outputWidth: 256, add: True)" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.3013974" startTime="2026-10-08T14:45:41.0475301+09:00" endTime="2026-10-08T14:45:41.3489893+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="c30214f2-d8a6-43d8-84fc-38ecc9d13c62">
+      <Output>
+        <StdOut>transpose 129x512x256, add=True, tile=(8, 16), panel=16: relative L2=1.418127E-007, maximum absolute=5.960464E-007&#xD;
+transpose 129x512x256, add=True, tile=(16, 32), panel=16: relative L2=1.418127E-007, maximum absolute=5.960464E-007&#xD;
+transpose 129x512x256, add=True, tile=(32, 32), panel=16: relative L2=1.418127E-007, maximum absolute=5.960464E-007&#xD;
+transpose 129x512x256, add=True, tile=(8, 16), panel=32: relative L2=1.418127E-007, maximum absolute=5.960464E-007&#xD;
+transpose 129x512x256, add=True, tile=(16, 32), panel=32: relative L2=1.418127E-007, maximum absolute=5.960464E-007&#xD;
+transpose 129x512x256, add=True, tile=(32, 32), panel=32: relative L2=1.418127E-007, maximum absolute=5.960464E-007&#xD;
+transpose 129x512x256, add=True, tile=(8, 16), panel=512: relative L2=1.418127E-007, maximum absolute=5.960464E-007&#xD;
+transpose 129x512x256, add=True, tile=(16, 32), panel=512: relative L2=1.418127E-007, maximum absolute=5.960464E-007&#xD;
+transpose 129x512x256, add=True, tile=(32, 32), panel=512: relative L2=1.418127E-007, maximum absolute=5.960464E-007</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="ab6b9b01-8755-4255-8920-16b0403c019d" testId="6ebb70cd-64f1-282a-98dc-766f293f7bdc" testName="NNtrain.Core.Tests.Qwen35AttentionMemoryGuardTests.TilePlanShrinksForStagingAndLaterPrefixCapacityGrowth" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.0030668" startTime="2026-10-08T14:46:01.4880723+09:00" endTime="2026-10-08T14:46:01.4911602+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="ab6b9b01-8755-4255-8920-16b0403c019d" />
+    <UnitTestResult executionId="1db13c09-79f1-476d-b85c-b8aa0cde980f" testId="9d2fd5d0-910d-85db-b8d8-58fa45474fdb" testName="NNtrain.Core.Tests.Qwen35Iq2Compact132Tests.Compact132RetainsPair2BitsForRowsTailsAndPackedScales(nativeHalf: True)" computerName="DESKTOP-Q9VA6H3" duration="00:00:17.9336993" startTime="2026-10-08T14:46:45.6309252+09:00" endTime="2026-10-08T14:47:03.5646772+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="1db13c09-79f1-476d-b85c-b8aa0cde980f" />
+    <UnitTestResult executionId="71210621-1efb-4057-a36a-7db809368fb0" testId="b8c7be6e-0cca-8aeb-a9fb-8e9aafb906e2" testName="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests.TextBatchesPreserveLogitsAndKvContinuationAcrossReusedPrefixes(chunkSize: 32, fastNorm: True, lora: True, tileRows: 0)" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.3905037" startTime="2026-10-08T14:47:04.9326682+09:00" endTime="2026-10-08T14:47:05.3232093+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="71210621-1efb-4057-a36a-7db809368fb0" />
+    <UnitTestResult executionId="3482aae8-893d-4190-9a5d-75b493b54e03" testId="93b19b07-7fc4-133e-27e6-cdc9ee76987b" testName="NNtrain.Core.Tests.Qwen35Iq2Compact132Tests.Compact132RetainsPair2BitsForRowsTailsAndPackedScales(nativeHalf: False)" computerName="DESKTOP-Q9VA6H3" duration="00:00:20.0402213" startTime="2026-10-08T14:46:25.5900558+09:00" endTime="2026-10-08T14:46:45.6303279+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="3482aae8-893d-4190-9a5d-75b493b54e03" />
+    <UnitTestResult executionId="d7df0f56-acd8-4a77-8bc9-d7d0e05fbf84" testId="d5a4b83b-18d5-ca2d-3d79-ac870411afbc" testName="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.ModelPrefillAndLoraGradientsRemainCloseWithIndependentSwitches(forward: True, backward: True)" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.8313322" startTime="2026-10-08T14:45:59.2849982+09:00" endTime="2026-10-08T14:46:00.1163917+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="d7df0f56-acd8-4a77-8bc9-d7d0e05fbf84">
+      <Output>
+        <StdOut>prefill logits: relative L2=0.000000E+000, maximum absolute=0.000000E+000&#xD;
+model forward=True, backward=True: loss=1.3650681264698505, gradient L2=3.346252E-007</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="1ba52d15-3948-4fb6-9568-55016e1b138f" testId="278ec5e0-436f-de82-6619-cded642883a0" testName="NNtrain.Core.Tests.Qwen35AttentionMemoryGuardTests.InsufficientOuterStagingHeadroomRejectsAllTilesBeforeExecution" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.0002020" startTime="2026-10-08T14:46:01.4926836+09:00" endTime="2026-10-08T14:46:01.4929032+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="1ba52d15-3948-4fb6-9568-55016e1b138f" />
+    <UnitTestResult executionId="198f6b04-5140-41e6-8fed-dc72557beba0" testId="577b0074-b26e-ad3b-91f2-2b9288739642" testName="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests.TextBatchesPreserveLogitsAndKvContinuationAcrossReusedPrefixes(chunkSize: 33, fastNorm: False, lora: False, tileRows: 8)" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.3496226" startTime="2026-10-08T14:47:05.3242095+09:00" endTime="2026-10-08T14:47:05.6738793+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="198f6b04-5140-41e6-8fed-dc72557beba0" />
+    <UnitTestResult executionId="e61c1c64-758e-42b5-b0d8-44c2cd36d09d" testId="3da6a390-806f-e428-2334-286d77b016cb" testName="NNtrain.Core.Tests.Qwen35Iq2Compact132Tests.OptionalPair2VersusCompact132Benchmark" computerName="DESKTOP-Q9VA6H3" duration="00:00:01.3646948" startTime="2026-10-08T14:47:03.5657617+09:00" endTime="2026-10-08T14:47:04.9305035+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="e61c1c64-758e-42b5-b0d8-44c2cd36d09d">
+      <Output>
+        <StdOut>{"benchmark":"IQ2_S decode pair2 versus compact132","profile":false,"rows":1,"inputWidth":5120,"outputWidth":6144,"device":{"Index":0,"Name":"Intel(R) Arc(TM) B580 Graphics","DriverVersion":"32.0.101.9030"},"scope":"Synthetic valid IQ2_S projection only, resident FP32 input; no host transfer, packing, allocation, or full-model generation in decode timing; one-time GPU packing is measured separately.","complete":true,"allOutputsBitwiseEqual":true,"guardsIntact":true,"nativeHalfScale":true,"iterations":16,"warmup":3,"samples":9,"hostWallMedianSpeedup":0.9682900432900433,"pair2Wall":{"count":9,"median":0.05591875,"mean":0.05613819444444444,"standardDeviation":0.0006364877887649635,"minimum":0.05550625,"maximum":0.05770625},"compact132Wall":{"count":9,"median":0.05775,"mean":0.05780138888888889,"standardDeviation":0.00030578589802687014,"minimum":0.05735,"maximum":0.05825625},"pair2Gpu":null,"compact132Gpu":null,"rawWeightBytes":10076160,"compactWeightBytes":16220160,"packTiming":{"WallMilliseconds":4.797,"GpuMilliseconds":null,"InputBytes":10076160,"OutputBytes":16220160,"Scope":"One-time GPU recoding including dispatch and synchronization, excluding allocation/upload; one observation, not steady-state decode latency."},"rawSamples":[{"Round":0,"Compact132":false,"Wall":0.05634375,"Gpu":null},{"Round":0,"Compact132":true,"Wall":0.05825625,"Gpu":null},{"Round":1,"Compact132":true,"Wall":0.05769375,"Gpu":null},{"Round":1,"Compact132":false,"Wall":0.05770625,"Gpu":null},{"Round":2,"Compact132":false,"Wall":0.0559,"Gpu":null},{"Round":2,"Compact132":true,"Wall":0.05775,"Gpu":null},{"Round":3,"Compact132":true,"Wall":0.0578875,"Gpu":null},{"Round":3,"Compact132":false,"Wall":0.05550625,"Gpu":null},{"Round":4,"Compact132":false,"Wall":0.0559875,"Gpu":null},{"Round":4,"Compact132":true,"Wall":0.05735,"Gpu":null},{"Round":5,"Compact132":true,"Wall":0.0580375,"Gpu":null},{"Round":5,"Compact132":false,"Wall":0.05554375,"Gpu":null},{"Round":6,"Compact132":false,"Wall":0.05653125,"Gpu":null},{"Round":6,"Compact132":true,"Wall":0.05741875,"Gpu":null},{"Round":7,"Compact132":true,"Wall":0.0582125,"Gpu":null},{"Round":7,"Compact132":false,"Wall":0.05591875,"Gpu":null},{"Round":8,"Compact132":false,"Wall":0.05580625,"Gpu":null},{"Round":8,"Compact132":true,"Wall":0.05760625,"Gpu":null}]}&#xD;
+{"benchmark":"IQ2_S decode pair2 versus compact132","profile":false,"rows":1,"inputWidth":5120,"outputWidth":17408,"device":{"Index":0,"Name":"Intel(R) Arc(TM) B580 Graphics","DriverVersion":"32.0.101.9030"},"scope":"Synthetic valid IQ2_S projection only, resident FP32 input; no host transfer, packing, allocation, or full-model generation in decode timing; one-time GPU packing is measured separately.","complete":true,"allOutputsBitwiseEqual":true,"guardsIntact":true,"nativeHalfScale":true,"iterations":16,"warmup":3,"samples":9,"hostWallMedianSpeedup":1.016520151186988,"pair2Wall":{"count":9,"median":0.1496,"mean":0.1484826388888889,"standardDeviation":0.0023141956579360106,"minimum":0.14571875,"maximum":0.1514375},"compact132Wall":{"count":9,"median":0.14716875,"mean":0.14854027777777778,"standardDeviation":0.0019493791548865433,"minimum":0.146975,"maximum":0.15188125},"pair2Gpu":null,"compact132Gpu":null,"rawWeightBytes":28549120,"compactWeightBytes":45957120,"packTiming":{"WallMilliseconds":1.2733,"GpuMilliseconds":null,"InputBytes":28549120,"OutputBytes":45957120,"Scope":"One-time GPU recoding including dispatch and synchronization, excluding allocation/upload; one observation, not steady-state decode latency."},"rawSamples":[{"Round":0,"Compact132":false,"Wall":0.1514375,"Gpu":null},{"Round":0,"Compact132":true,"Wall":0.1477625,"Gpu":null},{"Round":1,"Compact132":true,"Wall":0.14715,"Gpu":null},{"Round":1,"Compact132":false,"Wall":0.146425,"Gpu":null},{"Round":2,"Compact132":false,"Wall":0.15136875,"Gpu":null},{"Round":2,"Compact132":true,"Wall":0.14705625,"Gpu":null},{"Round":3,"Compact132":true,"Wall":0.1508125,"Gpu":null},{"Round":3,"Compact132":false,"Wall":0.14578125,"Gpu":null},{"Round":4,"Compact132":false,"Wall":0.1496,"Gpu":null},{"Round":4,"Compact132":true,"Wall":0.14716875,"Gpu":null},{"Round":5,"Compact132":true,"Wall":0.15188125,"Gpu":null},{"Round":5,"Compact132":false,"Wall":0.14571875,"Gpu":null},{"Round":6,"Compact132":false,"Wall":0.15023125,"Gpu":null},{"Round":6,"Compact132":true,"Wall":0.1469875,"Gpu":null},{"Round":7,"Compact132":true,"Wall":0.15106875,"Gpu":null},{"Round":7,"Compact132":false,"Wall":0.146025,"Gpu":null},{"Round":8,"Compact132":false,"Wall":0.14975625,"Gpu":null},{"Round":8,"Compact132":true,"Wall":0.146975,"Gpu":null}]}&#xD;
+{"benchmark":"IQ2_S decode pair2 versus compact132","profile":false,"rows":1,"inputWidth":17408,"outputWidth":5120,"device":{"Index":0,"Name":"Intel(R) Arc(TM) B580 Graphics","DriverVersion":"32.0.101.9030"},"scope":"Synthetic valid IQ2_S projection only, resident FP32 input; no host transfer, packing, allocation, or full-model generation in decode timing; one-time GPU packing is measured separately.","complete":true,"allOutputsBitwiseEqual":true,"guardsIntact":true,"nativeHalfScale":true,"iterations":16,"warmup":3,"samples":9,"hostWallMedianSpeedup":0.9949410542481593,"pair2Wall":{"count":9,"median":0.13766875,"mean":0.13780208333333333,"standardDeviation":0.00030124164349867096,"minimum":0.1374625,"maximum":0.13848125},"compact132Wall":{"count":9,"median":0.13836875,"mean":0.13841458333333334,"standardDeviation":0.00017260262647673434,"minimum":0.13819375,"maximum":0.13875},"pair2Gpu":null,"compact132Gpu":null,"rawWeightBytes":28549120,"compactWeightBytes":45957120,"packTiming":{"WallMilliseconds":0.5174,"GpuMilliseconds":null,"InputBytes":28549120,"OutputBytes":45957120,"Scope":"One-time GPU recoding including dispatch and synchronization, excluding allocation/upload; one observation, not steady-state decode latency."},"rawSamples":[{"Round":0,"Compact132":false,"Wall":0.13765,"Gpu":null},{"Round":0,"Compact132":true,"Wall":0.13829375,"Gpu":null},{"Round":1,"Compact132":true,"Wall":0.13875,"Gpu":null},{"Round":1,"Compact132":false,"Wall":0.13848125,"Gpu":null},{"Round":2,"Compact132":false,"Wall":0.13810625,"Gpu":null},{"Round":2,"Compact132":true,"Wall":0.13859375,"Gpu":null},{"Round":3,"Compact132":true,"Wall":0.13836875,"Gpu":null},{"Round":3,"Compact132":false,"Wall":0.13766875,"Gpu":null},{"Round":4,"Compact132":false,"Wall":0.13789375,"Gpu":null},{"Round":4,"Compact132":true,"Wall":0.1382875,"Gpu":null},{"Round":5,"Compact132":true,"Wall":0.138575,"Gpu":null},{"Round":5,"Compact132":false,"Wall":0.1377875,"Gpu":null},{"Round":6,"Compact132":false,"Wall":0.137625,"Gpu":null},{"Round":6,"Compact132":true,"Wall":0.13819375,"Gpu":null},{"Round":7,"Compact132":true,"Wall":0.138375,"Gpu":null},{"Round":7,"Compact132":false,"Wall":0.13754375,"Gpu":null},{"Round":8,"Compact132":false,"Wall":0.1374625,"Gpu":null},{"Round":8,"Compact132":true,"Wall":0.13829375,"Gpu":null}]}&#xD;
+{"benchmark":"IQ2_S decode pair2 versus compact132","profile":true,"rows":1,"inputWidth":5120,"outputWidth":6144,"device":{"Index":0,"Name":"Intel(R) Arc(TM) B580 Graphics","DriverVersion":"32.0.101.9030"},"scope":"Synthetic valid IQ2_S projection only, resident FP32 input; no host transfer, packing, allocation, or full-model generation in decode timing; one-time GPU packing is measured separately.","complete":true,"allOutputsBitwiseEqual":true,"guardsIntact":true,"nativeHalfScale":true,"iterations":16,"warmup":3,"samples":9,"hostWallMedianSpeedup":0.9742480833497148,"pair2Wall":{"count":9,"median":0.06195,"mean":0.06182569444444445,"standardDeviation":0.00037402006737937083,"minimum":0.061175,"maximum":0.06229375},"compact132Wall":{"count":9,"median":0.0635875,"mean":0.06353541666666666,"standardDeviation":0.0001853815509818724,"minimum":0.06330625,"maximum":0.06380625},"pair2Gpu":{"count":9,"median":0.05430943749999928,"mean":0.05432676388888872,"standardDeviation":0.00032961536240526135,"minimum":0.053756062499999535,"maximum":0.05482375000000006},"compact132Gpu":{"count":9,"median":0.05592412499999977,"mean":0.05595587499999983,"standardDeviation":0.0001598597991427778,"minimum":0.055611562499999545,"maximum":0.05621049999999994},"rawWeightBytes":10076160,"compactWeightBytes":16220160,"packTiming":{"WallMilliseconds":4.9822,"GpuMilliseconds":0.09072899999999999,"InputBytes":10076160,"OutputBytes":16220160,"Scope":"One-time GPU recoding including dispatch and synchronization, excluding allocation/upload; one observation, not steady-state decode latency."},"rawSamples":[{"Round":0,"Compact132":false,"Wall":0.06195,"Gpu":0.05417918749999995},{"Round":0,"Compact132":true,"Wall":0.06330625,"Gpu":0.0558849374999999},{"Round":1,"Compact132":true,"Wall":0.0635875,"Gpu":0.055898062499999956},{"Round":1,"Compact132":false,"Wall":0.061175,"Gpu":0.05391231250000006},{"Round":2,"Compact132":false,"Wall":0.06205,"Gpu":0.05443962499999999},{"Round":2,"Compact132":true,"Wall":0.06360625,"Gpu":0.056047812499999794},{"Round":3,"Compact132":true,"Wall":0.06330625,"Gpu":0.055611562499999545},{"Round":3,"Compact132":false,"Wall":0.06165625,"Gpu":0.05449162499999982},{"Round":4,"Compact132":false,"Wall":0.0621875,"Gpu":0.05428981249999976},{"Round":4,"Compact132":true,"Wall":0.06341875,"Gpu":0.0560151874999999},{"Round":5,"Compact132":true,"Wall":0.0637625,"Gpu":0.05590443749999985},{"Round":5,"Compact132":false,"Wall":0.06214375,"Gpu":0.05482375000000006},{"Round":6,"Compact132":false,"Wall":0.06229375,"Gpu":0.054739062500000046},{"Round":6,"Compact132":true,"Wall":0.06368125,"Gpu":0.05621049999999994},{"Round":7,"Compact132":true,"Wall":0.06380625,"Gpu":0.05592412499999977},{"Round":7,"Compact132":false,"Wall":0.0616625,"Gpu":0.05430943749999928},{"Round":8,"Compact132":false,"Wall":0.0613125,"Gpu":0.053756062499999535},{"Round":8,"Compact132":true,"Wall":0.06334375,"Gpu":0.0561062499999998}]}&#xD;
+{"benchmark":"IQ2_S decode pair2 versus compact132","profile":true,"rows":1,"inputWidth":5120,"outputWidth":17408,"device":{"Index":0,"Name":"Intel(R) Arc(TM) B580 Graphics","DriverVersion":"32.0.101.9030"},"scope":"Synthetic valid IQ2_S projection only, resident FP32 input; no host transfer, packing, allocation, or full-model generation in decode timing; one-time GPU packing is measured separately.","complete":true,"allOutputsBitwiseEqual":true,"guardsIntact":true,"nativeHalfScale":true,"iterations":16,"warmup":3,"samples":9,"hostWallMedianSpeedup":0.9905998209489705,"pair2Wall":{"count":9,"median":0.15214375,"mean":0.1544138888888889,"standardDeviation":0.007235801336939423,"minimum":0.14914375,"maximum":0.1746625},"compact132Wall":{"count":9,"median":0.1535875,"mean":0.1532798611111111,"standardDeviation":0.0019034343453607136,"minimum":0.15001875,"maximum":0.15684375},"pair2Gpu":{"count":9,"median":0.14387337499999786,"mean":0.144036812499999,"standardDeviation":0.0002539562209376564,"minimum":0.143762687499998,"maximum":0.14438112499999844},"compact132Gpu":{"count":9,"median":0.14531849999999835,"mean":0.14534897916666653,"standardDeviation":6.373932372474054E-05,"minimum":0.14528606250000076,"maximum":0.14550743750000006},"rawWeightBytes":28549120,"compactWeightBytes":45957120,"packTiming":{"WallMilliseconds":1.3567,"GpuMilliseconds":0.3306250000000013,"InputBytes":28549120,"OutputBytes":45957120,"Scope":"One-time GPU recoding including dispatch and synchronization, excluding allocation/upload; one observation, not steady-state decode latency."},"rawSamples":[{"Round":0,"Compact132":false,"Wall":0.15206875,"Gpu":0.14387337499999786},{"Round":0,"Compact132":true,"Wall":0.1529875,"Gpu":0.1453706249999991},{"Round":1,"Compact132":true,"Wall":0.15375625,"Gpu":0.14531849999999835},{"Round":1,"Compact132":false,"Wall":0.14914375,"Gpu":0.1442639999999984},{"Round":2,"Compact132":false,"Wall":0.151975,"Gpu":0.1438276874999982},{"Round":2,"Compact132":true,"Wall":0.15001875,"Gpu":0.1453578125000008},{"Round":3,"Compact132":true,"Wall":0.1535875,"Gpu":0.14531199999999833},{"Round":3,"Compact132":false,"Wall":0.15214375,"Gpu":0.1442574374999981},{"Round":4,"Compact132":false,"Wall":0.15215625,"Gpu":0.143762687499998},{"Round":4,"Compact132":true,"Wall":0.15056875,"Gpu":0.14528606250000076},{"Round":5,"Compact132":true,"Wall":0.15425625,"Gpu":0.14531206249999906},{"Round":5,"Compact132":false,"Wall":0.152175,"Gpu":0.14438112499999844},{"Round":6,"Compact132":false,"Wall":0.15205,"Gpu":0.1438081874999999},{"Round":6,"Compact132":true,"Wall":0.15350625,"Gpu":0.14529906250000213},{"Round":7,"Compact132":true,"Wall":0.15399375,"Gpu":0.14537725000000012},{"Round":7,"Compact132":false,"Wall":0.1746625,"Gpu":0.14436150000000225},{"Round":8,"Compact132":false,"Wall":0.15335,"Gpu":0.1437953125},{"Round":8,"Compact132":true,"Wall":0.15684375,"Gpu":0.14550743750000006}]}&#xD;
+{"benchmark":"IQ2_S decode pair2 versus compact132","profile":true,"rows":1,"inputWidth":17408,"outputWidth":5120,"device":{"Index":0,"Name":"Intel(R) Arc(TM) B580 Graphics","DriverVersion":"32.0.101.9030"},"scope":"Synthetic valid IQ2_S projection only, resident FP32 input; no host transfer, packing, allocation, or full-model generation in decode timing; one-time GPU packing is measured separately.","complete":true,"allOutputsBitwiseEqual":true,"guardsIntact":true,"nativeHalfScale":true,"iterations":16,"warmup":3,"samples":9,"hostWallMedianSpeedup":0.9941689702833448,"pair2Wall":{"count":9,"median":0.14385625,"mean":0.14383333333333334,"standardDeviation":0.000565485902172247,"minimum":0.14263125,"maximum":0.14494375},"compact132Wall":{"count":9,"median":0.1447,"mean":0.1447826388888889,"standardDeviation":0.002173410533876523,"minimum":0.141425,"maximum":0.14835625},"pair2Gpu":{"count":9,"median":0.1359110000000019,"mean":0.13597036805555718,"standardDeviation":0.00020902933623448463,"minimum":0.1357483125000014,"maximum":0.13642525000000205},"compact132Gpu":{"count":9,"median":0.13671831250000022,"mean":0.13672194444444516,"standardDeviation":9.021586979864452E-05,"minimum":0.1365686875000014,"maximum":0.13685493749999988},"rawWeightBytes":28549120,"compactWeightBytes":45957120,"packTiming":{"WallMilliseconds":0.5698,"GpuMilliseconds":0.32541600000000415,"InputBytes":28549120,"OutputBytes":45957120,"Scope":"One-time GPU recoding including dispatch and synchronization, excluding allocation/upload; one observation, not steady-state decode latency."},"rawSamples":[{"Round":0,"Compact132":false,"Wall":0.14263125,"Gpu":0.1359110000000019},{"Round":0,"Compact132":true,"Wall":0.14775625,"Gpu":0.13679650000000088},{"Round":1,"Compact132":true,"Wall":0.14171875,"Gpu":0.1365686875000014},{"Round":1,"Compact132":false,"Wall":0.14494375,"Gpu":0.13642525000000205},{"Round":2,"Compact132":false,"Wall":0.1439625,"Gpu":0.135845875000002},{"Round":2,"Compact132":true,"Wall":0.14445,"Gpu":0.13666631250000005},{"Round":3,"Compact132":true,"Wall":0.1447,"Gpu":0.13671831250000022},{"Round":3,"Compact132":false,"Wall":0.1435625,"Gpu":0.1360673125000016},{"Round":4,"Compact132":false,"Wall":0.144,"Gpu":0.1357483125000014},{"Round":4,"Compact132":true,"Wall":0.14510625,"Gpu":0.13685493749999988},{"Round":5,"Compact132":true,"Wall":0.144675,"Gpu":0.13666631250000094},{"Round":5,"Compact132":false,"Wall":0.1438,"Gpu":0.136073875000001},{"Round":6,"Compact132":false,"Wall":0.14385625,"Gpu":0.13575481250000276},{"Round":6,"Compact132":true,"Wall":0.141425,"Gpu":0.13673781250000072},{"Round":7,"Compact132":true,"Wall":0.14485625,"Gpu":0.13664668750000164},{"Round":7,"Compact132":false,"Wall":0.14406875,"Gpu":0.13611287500000113},{"Round":8,"Compact132":false,"Wall":0.143675,"Gpu":0.13579400000000064},{"Round":8,"Compact132":true,"Wall":0.14835625,"Gpu":0.13684193750000073}]}</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="8d30c9cb-7d64-4783-9b89-b384239f0ad7" testId="3c227e1c-8d8c-aaaa-90ec-fe6ac322e9d6" testName="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.NonFiniteWeightScalesRetainReferenceOutputClassification" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.2833663" startTime="2026-10-08T14:45:40.4858401+09:00" endTime="2026-10-08T14:45:40.7692725+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="8d30c9cb-7d64-4783-9b89-b384239f0ad7" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests.TextBatchesPreserveLogitsAndKvContinuationAcrossReusedPrefixes(chunkSize: 32, fastNorm: True, lora: True, tileRows: 0)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="b8c7be6e-0cca-8aeb-a9fb-8e9aafb906e2">
+      <Execution id="71210621-1efb-4057-a36a-7db809368fb0" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests" name="TextBatchesPreserveLogitsAndKvContinuationAcrossReusedPrefixes" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.ForwardTilesPreserveBiasedProjectionAndSplitPanelTails(rows: 129, inputWidth: 512)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="5b6d0ea6-3bfd-c52e-7084-529892a33676">
+      <Execution id="0da9ea7b-8eab-47ff-9d35-e46482a8c157" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests" name="ForwardTilesPreserveBiasedProjectionAndSplitPanelTails" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.NonFiniteWeightScalesRetainReferenceOutputClassification" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="3c227e1c-8d8c-aaaa-90ec-fe6ac322e9d6">
+      <Execution id="8d30c9cb-7d64-4783-9b89-b384239f0ad7" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests" name="NonFiniteWeightScalesRetainReferenceOutputClassification" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests.TextBatchesPreserveLogitsAndKvContinuationAcrossReusedPrefixes(chunkSize: 33, fastNorm: False, lora: False, tileRows: 8)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="577b0074-b26e-ad3b-91f2-2b9288739642">
+      <Execution id="198f6b04-5140-41e6-8fed-dc72557beba0" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests" name="TextBatchesPreserveLogitsAndKvContinuationAcrossReusedPrefixes" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2Compact132Tests.Compact132RetainsPair2BitsForRowsTailsAndPackedScales(nativeHalf: True)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="9d2fd5d0-910d-85db-b8d8-58fa45474fdb">
+      <Execution id="1db13c09-79f1-476d-b85c-b8aa0cde980f" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2Compact132Tests" name="Compact132RetainsPair2BitsForRowsTailsAndPackedScales" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.TinyNormalRowsPreserveRelativePrecisionInBothDirections(amplitude: 9.99999972E-10)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="be856d2f-4c3d-7c03-56dd-d636fe9c4852">
+      <Execution id="253fa838-16d7-4159-b9fb-cd530b756d67" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests" name="TinyNormalRowsPreserveRelativePrecisionInBothDirections" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests.TextBatchesPreserveLogitsAndKvContinuationAcrossReusedPrefixes(chunkSize: 33, fastNorm: True, lora: True, tileRows: 16)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="84900efb-4d14-6529-ddca-964933f3ea64">
+      <Execution id="b51d0c46-2363-452c-9b47-b7ae71d2dc36" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests" name="TextBatchesPreserveLogitsAndKvContinuationAcrossReusedPrefixes" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests.TextBatchingRemainsAnIndependentOptIn" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="29c2a5a9-e4a7-b6c7-ada2-846480f260d7">
+      <Execution id="6cc38b51-70ed-41e6-b63f-ab1ca9ec4b24" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests" name="TextBatchingRemainsAnIndependentOptIn" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.BoundedBackwardRowChunksPreserveAccumulationAndGuards" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="feb8ec7d-43fb-e2a8-c51d-4644a0d7c100">
+      <Execution id="7f577b30-1fc4-4588-b508-e7217580957d" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests" name="BoundedBackwardRowChunksPreserveAccumulationAndGuards" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2Compact132Tests.OptionalPair2VersusCompact132Benchmark" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="3da6a390-806f-e428-2334-286d77b016cb">
+      <Execution id="e61c1c64-758e-42b5-b0d8-44c2cd36d09d" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2Compact132Tests" name="OptionalPair2VersusCompact132Benchmark" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35AttentionMemoryGuardTests.FullBatchAccountsForEverySimultaneouslyLiveBuffer" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="e13daeaa-d4b7-731e-c3cc-874ace76fd49">
+      <Execution id="530595d9-68b8-4e7f-87db-a136ec1e8a2a" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35AttentionMemoryGuardTests" name="FullBatchAccountsForEverySimultaneouslyLiveBuffer" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2Compact132Tests.Compact132RetainsPair2BitsForRowsTailsAndPackedScales(nativeHalf: False)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="93b19b07-7fc4-133e-27e6-cdc9ee76987b">
+      <Execution id="3482aae8-893d-4190-9a5d-75b493b54e03" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2Compact132Tests" name="Compact132RetainsPair2BitsForRowsTailsAndPackedScales" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35AttentionMemoryGuardTests.PlentyOfHeadroomKeepsExistingTileSizesAndOneRowTail" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="e3f212d6-94ac-1b0b-0527-e398ae8bcbbf">
+      <Execution id="378bd3d4-f2d8-4671-a7f3-a2f92a0b85ed" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35AttentionMemoryGuardTests" name="PlentyOfHeadroomKeepsExistingTileSizesAndOneRowTail" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests.TextBatchesPreserveLogitsAndKvContinuationAcrossReusedPrefixes(chunkSize: 8, fastNorm: False, lora: False, tileRows: 0)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="73c12dcd-a7f5-64c5-b423-488b28044dc9">
+      <Execution id="480d95dc-db39-431e-8a13-0e9dc3745626" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests" name="TextBatchesPreserveLogitsAndKvContinuationAcrossReusedPrefixes" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.ModelPrefillAndLoraGradientsRemainCloseWithIndependentSwitches(forward: True, backward: True)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="d5a4b83b-18d5-ca2d-3d79-ac870411afbc">
+      <Execution id="d7df0f56-acd8-4a77-8bc9-d7d0e05fbf84" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests" name="ModelPrefillAndLoraGradientsRemainCloseWithIndependentSwitches" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests.TextBatchesPreserveLogitsAndKvContinuationAcrossReusedPrefixes(chunkSize: 16, fastNorm: True, lora: False, tileRows: 0)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="91ed85ac-1991-3928-a6ef-6ce6e6ed39d0">
+      <Execution id="a1539593-843f-4999-a107-abd3ea755073" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35TextAttentionPrefillTests" name="TextBatchesPreserveLogitsAndKvContinuationAcrossReusedPrefixes" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.ForwardRowChunksPreserveBiasTailsAndGuardWithoutHostTransfers" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="5d451d68-1fe0-f6ee-9233-e5ba863d054d">
+      <Execution id="4a766331-75e5-48f6-9a84-777a39b3b84a" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests" name="ForwardRowChunksPreserveBiasTailsAndGuardWithoutHostTransfers" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.ForwardTilesPreserveBiasedProjectionAndSplitPanelTails(rows: 129, inputWidth: 5120)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="a778c83c-c83a-df6d-a7bf-d0f45dc3285f">
+      <Execution id="36c7b131-15cb-42b0-8026-e77d33adb764" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests" name="ForwardTilesPreserveBiasedProjectionAndSplitPanelTails" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35AttentionMemoryGuardTests.InsufficientOuterStagingHeadroomRejectsAllTilesBeforeExecution" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="278ec5e0-436f-de82-6619-cded642883a0">
+      <Execution id="1ba52d15-3948-4fb6-9568-55016e1b138f" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35AttentionMemoryGuardTests" name="InsufficientOuterStagingHeadroomRejectsAllTilesBeforeExecution" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.TinyNormalRowsPreserveRelativePrecisionInBothDirections(amplitude: 9.99999968E-21)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="5b21d7ab-2c96-281b-4147-6d37e4ead1f7">
+      <Execution id="b12b03dc-cd28-471c-a855-8cb85dccf823" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests" name="TinyNormalRowsPreserveRelativePrecisionInBothDirections" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35AttentionMemoryGuardTests.TilePlanShrinksForStagingAndLaterPrefixCapacityGrowth" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="6ebb70cd-64f1-282a-98dc-766f293f7bdc">
+      <Execution id="ab6b9b01-8755-4255-8920-16b0403c019d" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35AttentionMemoryGuardTests" name="TilePlanShrinksForStagingAndLaterPrefixCapacityGrowth" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35AttentionMemoryGuardTests.RejectedDirectBatchLeavesBothKvCachesAndAllocationCountUntouched" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="5ace6b5b-e00f-d743-eee9-4eaac399e7a0">
+      <Execution id="f2de288f-5a95-4037-acde-38823ae41add" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35AttentionMemoryGuardTests" name="RejectedDirectBatchLeavesBothKvCachesAndAllocationCountUntouched" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.ModelPrefillAndLoraGradientsRemainCloseWithIndependentSwitches(forward: True, backward: False)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="11094876-b5a0-7c96-4154-e54af43248d6">
+      <Execution id="a3babf70-4e24-4e36-b333-67b059a6a916" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests" name="ModelPrefillAndLoraGradientsRemainCloseWithIndependentSwitches" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2InferenceRoutingTests.DisabledInferenceXmxNeverSelectsFactoredTrainingProjection" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="8a3edfa0-eacd-08e0-d985-cbd2b02b629c">
+      <Execution id="ca0fccc7-959f-43f7-ad6e-e194c78c7111" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2InferenceRoutingTests" name="DisabledInferenceXmxNeverSelectsFactoredTrainingProjection" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.TransposePanelsRetainGradientAddAndRowTails(rows: 129, inputWidth: 512, outputWidth: 256, add: True)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="d2ae0e5e-b61f-ed32-7df6-91a3be9047de">
+      <Execution id="c30214f2-d8a6-43d8-84fc-38ecc9d13c62" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests" name="TransposePanelsRetainGradientAddAndRowTails" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.ForwardTilesPreserveBiasedProjectionAndSplitPanelTails(rows: 17, inputWidth: 256)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="5a703122-dc34-6d98-e67f-d8f39b4e08bc">
+      <Execution id="59064c44-3cd8-48b8-909c-1383d5db6a9b" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests" name="ForwardTilesPreserveBiasedProjectionAndSplitPanelTails" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.TransposePanelsRetainGradientAddAndRowTails(rows: 17, inputWidth: 256, outputWidth: 80, add: False)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="4621cf43-982e-fca3-d555-93b79e6315d9">
+      <Execution id="5551bb87-1e22-487e-be12-e09fbd012789" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests" name="TransposePanelsRetainGradientAddAndRowTails" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.ModelPrefillAndLoraGradientsRemainCloseWithIndependentSwitches(forward: False, backward: True)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="89e5bfff-251c-076a-38d9-239e34368d6b">
+      <Execution id="afb9a72b-e4d2-447c-ac47-6399aab6e2aa" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests" name="ModelPrefillAndLoraGradientsRemainCloseWithIndependentSwitches" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.WideDynamicRangePreservesTinyActivationRows(extreme: -100000)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="2f7f86eb-8807-9a89-194f-189634044e8a">
+      <Execution id="0d0879d3-0abf-49f1-ab18-fb0a487e0e1d" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests" name="WideDynamicRangePreservesTinyActivationRows" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests.WideDynamicRangePreservesTinyActivationRows(extreme: 100000)" storage="c:\users\takos\source\repos\nntrain\nntrain.core.tests\bin\release\net10.0\nntrain.core.tests.dll" id="8af236f1-ec2a-7f05-e057-752b8618bcaa">
+      <Execution id="1334217a-8151-482e-958c-ecac591cc3bd" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Core.Tests\bin\Release\net10.0\NNtrain.Core.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Core.Tests.Qwen35Iq2TiledProjectionTests" name="WideDynamicRangePreservesTinyActivationRows" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="29c2a5a9-e4a7-b6c7-ada2-846480f260d7" executionId="6cc38b51-70ed-41e6-b63f-ab1ca9ec4b24" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="91ed85ac-1991-3928-a6ef-6ce6e6ed39d0" executionId="a1539593-843f-4999-a107-abd3ea755073" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="5b21d7ab-2c96-281b-4147-6d37e4ead1f7" executionId="b12b03dc-cd28-471c-a855-8cb85dccf823" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="5d451d68-1fe0-f6ee-9233-e5ba863d054d" executionId="4a766331-75e5-48f6-9a84-777a39b3b84a" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="11094876-b5a0-7c96-4154-e54af43248d6" executionId="a3babf70-4e24-4e36-b333-67b059a6a916" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="be856d2f-4c3d-7c03-56dd-d636fe9c4852" executionId="253fa838-16d7-4159-b9fb-cd530b756d67" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="5b6d0ea6-3bfd-c52e-7084-529892a33676" executionId="0da9ea7b-8eab-47ff-9d35-e46482a8c157" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="73c12dcd-a7f5-64c5-b423-488b28044dc9" executionId="480d95dc-db39-431e-8a13-0e9dc3745626" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="feb8ec7d-43fb-e2a8-c51d-4644a0d7c100" executionId="7f577b30-1fc4-4588-b508-e7217580957d" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="2f7f86eb-8807-9a89-194f-189634044e8a" executionId="0d0879d3-0abf-49f1-ab18-fb0a487e0e1d" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="89e5bfff-251c-076a-38d9-239e34368d6b" executionId="afb9a72b-e4d2-447c-ac47-6399aab6e2aa" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="8a3edfa0-eacd-08e0-d985-cbd2b02b629c" executionId="ca0fccc7-959f-43f7-ad6e-e194c78c7111" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="84900efb-4d14-6529-ddca-964933f3ea64" executionId="b51d0c46-2363-452c-9b47-b7ae71d2dc36" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="8af236f1-ec2a-7f05-e057-752b8618bcaa" executionId="1334217a-8151-482e-958c-ecac591cc3bd" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="e3f212d6-94ac-1b0b-0527-e398ae8bcbbf" executionId="378bd3d4-f2d8-4671-a7f3-a2f92a0b85ed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="5ace6b5b-e00f-d743-eee9-4eaac399e7a0" executionId="f2de288f-5a95-4037-acde-38823ae41add" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="e13daeaa-d4b7-731e-c3cc-874ace76fd49" executionId="530595d9-68b8-4e7f-87db-a136ec1e8a2a" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="4621cf43-982e-fca3-d555-93b79e6315d9" executionId="5551bb87-1e22-487e-be12-e09fbd012789" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="a778c83c-c83a-df6d-a7bf-d0f45dc3285f" executionId="36c7b131-15cb-42b0-8026-e77d33adb764" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="5a703122-dc34-6d98-e67f-d8f39b4e08bc" executionId="59064c44-3cd8-48b8-909c-1383d5db6a9b" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="d2ae0e5e-b61f-ed32-7df6-91a3be9047de" executionId="c30214f2-d8a6-43d8-84fc-38ecc9d13c62" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="6ebb70cd-64f1-282a-98dc-766f293f7bdc" executionId="ab6b9b01-8755-4255-8920-16b0403c019d" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="9d2fd5d0-910d-85db-b8d8-58fa45474fdb" executionId="1db13c09-79f1-476d-b85c-b8aa0cde980f" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="b8c7be6e-0cca-8aeb-a9fb-8e9aafb906e2" executionId="71210621-1efb-4057-a36a-7db809368fb0" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="93b19b07-7fc4-133e-27e6-cdc9ee76987b" executionId="3482aae8-893d-4190-9a5d-75b493b54e03" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="d5a4b83b-18d5-ca2d-3d79-ac870411afbc" executionId="d7df0f56-acd8-4a77-8bc9-d7d0e05fbf84" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="278ec5e0-436f-de82-6619-cded642883a0" executionId="1ba52d15-3948-4fb6-9568-55016e1b138f" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="577b0074-b26e-ad3b-91f2-2b9288739642" executionId="198f6b04-5140-41e6-8fed-dc72557beba0" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="3da6a390-806f-e428-2334-286d77b016cb" executionId="e61c1c64-758e-42b5-b0d8-44c2cd36d09d" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="3c227e1c-8d8c-aaaa-90ec-fe6ac322e9d6" executionId="8d30c9cb-7d64-4783-9b89-b384239f0ad7" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="一覧に存在しない結果" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="読み込まれたすべての結果" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Completed">
+    <Counters total="30" executed="30" passed="30" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v3.1.1+bf6400fd51 (64-bit .NET 10.0.11)&#xD;
+[xUnit.net 00:00:00.36]   Discovering: NNtrain.Core.Tests&#xD;
+[xUnit.net 00:00:01.52]   Discovered:  NNtrain.Core.Tests&#xD;
+[xUnit.net 00:00:01.85]   Starting:    NNtrain.Core.Tests&#xD;
+[xUnit.net 00:01:50.28]   Finished:    NNtrain.Core.Tests&#xD;
+</StdOut>
+    </Output>
+  </ResultSummary>
+</TestRun>

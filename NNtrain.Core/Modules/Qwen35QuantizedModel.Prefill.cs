@@ -177,16 +177,67 @@ public sealed partial class Qwen35QuantizedModel
         int queryWidth = checked(2 * d.HeadCount * d.HeadWidth);
         int kvWidth = checked(d.KvHeadCount * d.HeadWidth);
         int outputWidth = checked(d.HeadCount * d.HeadWidth);
-        if (mixedPrompt is not null && _options.InferenceBatchMixedAttention
-            && Qwen35Gpu.CanAttentionRows(lane, startPosition, rows, d.HeadCount))
+        bool batchAttention = mixedPrompt is null
+            ? _options.InferenceBatchTextAttention : _options.InferenceBatchMixedAttention;
+        int textTileLimit = _options.InferenceTextAttentionTileRows;
+        if (mixedPrompt is null && batchAttention && (textTileLimit < 0 || textTileLimit == 1))
+            throw new ArgumentOutOfRangeException(nameof(Qwen35ExecutionOptions.InferenceTextAttentionTileRows),
+                "Text attention tiles must be zero (automatic) or at least two rows.");
+        if (batchAttention
+            && (mixedPrompt is not null || textTileLimit == 0 || rows <= textTileLimit)
+            && Qwen35Gpu.CanAttentionRows(lane, startPosition, rows, d.HeadCount, d.KvHeadCount, d.HeadWidth))
         {
             Qwen35Position[] positions = Enumerable.Range(startPosition, rows)
-                .Select(position => mixedPrompt[position].Position).ToArray();
+                .Select(position => mixedPrompt is null
+                    ? Qwen35Position.Scalar(position) : mixedPrompt[position].Position).ToArray();
             using ArcBuffer attention = Qwen35Gpu.AttentionRows(lane, qAndGate, key, value,
                 bindings.QueryNorm!, bindings.KeyNorm!, bindings.State.Keys!, bindings.State.Values!,
                 startPosition, rows, d.HeadCount, d.KvHeadCount, d.HeadWidth,
                 d.RopeDimensionCount, d.RopeTheta, d.RmsEpsilon, positions, d.RopeDimensionSections);
             return ProjectRows(bindings.AttentionOutput, attention, rows, shareLoraPrefill);
+        }
+        // The score matrix grows with the cached prefix as well as the chunk.
+        // Tile only text attention when a full chunk exceeds the same bounded
+        // scratch guard; Q/K/V and the output projection still span all rows.
+        // Plan with all staging buffers included before any cache mutation.
+        // If even a two-row tile cannot fit, retain the scalar fallback.
+        int[] attentionTiles = mixedPrompt is null && batchAttention && rows > 1
+            ? Qwen35Gpu.PlanAttentionRowsTiles(startPosition, rows,
+                Math.Min(rows, textTileLimit > 0 ? textTileLimit : 256),
+                d.HeadCount, d.KvHeadCount, d.HeadWidth, lane.Device.MaximumAllocationBytes,
+                lane.EffectivePhysicalBufferBudgetBytes - lane.AllocatedBytes)
+            : [];
+        if (attentionTiles.Length > 0)
+        {
+            int tileRows = attentionTiles[0];
+            using ArcBuffer batchedOutput = lane.Allocate(checked(rows * outputWidth));
+            // Release Q/K/V staging before the output projection allocates its result.
+            using (ArcBuffer tileQuery = lane.Allocate(checked(tileRows * queryWidth)))
+            using (ArcBuffer tileKey = lane.Allocate(checked(tileRows * kvWidth)))
+            using (ArcBuffer tileValue = lane.Allocate(checked(tileRows * kvWidth)))
+            {
+                int first = 0;
+                foreach (int count in attentionTiles)
+                {
+                    int position = checked(startPosition + first);
+                    lane.CopyBytes(qAndGate, tileQuery, checked(first * queryWidth * sizeof(float)), 0,
+                        checked(count * queryWidth * sizeof(float)));
+                    lane.CopyBytes(key, tileKey, checked(first * kvWidth * sizeof(float)), 0,
+                        checked(count * kvWidth * sizeof(float)));
+                    lane.CopyBytes(value, tileValue, checked(first * kvWidth * sizeof(float)), 0,
+                        checked(count * kvWidth * sizeof(float)));
+                    Qwen35Position[] positions = Enumerable.Range(position, count)
+                        .Select(Qwen35Position.Scalar).ToArray();
+                    using ArcBuffer attention = Qwen35Gpu.AttentionRows(lane, tileQuery, tileKey, tileValue,
+                        bindings.QueryNorm!, bindings.KeyNorm!, bindings.State.Keys!, bindings.State.Values!,
+                        position, count, d.HeadCount, d.KvHeadCount, d.HeadWidth,
+                        d.RopeDimensionCount, d.RopeTheta, d.RmsEpsilon, positions, d.RopeDimensionSections);
+                    lane.CopyBytes(attention, batchedOutput, 0, checked(first * outputWidth * sizeof(float)),
+                        checked(count * outputWidth * sizeof(float)));
+                    first += count;
+                }
+            }
+            return ProjectRows(bindings.AttentionOutput, batchedOutput, rows, shareLoraPrefill);
         }
         using ArcBuffer rowQuery = lane.Allocate(queryWidth);
         using ArcBuffer rowKey = lane.Allocate(kvWidth);
@@ -210,5 +261,6 @@ public sealed partial class Qwen35QuantizedModel
         void CopyRow(ArcBuffer source, ArcBuffer target, int row, int width)
             => lane.CopyBytes(source, target, checked(row * width * sizeof(float)), 0,
                 checked(width * sizeof(float)));
+
     }
 }

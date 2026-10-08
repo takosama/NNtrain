@@ -250,7 +250,10 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                         inferenceXmxPackedPrefill: !options.LoraTraining && options.InferenceXmxPackedPrefill,
                         inferenceXmxFactoredPrefill: !options.LoraTraining && options.InferenceXmxFactoredPrefill,
                         inferenceResidentIq2Panels: residentIq2Panels,
-                        inferenceXmxGgufBslmPrefill: !options.LoraTraining && options.InferenceXmxGgufBslmPrefill);
+                        inferenceXmxGgufBslmPrefill: !options.LoraTraining && options.InferenceXmxGgufBslmPrefill,
+                        iq2TiledForward: options.IQ2TiledForward, iq2TiledBackward: options.IQ2TiledBackward,
+                        inferenceIq2DecodePair4: !options.LoraTraining && options.InferenceIq2DecodePair4,
+                        inferenceIq2DecodeLevel3: !options.LoraTraining && options.InferenceIq2DecodeLevel3);
                     lock (model._matrices) model._matrices.Add(tensor.Name, matrix);
                 }
                 else
@@ -457,6 +460,7 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         foreach (LayerState state in _states) state.EnsureCapacity(_position + 1);
         ArcExecutionLane lane = _embedding.Lane;
         ArcBuffer? hidden = null;
+        bool fusedResidualRms = _options.InferenceFusedResidualRms && !_options.LoraTraining;
         try
         {
             hidden = overrideEmbedding is null ? _embedding.Embedding(tokenId) : lane.Upload(overrideEmbedding);
@@ -474,18 +478,26 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                 using ArcBuffer attention = bindings.Recurrent
                     ? RecurrentAttention(normalized, bindings)
                     : FullAttention(normalized, bindings, ropePosition);
-                Qwen35Gpu.AddInPlace(lane, hidden!, attention, d.EmbeddingLength);
-                using ArcBuffer postNorm = Qwen35Gpu.RmsNorm(lane, hidden!, bindings.PostAttentionNorm,
-                    1, d.EmbeddingLength, d.RmsEpsilon);
+                using ArcBuffer postNorm = AddResidualAndRmsNorm(lane, hidden!, attention,
+                    bindings.PostAttentionNorm, d.EmbeddingLength, d.RmsEpsilon, fusedResidualRms);
                 using ArcBuffer gate = Project(bindings.FfnGate, postNorm);
                 using ArcBuffer up = Project(bindings.FfnUp, postNorm);
                 using ArcBuffer activated = Qwen35Gpu.SiluMultiply(lane, gate, up, d.FeedForwardLength);
                 using ArcBuffer down = Project(bindings.FfnDown, activated);
-                Qwen35Gpu.AddInPlace(lane, hidden!, down, d.EmbeddingLength);
+                if (fusedResidualRms && returnLogits && layer == d.LayerCount - 1)
+                {
+                    ArcBuffer finalNorm = AddResidualAndRmsNorm(lane, hidden!, down,
+                        _outputNorm, d.EmbeddingLength, d.RmsEpsilon, fused: true);
+                    hidden!.Dispose(); hidden = finalNorm;
+                }
+                else Qwen35Gpu.AddInPlace(lane, hidden!, down, d.EmbeddingLength);
             }
             if (!returnLogits) { _position++; return null; }
-            ArcBuffer finalNorm = Qwen35Gpu.RmsNorm(lane, hidden!, _outputNorm, 1, d.EmbeddingLength, d.RmsEpsilon);
-            hidden!.Dispose(); hidden = finalNorm;
+            if (!fusedResidualRms)
+            {
+                ArcBuffer finalNorm = Qwen35Gpu.RmsNorm(lane, hidden!, _outputNorm, 1, d.EmbeddingLength, d.RmsEpsilon);
+                hidden!.Dispose(); hidden = finalNorm;
+            }
             MoveToLane(ref hidden, ref lane, OutputMatrix.Lane, d.EmbeddingLength);
             ArcBuffer logits = ProjectMatrix("output.weight", OutputMatrix, hidden!);
             _position++;
@@ -505,6 +517,27 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         source.Read(buffer!, staging);
         ArcBuffer moved = destination.Upload(staging);
         buffer!.Dispose(); buffer = moved; source = destination;
+    }
+
+    private static ArcBuffer AddResidualAndRmsNorm(ArcExecutionLane lane, ArcBuffer hidden,
+        ArcBuffer residual, ArcBuffer weight, int width, float epsilon, bool fused)
+    {
+        if (!fused)
+        {
+            Qwen35Gpu.AddInPlace(lane, hidden, residual, width);
+            return Qwen35Gpu.RmsNorm(lane, hidden, weight, 1, width, epsilon);
+        }
+        ArcBuffer normalized = lane.Allocate(width);
+        try
+        {
+            bool fast = lane.Options.Qwen35FastRmsNorm && lane.Options.XmxMatrices
+                && lane.Device.SupportsXmx && lane.Device.MinimumSubgroupSize == 16
+                && lane.Device.Extensions.Split(' ').Contains("cl_intel_subgroups");
+            lane.Run(fast ? "q35a_add_rms_norm_sg16_exact" : "q35a_add_rms_norm",
+                128, 128, hidden, residual, weight, normalized, width, width, epsilon);
+            return normalized;
+        }
+        catch { normalized.Dispose(); throw; }
     }
 
     private ArcBuffer Project(string name, ArcBuffer input)
@@ -557,7 +590,8 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         using ArcBuffer delta = _options.FusedDelta ? Qwen35Gpu.DeltaStepFused(state.Lane, qkv, gate, alpha, beta,
             bindings.Convolution!, bindings.DtBias!, bindings.A!,
             bindings.RecurrentNorm!, state.Convolution!, state.Recurrent!,
-            d.LinearKeyHeads, d.LinearValueHeads, d.LinearHeadWidth, d.ConvKernel, d.RmsEpsilon)
+            d.LinearKeyHeads, d.LinearValueHeads, d.LinearHeadWidth, d.ConvKernel, d.RmsEpsilon,
+            cacheState: _options.InferenceCachedDeltaDecode && !_options.LoraTraining)
             : Qwen35Gpu.DeltaStep(state.Lane, qkv, gate, alpha, beta,
             bindings.Convolution!, bindings.DtBias!, bindings.A!,
             bindings.RecurrentNorm!, state.Convolution!, state.Recurrent!,
@@ -1050,15 +1084,18 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         private readonly bool _inferenceXmxPackedPrefill;
         private readonly bool _inferenceXmxFactoredPrefill;
         private readonly bool _inferenceXmxGgufBslmPrefill;
+        private readonly bool _iq2TiledForward, _iq2TiledBackward;
         private readonly bool PairedProjection;
+        private readonly bool _iq2DecodePair4;
+        private readonly bool _iq2DecodeLevel3;
         private readonly bool PairedLoraProjection;
         internal bool SupportsFusedLora => _kernel == Qwen35QuantizedKernel.Subgroup
             && _type is not (Qwen35Gguf.PQ20Type or Qwen35Gguf.PTQ10Type or Qwen2Gguf.BF16Type);
         internal bool SupportsSharedPrefillProjection => !Lane.Options.Qwen35TrainingKernels
-            && (_forwardRows > 1 || _inferenceXmxPrefill) && _kernel == Qwen35QuantizedKernel.Subgroup
+            && (_forwardRows > 1 || _inferenceXmxPrefill || _iq2TiledForward) && _kernel == Qwen35QuantizedKernel.Subgroup
             && _type is Qwen2Gguf.Q4KType or Qwen35Gguf.IQ2SType or Qwen35Gguf.IQ3SType;
         internal bool IsIq2S => _type == Qwen35Gguf.IQ2SType;
-        internal Matrix(ArcExecutionLane lane, GgufTensorInfo info, byte[] payload, Qwen35QuantizedKernel kernel, int transposeRows, int forwardRows, int q5ForwardRows, bool trainingIq2Bf16XmxForward, bool trainingIq2Fp16XmxForward, bool trainingIq2RollingTranspose, int transposeOctetRows, bool inferenceXmxPrefill = false, bool inferenceXmxPackedPrefill = false, bool inferenceXmxFactoredPrefill = false, bool inferenceResidentIq2Panels = false, bool inferenceXmxGgufBslmPrefill = false)
+        internal Matrix(ArcExecutionLane lane, GgufTensorInfo info, byte[] payload, Qwen35QuantizedKernel kernel, int transposeRows, int forwardRows, int q5ForwardRows, bool trainingIq2Bf16XmxForward, bool trainingIq2Fp16XmxForward, bool trainingIq2RollingTranspose, int transposeOctetRows, bool inferenceXmxPrefill = false, bool inferenceXmxPackedPrefill = false, bool inferenceXmxFactoredPrefill = false, bool inferenceResidentIq2Panels = false, bool inferenceXmxGgufBslmPrefill = false, bool iq2TiledForward = false, bool iq2TiledBackward = false, bool inferenceIq2DecodePair4 = false, bool inferenceIq2DecodeLevel3 = false)
         {
             _transposeRows = transposeRows;
             _forwardRows = forwardRows;
@@ -1098,6 +1135,10 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                 && _type is Qwen35Gguf.IQ2SType or Qwen35Gguf.IQ3SType;
             _inferenceXmxGgufBslmPrefill = inferenceXmxGgufBslmPrefill && _inferenceXmxPrefill
                 && _type == Qwen35Gguf.IQ2SType;
+            _iq2TiledForward = iq2TiledForward && IsIq2S && lane.SupportsIq2TiledProjection
+                && _kernel == Qwen35QuantizedKernel.Subgroup && !trainingIq2Bf16XmxForward && !trainingIq2Fp16XmxForward;
+            _iq2TiledBackward = iq2TiledBackward && IsIq2S && lane.SupportsIq2TiledProjection
+                && _kernel == Qwen35QuantizedKernel.Subgroup;
             if (_kernel == Qwen35QuantizedKernel.Subgroup && !subgroup)
                 throw new NotSupportedException("The Qwen3.5 subgroup kernel requires Intel SG16 support.");
             PairedProjection = (lane.Options.Qwen35PairedProjection
@@ -1105,6 +1146,10 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                     Qwen35Gguf.IQ2SType => 1, Qwen2Gguf.Q4KType => 2, Qwen35Gguf.IQ3SType => 4, _ => 0 })) != 0)
                 && _type is Qwen2Gguf.Q4KType or Qwen35Gguf.IQ2SType or Qwen35Gguf.IQ3SType;
             _projectionKernel = $"q35l_{_quantization}_sg16" + (PairedProjection ? "_pair" : "");
+            _iq2DecodePair4 = inferenceIq2DecodePair4 && !lane.Options.Qwen35TrainingKernels
+                && _kernel == Qwen35QuantizedKernel.Subgroup && _type == Qwen35Gguf.IQ2SType;
+            _iq2DecodeLevel3 = inferenceIq2DecodeLevel3 && !lane.Options.Qwen35TrainingKernels
+                && _kernel == Qwen35QuantizedKernel.Subgroup && _type == Qwen35Gguf.IQ2SType;
             PairedLoraProjection = PairedProjection && lane.Options.Qwen35PairedLoraProjection;
             _fusedProjectionKernel = $"q35l_{_quantization}_sg16" + (PairedLoraProjection ? "_pair" : "") + "_lora";
             if (inferenceResidentIq2Panels && _inferenceXmxPrefill && CanUseResidentIq2Panels(info))
@@ -1165,17 +1210,29 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                             zeroBias, output, rows, _inputWidth, OutputWidth);
                     }
                 }
+                // Training uses block-factored integer panels. Inference keeps
+                // the original K16 coefficient order to preserve model logits.
+                else if (Lane.Options.Qwen35TrainingKernels && _iq2TiledForward && !_inferenceXmxPrefill && rows >= 128
+                    && Lane.AllocatedBytes + Lane.Iq2TiledForwardWorkspaceBytes(rows, _inputWidth, OutputWidth)
+                        + 16L * 1024 * 1024 < Lane.EffectivePhysicalBufferBudgetBytes)
+                {
+                    Lane.Iq2TiledForward(input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
+                }
                 else if (_inferenceXmxPrefill && rows >= 16)
                 {
                     if (_inferenceXmxGgufBslmPrefill)
                     {
+                        // Row-major A removes the long stride in each XMX
+                        // reduction while retaining the old K16 arithmetic.
+                        bool rowMajor = _iq2TiledForward && rows >= 512;
                         int elements = checked((rows + 7) / 8 * 8 * _inputWidth);
                         using ArcBuffer high = Lane.AllocateBytes(checked(elements * sizeof(ushort)));
                         using ArcBuffer low = Lane.AllocateBytes(checked(elements * sizeof(ushort)));
                         using ArcBuffer rangeStatus = Lane.Allocate(1);
                         Lane.Run("q35a_zero", 1, 0, rangeStatus, 1);
-                        Lane.Run("q35l_prefill_xmx_pack_input_f16x2", elements, 0, input, high, low, rangeStatus, rows, _inputWidth);
-                        Lane.Run2D("q35l_prefill_xmx_iq2_s_gguf_bslm", ((long)OutputWidth + 63) / 64 * 16,
+                        Lane.Run(rowMajor ? "q35l_prefill_xmx_pack_input_f16x2_rowmajor" : "q35l_prefill_xmx_pack_input_f16x2",
+                            elements, 0, input, high, low, rangeStatus, rows, _inputWidth);
+                        Lane.Run2D(rowMajor ? "q35l_prefill_xmx_iq2_s_gguf_bslm_k32r" : "q35l_prefill_xmx_iq2_s_gguf_bslm", ((long)OutputWidth + 63) / 64 * 16,
                             ((long)rows + 127) / 128 * 16, 16, 16, high, low, _encoded, zeroBias, output,
                             rows, _inputWidth, OutputWidth, input, rangeStatus);
                     }
@@ -1257,6 +1314,12 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
                     Lane.Run($"{_rowProjectionKernelPrefix}{_quantization}_rows{_forwardRows}",
                         ((((long)rows + _forwardRows - 1) / _forwardRows * OutputWidth + 1) / 2) * 32, 32,
                         input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
+                else if (_iq2DecodeLevel3 && rows == 1)
+                    Lane.Run("q35l_iq2_s_sg16_levels3", ((long)((OutputWidth + 1) / 2) + 1) / 2 * 32,
+                        32, input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
+                else if (_iq2DecodePair4 && rows == 1)
+                    Lane.Run("q35l_iq2_s_sg16_pair4", ((long)((OutputWidth + 3) / 4) + 1) / 2 * 32,
+                        32, input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
                 else if (_kernel == Qwen35QuantizedKernel.Subgroup && PairedProjection)
                     Lane.Run(_projectionKernel, ((long)rows * ((OutputWidth + 1) / 2) + 1) / 2 * 32,
                         32, input, _encoded, zeroBias, output, rows, _inputWidth, OutputWidth);
@@ -1322,6 +1385,13 @@ public sealed partial class Qwen35QuantizedModel : IDisposable
         }
         internal void BackwardInput(ArcBuffer dy, ArcBuffer dx, int rows, long scratchBudgetBytes)
         {
+            if (_iq2TiledBackward && rows >= 128 && OutputWidth % 16 == 0 && scratchBudgetBytes >= 128L * 1024 * 1024
+                && Lane.AllocatedBytes + Math.Min(scratchBudgetBytes, Lane.Iq2TiledBackwardWorkspaceBytes(rows, _inputWidth, OutputWidth))
+                    + 16L * 1024 * 1024 < Lane.EffectivePhysicalBufferBudgetBytes)
+            {
+                Lane.Iq2TiledBackward(dy, _encoded, dx, rows, _inputWidth, OutputWidth, workspaceBudgetBytes: scratchBudgetBytes);
+                return;
+            }
             const int tile = 1024;
             int splits = (OutputWidth + tile - 1) / tile;
             if (scratchBudgetBytes < sizeof(float)) throw new ArgumentOutOfRangeException(nameof(scratchBudgetBytes));

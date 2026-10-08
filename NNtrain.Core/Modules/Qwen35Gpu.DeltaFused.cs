@@ -8,12 +8,15 @@ internal static partial class Qwen35Gpu
     /// <summary>
     /// Combines recurrent update and gated RMSNorm for width-128 heads.
     /// Other widths use the generic implementation. All inputs remain caller-owned.
+    /// The optional cached-state path reuses the SG16 prompt kernel for one row,
+    /// retaining the convolution, normalization and recurrent arithmetic order.
     /// </summary>
     internal static ArcBuffer DeltaStepFused(
         ArcExecutionLane lane, ArcBuffer qkv, ArcBuffer gate, ArcBuffer alpha, ArcBuffer beta,
         ArcBuffer convWeights, ArcBuffer dt, ArcBuffer a, ArcBuffer norm,
         ArcBuffer convState, ArcBuffer recurrentState,
-        int keyHeads, int valueHeads, int headWidth, int convKernel, float eps)
+        int keyHeads, int valueHeads, int headWidth, int convKernel, float eps,
+        bool cacheState = false)
     {
         if (headWidth != 128)
             return DeltaStep(lane, qkv, gate, alpha, beta, convWeights, dt, a, norm,
@@ -46,8 +49,16 @@ internal static partial class Qwen35Gpu
                 lane.Run("q35d_normalize_qk_coop128", (long)keyHeads * 128, 128, mixed, keyHeads, eps);
             else
                 lane.Run("q35d_normalize_qk", keyHeads, 0, mixed, keyHeads, headWidth, eps);
-            lane.Run("q35d_recurrent_gated_rmsnorm_fused128", valueSize, 128,
-                mixed, alpha, beta, dt, a, recurrentState, norm, gate, output, keyHeads, eps);
+            bool useCachedSubgroup = cacheState && lane.Options.Qwen35DeltaSubgroupRms
+                && lane.Device.MinimumSubgroupSize == 16
+                && lane.Device.Extensions.Split(' ').Contains("cl_intel_subgroups");
+            if (useCachedSubgroup)
+                lane.Run("q35d_recurrent_gated_rmsnorm_rows128_subgroup", valueSize, 128,
+                    mixed, alpha, beta, dt, a, recurrentState, norm, gate, output,
+                    keyHeads, valueHeads, channels, 0, 1, eps);
+            else
+                lane.Run("q35d_recurrent_gated_rmsnorm_fused128", valueSize, 128,
+                    mixed, alpha, beta, dt, a, recurrentState, norm, gate, output, keyHeads, eps);
             return output;
         }
         catch { output.Dispose(); throw; }

@@ -12,10 +12,23 @@ public sealed record Qwen35ExecutionOptions
     public bool InferencePairedProjection { get; init; }
     // Bit 0: IQ2_S, bit 1: Q4_K, bit 2: IQ3_S. Q4 pairing was slower on Arc B580.
     public int InferencePairedProjectionTypes { get; init; } = 5;
+    // Experimental IQ2_S decode: one SG16 shares activation loads across four
+    // outputs, preserving each output's FMA/reduction order. Fused LoRA keeps
+    // its existing projection kernel until a four-output version is verified.
+    public bool InferenceIq2DecodePair4 { get; init; }
+    // Experimental pair2 decoder: select the three exact IQ2 grid products
+    // instead of converting and multiplying all eight grid entries separately.
+    public bool InferenceIq2DecodeLevel3 { get; init; }
     public bool InferencePairedLoraProjection { get; init; }
     public bool CacheKernelArguments { get; init; } = true;
     public bool CacheProgramBinary { get; init; } = true;
     public bool InferenceFastRmsNorm { get; init; } = true;
+    // Experimental single-token residual addition and exact RMSNorm fusion.
+    // Keep the stored FP32 residual and the existing reduction tree unchanged.
+    public bool InferenceFusedResidualRms { get; init; }
+    // Experimental single-token DeltaNet state-column cache. Retains the
+    // original recurrent arithmetic while reducing global state traffic.
+    public bool InferenceCachedDeltaDecode { get; init; }
     public bool InferenceCooperativeLora { get; init; } = true;
     public int ProjectionWorkgroupSize { get; init; } = 32;
     public bool ParallelArgmax { get; init; } = true;
@@ -36,6 +49,11 @@ public sealed record Qwen35ExecutionOptions
     // Decode original IQ2 GGUF blocks once per B-only SLM tile. Original
     // single-token projection/storage remains available without recoding.
     public bool InferenceXmxGgufBslmPrefill { get; init; }
+    // Training uses bounded IQ2 integer panels and row-scaled FP16 residuals.
+    // Inference at 512+ rows uses row-major GGUF BSLM with the original K16
+    // arithmetic preserved. Disable these to compare the previous routes.
+    public bool IQ2TiledForward { get; init; } = true;
+    public bool IQ2TiledBackward { get; init; } = true;
     // Exactly recode IQ2 block projections into small, resident XMX panels.
     // Embeddings, output heads and every training path keep GGUF storage.
     public bool InferenceResidentIq2Panels { get; init; }
@@ -44,6 +62,13 @@ public sealed record Qwen35ExecutionOptions
     // Mixed prompt attention can aggregate normalization and KV work across
     // rows. Keep selectable for device and model-specific performance checks.
     public bool InferenceBatchMixedAttention { get; init; } = true;
+    // Experimental: aggregate plain-text prompt attention with absolute scalar
+    // RoPE positions, retaining the existing bounded score-scratch guard.
+    public bool InferenceBatchTextAttention { get; init; }
+    // Zero chooses the whole chunk when it fits, otherwise at most 256 rows
+    // within the attention scratch budget. Positive values force a smaller
+    // text-attention tile without splitting the surrounding projections.
+    public int InferenceTextAttentionTileRows { get; init; }
     // Batched prompt convolution and token-ordered width-128 DeltaNet state
     // avoid per-token dispatches while preserving the existing FP32 order.
     public bool InferenceBatchRecurrent { get; init; } = true;

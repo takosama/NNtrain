@@ -14,7 +14,7 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
     private static readonly string[] Qwen35KernelResourceSuffixes =
     [
         ".qwen.cl", ".qwen35_attention.cl", ".qwen35_delta.cl",
-        ".qwen35_delta_fused.cl", ".qwen35_linear_fast.cl", ".qwen35_iq.cl", ".qwen35_lora.cl", ".qwen35_prism.cl",
+        ".qwen35_delta_fused.cl", ".qwen35_linear_fast.cl", ".qwen35_iq.cl", ".qwen35_iq2_decode132.cl", ".qwen35_iq2_tiles.cl", ".qwen35_lora.cl", ".qwen35_prism.cl",
         ".qwen35_projection_pair.cl", ".qwen35_norm_fast.cl", ".qwen35_prefill_linear.cl", ".qwen35_prefill_xmx.cl", ".qwen35_prefill_xmx_tiles.cl", ".qwen35_vision.cl",
         ".qwen35_vision_attention_fast.cl", ".qwen35_vision_attention_xmx.cl", ".qwen35_vision_linear_fast.cl"
     ];
@@ -227,7 +227,9 @@ public sealed partial class ArcExecutionLane : IExecutionLane, IDeviceMemoryMana
         if (!Options.Qwen35InferenceKernelsOnly) return ProgramForKernel(name);
         // Do not silently compile standalone training programs when a caller
         // requests a kernel outside the explicitly selected inference workload.
-        if ((Options.Qwen35TrainingKernels && name.StartsWith("q35t_", StringComparison.Ordinal))
+        if (name.StartsWith("q35s_", StringComparison.Ordinal)
+            || (Options.ExperimentalOptimizationKernels && name.StartsWith("q35c_", StringComparison.Ordinal))
+            || (Options.Qwen35TrainingKernels && name.StartsWith("q35t_", StringComparison.Ordinal))
             || name.StartsWith("qwen_", StringComparison.Ordinal)
             || name.StartsWith("q35a_", StringComparison.Ordinal)
             || name.StartsWith("q35d_", StringComparison.Ordinal)
