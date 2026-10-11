@@ -155,6 +155,7 @@ public sealed class InferenceSession : IDisposable
                         // Use both GPUs for the Q5_K vocabulary projection when
                         // the model's format, adapters and memory budget allow it.
                         InferenceSplitOutputHead = _inferenceSplitOutputHead && devices.Length > 1,
+                        InferencePackedIq2Decode = true,
                         CollectKernelTimings = _collectKernelTimings,
                         InferenceProjectionRows = _inferenceProjectionRows,
                         InferenceXmxPrefill = _inferenceXmxPrefill,

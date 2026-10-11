@@ -14,12 +14,12 @@ for (int i = 0; i < args.Length; i++)
     if (!arg.StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException($"Unexpected argument {arg}");
     int equal = arg.IndexOf('=');
     if (equal >= 0) options.Add(arg[..equal], arg[(equal + 1)..]);
-    else if (arg is "--fallback" or "--stress" or "--hash-model" or "--transpose" or "--model-forward" or "--model-no-profile" or "--row-major") options.Add(arg, "true");
+    else if (arg is "--fallback" or "--stress" or "--hash-model" or "--transpose" or "--model-forward" or "--model-packed-iq2" or "--model-no-profile" or "--row-major") options.Add(arg, "true");
     else options.Add(arg, ++i < args.Length ? args[i] : throw new ArgumentException($"Missing value for {arg}"));
 }
 string[] known = ["--output", "--model", "--tensors", "--rows", "--input", "--output-width", "--tiles", "--modes",
     "--panel-columns", "--samples", "--warmup", "--device", "--cpu-points", "--fallback", "--stress", "--hash-model", "--repo", "--transpose", "--scratch-mib",
-    "--model-forward", "--model-no-profile", "--devices", "--prefill-chunk", "--model-l2-limit", "--prompt-file", "--row-major", "--bslm-k"];
+    "--model-forward", "--model-packed-iq2", "--model-no-profile", "--devices", "--prefill-chunk", "--model-l2-limit", "--prompt-file", "--row-major", "--bslm-k"];
 foreach (string name in options.Keys) if (!known.Contains(name)) throw new ArgumentException($"Unknown option {name}");
 if (options.ContainsKey("--model-forward"))
 {

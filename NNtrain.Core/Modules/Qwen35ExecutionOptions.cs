@@ -5,6 +5,9 @@ public enum Qwen35QuantizedKernel { Reference, Cooperative, Subgroup, Auto }
 
 public sealed record Qwen35ExecutionOptions
 {
+    // Lossless, same-size IQ2_S storage with aligned index/sign words. Only
+    // inference block projections use it; GGUF files and training stay raw.
+    public bool InferencePackedIq2Decode { get; init; }
     // Opt-in: overlap the two vocabulary halves of an SG16 Q5_K output head
     // on two GPUs. Keep the original full head for unsupported/LoRA fallback.
     public bool InferenceSplitOutputHead { get; init; }

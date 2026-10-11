@@ -1,0 +1,110 @@
+{
+  "sourceBaseCommit": "1feb228adea15a08856d34ca83f0d50bdc9ad9ad",
+  "sourceScope": "Only these staged source changes were exported; unrelated working tree changes excluded.",
+  "sourceFiles": {
+    "NNtrain.Arc/ArcExecutionLane.cs": {
+      "gitBlob": "bfa2a2671bfc1d9dc712dbd0ff7b8c75444f5a39",
+      "exportedSha256": "8a32b7d7b66171bf772eb1472f7f9bdab283959dd4143496b4bda8dbc575ac47"
+    },
+    "NNtrain.Arc/Kernels/qwen35_iq2_packed_decode.cl": {
+      "gitBlob": "0c6483f14eadb352d0eb9b4fc3505e567fb40489",
+      "exportedSha256": "be93e542a6b41b90d7caac5a4cf893d38e3e048a011679f00ccc5dcc55b14afe"
+    },
+    "NNtrain.Arc/Kernels/qwen35_iq2_packed_prefill.cl": {
+      "gitBlob": "f78f74a976aeb398faad7c977be52db24ab8a9f0",
+      "exportedSha256": "5c0361d173f7e52759663a090e2d822c73cda472244a68a277769a285658af93"
+    },
+    "NNtrain.Arc/Kernels/qwen35_iq2_signed_lookup.cl": {
+      "gitBlob": "46d92243dde2e8fdc8ecb7b1edfbfac0876e2ea5",
+      "exportedSha256": "a7500d4ab24f89d6fa32afd2072a038d6d93fa90518dd63e940e0515264e1155"
+    },
+    "NNtrain.Arc/NNtrain.Arc.csproj": {
+      "gitBlob": "7f2617b151097b6fd833b47a1b47b7de4da16ad5",
+      "exportedSha256": "c66c9e52118723d4b63eea6adda4440895f328ec1cf7df8b10145b3032fe0ade"
+    },
+    "NNtrain.Core.Tests/Qwen35Iq2PackedDecodeTests.cs": {
+      "gitBlob": "670cc782b814679c704d0f45bce63dac10a6a3da",
+      "exportedSha256": "d092437dcbdefa404abd0dd8d7ca5dd8c0740df487b4175fcdc304ce0552af01"
+    },
+    "NNtrain.Core.Tests/Qwen35Iq2PackedPrefillTests.cs": {
+      "gitBlob": "dec111b3b4f0aba6845f60a18eed92970e9d764d",
+      "exportedSha256": "db0b832e800ca9b7e7475b6b0dd8360a26ff6475ccc4524258edc8a9c0ac0e23"
+    },
+    "NNtrain.Core.Tests/Qwen35Iq2PackedRoutingTests.cs": {
+      "gitBlob": "3e39d9903dd9d8000f44b8d1e0fc8c00a08d70ca",
+      "exportedSha256": "728a69ccf800e2badd7522f1d32765d70f2e6864f801e604ce97afeb87d02802"
+    },
+    "NNtrain.Core/Modules/Qwen35ExecutionOptions.cs": {
+      "gitBlob": "77e54d931b865d334bedf1459ee1add8da956d58",
+      "exportedSha256": "0f2d12c8e6165fe15bc058949ff10274a0bfff44afaa3314569bb53580815201"
+    },
+    "NNtrain.Core/Modules/Qwen35QuantizedModel.Iq2PackedDecode.cs": {
+      "gitBlob": "1fec48b984c2814230dd3ea3c0f501339105dc59",
+      "exportedSha256": "b510ba5aa1992453fccb2608d56dfb421ab3f839c91a2b48963c50c13e19b288"
+    },
+    "NNtrain.Core/Modules/Qwen35QuantizedModel.cs": {
+      "gitBlob": "e9a937a326ff1a4aca07a9e9732f95f10b770ebe",
+      "exportedSha256": "549b1d21014eab4ed2d280ac75121720819008dea5bcbdfd3af20ce128fbf61e"
+    },
+    "NNtrain.Gui/InferenceSession.cs": {
+      "gitBlob": "cdf14a9baa8920f69148f6c1b6d80839deedfab2",
+      "exportedSha256": "b3ecfc5750252c1e98919d5c5da82d343f57c991cf991158e41bd9400fa625fa"
+    },
+    "tools/iq2s-packed-decode-bench/Iq2sPackedDecodeBench.csproj": {
+      "gitBlob": "b26e95cf8b1a6814043cfc32c18d9c1ff074c36f",
+      "exportedSha256": "aa33bc60777e043b995f6233f19dc572f6ef3fbb9b0c6029c07c7489c694a871"
+    },
+    "tools/iq2s-packed-decode-bench/Program.cs": {
+      "gitBlob": "02dd744b094262c0c9a1f883654072f7a7f7fc7a",
+      "exportedSha256": "55d92ba85f4d48ef78be3e119fe4ca3855c2e6e559169ef90f8251d17192fb8a"
+    },
+    "tools/iq2s-packed-decode-bench/README.md": {
+      "gitBlob": "48858a8b697642cf3fa3844b6131b16819508481",
+      "exportedSha256": "c368e21c9ea7c68776ceff3d0f0f64142a6fe0653be603424052b45ccbc236a0"
+    },
+    "tools/iq2s-production-bench/ModelBenchmark.cs": {
+      "gitBlob": "9a354bd93b0b18b66b6c1479c793a4b60f2e3ad2",
+      "exportedSha256": "d71860213243341894be5110660f7b3a1e790ee272a561b2aaade3542d49e1ab"
+    },
+    "tools/iq2s-production-bench/Program.cs": {
+      "gitBlob": "4829a5d141a0bcf85b2c6dae1e6d6022e5ee2d97",
+      "exportedSha256": "87d23b7f98f0cc0c07b7760f43e929bf0240668896b97b344a48703252820ce9"
+    },
+    "tools/iq2s-production-bench/summarize_decode.py": {
+      "gitBlob": "7bfe64b42164e1ca265b9381851f918314d5b18a",
+      "exportedSha256": "5feea17f01a189cda0f0aebf10e4150429bfa749006ff6f528de72df666a08d6"
+    }
+  },
+  "measuredReleaseBinaries": {
+    "NNtrain.Core": "5cea29710163128134c6031dd678cfcddc808cdbcf33a31dfb9e3a0907c9d72d",
+    "NNtrain.Arc": "582be5070694db7cd743365c232a5ea7aae327a62e85f5d8dcf8e746208217c2",
+    "NNtrain.Benchmarks": "f38b2438707b1265a67258d9973520aa868b7ba861c278874782b34c4b8a29a5"
+  },
+  "prefillBinaries": {
+    "NNtrain.Arc.dll": "684c0f73c28e467a95abda738afee83a0db70af566a39b0de3f95c872e3113ed",
+    "NNtrain.Core.dll": "9f2d833d1b435e03921104c538d8f4220faec7356830b809d086608285bed8a4",
+    "NNtrain.Cuda.dll": "7fe30d73d49faa57322319790f787c0ebf99d6673342172183eaa6b51a94a9a5",
+    "NNtrain.CudaKernels.dll": "9872abcbcb9e69d477a0c4fefd0151a1fa0d9f081c91983af359a118ed84228e",
+    "NNtrain.F16C.dll": "a183998eb99c5cde48a4b9d7bb14e2d1afd1fbf62a62d75451b96e679dc09d9a",
+    "NNtrain.Iq2sProductionBench.dll": "4a6609fccd17a7c47cea7ec5b0ca523ccea43146042e3b89ca7f579e7e44f1b8",
+    "NNtrain.Runtime.dll": "7adc9684f1cae6daadeed877c07b8d959af287e42b04ea9d4d9b83fa657d70df"
+  },
+  "tests": {
+    "total": "55",
+    "executed": "55",
+    "passed": "55",
+    "failed": "0",
+    "error": "0",
+    "timeout": "0",
+    "aborted": "0",
+    "inconclusive": "0",
+    "passedButRunAborted": "0",
+    "notRunnable": "0",
+    "notExecuted": "0",
+    "disconnected": "0",
+    "warning": "0",
+    "completed": "0",
+    "inProgress": "0",
+    "pending": "0"
+  }
+}

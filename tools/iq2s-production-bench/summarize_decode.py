@@ -145,8 +145,15 @@ def validate(path, label, args):
     document = parse_json(path.read_text(encoding="utf-8-sig"), str(path))
     require(document.get("SchemaVersion") == 2 and document.get("CompletedUtc") and document.get("StartedUtc"),
             f"{path}: completed Qwen35GenerationProbe schema 2 required")
-    require(document.get("Adapter") is None and document.get("Options", {}).get("LoraTraining") is False,
-            f"{path}: this report requires base-model inference without LoRA")
+    require(document.get("Options", {}).get("LoraTraining") is False,
+            f"{path}: inference with LoraTraining=False required")
+    adapter = document.get("Adapter")
+    if adapter is not None:
+        require(args.allow_matching_adapter, f"{path}: adapter requires --allow-matching-adapter")
+        require(isinstance(adapter, dict) and isinstance(adapter.get("Path"), str)
+                and adapter["Path"], f"{path}: adapter path required")
+        integer(adapter.get("Bytes"), str(path) + ".Adapter.Bytes", 1)
+        digest(adapter.get("Sha256"), str(path) + ".Adapter.Sha256")
     model = document.get("Model", {})
     digest(model.get("Sha256"), str(path) + ".Model.Sha256")
     integer(model.get("Bytes"), str(path) + ".Model.Bytes", 1)
@@ -239,7 +246,7 @@ def compare_bytes(first, second):
 def compare(baseline, candidate, args):
     old, new = baseline["raw"], candidate["raw"]
     label = candidate["label"]
-    for key in ("Devices", "Shape", "Runtime", "PromptTokenIds", "RequestedNewTokens", "Sampling", "BinarySha256"):
+    for key in ("Devices", "Shape", "Runtime", "PromptTokenIds", "RequestedNewTokens", "Sampling", "BinarySha256", "Adapter"):
         require(old[key] == new[key], f"{label}: {key} differs from baseline")
     require(old["Model"]["Sha256"].lower() == new["Model"]["Sha256"].lower()
             and old["Model"]["Bytes"] == new["Model"]["Bytes"], f"{label}: model SHA/size differs")
@@ -338,8 +345,11 @@ def render(summary, output):
     sampling = raw["Sampling"]
     sampling_text = ("greedy生成" if sampling["Method"] == "GPU greedy argmax" else
                      f"seed固定sampling（temperature={sampling['Temperature']}、top-p={sampling['TopP']}、top-k={sampling['TopK']}、seed={sampling['RandomSeed']}）")
+    adapter = raw.get("Adapter")
+    adapter_text = ("LoRAなし" if adapter is None else
+                    f"LoRA適用（{Path(adapter['Path']).name}、SHA-256 `{adapter['Sha256']}`）")
     lines = ["# Qwen GGUF 生成速度の比較", "", "## 測定範囲", "",
-             f"同じベースモデル・{len(raw['Devices'])} GPU（{device_text}）・{len(raw['PromptTokenIds'])} tokenの同じprompt・{sampling_text}・LoRAなしで比較。各runで{raw['RequestedNewTokens']} tokenを生成。EOSによる早期終了はしない。",
+             f"同じベースモデル・{len(raw['Devices'])} GPU（{device_text}）・{len(raw['PromptTokenIds'])} tokenの同じprompt・{sampling_text}・{adapter_text}で比較。各runで{raw['RequestedNewTokens']} tokenを生成。EOSによる早期終了はしない。",
              "最初の出力tokenから最後の出力tokenまでをdecode時間とし、`(生成数−1)×1000 / decode ms`でtok/sを再計算した。prompt処理と最初のtoken生成、モデルロード、logits保存はこの指標に含めない。",
              f"先頭{summary['discardFirstRuns']} runを速度集計から除外。除外runも生成ID・時刻・logits整合性の検証対象。実行順は各JSONの時刻に記録されており、別プロセス/別セッション間の変動を含む。",
              "全モデルのdecode測定であり、既存のprefillやIQ2演算単体の倍率とは別の値。", "",
@@ -386,6 +396,8 @@ def main(argv=None):
     parser.add_argument("--baseline-name", default="original")
     parser.add_argument("--candidate", action="append", required=True, metavar="NAME=JSON")
     parser.add_argument("--require-logits", action="store_true")
+    parser.add_argument("--allow-matching-adapter", action="store_true",
+                        help="Allow LoRA inference only when both probes record the same adapter identity")
     parser.add_argument("--allow-option-change", action="append", default=[], metavar="OPTION",
                         help="Explicitly allow an additional option difference beyond the planned RMS, cached Delta, resident IQ2 and GGUF BSLM switches")
     parser.add_argument("--minimum-runs", type=int, default=4)
@@ -410,6 +422,7 @@ def main(argv=None):
                "minimumRunsRequired": args.minimum_runs, "discardFirstRuns": args.discard_first,
                "allowedOptionChanges": sorted(PLANNED_OPTION_CHANGES | set(args.allow_option_change)),
                "requireLogitBytesEqual": args.require_logits,
+               "allowMatchingAdapter": args.allow_matching_adapter,
                "baseline": records[0], "candidates": records[1:], "comparisons": comparisons,
                "deltaExperiments": [delta_appendix(path.resolve(strict=True)) for path in args.delta_trx]}
     output = args.output.resolve()

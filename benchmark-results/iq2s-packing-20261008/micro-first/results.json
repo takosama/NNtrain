@@ -1,0 +1,2871 @@
+{
+  "schemaVersion": 1,
+  "complete": true,
+  "error": null,
+  "startedUtc": "2026-10-08T08:41:15.4367136+00:00",
+  "completedUtc": "2026-10-08T08:41:30.1091781+00:00",
+  "commandArguments": [
+    "--model",
+    "models/Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf",
+    "--output",
+    "benchmark-results/iq2s-packing-20261008/micro-first",
+    "--samples",
+    "9",
+    "--iterations",
+    "16",
+    "--profile",
+    "0"
+  ],
+  "operation": "Single-token FP32 x complete IQ2_S GGUF tensor -\u003E FP32 projection, with nonzero FP32 bias",
+  "scope": "One resident projection only. This is not full-model generation tok/s. Packing is reported separately from repeated decode.",
+  "model": {
+    "path": "C:\\Users\\takos\\source\\repos\\NNtrain\\models\\Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf",
+    "bytes": 10173451200,
+    "lastWriteTimeUtc": "2026-09-20T21:37:56.9527558Z",
+    "sha256": null
+  },
+  "device": {
+    "index": 0,
+    "name": "Intel(R) Arc(TM) B580 Graphics",
+    "driverVersion": "32.0.101.9030",
+    "globalMemoryBytes": 12452507648,
+    "maximumAllocationBytes": 12452507648,
+    "minimumSubgroupSize": 16,
+    "supportsXmx": true
+  },
+  "measuredFileSha256": {
+    "NNtrain.Arc.dll": "28f059c47d2969f6ff0c96b6c6d07824e27ee591da8760d67a27c23f09494108",
+    "NNtrain.Core.dll": "0d583e4e94cd6812a295b6d262115358928b9e10a98adde30f9aaae3dd33753a",
+    "NNtrain.Cuda.dll": "7fe30d73d49faa57322319790f787c0ebf99d6673342172183eaa6b51a94a9a5",
+    "NNtrain.CudaKernels.dll": "9872abcbcb9e69d477a0c4fefd0151a1fa0d9f081c91983af359a118ed84228e",
+    "NNtrain.F16C.dll": "a183998eb99c5cde48a4b9d7bb14e2d1afd1fbf62a62d75451b96e679dc09d9a",
+    "NNtrain.Iq2sPackedDecodeBench.dll": "36949e55abc837fb2f226b202f1a645242de8f4235344c2a73c1cbae688aa14a",
+    "NNtrain.Runtime.dll": "7adc9684f1cae6daadeed877c07b8d959af287e42b04ea9d4d9b83fa657d70df",
+    "qwen35_iq.cl": "a0f2afe1f1e3632584187aaa3f0b945d6451331ac3af68e86765bc58d83c318f"
+  },
+  "sourceFileSha256": {
+    "NNtrain.Arc\\Kernels\\qwen35_iq.cl": "a0f2afe1f1e3632584187aaa3f0b945d6451331ac3af68e86765bc58d83c318f",
+    "NNtrain.Arc\\Kernels\\qwen35_iq2_decode132.cl": "57931ac09170c2cb4054df9cc5d4a5d970dea606fa898e5c20dcb8e9612d5539",
+    "NNtrain.Arc\\Kernels\\qwen35_iq2_packed_decode.cl": "5d369121cd870a0488d6fcec8f7088025b638c2afd4d878c678e165701e64b96",
+    "NNtrain.Arc\\Kernels\\qwen35_iq2_signed_lookup.cl": "a33e2d1f7cdf437784a8f1e67b3cc08c7acf9c9c78b72b79601423c4cb3e2398",
+    "NNtrain.Arc\\Kernels\\qwen35_iq2_tiles.cl": "99c0e10525dfce277de40c1c5efd2406c6ee2bbb95316813f99aae0d602749a6",
+    "NNtrain.Arc\\Kernels\\qwen35_projection_pair.cl": "61a3afa9eaa09fe9a1776ea31850bc550992f56fb545a8d26a095dc2b8a79139",
+    "NNtrain.Core\\Modules\\Qwen35ExecutionOptions.cs": "87afcf3a42086b1906db04dba8cf94094188c19cd0f9031efe467ba2e352ea8e",
+    "NNtrain.Core\\Modules\\Qwen35Gpu.Attention.cs": "cff140eaf869daebc3a75a56112218363366223bb510de6d6f051591a0c44876",
+    "NNtrain.Core\\Modules\\Qwen35Gpu.AttentionBatch.cs": "5717d602c5105dae77f8b54bc0e702eda668bf0928389e6b1b3d84d692f1f5f7",
+    "NNtrain.Core\\Modules\\Qwen35Gpu.Delta.cs": "e89c6a6d47cf5d3a72c38600b524cfd105c012349547f0babc58a27f8f638c8e",
+    "NNtrain.Core\\Modules\\Qwen35Gpu.DeltaFused.cs": "db3a087cbf0460688b375d9f7317122390981dd8bf7587b0f20bd20657132f7a",
+    "NNtrain.Core\\Modules\\Qwen35Gpu.DeltaRows.cs": "ae950f1fe213d5d8ee854028f88c25d84958aa96ad70a94ca9fb6b6c8209bd86",
+    "NNtrain.Core\\Modules\\Qwen35LoraMatrix.cs": "6a8b3fb2aeb278befb0f50f1a0162a5109a6ad41e7518700974011211011a249",
+    "NNtrain.Core\\Modules\\Qwen35LoraOptions.cs": "caca601a408f5210f1f2c44249fddd268e45c218cc3555b7a68e5145ab54f4ee",
+    "NNtrain.Core\\Modules\\Qwen35Math.cs": "ea19683d2b0348898e164064b3629f2a41ab6a2d8c198b174c45654b2898b610",
+    "NNtrain.Core\\Modules\\Qwen35QuantizedModel.cs": "72e09ed00acd9bd7f9b1cbd752414c7c2c4f6f134529de418dde22f5d29e15d1",
+    "NNtrain.Core\\Modules\\Qwen35QuantizedModel.Iq2PackedDecode.cs": "7eaa3498a024cde566dd76e299db237363228409949759950d0862ce612287cc",
+    "NNtrain.Core\\Modules\\Qwen35QuantizedModel.Lora.cs": "0298dd2a67fc22551cc16cdb34489fbb7c2012dd3d1f678d25d87ef9d14be7d6",
+    "NNtrain.Core\\Modules\\Qwen35QuantizedModel.LoraCheckpoint.cs": "cf3405bd7b7470ae3b47131bc49fb9858f115b3cd33cc042987bf1a48f952257",
+    "NNtrain.Core\\Modules\\Qwen35QuantizedModel.LoraGguf.cs": "b617918426892a359ad2fc7141850824353d6d89bb920119ac03e4b109a03645",
+    "NNtrain.Core\\Modules\\Qwen35QuantizedModel.Multimodal.cs": "36286869186c4e9367a2ee1607577f26a6eebef13e7482e7356cb905a6bd9651",
+    "NNtrain.Core\\Modules\\Qwen35QuantizedModel.OutputHead.cs": "d39c3461e939a6afe827c12f6636f167f73dae177d302837ce9ad998d227779c",
+    "NNtrain.Core\\Modules\\Qwen35QuantizedModel.Prefill.cs": "9089bef30fd6f2412f6e51ef8624b93320080bb24d4d373dafd52d137ed6b359",
+    "NNtrain.Core\\Modules\\Qwen35TrainingAttention.cs": "c1db04d45ba0cf5d26e7f883108abc11b1875b7e6ac506abd8bee2d1a6dee110",
+    "NNtrain.Core\\Modules\\Qwen35TrainingDelta.cs": "49684c66fa5f524e6870742e7b461644ddaf6c3e93a76c453dd8bb10ad368120",
+    "NNtrain.Core\\Modules\\Qwen35TrainingTape.cs": "6958ce962cdb2c7172857611781f4f126b9dd9f38872bcf96aa6853d68bd71eb",
+    "NNtrain.Core\\Modules\\Qwen35VisionEncoder.cs": "4aca7b427e88b596f19e72d6d1a033ae77786d862cddb27c837cde51df808a79",
+    "NNtrain.Core\\Modules\\Qwen35VisionPreprocessor.cs": "fa15d5730be747b2957ec67f1b8fec2dce7958098f1ab11bd9b34b66ffc74522",
+    "tools\\iq2s-packed-decode-bench\\Iq2sPackedDecodeBench.csproj": "e9bb7a8518fd6b3ef6293c700d44ed5f0368c175221e71dbe1e0998fe1419587",
+    "tools\\iq2s-packed-decode-bench\\Program.cs": "8b0d758e8a939e324a1857dc61f8b05dbd2cdf61daf7786da0aa0b57b6f68dd3",
+    "tools\\iq2s-production-bench\\ReferenceData.cs": "89b3e918745dfe625c292499d50e9f4247dae7c841787679d7253f948dcb3eaa"
+  },
+  "signedLookupPreparation": {
+    "bytes": 131072,
+    "firstPreparationMilliseconds": 20.122,
+    "repeatedWallMilliseconds": {
+      "count": 9,
+      "median": 0.0138,
+      "mean": 0.01642222222222222,
+      "standardDeviation": 0.004996616138899022,
+      "minimum": 0.0132,
+      "maximum": 0.0276
+    },
+    "repeatedGpuMilliseconds": null,
+    "sha256": "8edbd5a2e0059b771de0446cc5a2651aa972968c9d302e04b4f2d4c06550ee66",
+    "samples": [
+      {
+        "round": 0,
+        "iterations": 1,
+        "wallMilliseconds": 0.0276,
+        "batchWallMilliseconds": 0.0276,
+        "gpuMilliseconds": null,
+        "kernelMilliseconds": {},
+        "hostTransferBytes": 0,
+        "logicalAllocationBytes": 0,
+        "kernelLaunches": 1
+      },
+      {
+        "round": 1,
+        "iterations": 1,
+        "wallMilliseconds": 0.0235,
+        "batchWallMilliseconds": 0.0235,
+        "gpuMilliseconds": null,
+        "kernelMilliseconds": {},
+        "hostTransferBytes": 0,
+        "logicalAllocationBytes": 0,
+        "kernelLaunches": 1
+      },
+      {
+        "round": 2,
+        "iterations": 1,
+        "wallMilliseconds": 0.0149,
+        "batchWallMilliseconds": 0.0149,
+        "gpuMilliseconds": null,
+        "kernelMilliseconds": {},
+        "hostTransferBytes": 0,
+        "logicalAllocationBytes": 0,
+        "kernelLaunches": 1
+      },
+      {
+        "round": 3,
+        "iterations": 1,
+        "wallMilliseconds": 0.0138,
+        "batchWallMilliseconds": 0.0138,
+        "gpuMilliseconds": null,
+        "kernelMilliseconds": {},
+        "hostTransferBytes": 0,
+        "logicalAllocationBytes": 0,
+        "kernelLaunches": 1
+      },
+      {
+        "round": 4,
+        "iterations": 1,
+        "wallMilliseconds": 0.0138,
+        "batchWallMilliseconds": 0.0138,
+        "gpuMilliseconds": null,
+        "kernelMilliseconds": {},
+        "hostTransferBytes": 0,
+        "logicalAllocationBytes": 0,
+        "kernelLaunches": 1
+      },
+      {
+        "round": 5,
+        "iterations": 1,
+        "wallMilliseconds": 0.0132,
+        "batchWallMilliseconds": 0.0132,
+        "gpuMilliseconds": null,
+        "kernelMilliseconds": {},
+        "hostTransferBytes": 0,
+        "logicalAllocationBytes": 0,
+        "kernelLaunches": 1
+      },
+      {
+        "round": 6,
+        "iterations": 1,
+        "wallMilliseconds": 0.0134,
+        "batchWallMilliseconds": 0.0134,
+        "gpuMilliseconds": null,
+        "kernelMilliseconds": {},
+        "hostTransferBytes": 0,
+        "logicalAllocationBytes": 0,
+        "kernelLaunches": 1
+      },
+      {
+        "round": 7,
+        "iterations": 1,
+        "wallMilliseconds": 0.0142,
+        "batchWallMilliseconds": 0.0142,
+        "gpuMilliseconds": null,
+        "kernelMilliseconds": {},
+        "hostTransferBytes": 0,
+        "logicalAllocationBytes": 0,
+        "kernelLaunches": 1
+      },
+      {
+        "round": 8,
+        "iterations": 1,
+        "wallMilliseconds": 0.0134,
+        "batchWallMilliseconds": 0.0134,
+        "gpuMilliseconds": null,
+        "kernelMilliseconds": {},
+        "hostTransferBytes": 0,
+        "logicalAllocationBytes": 0,
+        "kernelLaunches": 1
+      }
+    ],
+    "scope": "One shared 128 KiB lookup allocation for all tensors; original 82-byte GGUF weights remain unchanged"
+  },
+  "layout": "Exactly 82 bytes per original 256-value block in one allocation: all 64-byte ushort low-index/sign planes, all 16-byte pre-folded high-index/scale planes, then all 2-byte raw FP16 coefficients. No weight expansion or requantization.",
+  "timing": {
+    "profile": false,
+    "samples": 9,
+    "warmup": 3,
+    "iterations": 16,
+    "packSamples": 9,
+    "packWarmup": 3,
+    "workgroup": 32,
+    "order": "Round robin; reverse route order on alternate warmup/sample rounds",
+    "decodeWall": "Per-call batch average: dispatch iterations then synchronize once; input, encoded/packed weight, bias, output already resident",
+    "decodeGpu": "Not collected; use a separate --profile 1 run for kernel evidence",
+    "excludedFromDecode": "Compilation, initial allocation/upload, weight packing, CPU reference, poison/readback validation, model reads and hashing",
+    "packing": "First preparation includes allocation\u002Bpack\u002Bsync after kernel handles are created; repeated pack statistics use the existing output allocation. CPU pack is one allocation\u002Bconversion measurement.",
+    "comparison": "Only compare primary wall times from unprofiled runs; profile wall times are diagnostics."
+  },
+  "validation": {
+    "allOutputsBitwiseEqualRequired": true,
+    "cpuPointsRequested": 256,
+    "cpuTolerance": "max(1e-7, 2e-6 * sum(abs(products),abs(bias)))",
+    "guards": "Two NaN output guards",
+    "packedBytes": "GPU packed bytes must equal independent CPU packing, and CPU unpacking must reproduce every original GGUF byte",
+    "productionBaseline": "q35l_iq2_s_sg16_pair",
+    "rawSingleBaseline": "q35l_iq2_s_sg16"
+  },
+  "cases": [
+    {
+      "name": "blk.0.attn_gate.weight",
+      "rows": 1,
+      "inputWidth": 5120,
+      "outputWidth": 6144,
+      "source": {
+        "kind": "Complete unmodified GGUF IQ2_S tensor",
+        "type": 22,
+        "shape": [
+          5120,
+          6144
+        ],
+        "offset": 1589268480,
+        "bytes": 10076160,
+        "payloadSha256": "d2e134e379f6ad09d29821492a83a339b4cc5449afe2c6d8b030cb313ea31eb4"
+      },
+      "activation": {
+        "type": "FP32",
+        "seed": 812272,
+        "distribution": "Deterministic uniform [-1,1)",
+        "sha256": "4c0fba44d8d39252239e000a3b1399ff6389bd8a646d542fbb18e0953ea389ab",
+        "additionalQuantization": false
+      },
+      "bias": {
+        "type": "FP32",
+        "expression": "(column % 9 - 4) * 0.03",
+        "sha256": "2a4793145b0230e292c8a01e19b38cc3997acf646dd4a158471ad5d7f06c5d57"
+      },
+      "packing": {
+        "layout": "packed82",
+        "cpuPackMilliseconds": 8.0076,
+        "firstPreparationMilliseconds": 0.8338,
+        "repeatedWallMilliseconds": {
+          "count": 9,
+          "median": 0.0593,
+          "mean": 0.05957777777777778,
+          "standardDeviation": 0.001567572630093191,
+          "minimum": 0.0569,
+          "maximum": 0.0623
+        },
+        "repeatedGpuMilliseconds": null,
+        "packedSha256": "28124954691f3f85f4af3004500970814d344b4452258312b49096792bd1f7b9",
+        "allPackedBytesMatchIndependentCpu": true,
+        "allRawBytesRecovered": true,
+        "packedWeightsUnchangedAfterDecode": true,
+        "samples": [
+          {
+            "round": 0,
+            "iterations": 1,
+            "wallMilliseconds": 0.0623,
+            "batchWallMilliseconds": 0.0623,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 1,
+            "iterations": 1,
+            "wallMilliseconds": 0.0569,
+            "batchWallMilliseconds": 0.0569,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 2,
+            "iterations": 1,
+            "wallMilliseconds": 0.0593,
+            "batchWallMilliseconds": 0.0593,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 3,
+            "iterations": 1,
+            "wallMilliseconds": 0.0592,
+            "batchWallMilliseconds": 0.0592,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 4,
+            "iterations": 1,
+            "wallMilliseconds": 0.0594,
+            "batchWallMilliseconds": 0.0594,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 5,
+            "iterations": 1,
+            "wallMilliseconds": 0.062,
+            "batchWallMilliseconds": 0.062,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 6,
+            "iterations": 1,
+            "wallMilliseconds": 0.0596,
+            "batchWallMilliseconds": 0.0596,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 7,
+            "iterations": 1,
+            "wallMilliseconds": 0.0589,
+            "batchWallMilliseconds": 0.0589,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 8,
+            "iterations": 1,
+            "wallMilliseconds": 0.0586,
+            "batchWallMilliseconds": 0.0586,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          }
+        ]
+      },
+      "memory": {
+        "rawWeightBytes": 10076160,
+        "packedWeightBytes": 10076160,
+        "packedToRawRatio": 1,
+        "additionalResidentBytesWhileKeepingRaw": 10076160,
+        "replacementWeightBytesDelta": 0,
+        "simultaneouslyResidentWeightBytes": 20152320,
+        "sharedLookupBytes": 131072,
+        "liveBytesWithAllOperands": 20353032,
+        "note": "Both raw and packed weights stay resident for the comparison. Replacing raw storage saves that duplicate only if the model no longer needs raw weights for another route."
+      },
+      "baselineValidation": {
+        "finite": true,
+        "cpuPoints": 256,
+        "maxAbsoluteErrorVsDouble": 3.075795342866172E-07,
+        "relativeL2VsDouble": 1.388606853709476E-07,
+        "worstToleranceRatio": 0.004404045617233074,
+        "fullOutputCompared": false,
+        "maxAbsoluteErrorVsOriginal": null,
+        "relativeL2VsOriginal": null,
+        "bitwiseEqualToOriginal": null,
+        "guardsIntact": true
+      },
+      "variants": [
+        {
+          "name": "original-pair",
+          "kernel": "q35l_iq2_s_sg16_pair",
+          "validation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 3.075795342866172E-07,
+            "relativeL2VsDouble": 1.388606853709476E-07,
+            "worstToleranceRatio": 0.004404045617233074,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "postTimingValidation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 3.075795342866172E-07,
+            "relativeL2VsDouble": 1.388606853709476E-07,
+            "worstToleranceRatio": 0.004404045617233074,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "weightStorage": "Original GGUF IQ2_S",
+          "additionalSharedLookupBytes": 0,
+          "wallMilliseconds": {
+            "count": 9,
+            "median": 0.05601875,
+            "mean": 0.05603333333333333,
+            "standardDeviation": 0.00039823830805185,
+            "minimum": 0.05554375,
+            "maximum": 0.05675
+          },
+          "gpuMilliseconds": null,
+          "versusProductionPairWallSpeedup": 1,
+          "versusOriginalSingleWallSpeedup": 0.9496820261073301,
+          "samples": [
+            {
+              "round": 0,
+              "iterations": 16,
+              "wallMilliseconds": 0.05601875,
+              "batchWallMilliseconds": 0.8963,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 1,
+              "iterations": 16,
+              "wallMilliseconds": 0.055775,
+              "batchWallMilliseconds": 0.8924,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 2,
+              "iterations": 16,
+              "wallMilliseconds": 0.05675,
+              "batchWallMilliseconds": 0.908,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 3,
+              "iterations": 16,
+              "wallMilliseconds": 0.05554375,
+              "batchWallMilliseconds": 0.8887,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 4,
+              "iterations": 16,
+              "wallMilliseconds": 0.0557625,
+              "batchWallMilliseconds": 0.8922,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 5,
+              "iterations": 16,
+              "wallMilliseconds": 0.0566375,
+              "batchWallMilliseconds": 0.9062,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 6,
+              "iterations": 16,
+              "wallMilliseconds": 0.05563125,
+              "batchWallMilliseconds": 0.8901,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 7,
+              "iterations": 16,
+              "wallMilliseconds": 0.05610625,
+              "batchWallMilliseconds": 0.8977,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 8,
+              "iterations": 16,
+              "wallMilliseconds": 0.056075,
+              "batchWallMilliseconds": 0.8972,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            }
+          ]
+        },
+        {
+          "name": "original-sg16",
+          "kernel": "q35l_iq2_s_sg16",
+          "validation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 3.075795342866172E-07,
+            "relativeL2VsDouble": 1.388606853709476E-07,
+            "worstToleranceRatio": 0.004404045617233074,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "postTimingValidation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 3.075795342866172E-07,
+            "relativeL2VsDouble": 1.388606853709476E-07,
+            "worstToleranceRatio": 0.004404045617233074,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "weightStorage": "Original GGUF IQ2_S",
+          "additionalSharedLookupBytes": 0,
+          "wallMilliseconds": {
+            "count": 9,
+            "median": 0.0532,
+            "mean": 0.05325277777777778,
+            "standardDeviation": 0.0002354463681689538,
+            "minimum": 0.05303125,
+            "maximum": 0.05386875
+          },
+          "gpuMilliseconds": null,
+          "versusProductionPairWallSpeedup": 1.0529840225563911,
+          "versusOriginalSingleWallSpeedup": 1,
+          "samples": [
+            {
+              "round": 0,
+              "iterations": 16,
+              "wallMilliseconds": 0.05303125,
+              "batchWallMilliseconds": 0.8485,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 1,
+              "iterations": 16,
+              "wallMilliseconds": 0.05386875,
+              "batchWallMilliseconds": 0.8619,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 2,
+              "iterations": 16,
+              "wallMilliseconds": 0.05314375,
+              "batchWallMilliseconds": 0.8503,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 3,
+              "iterations": 16,
+              "wallMilliseconds": 0.05324375,
+              "batchWallMilliseconds": 0.8519,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 4,
+              "iterations": 16,
+              "wallMilliseconds": 0.05305,
+              "batchWallMilliseconds": 0.8488,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 5,
+              "iterations": 16,
+              "wallMilliseconds": 0.05325625,
+              "batchWallMilliseconds": 0.8521,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 6,
+              "iterations": 16,
+              "wallMilliseconds": 0.053325,
+              "batchWallMilliseconds": 0.8532,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 7,
+              "iterations": 16,
+              "wallMilliseconds": 0.05315625,
+              "batchWallMilliseconds": 0.8505,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 8,
+              "iterations": 16,
+              "wallMilliseconds": 0.0532,
+              "batchWallMilliseconds": 0.8512,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            }
+          ]
+        },
+        {
+          "name": "packed82-sg16",
+          "kernel": "q35l_iq2_s_packed82_sg16",
+          "validation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 3.075795342866172E-07,
+            "relativeL2VsDouble": 1.388606853709476E-07,
+            "worstToleranceRatio": 0.004404045617233074,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "postTimingValidation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 3.075795342866172E-07,
+            "relativeL2VsDouble": 1.388606853709476E-07,
+            "worstToleranceRatio": 0.004404045617233074,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "weightStorage": "Lossless packed82",
+          "additionalSharedLookupBytes": 0,
+          "wallMilliseconds": {
+            "count": 9,
+            "median": 0.05003125,
+            "mean": 0.05051875000000001,
+            "standardDeviation": 0.0013734713725124048,
+            "minimum": 0.0498875,
+            "maximum": 0.05439375
+          },
+          "gpuMilliseconds": null,
+          "versusProductionPairWallSpeedup": 1.119675202998126,
+          "versusOriginalSingleWallSpeedup": 1.0633354153653967,
+          "samples": [
+            {
+              "round": 0,
+              "iterations": 16,
+              "wallMilliseconds": 0.0498875,
+              "batchWallMilliseconds": 0.7982,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 1,
+              "iterations": 16,
+              "wallMilliseconds": 0.05439375,
+              "batchWallMilliseconds": 0.8703,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 2,
+              "iterations": 16,
+              "wallMilliseconds": 0.05015,
+              "batchWallMilliseconds": 0.8024,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 3,
+              "iterations": 16,
+              "wallMilliseconds": 0.0499625,
+              "batchWallMilliseconds": 0.7994,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 4,
+              "iterations": 16,
+              "wallMilliseconds": 0.04994375,
+              "batchWallMilliseconds": 0.7991,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 5,
+              "iterations": 16,
+              "wallMilliseconds": 0.05010625,
+              "batchWallMilliseconds": 0.8017,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 6,
+              "iterations": 16,
+              "wallMilliseconds": 0.0499875,
+              "batchWallMilliseconds": 0.7998,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 7,
+              "iterations": 16,
+              "wallMilliseconds": 0.05003125,
+              "batchWallMilliseconds": 0.8005,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 8,
+              "iterations": 16,
+              "wallMilliseconds": 0.05020625,
+              "batchWallMilliseconds": 0.8033,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            }
+          ]
+        },
+        {
+          "name": "packed82-pair",
+          "kernel": "q35l_iq2_s_packed82_sg16_pair",
+          "validation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 3.075795342866172E-07,
+            "relativeL2VsDouble": 1.388606853709476E-07,
+            "worstToleranceRatio": 0.004404045617233074,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "postTimingValidation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 3.075795342866172E-07,
+            "relativeL2VsDouble": 1.388606853709476E-07,
+            "worstToleranceRatio": 0.004404045617233074,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "weightStorage": "Lossless packed82",
+          "additionalSharedLookupBytes": 0,
+          "wallMilliseconds": {
+            "count": 9,
+            "median": 0.04791875,
+            "mean": 0.04801041666666667,
+            "standardDeviation": 0.0003904902545376621,
+            "minimum": 0.0476,
+            "maximum": 0.04890625
+          },
+          "gpuMilliseconds": null,
+          "versusProductionPairWallSpeedup": 1.1690361288639624,
+          "versusOriginalSingleWallSpeedup": 1.1102125994521976,
+          "samples": [
+            {
+              "round": 0,
+              "iterations": 16,
+              "wallMilliseconds": 0.0478,
+              "batchWallMilliseconds": 0.7648,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 1,
+              "iterations": 16,
+              "wallMilliseconds": 0.04890625,
+              "batchWallMilliseconds": 0.7825,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 2,
+              "iterations": 16,
+              "wallMilliseconds": 0.0484375,
+              "batchWallMilliseconds": 0.775,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 3,
+              "iterations": 16,
+              "wallMilliseconds": 0.04791875,
+              "batchWallMilliseconds": 0.7667,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 4,
+              "iterations": 16,
+              "wallMilliseconds": 0.04763125,
+              "batchWallMilliseconds": 0.7621,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 5,
+              "iterations": 16,
+              "wallMilliseconds": 0.0479875,
+              "batchWallMilliseconds": 0.7678,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 6,
+              "iterations": 16,
+              "wallMilliseconds": 0.04789375,
+              "batchWallMilliseconds": 0.7663,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 7,
+              "iterations": 16,
+              "wallMilliseconds": 0.04791875,
+              "batchWallMilliseconds": 0.7667,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 8,
+              "iterations": 16,
+              "wallMilliseconds": 0.0476,
+              "batchWallMilliseconds": 0.7616,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            }
+          ]
+        },
+        {
+          "name": "signed-lookup-pair",
+          "kernel": "q35l_iq2_s_sg16_pair_signed_lookup",
+          "validation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 3.075795342866172E-07,
+            "relativeL2VsDouble": 1.388606853709476E-07,
+            "worstToleranceRatio": 0.004404045617233074,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "postTimingValidation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 3.075795342866172E-07,
+            "relativeL2VsDouble": 1.388606853709476E-07,
+            "worstToleranceRatio": 0.004404045617233074,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "weightStorage": "Original GGUF IQ2_S",
+          "additionalSharedLookupBytes": 131072,
+          "wallMilliseconds": {
+            "count": 9,
+            "median": 0.057075,
+            "mean": 0.05707777777777777,
+            "standardDeviation": 0.00012158927015688508,
+            "minimum": 0.0569125,
+            "maximum": 0.05726875
+          },
+          "gpuMilliseconds": null,
+          "versusProductionPairWallSpeedup": 0.9814936487078405,
+          "versusOriginalSingleWallSpeedup": 0.9321068769163381,
+          "samples": [
+            {
+              "round": 0,
+              "iterations": 16,
+              "wallMilliseconds": 0.057075,
+              "batchWallMilliseconds": 0.9132,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 1,
+              "iterations": 16,
+              "wallMilliseconds": 0.05726875,
+              "batchWallMilliseconds": 0.9163,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 2,
+              "iterations": 16,
+              "wallMilliseconds": 0.05719375,
+              "batchWallMilliseconds": 0.9151,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 3,
+              "iterations": 16,
+              "wallMilliseconds": 0.05693125,
+              "batchWallMilliseconds": 0.9109,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 4,
+              "iterations": 16,
+              "wallMilliseconds": 0.057075,
+              "batchWallMilliseconds": 0.9132,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 5,
+              "iterations": 16,
+              "wallMilliseconds": 0.05705,
+              "batchWallMilliseconds": 0.9128,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 6,
+              "iterations": 16,
+              "wallMilliseconds": 0.05696875,
+              "batchWallMilliseconds": 0.9115,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 7,
+              "iterations": 16,
+              "wallMilliseconds": 0.0569125,
+              "batchWallMilliseconds": 0.9106,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 8,
+              "iterations": 16,
+              "wallMilliseconds": 0.057225,
+              "batchWallMilliseconds": 0.9156,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "blk.0.ffn_gate.weight",
+      "rows": 1,
+      "inputWidth": 5120,
+      "outputWidth": 17408,
+      "source": {
+        "kind": "Complete unmodified GGUF IQ2_S tensor",
+        "type": 22,
+        "shape": [
+          5120,
+          17408
+        ],
+        "offset": 1667153920,
+        "bytes": 28549120,
+        "payloadSha256": "6950b3f8a593a76b2b6b85f3c4a9357fa2475d70001987dc7497c81040c16541"
+      },
+      "activation": {
+        "type": "FP32",
+        "seed": 823536,
+        "distribution": "Deterministic uniform [-1,1)",
+        "sha256": "74b688bc6c880433640cbfffa2b79334527d3cb65abddeff993b730070fb089c",
+        "additionalQuantization": false
+      },
+      "bias": {
+        "type": "FP32",
+        "expression": "(column % 9 - 4) * 0.03",
+        "sha256": "7c73827d686f23f6c5b78b7eae93889532d8e842802c43b9ecd4ab39eb8b4c73"
+      },
+      "packing": {
+        "layout": "packed82",
+        "cpuPackMilliseconds": 20.7714,
+        "firstPreparationMilliseconds": 1.1046,
+        "repeatedWallMilliseconds": {
+          "count": 9,
+          "median": 0.1868,
+          "mean": 0.18711111111111112,
+          "standardDeviation": 0.0022042607450342105,
+          "minimum": 0.1843,
+          "maximum": 0.1922
+        },
+        "repeatedGpuMilliseconds": null,
+        "packedSha256": "572cc3ee178d5124aad8623442b81c2c050514d85301936c0628fd9cf7b7718c",
+        "allPackedBytesMatchIndependentCpu": true,
+        "allRawBytesRecovered": true,
+        "packedWeightsUnchangedAfterDecode": true,
+        "samples": [
+          {
+            "round": 0,
+            "iterations": 1,
+            "wallMilliseconds": 0.1888,
+            "batchWallMilliseconds": 0.1888,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 1,
+            "iterations": 1,
+            "wallMilliseconds": 0.1874,
+            "batchWallMilliseconds": 0.1874,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 2,
+            "iterations": 1,
+            "wallMilliseconds": 0.1843,
+            "batchWallMilliseconds": 0.1843,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 3,
+            "iterations": 1,
+            "wallMilliseconds": 0.1873,
+            "batchWallMilliseconds": 0.1873,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 4,
+            "iterations": 1,
+            "wallMilliseconds": 0.1849,
+            "batchWallMilliseconds": 0.1849,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 5,
+            "iterations": 1,
+            "wallMilliseconds": 0.1922,
+            "batchWallMilliseconds": 0.1922,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 6,
+            "iterations": 1,
+            "wallMilliseconds": 0.1868,
+            "batchWallMilliseconds": 0.1868,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 7,
+            "iterations": 1,
+            "wallMilliseconds": 0.1859,
+            "batchWallMilliseconds": 0.1859,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 8,
+            "iterations": 1,
+            "wallMilliseconds": 0.1864,
+            "batchWallMilliseconds": 0.1864,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          }
+        ]
+      },
+      "memory": {
+        "rawWeightBytes": 28549120,
+        "packedWeightBytes": 28549120,
+        "packedToRawRatio": 1,
+        "additionalResidentBytesWhileKeepingRaw": 28549120,
+        "replacementWeightBytesDelta": 0,
+        "simultaneouslyResidentWeightBytes": 57098240,
+        "sharedLookupBytes": 131072,
+        "liveBytesWithAllOperands": 57389064,
+        "note": "Both raw and packed weights stay resident for the comparison. Replacing raw storage saves that duplicate only if the model no longer needs raw weights for another route."
+      },
+      "baselineValidation": {
+        "finite": true,
+        "cpuPoints": 256,
+        "maxAbsoluteErrorVsDouble": 1.9049782284952244E-07,
+        "relativeL2VsDouble": 1.4913511382292573E-07,
+        "worstToleranceRatio": 0.004556953720856336,
+        "fullOutputCompared": false,
+        "maxAbsoluteErrorVsOriginal": null,
+        "relativeL2VsOriginal": null,
+        "bitwiseEqualToOriginal": null,
+        "guardsIntact": true
+      },
+      "variants": [
+        {
+          "name": "original-pair",
+          "kernel": "q35l_iq2_s_sg16_pair",
+          "validation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 1.9049782284952244E-07,
+            "relativeL2VsDouble": 1.4913511382292573E-07,
+            "worstToleranceRatio": 0.004556953720856336,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "postTimingValidation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 1.9049782284952244E-07,
+            "relativeL2VsDouble": 1.4913511382292573E-07,
+            "worstToleranceRatio": 0.004556953720856336,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "weightStorage": "Original GGUF IQ2_S",
+          "additionalSharedLookupBytes": 0,
+          "wallMilliseconds": {
+            "count": 9,
+            "median": 0.1457,
+            "mean": 0.14637569444444443,
+            "standardDeviation": 0.0017348136818697494,
+            "minimum": 0.14531875,
+            "maximum": 0.1511625
+          },
+          "gpuMilliseconds": null,
+          "versusProductionPairWallSpeedup": 1,
+          "versusOriginalSingleWallSpeedup": 1.0386067261496224,
+          "samples": [
+            {
+              "round": 0,
+              "iterations": 16,
+              "wallMilliseconds": 0.1457,
+              "batchWallMilliseconds": 2.3312,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 1,
+              "iterations": 16,
+              "wallMilliseconds": 0.1511625,
+              "batchWallMilliseconds": 2.4186,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 2,
+              "iterations": 16,
+              "wallMilliseconds": 0.14566875,
+              "batchWallMilliseconds": 2.3307,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 3,
+              "iterations": 16,
+              "wallMilliseconds": 0.1460125,
+              "batchWallMilliseconds": 2.3362,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 4,
+              "iterations": 16,
+              "wallMilliseconds": 0.1457,
+              "batchWallMilliseconds": 2.3312,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 5,
+              "iterations": 16,
+              "wallMilliseconds": 0.14673125,
+              "batchWallMilliseconds": 2.3477,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 6,
+              "iterations": 16,
+              "wallMilliseconds": 0.1455375,
+              "batchWallMilliseconds": 2.3286,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 7,
+              "iterations": 16,
+              "wallMilliseconds": 0.14555,
+              "batchWallMilliseconds": 2.3288,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 8,
+              "iterations": 16,
+              "wallMilliseconds": 0.14531875,
+              "batchWallMilliseconds": 2.3251,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            }
+          ]
+        },
+        {
+          "name": "original-sg16",
+          "kernel": "q35l_iq2_s_sg16",
+          "validation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 1.9049782284952244E-07,
+            "relativeL2VsDouble": 1.4913511382292573E-07,
+            "worstToleranceRatio": 0.004556953720856336,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "postTimingValidation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 1.9049782284952244E-07,
+            "relativeL2VsDouble": 1.4913511382292573E-07,
+            "worstToleranceRatio": 0.004556953720856336,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "weightStorage": "Original GGUF IQ2_S",
+          "additionalSharedLookupBytes": 0,
+          "wallMilliseconds": {
+            "count": 9,
+            "median": 0.151325,
+            "mean": 0.15126944444444446,
+            "standardDeviation": 0.0002641227034337212,
+            "minimum": 0.15095,
+            "maximum": 0.1516375
+          },
+          "gpuMilliseconds": null,
+          "versusProductionPairWallSpeedup": 0.9628283495787213,
+          "versusOriginalSingleWallSpeedup": 1,
+          "samples": [
+            {
+              "round": 0,
+              "iterations": 16,
+              "wallMilliseconds": 0.15150625,
+              "batchWallMilliseconds": 2.4241,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 1,
+              "iterations": 16,
+              "wallMilliseconds": 0.151325,
+              "batchWallMilliseconds": 2.4212,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 2,
+              "iterations": 16,
+              "wallMilliseconds": 0.151325,
+              "batchWallMilliseconds": 2.4212,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 3,
+              "iterations": 16,
+              "wallMilliseconds": 0.1516375,
+              "batchWallMilliseconds": 2.4262,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 4,
+              "iterations": 16,
+              "wallMilliseconds": 0.15104375,
+              "batchWallMilliseconds": 2.4167,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 5,
+              "iterations": 16,
+              "wallMilliseconds": 0.15163125,
+              "batchWallMilliseconds": 2.4261,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 6,
+              "iterations": 16,
+              "wallMilliseconds": 0.15095,
+              "batchWallMilliseconds": 2.4152,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 7,
+              "iterations": 16,
+              "wallMilliseconds": 0.15095625,
+              "batchWallMilliseconds": 2.4153,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 8,
+              "iterations": 16,
+              "wallMilliseconds": 0.15105,
+              "batchWallMilliseconds": 2.4168,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            }
+          ]
+        },
+        {
+          "name": "packed82-sg16",
+          "kernel": "q35l_iq2_s_packed82_sg16",
+          "validation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 1.9049782284952244E-07,
+            "relativeL2VsDouble": 1.4913511382292573E-07,
+            "worstToleranceRatio": 0.004556953720856336,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "postTimingValidation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 1.9049782284952244E-07,
+            "relativeL2VsDouble": 1.4913511382292573E-07,
+            "worstToleranceRatio": 0.004556953720856336,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "weightStorage": "Lossless packed82",
+          "additionalSharedLookupBytes": 0,
+          "wallMilliseconds": {
+            "count": 9,
+            "median": 0.141275,
+            "mean": 0.1412875,
+            "standardDeviation": 0.0003821539829266014,
+            "minimum": 0.14071875,
+            "maximum": 0.142075
+          },
+          "gpuMilliseconds": null,
+          "versusProductionPairWallSpeedup": 1.0313218899309855,
+          "versusOriginalSingleWallSpeedup": 1.0711378517076622,
+          "samples": [
+            {
+              "round": 0,
+              "iterations": 16,
+              "wallMilliseconds": 0.14139375,
+              "batchWallMilliseconds": 2.2623,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 1,
+              "iterations": 16,
+              "wallMilliseconds": 0.141025,
+              "batchWallMilliseconds": 2.2564,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 2,
+              "iterations": 16,
+              "wallMilliseconds": 0.142075,
+              "batchWallMilliseconds": 2.2732,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 3,
+              "iterations": 16,
+              "wallMilliseconds": 0.141275,
+              "batchWallMilliseconds": 2.2604,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 4,
+              "iterations": 16,
+              "wallMilliseconds": 0.14163125,
+              "batchWallMilliseconds": 2.2661,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 5,
+              "iterations": 16,
+              "wallMilliseconds": 0.14094375,
+              "batchWallMilliseconds": 2.2551,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 6,
+              "iterations": 16,
+              "wallMilliseconds": 0.1411,
+              "batchWallMilliseconds": 2.2576,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 7,
+              "iterations": 16,
+              "wallMilliseconds": 0.14071875,
+              "batchWallMilliseconds": 2.2515,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 8,
+              "iterations": 16,
+              "wallMilliseconds": 0.141425,
+              "batchWallMilliseconds": 2.2628,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            }
+          ]
+        },
+        {
+          "name": "packed82-pair",
+          "kernel": "q35l_iq2_s_packed82_sg16_pair",
+          "validation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 1.9049782284952244E-07,
+            "relativeL2VsDouble": 1.4913511382292573E-07,
+            "worstToleranceRatio": 0.004556953720856336,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "postTimingValidation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 1.9049782284952244E-07,
+            "relativeL2VsDouble": 1.4913511382292573E-07,
+            "worstToleranceRatio": 0.004556953720856336,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "weightStorage": "Lossless packed82",
+          "additionalSharedLookupBytes": 0,
+          "wallMilliseconds": {
+            "count": 9,
+            "median": 0.1237375,
+            "mean": 0.12376180555555555,
+            "standardDeviation": 0.00034288963598967973,
+            "minimum": 0.1231875,
+            "maximum": 0.1243
+          },
+          "gpuMilliseconds": null,
+          "versusProductionPairWallSpeedup": 1.1774926760278817,
+          "versusOriginalSingleWallSpeedup": 1.222951813314476,
+          "samples": [
+            {
+              "round": 0,
+              "iterations": 16,
+              "wallMilliseconds": 0.12354375,
+              "batchWallMilliseconds": 1.9767,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 1,
+              "iterations": 16,
+              "wallMilliseconds": 0.1237375,
+              "batchWallMilliseconds": 1.9798,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 2,
+              "iterations": 16,
+              "wallMilliseconds": 0.12416875,
+              "batchWallMilliseconds": 1.9867,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 3,
+              "iterations": 16,
+              "wallMilliseconds": 0.1243,
+              "batchWallMilliseconds": 1.9888,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 4,
+              "iterations": 16,
+              "wallMilliseconds": 0.1234125,
+              "batchWallMilliseconds": 1.9746,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 5,
+              "iterations": 16,
+              "wallMilliseconds": 0.12366875,
+              "batchWallMilliseconds": 1.9787,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 6,
+              "iterations": 16,
+              "wallMilliseconds": 0.1231875,
+              "batchWallMilliseconds": 1.971,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 7,
+              "iterations": 16,
+              "wallMilliseconds": 0.12376875,
+              "batchWallMilliseconds": 1.9803,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 8,
+              "iterations": 16,
+              "wallMilliseconds": 0.12406875,
+              "batchWallMilliseconds": 1.9851,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            }
+          ]
+        },
+        {
+          "name": "signed-lookup-pair",
+          "kernel": "q35l_iq2_s_sg16_pair_signed_lookup",
+          "validation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 1.9049782284952244E-07,
+            "relativeL2VsDouble": 1.4913511382292573E-07,
+            "worstToleranceRatio": 0.004556953720856336,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "postTimingValidation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 1.9049782284952244E-07,
+            "relativeL2VsDouble": 1.4913511382292573E-07,
+            "worstToleranceRatio": 0.004556953720856336,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "weightStorage": "Original GGUF IQ2_S",
+          "additionalSharedLookupBytes": 131072,
+          "wallMilliseconds": {
+            "count": 9,
+            "median": 0.1528125,
+            "mean": 0.15289791666666666,
+            "standardDeviation": 0.00028639582651366203,
+            "minimum": 0.15258125,
+            "maximum": 0.1535375
+          },
+          "gpuMilliseconds": null,
+          "versusProductionPairWallSpeedup": 0.9534560327198365,
+          "versusOriginalSingleWallSpeedup": 0.9902658486707566,
+          "samples": [
+            {
+              "round": 0,
+              "iterations": 16,
+              "wallMilliseconds": 0.1528625,
+              "batchWallMilliseconds": 2.4458,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 1,
+              "iterations": 16,
+              "wallMilliseconds": 0.1531875,
+              "batchWallMilliseconds": 2.451,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 2,
+              "iterations": 16,
+              "wallMilliseconds": 0.15280625,
+              "batchWallMilliseconds": 2.4449,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 3,
+              "iterations": 16,
+              "wallMilliseconds": 0.1528125,
+              "batchWallMilliseconds": 2.445,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 4,
+              "iterations": 16,
+              "wallMilliseconds": 0.15258125,
+              "batchWallMilliseconds": 2.4413,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 5,
+              "iterations": 16,
+              "wallMilliseconds": 0.1529875,
+              "batchWallMilliseconds": 2.4478,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 6,
+              "iterations": 16,
+              "wallMilliseconds": 0.15264375,
+              "batchWallMilliseconds": 2.4423,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 7,
+              "iterations": 16,
+              "wallMilliseconds": 0.1526625,
+              "batchWallMilliseconds": 2.4426,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 8,
+              "iterations": 16,
+              "wallMilliseconds": 0.1535375,
+              "batchWallMilliseconds": 2.4566,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "blk.8.ffn_down.weight",
+      "rows": 1,
+      "inputWidth": 17408,
+      "outputWidth": 5120,
+      "source": {
+        "kind": "Complete unmodified GGUF IQ2_S tensor",
+        "type": 22,
+        "shape": [
+          17408,
+          5120
+        ],
+        "offset": 2768744192,
+        "bytes": 28549120,
+        "payloadSha256": "bb263ad290c0acebacaf713c42ebaa203f8f442b39ec07eef62210a15e478aa7"
+      },
+      "activation": {
+        "type": "FP32",
+        "seed": 823536,
+        "distribution": "Deterministic uniform [-1,1)",
+        "sha256": "0b4b8b693a5ef22e99df53c12832c47d9b23e0a30b00725b056d977d4c495867",
+        "additionalQuantization": false
+      },
+      "bias": {
+        "type": "FP32",
+        "expression": "(column % 9 - 4) * 0.03",
+        "sha256": "0e0e7cba72624ff738a88015c83b1a07c716bec753a7f69de60cee2a4aa94250"
+      },
+      "packing": {
+        "layout": "packed82",
+        "cpuPackMilliseconds": 19.9943,
+        "firstPreparationMilliseconds": 1.2739,
+        "repeatedWallMilliseconds": {
+          "count": 9,
+          "median": 0.1875,
+          "mean": 0.18825555555555556,
+          "standardDeviation": 0.0028323963592340796,
+          "minimum": 0.1827,
+          "maximum": 0.1928
+        },
+        "repeatedGpuMilliseconds": null,
+        "packedSha256": "b32c8b36b6a54c55145cfd6bcb9da07cbe3bf96cc282768dc1f80029d47b3aa1",
+        "allPackedBytesMatchIndependentCpu": true,
+        "allRawBytesRecovered": true,
+        "packedWeightsUnchangedAfterDecode": true,
+        "samples": [
+          {
+            "round": 0,
+            "iterations": 1,
+            "wallMilliseconds": 0.1907,
+            "batchWallMilliseconds": 0.1907,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 1,
+            "iterations": 1,
+            "wallMilliseconds": 0.1875,
+            "batchWallMilliseconds": 0.1875,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 2,
+            "iterations": 1,
+            "wallMilliseconds": 0.1827,
+            "batchWallMilliseconds": 0.1827,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 3,
+            "iterations": 1,
+            "wallMilliseconds": 0.1883,
+            "batchWallMilliseconds": 0.1883,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 4,
+            "iterations": 1,
+            "wallMilliseconds": 0.1871,
+            "batchWallMilliseconds": 0.1871,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 5,
+            "iterations": 1,
+            "wallMilliseconds": 0.1913,
+            "batchWallMilliseconds": 0.1913,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 6,
+            "iterations": 1,
+            "wallMilliseconds": 0.1928,
+            "batchWallMilliseconds": 0.1928,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 7,
+            "iterations": 1,
+            "wallMilliseconds": 0.1867,
+            "batchWallMilliseconds": 0.1867,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          },
+          {
+            "round": 8,
+            "iterations": 1,
+            "wallMilliseconds": 0.1872,
+            "batchWallMilliseconds": 0.1872,
+            "gpuMilliseconds": null,
+            "kernelMilliseconds": {},
+            "hostTransferBytes": 0,
+            "logicalAllocationBytes": 0,
+            "kernelLaunches": 1
+          }
+        ]
+      },
+      "memory": {
+        "rawWeightBytes": 28549120,
+        "packedWeightBytes": 28549120,
+        "packedToRawRatio": 1,
+        "additionalResidentBytesWhileKeepingRaw": 28549120,
+        "replacementWeightBytesDelta": 0,
+        "simultaneouslyResidentWeightBytes": 57098240,
+        "sharedLookupBytes": 131072,
+        "liveBytesWithAllOperands": 57339912,
+        "note": "Both raw and packed weights stay resident for the comparison. Replacing raw storage saves that duplicate only if the model no longer needs raw weights for another route."
+      },
+      "baselineValidation": {
+        "finite": true,
+        "cpuPoints": 256,
+        "maxAbsoluteErrorVsDouble": 7.775710209045883E-07,
+        "relativeL2VsDouble": 2.1824929482223084E-07,
+        "worstToleranceRatio": 0.004771062751563533,
+        "fullOutputCompared": false,
+        "maxAbsoluteErrorVsOriginal": null,
+        "relativeL2VsOriginal": null,
+        "bitwiseEqualToOriginal": null,
+        "guardsIntact": true
+      },
+      "variants": [
+        {
+          "name": "original-pair",
+          "kernel": "q35l_iq2_s_sg16_pair",
+          "validation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 7.775710209045883E-07,
+            "relativeL2VsDouble": 2.1824929482223084E-07,
+            "worstToleranceRatio": 0.004771062751563533,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "postTimingValidation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 7.775710209045883E-07,
+            "relativeL2VsDouble": 2.1824929482223084E-07,
+            "worstToleranceRatio": 0.004771062751563533,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "weightStorage": "Original GGUF IQ2_S",
+          "additionalSharedLookupBytes": 0,
+          "wallMilliseconds": {
+            "count": 9,
+            "median": 0.1375375,
+            "mean": 0.13763472222222217,
+            "standardDeviation": 0.00039729020397291735,
+            "minimum": 0.13729375,
+            "maximum": 0.13864375
+          },
+          "gpuMilliseconds": null,
+          "versusProductionPairWallSpeedup": 1,
+          "versusOriginalSingleWallSpeedup": 1.0447605198582206,
+          "samples": [
+            {
+              "round": 0,
+              "iterations": 16,
+              "wallMilliseconds": 0.1373,
+              "batchWallMilliseconds": 2.1968,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 1,
+              "iterations": 16,
+              "wallMilliseconds": 0.1376375,
+              "batchWallMilliseconds": 2.2022,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 2,
+              "iterations": 16,
+              "wallMilliseconds": 0.13864375,
+              "batchWallMilliseconds": 2.2183,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 3,
+              "iterations": 16,
+              "wallMilliseconds": 0.13769375,
+              "batchWallMilliseconds": 2.2031,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 4,
+              "iterations": 16,
+              "wallMilliseconds": 0.13729375,
+              "batchWallMilliseconds": 2.1967,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 5,
+              "iterations": 16,
+              "wallMilliseconds": 0.1375375,
+              "batchWallMilliseconds": 2.2006,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 6,
+              "iterations": 16,
+              "wallMilliseconds": 0.13730625,
+              "batchWallMilliseconds": 2.1969,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 7,
+              "iterations": 16,
+              "wallMilliseconds": 0.1378125,
+              "batchWallMilliseconds": 2.205,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 8,
+              "iterations": 16,
+              "wallMilliseconds": 0.1374875,
+              "batchWallMilliseconds": 2.1998,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            }
+          ]
+        },
+        {
+          "name": "original-sg16",
+          "kernel": "q35l_iq2_s_sg16",
+          "validation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 7.775710209045883E-07,
+            "relativeL2VsDouble": 2.1824929482223084E-07,
+            "worstToleranceRatio": 0.004771062751563533,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "postTimingValidation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 7.775710209045883E-07,
+            "relativeL2VsDouble": 2.1824929482223084E-07,
+            "worstToleranceRatio": 0.004771062751563533,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "weightStorage": "Original GGUF IQ2_S",
+          "additionalSharedLookupBytes": 0,
+          "wallMilliseconds": {
+            "count": 9,
+            "median": 0.14369375,
+            "mean": 0.1436958333333333,
+            "standardDeviation": 0.00020791624916457544,
+            "minimum": 0.1432875,
+            "maximum": 0.14405625
+          },
+          "gpuMilliseconds": null,
+          "versusProductionPairWallSpeedup": 0.9571571484493933,
+          "versusOriginalSingleWallSpeedup": 1,
+          "samples": [
+            {
+              "round": 0,
+              "iterations": 16,
+              "wallMilliseconds": 0.143625,
+              "batchWallMilliseconds": 2.298,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 1,
+              "iterations": 16,
+              "wallMilliseconds": 0.14379375,
+              "batchWallMilliseconds": 2.3007,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 2,
+              "iterations": 16,
+              "wallMilliseconds": 0.14369375,
+              "batchWallMilliseconds": 2.2991,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 3,
+              "iterations": 16,
+              "wallMilliseconds": 0.14405625,
+              "batchWallMilliseconds": 2.3049,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 4,
+              "iterations": 16,
+              "wallMilliseconds": 0.1435,
+              "batchWallMilliseconds": 2.296,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 5,
+              "iterations": 16,
+              "wallMilliseconds": 0.14379375,
+              "batchWallMilliseconds": 2.3007,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 6,
+              "iterations": 16,
+              "wallMilliseconds": 0.1432875,
+              "batchWallMilliseconds": 2.2926,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 7,
+              "iterations": 16,
+              "wallMilliseconds": 0.14365,
+              "batchWallMilliseconds": 2.2984,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 8,
+              "iterations": 16,
+              "wallMilliseconds": 0.1438625,
+              "batchWallMilliseconds": 2.3018,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            }
+          ]
+        },
+        {
+          "name": "packed82-sg16",
+          "kernel": "q35l_iq2_s_packed82_sg16",
+          "validation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 7.775710209045883E-07,
+            "relativeL2VsDouble": 2.1824929482223084E-07,
+            "worstToleranceRatio": 0.004771062751563533,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "postTimingValidation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 7.775710209045883E-07,
+            "relativeL2VsDouble": 2.1824929482223084E-07,
+            "worstToleranceRatio": 0.004771062751563533,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "weightStorage": "Lossless packed82",
+          "additionalSharedLookupBytes": 0,
+          "wallMilliseconds": {
+            "count": 9,
+            "median": 0.1341375,
+            "mean": 0.1342159722222222,
+            "standardDeviation": 0.000500000964505246,
+            "minimum": 0.13369375,
+            "maximum": 0.1352875
+          },
+          "gpuMilliseconds": null,
+          "versusProductionPairWallSpeedup": 1.0253471251514306,
+          "versusOriginalSingleWallSpeedup": 1.0712421955083404,
+          "samples": [
+            {
+              "round": 0,
+              "iterations": 16,
+              "wallMilliseconds": 0.1342625,
+              "batchWallMilliseconds": 2.1482,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 1,
+              "iterations": 16,
+              "wallMilliseconds": 0.13375,
+              "batchWallMilliseconds": 2.14,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 2,
+              "iterations": 16,
+              "wallMilliseconds": 0.1352875,
+              "batchWallMilliseconds": 2.1646,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 3,
+              "iterations": 16,
+              "wallMilliseconds": 0.1339125,
+              "batchWallMilliseconds": 2.1426,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 4,
+              "iterations": 16,
+              "wallMilliseconds": 0.1341375,
+              "batchWallMilliseconds": 2.1462,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 5,
+              "iterations": 16,
+              "wallMilliseconds": 0.13369375,
+              "batchWallMilliseconds": 2.1391,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 6,
+              "iterations": 16,
+              "wallMilliseconds": 0.13418125,
+              "batchWallMilliseconds": 2.1469,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 7,
+              "iterations": 16,
+              "wallMilliseconds": 0.133875,
+              "batchWallMilliseconds": 2.142,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 8,
+              "iterations": 16,
+              "wallMilliseconds": 0.13484375,
+              "batchWallMilliseconds": 2.1575,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            }
+          ]
+        },
+        {
+          "name": "packed82-pair",
+          "kernel": "q35l_iq2_s_packed82_sg16_pair",
+          "validation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 7.775710209045883E-07,
+            "relativeL2VsDouble": 2.1824929482223084E-07,
+            "worstToleranceRatio": 0.004771062751563533,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "postTimingValidation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 7.775710209045883E-07,
+            "relativeL2VsDouble": 2.1824929482223084E-07,
+            "worstToleranceRatio": 0.004771062751563533,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "weightStorage": "Lossless packed82",
+          "additionalSharedLookupBytes": 0,
+          "wallMilliseconds": {
+            "count": 9,
+            "median": 0.11759375,
+            "mean": 0.11820694444444443,
+            "standardDeviation": 0.0017171304097638597,
+            "minimum": 0.11735625,
+            "maximum": 0.12303125
+          },
+          "gpuMilliseconds": null,
+          "versusProductionPairWallSpeedup": 1.1695987244220039,
+          "versusOriginalSingleWallSpeedup": 1.2219505713526442,
+          "samples": [
+            {
+              "round": 0,
+              "iterations": 16,
+              "wallMilliseconds": 0.11743125,
+              "batchWallMilliseconds": 1.8789,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 1,
+              "iterations": 16,
+              "wallMilliseconds": 0.1174875,
+              "batchWallMilliseconds": 1.8798,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 2,
+              "iterations": 16,
+              "wallMilliseconds": 0.11796875,
+              "batchWallMilliseconds": 1.8875,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 3,
+              "iterations": 16,
+              "wallMilliseconds": 0.12303125,
+              "batchWallMilliseconds": 1.9685,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 4,
+              "iterations": 16,
+              "wallMilliseconds": 0.11735625,
+              "batchWallMilliseconds": 1.8777,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 5,
+              "iterations": 16,
+              "wallMilliseconds": 0.11759375,
+              "batchWallMilliseconds": 1.8815,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 6,
+              "iterations": 16,
+              "wallMilliseconds": 0.11791875,
+              "batchWallMilliseconds": 1.8867,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 7,
+              "iterations": 16,
+              "wallMilliseconds": 0.1176,
+              "batchWallMilliseconds": 1.8816,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 8,
+              "iterations": 16,
+              "wallMilliseconds": 0.117475,
+              "batchWallMilliseconds": 1.8796,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            }
+          ]
+        },
+        {
+          "name": "signed-lookup-pair",
+          "kernel": "q35l_iq2_s_sg16_pair_signed_lookup",
+          "validation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 7.775710209045883E-07,
+            "relativeL2VsDouble": 2.1824929482223084E-07,
+            "worstToleranceRatio": 0.004771062751563533,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "postTimingValidation": {
+            "finite": true,
+            "cpuPoints": 256,
+            "maxAbsoluteErrorVsDouble": 7.775710209045883E-07,
+            "relativeL2VsDouble": 2.1824929482223084E-07,
+            "worstToleranceRatio": 0.004771062751563533,
+            "fullOutputCompared": true,
+            "maxAbsoluteErrorVsOriginal": 0,
+            "relativeL2VsOriginal": 0,
+            "bitwiseEqualToOriginal": true,
+            "guardsIntact": true
+          },
+          "weightStorage": "Original GGUF IQ2_S",
+          "additionalSharedLookupBytes": 131072,
+          "wallMilliseconds": {
+            "count": 9,
+            "median": 0.15064375,
+            "mean": 0.1505923611111111,
+            "standardDeviation": 0.00031335684998432586,
+            "minimum": 0.15010625,
+            "maximum": 0.151225
+          },
+          "gpuMilliseconds": null,
+          "versusProductionPairWallSpeedup": 0.9129983819441564,
+          "versusOriginalSingleWallSpeedup": 0.9538646641496911,
+          "samples": [
+            {
+              "round": 0,
+              "iterations": 16,
+              "wallMilliseconds": 0.1504,
+              "batchWallMilliseconds": 2.4064,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 1,
+              "iterations": 16,
+              "wallMilliseconds": 0.15064375,
+              "batchWallMilliseconds": 2.4103,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 2,
+              "iterations": 16,
+              "wallMilliseconds": 0.151225,
+              "batchWallMilliseconds": 2.4196,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 3,
+              "iterations": 16,
+              "wallMilliseconds": 0.15083125,
+              "batchWallMilliseconds": 2.4133,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 4,
+              "iterations": 16,
+              "wallMilliseconds": 0.15064375,
+              "batchWallMilliseconds": 2.4103,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 5,
+              "iterations": 16,
+              "wallMilliseconds": 0.15010625,
+              "batchWallMilliseconds": 2.4017,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 6,
+              "iterations": 16,
+              "wallMilliseconds": 0.1507625,
+              "batchWallMilliseconds": 2.4122,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 7,
+              "iterations": 16,
+              "wallMilliseconds": 0.1502875,
+              "batchWallMilliseconds": 2.4046,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            },
+            {
+              "round": 8,
+              "iterations": 16,
+              "wallMilliseconds": 0.15043125,
+              "batchWallMilliseconds": 2.4069,
+              "gpuMilliseconds": null,
+              "kernelMilliseconds": {},
+              "hostTransferBytes": 0,
+              "logicalAllocationBytes": 0,
+              "kernelLaunches": 16
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -32,9 +32,10 @@ internal static class ModelBenchmark
         if (devices.Length == 0 || devices.Any(value => value < 0) || devices.Distinct().Count() != devices.Length)
             throw new ArgumentException("Invalid distinct device indices.");
         int sampleCount = Number("--samples", 3), warmup = Number("--warmup", 1, 0), chunk = Number("--prefill-chunk", 1024, 128);
+        bool packedComparison = bool.Parse(Get("--model-packed-iq2", "false"));
         bool profileKernels = !bool.Parse(Get("--model-no-profile", "false"));
         bool ExpectCandidateKernel(int length) => Math.Min(length, chunk) >= 512;
-        const string candidateProjectionKernel = "q35l_prefill_xmx_iq2_s_gguf_bslm_k32r";
+        string candidateProjectionKernel = "q35l_prefill_xmx_iq2_s_gguf_bslm_k32r" + (packedComparison ? "_packed82" : "");
         static bool AttentionExercised(IReadOnlyDictionary<string, double> kernels) =>
             kernels.GetValueOrDefault("q35a_scores_rows") > 0 && kernels.GetValueOrDefault("q35a_attend_rows") > 0;
         double l2Limit = double.Parse(Get("--model-l2-limit", "0.001"), CultureInfo.InvariantCulture);
@@ -56,11 +57,13 @@ internal static class ModelBenchmark
         Qwen35ExecutionOptions GuiOptions(bool tiled) => new()
         {
             LoraTraining = false,
-            IQ2TiledForward = tiled,
+            IQ2TiledForward = packedComparison || tiled,
+            InferencePackedIq2Decode = packedComparison && tiled,
+            InferenceSplitOutputHead = packedComparison,
             IQ2TiledBackward = false,
             InferencePrefillChunkTokens = chunk,
             InferenceBatchMixedAttention = true,
-            InferenceBatchTextAttention = tiled,
+            InferenceBatchTextAttention = packedComparison || tiled,
             CollectKernelTimings = profileKernels,
             InferenceProjectionRows = 4,
             InferenceXmxPrefill = true,
@@ -93,8 +96,8 @@ internal static class ModelBenchmark
             {
                 schemaVersion = 1, complete, error, startedUtc = started, completedUtc = complete ? (DateTimeOffset?)DateTimeOffset.UtcNow : null,
                 operation = "Reset -> PrimePromptPrefix(prefix of M tokens) -> ForwardToken(next prompt token, returnLogits=true)",
-                purpose = "Full base-model prefill plus next logits: original versus IQ2 row-major BSLM and batched text attention",
-                scope = "No LoRA adapter and no vision encoder. Candidate enables IQ2 row-major BSLM plus batched text attention; microbenchmarks isolate IQ2 alone. GUI inference option values otherwise; per-kernel profiling "
+                purpose = packedComparison ? "Full base-model prefill plus next logits: raw versus same-size packed82 IQ2 storage, otherwise identical current GUI routes" : "Full base-model prefill plus next logits: original versus IQ2 row-major BSLM and batched text attention",
+                scope = (packedComparison ? "No LoRA adapter and no vision encoder. Only InferencePackedIq2Decode differs; current row-major BSLM, batched text attention and split output head are enabled for both. Per-kernel profiling " : "No LoRA adapter and no vision encoder. Candidate enables IQ2 row-major BSLM plus batched text attention; microbenchmarks isolate IQ2 alone. GUI inference option values otherwise; per-kernel profiling ")
                     + (profileKernels ? "enabled." : "disabled to measure GUI wall latency.")
                     + " Prefix checkpoint capture and final logits download included in wall time.",
                 timing = new { sampleCount, warmup, profileKernels, requiresSeparateProfileEvidence = !profileKernels,
@@ -108,7 +111,7 @@ internal static class ModelBenchmark
                     configuredPrefixChunkTokens = chunk },
                 candidateKernels = new { projection = candidateProjectionKernel, projectionMinimumRows = 512,
                     attention = new[] { "q35a_scores_rows", "q35a_softmax_rows", "q35a_attend_rows" } },
-                numericGate = new { l2Limit, top1MustMatch = true, repeatL2Limit = 1e-5,
+                numericGate = new { bitwiseRequired = packedComparison, l2Limit, top1MustMatch = true, repeatL2Limit = 1e-5,
                     note = "Full vocabulary logit L2 gate is distinct from projection microbenchmark tolerances; changed FP32 order can propagate through 64 layers." },
                 model = new { path = modelPath, bytes = modelBytes, lastWriteTimeUtc = modelTime, sha256 = modelSha },
                 deviceInformation, options = new { original = GuiOptions(false), candidate = GuiOptions(true) },
@@ -177,8 +180,8 @@ internal static class ModelBenchmark
                             bool exercised = kernelTimes.GetValueOrDefault(candidateProjectionKernel) > 0;
                             bool expectedKernel = tiled && ExpectCandidateKernel(length);
                             if (profileKernels && exercised != expectedKernel) throw new InvalidOperationException($"Expected tiled route={expectedKernel}, observed={exercised}; hybrid route coverage is incorrect or original was contaminated.");
-                            if (profileKernels && AttentionExercised(kernelTimes) != tiled)
-                                throw new InvalidOperationException($"Expected batched text attention={tiled}, observed={AttentionExercised(kernelTimes)}.");
+                            if (profileKernels && AttentionExercised(kernelTimes) != (packedComparison || tiled))
+                                throw new InvalidOperationException($"Expected batched text attention={packedComparison || tiled}, observed={AttentionExercised(kernelTimes)}.");
                             if (firstLogits is not null)
                             {
                                 LogitComparison repeat = Compare(firstLogits, logits);
@@ -195,7 +198,12 @@ internal static class ModelBenchmark
                         if (firstLogits is null) throw new InvalidOperationException("No logits were produced.");
                         LogitComparison? comparison = null;
                         if (!tiled) baseline.Add(length, firstLogits);
-                        else comparison = Compare(baseline[length], firstLogits);
+                        else
+                        {
+                            comparison = Compare(baseline[length], firstLogits);
+                            if (packedComparison && !MemoryMarshal.AsBytes(baseline[length].AsSpan()).SequenceEqual(MemoryMarshal.AsBytes(firstLogits.AsSpan())))
+                                throw new ArithmeticException($"Packed IQ2 model logits are not bit-identical at prefix {length}.");
+                        }
                         string logitsPath = Path.Combine(directory, $"{(tiled ? "tiled" : "original")}-prefix{length}.logits.f32");
                         using (var stream = new FileStream(logitsPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
                             stream.Write(MemoryMarshal.AsBytes(firstLogits.AsSpan()));
