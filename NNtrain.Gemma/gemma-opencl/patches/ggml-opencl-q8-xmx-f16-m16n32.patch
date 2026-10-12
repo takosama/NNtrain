@@ -1,0 +1,198 @@
+diff --git a/ggml/src/ggml-opencl/ggml-opencl.cpp b/ggml/src/ggml-opencl/ggml-opencl.cpp
+index 416f145..67ce0d3 100644
+--- a/ggml/src/ggml-opencl/ggml-opencl.cpp
++++ b/ggml/src/ggml-opencl/ggml-opencl.cpp
+@@ -405,6 +405,7 @@ struct ggml_backend_opencl_context {
+     bool has_vector_subgroup_broadcast;
+     bool disable_fusion;
+     bool q8_xmx_f16;
++    bool q8_xmx_f16_m16n32;
+ 
+     bool adreno_has_large_buffer;
+     bool adreno_use_large_buffer;
+@@ -601,6 +602,7 @@ struct ggml_backend_opencl_context {
+     cl_kernel kernel_mul_mm_q4_1_f32_l4_lm;
+     cl_kernel kernel_mul_mm_q8_0_f32_l4_lm;
+     cl_kernel kernel_mul_mm_q8_0_f32_xmx_f16;
++    cl_kernel kernel_mul_mm_q8_0_f32_xmx_f16_m16n32;
+     cl_kernel kernel_mul_mm_q4_k_f32_l4_lm;
+     cl_kernel kernel_mul_mm_q5_k_f32_l4_lm;
+     cl_kernel kernel_mul_mm_q6_k_f32_l4_lm;
+@@ -1643,6 +1645,10 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
+         if (backend_ctx->q8_xmx_f16) {
+             CL_CHECK((backend_ctx->kernel_mul_mm_q8_0_f32_xmx_f16 = clCreateKernel(
+                 backend_ctx->program_mul_mm_q8_0_f32_l4_lm, "kernel_mul_mm_q8_0_f32_xmx_f16", &err), err));
++            if (backend_ctx->q8_xmx_f16_m16n32) {
++                CL_CHECK((backend_ctx->kernel_mul_mm_q8_0_f32_xmx_f16_m16n32 = clCreateKernel(
++                    backend_ctx->program_mul_mm_q8_0_f32_l4_lm, "kernel_mul_mm_q8_0_f32_xmx_f16_m16n32", &err), err));
++            }
+         }
+         GGML_LOG_CONT(".");
+     }
+@@ -3250,6 +3256,13 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
+     }
+     GGML_LOG_INFO("ggml_opencl: Q8_0 XMX F16 experiment: %s\n",
+                   backend_ctx->q8_xmx_f16 ? "enabled" : "disabled");
++    // Keep the validated M8xN16 path as the default until this larger
++    // register tile has passed numerical and throughput checks.
++    const char * wide_xmx_env = getenv("GGML_OPENCL_Q8_XMX_F16_M16N32");
++    backend_ctx->q8_xmx_f16_m16n32 = backend_ctx->q8_xmx_f16 &&
++        wide_xmx_env != nullptr && wide_xmx_env[0] == '1' && wide_xmx_env[1] == '\0';
++    GGML_LOG_INFO("ggml_opencl: Q8_0 XMX F16 M16xN32 tile: %s\n",
++                  backend_ctx->q8_xmx_f16_m16n32 ? "enabled" : "disabled");
+     // check Adreno large buffer support
+     backend_ctx->adreno_has_large_buffer = strstr(ext_buffer, "cl_qcom_large_buffer") != NULL;
+ 
+@@ -11278,8 +11291,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
+                 }
+ 
+                 const bool xmx = backend_ctx->q8_xmx_f16 && ne00 % 32 == 0;
+-                kernel = xmx ? backend_ctx->kernel_mul_mm_q8_0_f32_xmx_f16
+-                             : backend_ctx->kernel_mul_mm_q8_0_f32_l4_lm;
++                const bool xmx_wide = xmx && backend_ctx->q8_xmx_f16_m16n32;
++                kernel = xmx_wide ? backend_ctx->kernel_mul_mm_q8_0_f32_xmx_f16_m16n32
++                       : xmx      ? backend_ctx->kernel_mul_mm_q8_0_f32_xmx_f16
++                                  : backend_ctx->kernel_mul_mm_q8_0_f32_l4_lm;
+                 nth0 = xmx ? 16 : 128;
+ 
+                 int batch_stride_a = ne00*ne01;
+@@ -11306,10 +11321,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
+                 CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &r2));
+                 CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r3));
+ 
+-                // XMX computes 8 output rows x 16 token columns per subgroup.
++                // XMX computes either 8x16 or 16x32 outputs per subgroup.
+                 size_t global_work_size[] = {
+-                    (size_t)(CEIL_DIV(ne01, xmx ? 8 : 64) * nth0),
+-                    (size_t)(CEIL_DIV(ne11, xmx ? 16 : 64)),
++                    (size_t)(CEIL_DIV(ne01, xmx_wide ? 16 : xmx ? 8 : 64) * nth0),
++                    (size_t)(CEIL_DIV(ne11, xmx_wide ? 32 : xmx ? 16 : 64)),
+                     (size_t)ne12 * ne13};
+                 size_t local_work_size[] = {(size_t)nth0, 1, 1};
+ 
+diff --git a/ggml/src/ggml-opencl/kernels/mul_mm_q8_0_f32_l4_lm.cl b/ggml/src/ggml-opencl/kernels/mul_mm_q8_0_f32_l4_lm.cl
+index b27daf2..c4d1044 100644
+--- a/ggml/src/ggml-opencl/kernels/mul_mm_q8_0_f32_l4_lm.cl
++++ b/ggml/src/ggml-opencl/kernels/mul_mm_q8_0_f32_l4_lm.cl
+@@ -237,4 +237,121 @@ kernel void kernel_mul_mm_q8_0_f32_xmx_f16(
+         if (row + 7 < ne01) dst[out + 7] = acc.s7;
+     }
+ }
++
++// One 16-lane subgroup covers two 8-row A panels and two 16-column B panels.
++// Reuse each panel across four K16 matrix operations and retain F32 accumulators.
++__attribute__((intel_reqd_sub_group_size(16)))
++kernel void kernel_mul_mm_q8_0_f32_xmx_f16_m16n32(
++    global const char * src0_q,
++    global const half * src0_d,
++    global const float * src1,
++    ulong offset1,
++    global float * dst,
++    ulong offsetd,
++    int ne00,
++    int ne01,
++    int ne02,
++    int ne11,
++    int ne12,
++    int stride_a,
++    int stride_b,
++    int stride_d,
++    int batch_stride_a,
++    int batch_stride_b,
++    int batch_stride_d,
++    int r2,
++    int r3) {
++    src1 = (global const float *) ((global const char *) src1 + offset1);
++    dst = (global float *) ((global char *) dst + offsetd);
++
++    const int lane = get_local_id(0);
++    const int row0 = get_group_id(0) * 16;
++    const int row1 = row0 + 8;
++    const int col0 = get_group_id(1) * 32 + lane;
++    const int col1 = col0 + 16;
++    const int batch = get_group_id(2);
++    const int i13 = batch / ne12;
++    const int i12 = batch % ne12;
++    const int batch_a = (i13 / r3) * ne02 + i12 / r2;
++
++    float8 acc00 = (float8) (0.0f);
++    float8 acc01 = (float8) (0.0f);
++    float8 acc10 = (float8) (0.0f);
++    float8 acc11 = (float8) (0.0f);
++    for (int k = 0; k < ne00; k += 16) {
++        int8 bp0 = (int8) (0);
++        int8 bp1 = (int8) (0);
++        if (col0 < ne11) {
++            const global float * b0 = src1 + batch * batch_stride_b + col0 * stride_b + k;
++            bp0 = as_int8(convert_half16_rte(vload16(0, b0)));
++        }
++        if (col1 < ne11) {
++            const global float * b1 = src1 + batch * batch_stride_b + col1 * stride_b + k;
++            bp1 = as_int8(convert_half16_rte(vload16(0, b1)));
++        }
++
++        const short8 ap0 = (short8) (
++            q8_xmx_weight(src0_q, src0_d, batch_a, row0 + 0, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row0 + 1, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row0 + 2, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row0 + 3, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row0 + 4, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row0 + 5, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row0 + 6, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row0 + 7, k + lane, ne00, ne01));
++        const short8 ap1 = (short8) (
++            q8_xmx_weight(src0_q, src0_d, batch_a, row1 + 0, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row1 + 1, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row1 + 2, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row1 + 3, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row1 + 4, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row1 + 5, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row1 + 6, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row1 + 7, k + lane, ne00, ne01));
++
++        acc00 = intel_sub_group_f16_f16_matrix_mad_k16(ap0, bp0, acc00);
++        acc01 = intel_sub_group_f16_f16_matrix_mad_k16(ap0, bp1, acc01);
++        acc10 = intel_sub_group_f16_f16_matrix_mad_k16(ap1, bp0, acc10);
++        acc11 = intel_sub_group_f16_f16_matrix_mad_k16(ap1, bp1, acc11);
++    }
++
++    if (col0 < ne11) {
++        const int out0 = batch * batch_stride_d + col0 * stride_d;
++        if (row0 + 0 < ne01) dst[out0 + row0 + 0] = acc00.s0;
++        if (row0 + 1 < ne01) dst[out0 + row0 + 1] = acc00.s1;
++        if (row0 + 2 < ne01) dst[out0 + row0 + 2] = acc00.s2;
++        if (row0 + 3 < ne01) dst[out0 + row0 + 3] = acc00.s3;
++        if (row0 + 4 < ne01) dst[out0 + row0 + 4] = acc00.s4;
++        if (row0 + 5 < ne01) dst[out0 + row0 + 5] = acc00.s5;
++        if (row0 + 6 < ne01) dst[out0 + row0 + 6] = acc00.s6;
++        if (row0 + 7 < ne01) dst[out0 + row0 + 7] = acc00.s7;
++        if (row1 + 0 < ne01) dst[out0 + row1 + 0] = acc10.s0;
++        if (row1 + 1 < ne01) dst[out0 + row1 + 1] = acc10.s1;
++        if (row1 + 2 < ne01) dst[out0 + row1 + 2] = acc10.s2;
++        if (row1 + 3 < ne01) dst[out0 + row1 + 3] = acc10.s3;
++        if (row1 + 4 < ne01) dst[out0 + row1 + 4] = acc10.s4;
++        if (row1 + 5 < ne01) dst[out0 + row1 + 5] = acc10.s5;
++        if (row1 + 6 < ne01) dst[out0 + row1 + 6] = acc10.s6;
++        if (row1 + 7 < ne01) dst[out0 + row1 + 7] = acc10.s7;
++    }
++    if (col1 < ne11) {
++        const int out1 = batch * batch_stride_d + col1 * stride_d;
++        if (row0 + 0 < ne01) dst[out1 + row0 + 0] = acc01.s0;
++        if (row0 + 1 < ne01) dst[out1 + row0 + 1] = acc01.s1;
++        if (row0 + 2 < ne01) dst[out1 + row0 + 2] = acc01.s2;
++        if (row0 + 3 < ne01) dst[out1 + row0 + 3] = acc01.s3;
++        if (row0 + 4 < ne01) dst[out1 + row0 + 4] = acc01.s4;
++        if (row0 + 5 < ne01) dst[out1 + row0 + 5] = acc01.s5;
++        if (row0 + 6 < ne01) dst[out1 + row0 + 6] = acc01.s6;
++        if (row0 + 7 < ne01) dst[out1 + row0 + 7] = acc01.s7;
++        if (row1 + 0 < ne01) dst[out1 + row1 + 0] = acc11.s0;
++        if (row1 + 1 < ne01) dst[out1 + row1 + 1] = acc11.s1;
++        if (row1 + 2 < ne01) dst[out1 + row1 + 2] = acc11.s2;
++        if (row1 + 3 < ne01) dst[out1 + row1 + 3] = acc11.s3;
++        if (row1 + 4 < ne01) dst[out1 + row1 + 4] = acc11.s4;
++        if (row1 + 5 < ne01) dst[out1 + row1 + 5] = acc11.s5;
++        if (row1 + 6 < ne01) dst[out1 + row1 + 6] = acc11.s6;
++        if (row1 + 7 < ne01) dst[out1 + row1 + 7] = acc11.s7;
++    }
++}
+ #endif

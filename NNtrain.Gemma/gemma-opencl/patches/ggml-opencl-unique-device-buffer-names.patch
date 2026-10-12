@@ -1,0 +1,46 @@
+diff --git a/ggml/src/ggml-opencl/ggml-opencl.cpp b/ggml/src/ggml-opencl/ggml-opencl.cpp
+index a581402..78e40bb 100644
+--- a/ggml/src/ggml-opencl/ggml-opencl.cpp
++++ b/ggml/src/ggml-opencl/ggml-opencl.cpp
+@@ -372,10 +380,11 @@ struct ggml_backend_opencl_device_context {
+ 
+     // Initialized by ggml_backend_opencl_device_get_buffer_type()
+     ggml_backend_buffer_type buffer_type;
+ 
+     cl_context context = nullptr;
++    std::string buffer_type_name;
+ };
+ 
+ // backend context
+ struct ggml_backend_opencl_context {
+     int ref_count;
+@@ -3006,10 +3015,13 @@ static std::vector<ggml_backend_device> ggml_opencl_probe_devices(ggml_backend_r
+             /*.device_version   =*/dev->version,
+             /*.backend_ctx      =*/nullptr,
+             /*.buffer_type      =*/{},
+             /*.context          =*/shared_context,
+         });
++        // llama.cpp orders weight and KV contexts by buffer-type name. Two
++        // otherwise identical GPUs therefore need distinct, stable names.
++        dev_ctx->buffer_type_name = "OpenCL" + std::to_string(found_devices.size());
+ 
+         found_devices.push_back(ggml_backend_device{
+             /* .iface   = */ ggml_backend_opencl_device_i,
+             /* .reg     = */ reg,
+             /* .context = */ dev_ctx.get(),
+@@ -6047,13 +6059,12 @@ static ggml_backend_buffer_i ggml_backend_opencl_buffer_interface = {
+ //
+ // buffer type
+ //
+ 
+ static const char * ggml_backend_opencl_buffer_type_get_name(ggml_backend_buffer_type_t buffer_type) {
+-    return "OpenCL";
+-
+-    GGML_UNUSED(buffer_type);
++    auto * dev_ctx = static_cast<ggml_backend_opencl_device_context *>(buffer_type->device->context);
++    return dev_ctx->buffer_type_name.c_str();
+ }
+ 
+ static ggml_backend_buffer_t ggml_backend_opencl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buffer_type, size_t size) {
+     ggml_backend_opencl_context *backend_ctx = ggml_cl2_init(buffer_type->device);
+ 

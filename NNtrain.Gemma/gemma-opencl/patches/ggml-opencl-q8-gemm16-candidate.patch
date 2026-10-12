@@ -1,0 +1,18 @@
+diff --git a/ggml/src/ggml-opencl/ggml-opencl.cpp b/ggml/src/ggml-opencl/ggml-opencl.cpp
+--- a/ggml/src/ggml-opencl/ggml-opencl.cpp
++++ b/ggml/src/ggml-opencl/ggml-opencl.cpp
+@@ -11098,7 +11098,13 @@
+                 return;
+             }
+             case GGML_TYPE_Q8_0: {
+-                if (ne11 < 32) {
++                // Q8 GEMM is already bounds-checked for a partial 64-column tile.
++                // Keep the 32-token baseline unless this Intel-only trial is opted in.
++                static const bool q8_gemm16 = [] {
++                    const char * value = getenv("GGML_OPENCL_Q8_GEMM16");
++                    return value != nullptr && value[0] == '1' && value[1] == '\0';
++                }();
++                if (ne11 < ((backend_ctx->gpu_family == INTEL && q8_gemm16) ? 16 : 32)) {
+                     break;
+                 }
+                 if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {

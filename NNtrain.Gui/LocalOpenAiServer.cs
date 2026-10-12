@@ -218,10 +218,11 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
         string? lora = ResolveLora(json);
         string? mmproj = ResolveMmproj(json);
         int[]? devices = OptionalDevices(json);
+        string? gemmaBackend = OptionalGemmaBackend(json);
         await _requestGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            await LoadCoreAsync(model, lora, devices, ct, mmproj).ConfigureAwait(false);
+            await LoadCoreAsync(model, lora, devices, ct, mmproj, gemmaBackend).ConfigureAwait(false);
             await context.Response.WriteAsJsonAsync(State(), ct).ConfigureAwait(false);
         }
         finally { _requestGate.Release(); }
@@ -251,6 +252,7 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
         string? lora = ResolveLora(json);
         string? mmproj = ResolveMmproj(json);
         int[]? devices = OptionalDevices(json);
+        string? gemmaBackend = OptionalGemmaBackend(json);
         ChatTurn[] messages = RequiredMessages(json);
         int maxTokens = OptionalInt(json, "max_completion_tokens")
             ?? OptionalInt(json, "max_tokens") ?? 512;
@@ -276,7 +278,7 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
         double gateWaitMilliseconds = requestTimer.Elapsed.TotalMilliseconds;
         try
         {
-            await LoadCoreAsync(model, lora, devices, ct, mmproj).ConfigureAwait(false);
+            await LoadCoreAsync(model, lora, devices, ct, mmproj, gemmaBackend).ConfigureAwait(false);
             Log($"Chat {id}: model={model}, lora={lora ?? "none"}, stream={stream}, think={think}, " +
                 $"max_tokens={maxTokens}, temperature={temperature.ToString(CultureInfo.InvariantCulture)}, " +
                 $"top_p={topP.ToString(CultureInfo.InvariantCulture)}, top_k={topK}");
@@ -403,22 +405,26 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
     }
 
     private async Task LoadCoreAsync(string model, string? lora, int[]? devices, CancellationToken ct,
-        string? mmproj = null)
+        string? mmproj = null, string? gemmaBackend = null)
     {
         if (_session.IsLoaded && string.Equals(_session.LoadedModelPath, model, StringComparison.OrdinalIgnoreCase)
             && string.Equals(_session.LoadedAdapterPath, lora, StringComparison.OrdinalIgnoreCase)
             && string.Equals(_session.LoadedMmprojPath, mmproj, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(_session.LoadedGemmaBackend, gemmaBackend ??
+                (_session.LoadedGemmaBackend is null ? null : "cpu"), StringComparison.Ordinal)
             && (devices is null || _session.LoadedDevices is { } loaded && loaded.SequenceEqual(devices)))
         {
             MarkCompleted();
             return;
         }
         Log($"Loading model: {model}; LoRA: {lora ?? "none"}; devices: " +
-            (devices is null ? "automatic" : string.Join(',', devices)));
+            (devices is null ? "automatic" : string.Join(',', devices)) +
+            $"; gemma_backend: {gemmaBackend ?? "default"}");
         Stopwatch timer = Stopwatch.StartNew();
         try
         {
-            await _session.LoadAsync(model, lora, new Progress<string>(Log), ct, devices, mmproj).ConfigureAwait(false);
+            await _session.LoadAsync(model, lora, new Progress<string>(Log), ct, devices, mmproj,
+                gemmaBackend).ConfigureAwait(false);
         }
         finally
         {
@@ -445,6 +451,7 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
             lora = _session.LoadedAdapterPath,
             mmproj = _session.LoadedMmprojPath,
             devices = _session.LoadedDevices,
+            gemma_backend = _session.LoadedGemmaBackend,
             last_completed_utc = when,
             idle_seconds_remaining = idle
         };
@@ -596,9 +603,17 @@ public sealed class LocalOpenAiServer : IAsyncDisposable
                 throw new ApiException(400, "devices must contain nonnegative integer GPU indices.", "devices");
             return index;
         }).ToArray();
-        if (indices.Length is < 1 or > 2 || indices.Distinct().Count() != indices.Length)
-            throw new ApiException(400, "devices must contain one or two distinct GPU indices.", "devices");
+        if (indices.Length > 2 || indices.Distinct().Count() != indices.Length)
+            throw new ApiException(400, "devices must contain at most two distinct GPU indices; an empty array selects CPU for Gemma 3.", "devices");
         return indices;
+    }
+
+    private static string? OptionalGemmaBackend(JsonElement json)
+    {
+        string? backend = OptionalString(json, "gemma_backend");
+        if (backend is not null and not ("cpu" or "opencl"))
+            throw new ApiException(400, "gemma_backend must be cpu or opencl.", "gemma_backend");
+        return backend;
     }
 
     private static ChatTurn[] RequiredMessages(JsonElement json)

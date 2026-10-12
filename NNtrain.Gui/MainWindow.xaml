@@ -52,7 +52,7 @@
 
         <StackPanel Grid.Row="0" Margin="0,0,0,8">
             <TextBlock Text="NNtrain チャット" FontSize="28" FontWeight="SemiBold"/>
-            <TextBlock Text="Qwen3.5 / Qwen3.8 の GGUF と LoRA (.bin / .gguf) を選び、Arc GPU で会話します。"
+            <TextBlock Text="Qwen GGUF は Arc GPU、Gemma 3 GGUF は OpenCL GPU または CPU で会話します。"
                        Foreground="#9BAEC6" Margin="0,4,0,0"/>
         </StackPanel>
 

@@ -1,0 +1,6 @@
+ggml_opencl: selected platform: 'NVIDIA CUDA'
+
+ggml_opencl: device: 'GeForce GT 710 (OpenCL 1.2 CUDA)'
+Unsupported GPU: GeForce GT 710
+ggml_opencl: drop unsupported device.
+Error: The bundled Gemma 3 backend did not expose GPU offload. Check the Intel OpenCL driver and ggml-opencl.dll.

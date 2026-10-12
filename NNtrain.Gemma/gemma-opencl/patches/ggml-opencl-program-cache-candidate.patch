@@ -1,0 +1,121 @@
+diff --git a/ggml/src/ggml-opencl/ggml-opencl.cpp b/ggml/src/ggml-opencl/ggml-opencl.cpp
+index 78e40bb..05ac0fa 100644
+--- a/ggml/src/ggml-opencl/ggml-opencl.cpp
++++ b/ggml/src/ggml-opencl/ggml-opencl.cpp
+@@ -768,6 +768,51 @@ inline std::string read_file(const std::string &path) {
+   return text;
+ }
+ 
++// A cl_program built with device_list == NULL has binaries for every device
++// in its context.  Both Arc devices share one context, so the second backend
++// can create its own kernels from the program built for the first backend.
++struct ggml_opencl_program_cache {
++    struct entry {
++        cl_context context;
++        std::string source;
++        std::string options;
++        cl_program program;
++    };
++
++    std::mutex mutex;
++    std::vector<entry> entries;
++    size_t hits = 0;
++    size_t misses = 0;
++
++    ~ggml_opencl_program_cache() {
++        for (const auto & item : entries) {
++            clReleaseProgram(item.program);
++        }
++    }
++};
++
++static ggml_opencl_program_cache & get_ggml_opencl_program_cache() {
++    static ggml_opencl_program_cache cache;
++    return cache;
++}
++
++static void release_cached_programs_for_context(cl_context context) {
++    auto & cache = get_ggml_opencl_program_cache();
++    std::lock_guard<std::mutex> lock(cache.mutex);
++    const auto old_size = cache.entries.size();
++    const auto first_removed = std::remove_if(cache.entries.begin(), cache.entries.end(),
++        [context](const ggml_opencl_program_cache::entry & item) {
++            if (item.context != context) {
++                return false;
++            }
++            CL_CHECK(clReleaseProgram(item.program));
++            return true;
++        });
++    cache.entries.erase(first_removed, cache.entries.end());
++    GGML_LOG_INFO("ggml_opencl: program cache: released %zu entries after device initialization\n",
++                  old_size - cache.entries.size());
++}
++
+ static cl_program build_program_from_source(cl_context ctx, cl_device_id dev, const char* program_buffer, const std::string &compile_opts) {
+     cl_program p;
+     char *program_log;
+@@ -777,6 +822,26 @@ static cl_program build_program_from_source(cl_context ctx, cl_device_id dev, co
+ 
+     program_size = strlen(program_buffer);
+ 
++    // Opt in to in-process reuse.  The cache owns one program reference and
++    // each caller owns another, preserving existing clReleaseProgram calls.
++    const char * cache_env = getenv("GGML_OPENCL_PROGRAM_CACHE");
++    const bool use_cache = cache_env && strcmp(cache_env, "1") == 0;
++    ggml_opencl_program_cache * cache = use_cache ? &get_ggml_opencl_program_cache() : nullptr;
++    std::unique_lock<std::mutex> cache_lock;
++    if (cache) {
++        cache_lock = std::unique_lock<std::mutex>(cache->mutex);
++        for (const auto & item : cache->entries) {
++            if (item.context == ctx && item.options == compile_opts &&
++                item.source.size() == program_size &&
++                memcmp(item.source.data(), program_buffer, program_size) == 0) {
++                CL_CHECK(clRetainProgram(item.program));
++                cache->hits++;
++                return item.program;
++            }
++        }
++        cache->misses++;
++    }
++
+     p = clCreateProgramWithSource(ctx, 1, (const char**)&program_buffer, &program_size, &err);
+     if(err < 0) {
+         GGML_LOG_ERROR("OpenCL error creating program");
+@@ -794,6 +859,11 @@ static cl_program build_program_from_source(cl_context ctx, cl_device_id dev, co
+         exit(1);
+     }
+ 
++    if (cache) {
++        cache->entries.push_back({ctx, std::string(program_buffer, program_size), compile_opts, p});
++        CL_CHECK(clRetainProgram(p));
++    }
++
+     return p;
+ }
+ 
+@@ -2805,6 +2875,13 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
+     }
+ #endif // GGML_OPENCL_USE_ADRENO_KERNELS
+     GGML_LOG_CONT("\n");
++    if (const char * cache_env = getenv("GGML_OPENCL_PROGRAM_CACHE");
++        cache_env && strcmp(cache_env, "1") == 0) {
++        auto & cache = get_ggml_opencl_program_cache();
++        std::lock_guard<std::mutex> lock(cache.mutex);
++        GGML_LOG_INFO("ggml_opencl: program cache: %zu hits, %zu misses, %zu entries\n",
++                      cache.hits, cache.misses, cache.entries.size());
++    }
+ }
+ 
+ // XXX static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
+@@ -3036,6 +3113,11 @@ static std::vector<ggml_backend_device> ggml_opencl_probe_devices(ggml_backend_r
+         dev_ctx.release();
+     }
+ 
++    if (const char * cache_env = getenv("GGML_OPENCL_PROGRAM_CACHE");
++        cache_env && strcmp(cache_env, "1") == 0) {
++        release_cached_programs_for_context(shared_context);
++    }
++
+     if (found_devices.size()) {
+         auto * dev_ctx = static_cast<ggml_backend_opencl_device_context *>(found_devices.front().context);
+         GGML_LOG_INFO("ggml_opencl: default device: '%s (%s)'\n", dev_ctx->device_name.c_str(),

@@ -6,13 +6,14 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <NNtrainArchitectureLayer>Cli</NNtrainArchitectureLayer>
-    <NNtrainAllowedProjectReferences>NNtrain.Core;NNtrain.Data;NNtrain.Training</NNtrainAllowedProjectReferences>
+    <NNtrainAllowedProjectReferences>NNtrain.Core;NNtrain.Data;NNtrain.Training;NNtrain.Gemma</NNtrainAllowedProjectReferences>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\NNtrain.Core\NNtrain.Core.csproj" />
     <ProjectReference Include="..\NNtrain.Data\NNtrain.Data.csproj" />
     <ProjectReference Include="..\NNtrain.Training\NNtrain.Training.csproj" />
+    <ProjectReference Include="..\NNtrain.Gemma\NNtrain.Gemma.csproj" />
   </ItemGroup>
 
 </Project>

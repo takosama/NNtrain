@@ -1,0 +1,46 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="3daada91-5084-4cf7-94a5-b9092d6337e6" name="takos@DESKTOP-Q9VA6H3 2026-10-12 19:39:36" runUser="DESKTOP-Q9VA6H3\takos" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-10-12T19:39:36.3698778+09:00" queuing="2026-10-12T19:39:36.3698780+09:00" start="2026-10-12T19:39:34.3957040+09:00" finish="2026-10-12T19:39:36.3753134+09:00" />
+  <TestSettings name="default" id="c021c307-a6ac-4eaf-8332-19f9875a4aa7">
+    <Deployment runDeploymentRoot="takos_DESKTOP-Q9VA6H3_2026-10-12_19_39_36" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="ecbd070b-f4ac-49f0-a464-311c02f155fd" testId="f46de6c3-8cba-06b4-2e9b-c97a03919c8e" testName="NNtrain.Gui.Tests.Gemma3PromptTests.ConversationMustEndWithUserTurn" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.0010730" startTime="2026-10-12T19:39:36.2395951+09:00" endTime="2026-10-12T19:39:36.2407194+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="ecbd070b-f4ac-49f0-a464-311c02f155fd" />
+    <UnitTestResult executionId="8bd9d76c-6382-4942-a28c-c948be67a9c1" testId="076796e8-964b-d8c1-736b-31b12d24e970" testName="NNtrain.Gui.Tests.Gemma3PromptTests.ChatTurnsUseGemmaRolesAndGenerationPrefix" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.1245256" startTime="2026-10-12T19:39:36.1021510+09:00" endTime="2026-10-12T19:39:36.2344119+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="8bd9d76c-6382-4942-a28c-c948be67a9c1" />
+    <UnitTestResult executionId="6c18eaa5-42a6-464f-82f5-c13e873192c3" testId="5b68772a-9443-c98e-e46e-8c85f29d6672" testName="NNtrain.Gui.Tests.Gemma3PromptTests.UserTextCannotInjectTurnMarkers" computerName="DESKTOP-Q9VA6H3" duration="00:00:00.0183267" startTime="2026-10-12T19:39:36.2410175+09:00" endTime="2026-10-12T19:39:36.2593851+09:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="6c18eaa5-42a6-464f-82f5-c13e873192c3" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="NNtrain.Gui.Tests.Gemma3PromptTests.ConversationMustEndWithUserTurn" storage="c:\users\takos\source\repos\nntrain\nntrain.gui.tests\bin\release\net10.0-windows\nntrain.gui.tests.dll" id="f46de6c3-8cba-06b4-2e9b-c97a03919c8e">
+      <Execution id="ecbd070b-f4ac-49f0-a464-311c02f155fd" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Gui.Tests\bin\Release\net10.0-windows\NNtrain.Gui.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Gui.Tests.Gemma3PromptTests" name="ConversationMustEndWithUserTurn" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Gui.Tests.Gemma3PromptTests.ChatTurnsUseGemmaRolesAndGenerationPrefix" storage="c:\users\takos\source\repos\nntrain\nntrain.gui.tests\bin\release\net10.0-windows\nntrain.gui.tests.dll" id="076796e8-964b-d8c1-736b-31b12d24e970">
+      <Execution id="8bd9d76c-6382-4942-a28c-c948be67a9c1" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Gui.Tests\bin\Release\net10.0-windows\NNtrain.Gui.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Gui.Tests.Gemma3PromptTests" name="ChatTurnsUseGemmaRolesAndGenerationPrefix" />
+    </UnitTest>
+    <UnitTest name="NNtrain.Gui.Tests.Gemma3PromptTests.UserTextCannotInjectTurnMarkers" storage="c:\users\takos\source\repos\nntrain\nntrain.gui.tests\bin\release\net10.0-windows\nntrain.gui.tests.dll" id="5b68772a-9443-c98e-e46e-8c85f29d6672">
+      <Execution id="6c18eaa5-42a6-464f-82f5-c13e873192c3" />
+      <TestMethod codeBase="C:\Users\takos\source\repos\NNtrain\NNtrain.Gui.Tests\bin\Release\net10.0-windows\NNtrain.Gui.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="NNtrain.Gui.Tests.Gemma3PromptTests" name="UserTextCannotInjectTurnMarkers" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="f46de6c3-8cba-06b4-2e9b-c97a03919c8e" executionId="ecbd070b-f4ac-49f0-a464-311c02f155fd" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="076796e8-964b-d8c1-736b-31b12d24e970" executionId="8bd9d76c-6382-4942-a28c-c948be67a9c1" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="5b68772a-9443-c98e-e46e-8c85f29d6672" executionId="6c18eaa5-42a6-464f-82f5-c13e873192c3" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="一覧に存在しない結果" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="読み込まれたすべての結果" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Completed">
+    <Counters total="3" executed="3" passed="3" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v3.1.1+bf6400fd51 (64-bit .NET 10.0.11)&#xD;
+[xUnit.net 00:00:00.67]   Discovering: NNtrain.Gui.Tests&#xD;
+[xUnit.net 00:00:00.86]   Discovered:  NNtrain.Gui.Tests&#xD;
+[xUnit.net 00:00:01.19]   Starting:    NNtrain.Gui.Tests&#xD;
+[xUnit.net 00:00:01.27]   Finished:    NNtrain.Gui.Tests&#xD;
+</StdOut>
+    </Output>
+  </ResultSummary>
+</TestRun>

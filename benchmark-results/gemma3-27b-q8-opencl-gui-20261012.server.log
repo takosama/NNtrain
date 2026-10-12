@@ -1,0 +1,59 @@
+info: Microsoft.Hosting.Lifetime[14]
+      Now listening on: http://127.0.0.1:53441
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Production
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: C:\Users\takos\source\repos\NNtrain\NNtrain.Gui\bin\Release\net10.0-windows\
+[2026-10-12 07:07:36] Server listening at http://127.0.0.1:53441/
+NNtrain OpenAI API server: http://127.0.0.1:53441/
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:53441/health - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: GET /health'
+info: Microsoft.AspNetCore.Http.Result.JsonResult[3]
+      Writing value of type '<>f__AnonymousType0`1' as Json.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: GET /health'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 GET http://127.0.0.1:53441/health - 200 - application/json;+charset=utf-8 64.0364ms
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 POST http://127.0.0.1:53441/internal/load - application/json 168
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: POST /internal/load'
+[2026-10-12 07:07:37] Loading model: C:\Users\takos\source\repos\NNtrain\models\huggingface\ggml-org\gemma-3-27b-it-GGUF\gemma-3-27b-it-Q8_0.gguf; LoRA: none; devices: ; gemma_backend: opencl
+[2026-10-12 07:07:37] Gemma 3 を OpenCL GPU に読み込んでいます…
+[2026-10-12 07:07:46] Gemma 3 を OpenCL GPU に読み込みました。
+[2026-10-12 07:07:46] Model loaded in 9.22s.
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: POST /internal/load'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 POST http://127.0.0.1:53441/internal/load - 200 - application/json;+charset=utf-8 9253.7916ms
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 POST http://127.0.0.1:53441/v1/chat/completions - application/json 361
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: POST /v1/chat/completions'
+[2026-10-12 07:07:46] Chat chatcmpl-a7c1bcdfc1474f18bf0977005b9a0dac: model=C:\Users\takos\source\repos\NNtrain\models\huggingface\ggml-org\gemma-3-27b-it-GGUF\gemma-3-27b-it-Q8_0.gguf, lora=none, stream=False, think=False, max_tokens=8, temperature=0, top_p=1, top_k=1
+[2026-10-12 07:07:46] Chat chatcmpl-a7c1bcdfc1474f18bf0977005b9a0dac history: turns=1, characters=25
+[2026-10-12 07:07:46] Chat chatcmpl-a7c1bcdfc1474f18bf0977005b9a0dac input [user]: 2足す3はいくつですか。数字だけで答えてください。
+[2026-10-12 07:07:46] Chat chatcmpl-a7c1bcdfc1474f18bf0977005b9a0dac output: gate_wait_ms=2.8
+[2026-10-12 07:07:50] Chat chatcmpl-a7c1bcdfc1474f18bf0977005b9a0dac first text after 3.95s from request (3.95s generating).
+5
+
+[2026-10-12 07:07:51] Chat chatcmpl-a7c1bcdfc1474f18bf0977005b9a0dac completed: prompt_tokens=23, completion_tokens=3, reused=0, uncached=23, gate_wait_ms=2.8, first_text_ms_from_request=3949.7, first_token_ms_from_generation=3709.2, finish_reason=stop
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: POST /v1/chat/completions'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 POST http://127.0.0.1:53441/v1/chat/completions - 200 - application/json;+charset=utf-8 5374.8216ms
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 POST http://127.0.0.1:53441/internal/shutdown - application/json 2
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'HTTP: POST /internal/shutdown'
+[2026-10-12 07:07:51] Shutdown requested.
+info: Microsoft.Hosting.Lifetime[0]
+      Application is shutting down...
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+      Executed endpoint 'HTTP: POST /internal/shutdown'
+info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+      Request finished HTTP/1.1 POST http://127.0.0.1:53441/internal/shutdown - 200 - application/json;+charset=utf-8 13.4275ms

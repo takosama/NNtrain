@@ -28,12 +28,12 @@ dotnet publish NNtrain.Gui/NNtrain.Gui.csproj -c Release -r win-x64 --self-conta
 
 ## モデルを読み込んで会話する
 
-1. 「モデル・推論設定」を開き、GGUF と使用 GPU を選びます。Arc 2 台を検出すると両方を選択できます。
+1. 「モデル・推論設定」を開き、GGUF と計算方式を選びます。Qwen は Arc GPU を指定でき、Gemma 3 は「OpenCL GPU（自動）」または CPU を選びます。
 2. 必要なら LoRA と mmproj を選びます。
 3. 「プリロード」を押します。読み込み状態は GUI、詳細な処理はサーバーのコンソールで確認します。
 4. 入力欄に質問を書き、送信します。生成途中は停止できます。
 
-現在の GUI は `general.architecture=qwen35` の対応 GGUF を扱います。モデル名に Qwen3.8 などを含む場合でも、内部 architecture とテンソルを検証します。Qwen2 / Qwen2.5 は CLI 経路を使います。Qwen3.5 MoE や任意の GGUF を読み込めるわけではありません。
+現在の GUI は対応する `general.architecture=qwen35` GGUF と Gemma 3 Q8_0 GGUF を扱います。モデル名に Qwen3.8 などを含む場合でも、内部 architecture とテンソルを検証します。Qwen2 / Qwen2.5 は CLI 経路を使います。Qwen3.5 MoE や任意の GGUF を読み込めるわけではありません。Gemma 3 はテキスト生成に対応し、計算方式として「OpenCL GPU（自動）」または CPU を選べます。総 VRAM 11 GiB 以上の B580 がちょうど 2 台の構成では、context 4096 で 43 層を 53:47 の比率で割り当てます。単一 GPU では 20 層を使います。OpenCL の GPU 番号指定はまだ提供していません。CPU と OpenCL を切り替えると、内部の推論サーバーを再起動します。Gemma 3 の LoRA と画像 mmproj は現在使用できません。[最新の最適化と検証条件](../docs/benchmarks/gemma3-opencl-aggressive-2026-10-12.md)を参照してください。
 
 LoRA は NNtrain の `adapter.bin` と NNtrain がエクスポートした Qwen3.5 F32 GGUF LoRA に対応します。ベースモデルの識別情報・テンソル形状を検証します。学習再開には `.bin` が必要です。Bonsai PQ2_0 / PTQ1_0 の LoRA は対象外です。
 

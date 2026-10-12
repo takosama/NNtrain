@@ -1,0 +1,283 @@
+diff --git a/ggml/src/ggml-opencl/CMakeLists.txt b/ggml/src/ggml-opencl/CMakeLists.txt
+--- a/ggml/src/ggml-opencl/CMakeLists.txt
++++ b/ggml/src/ggml-opencl/CMakeLists.txt
+@@ -100,6 +100,7 @@
+     mul_mv_q6_k_f32_flat
+     mul_mv_q8_0_f32
+     mul_mv_q8_0_f32_flat
++    mul_mv_q8_0_f32_flat_rows
+     mul_mv_mxfp4_f32
+     mul_mv_mxfp4_f32_flat
+     mul_mv_id_q4_0_f32_8x_flat
+diff --git a/ggml/src/ggml-opencl/ggml-opencl.cpp b/ggml/src/ggml-opencl/ggml-opencl.cpp
+--- a/ggml/src/ggml-opencl/ggml-opencl.cpp
++++ b/ggml/src/ggml-opencl/ggml-opencl.cpp
+@@ -446,6 +446,8 @@
+     cl_program program_mul_mv_q4_0_f32_1d_16x_flat;
+     cl_program program_mul_mv_q6_K;
+     cl_program program_mul_mv_q8_0_f32, program_mul_mv_q8_0_f32_flat;
++    cl_program program_mul_mv_q8_0_f32_flat_rows = nullptr;
++    int q8_row_tile = 0;
+     cl_program program_mul_mv_mxfp4_f32;
+     cl_program program_mul_mv_mxfp4_f32_flat;
+     cl_program program_mul_mv_f16_f16;
+@@ -563,6 +565,7 @@
+     cl_kernel kernel_mul_mv_q6_K_f32_flat;
+     cl_kernel kernel_mul_mv_mxfp4_f32, kernel_mul_mv_mxfp4_f32_flat;
+     cl_kernel kernel_mul_mv_q8_0_f32, kernel_mul_mv_q8_0_f32_flat;
++    cl_kernel kernel_mul_mv_q8_0_f32_flat_rows = nullptr;
+     cl_kernel kernel_solve_tri_f32;
+     cl_kernel kernel_im2col_f32, kernel_im2col_f16;
+     cl_kernel kernel_argsort_f32_i32;
+@@ -1360,6 +1363,32 @@
+ 
+         CL_CHECK((backend_ctx->kernel_mul_mv_q8_0_f32_flat = clCreateKernel(backend_ctx->program_mul_mv_q8_0_f32_flat, "kernel_mul_mv_q8_0_f32_flat", &err), err));
+         GGML_LOG_CONT(".");
++    }
++
++    // Experimental Intel-only decode GEMV.  Build only when explicitly opted
++    // in; baseline kernels and the default startup path are unchanged.
++    if (backend_ctx->gpu_family == INTEL) {
++        const char * row_tile = getenv("GGML_OPENCL_Q8_ROW_TILE");
++        if (row_tile != nullptr &&
++            ((strcmp(row_tile, "2") == 0) || (strcmp(row_tile, "8") == 0))) {
++            backend_ctx->q8_row_tile = row_tile[0] - '0';
++#ifdef GGML_OPENCL_EMBED_KERNELS
++            const std::string kernel_src {
++                #include "mul_mv_q8_0_f32_flat_rows.cl.h"
++            };
++#else
++            const std::string kernel_src = read_file("mul_mv_q8_0_f32_flat_rows.cl");
++#endif
++            const std::string row_opts = compile_opts +
++                " -DQ8_ROW_TILE=" + std::to_string(backend_ctx->q8_row_tile);
++            backend_ctx->program_mul_mv_q8_0_f32_flat_rows =
++                build_program_from_source(backend_ctx->context, backend_ctx->device,
++                                          kernel_src.c_str(), row_opts);
++            CL_CHECK((backend_ctx->kernel_mul_mv_q8_0_f32_flat_rows =
++                clCreateKernel(backend_ctx->program_mul_mv_q8_0_f32_flat_rows,
++                               "kernel_mul_mv_q8_0_f32_flat_rows", &err), err));
++            GGML_LOG_CONT(".");
++        }
+     }
+ 
+     // mul_mv_mxfp4_f32
+@@ -5027,12 +5056,19 @@
+         GGML_ASSERT(size_d + size_q == ggml_nbytes(tensor) && "Incorrect tensor size");
+ 
+         cl_int err;
+-        cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE,
+-            ggml_nbytes(tensor), NULL, &err);
+-        CL_CHECK(err);
+-        CL_CHECK(clEnqueueWriteBuffer(
+-            queue, data_device, CL_TRUE, 0,
+-            ggml_nbytes(tensor), data, 0, NULL, NULL));
++        const char * host_repack_env = getenv("GGML_OPENCL_Q8_HOST_REPACK");
++        const bool host_repack = backend_ctx->gpu_family == INTEL &&
++                                 host_repack_env != nullptr &&
++                                 strcmp(host_repack_env, "1") == 0;
++        cl_mem data_device = nullptr;
++        if (!host_repack) {
++            data_device = clCreateBuffer(context, CL_MEM_READ_WRITE,
++                ggml_nbytes(tensor), NULL, &err);
++            CL_CHECK(err);
++            CL_CHECK(clEnqueueWriteBuffer(
++                queue, data_device, CL_FALSE, 0,
++                ggml_nbytes(tensor), data, 0, NULL, NULL));
++        }
+ 
+         // The original tensor memory is divided into scales and quants, i.e.,
+         // we first store scales, then quants.
+@@ -5055,6 +5091,27 @@
+             CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
+         CL_CHECK(err);
+ 
++        if (host_repack) {
++            // Avoid a second full-sized device allocation.  The Q8_0 source
++            // contains 2-byte fp16 scales and 32-byte signed quant blocks;
++            // the final OpenCL allocation stores those as two contiguous SoA
++            // regions.  Keep the staging vectors alive through both writes.
++            const size_t blocks = size_d/sizeof(ggml_fp16_t);
++            const uint8_t * source = static_cast<const uint8_t *>(data);
++            std::vector<uint8_t> scales(size_d);
++            std::vector<uint8_t> quants(size_q);
++            for (size_t block = 0; block < blocks; ++block) {
++                memcpy(scales.data() + block*2, source + block*34, 2);
++                memcpy(quants.data() + block*32, source + block*34 + 2, 32);
++            }
++            CL_CHECK(clEnqueueWriteBuffer(queue, extra->d, CL_FALSE, 0,
++                                          size_d, scales.data(), 0, NULL, NULL));
++            CL_CHECK(clEnqueueWriteBuffer(queue, extra->q, CL_TRUE, 0,
++                                          size_q, quants.data(), 0, NULL, NULL));
++            tensor->extra = extra;
++            return;
++        }
++
+         cl_kernel kernel = backend_ctx->kernel_convert_block_q8_0;
+ 
+         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
+@@ -5066,7 +5123,11 @@
+ 
+         cl_event evt;
+         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
++        // The in-order queue runs conversion after upload.  Waiting here keeps
++        // the caller's host pointer valid through both operations, without a
++        // second blocking fence immediately after the upload.
+         CL_CHECK(clWaitForEvents(1, &evt));
++        CL_CHECK(clReleaseEvent(evt));
+         CL_CHECK(clReleaseMemObject(data_device));
+ 
+         tensor->extra = extra;
+@@ -11655,7 +11716,11 @@
+         }
+         case GGML_TYPE_Q8_0: {
+ #ifdef GGML_OPENCL_SOA_Q
+-            kernel = backend_ctx->kernel_mul_mv_q8_0_f32_flat;
++            const bool use_rows = backend_ctx->kernel_mul_mv_q8_0_f32_flat_rows != nullptr &&
++                                  ne01 % (2*backend_ctx->q8_row_tile) == 0 &&
++                                  ggml_is_contiguous(src0);
++            kernel = use_rows ? backend_ctx->kernel_mul_mv_q8_0_f32_flat_rows :
++                                backend_ctx->kernel_mul_mv_q8_0_f32_flat;
+ 
+             // nth0 - subgroup size
+             // nth1 - number of subgroups per workgroup
+@@ -11663,7 +11728,7 @@
+             if (backend_ctx->gpu_family == INTEL) {
+                 nth0 = 16;
+                 nth1 = 2;
+-                ndst = nth1*4;
++                ndst = nth1*(use_rows ? backend_ctx->q8_row_tile : 4);
+             } else if (backend_ctx->gpu_family == ADRENO) {
+                 nth0 = 64;
+                 nth1 = 2;
+diff --git a/ggml/src/ggml-opencl/kernels/cvt.cl b/ggml/src/ggml-opencl/kernels/cvt.cl
+--- a/ggml/src/ggml-opencl/kernels/cvt.cl
++++ b/ggml/src/ggml-opencl/kernels/cvt.cl
+@@ -379,9 +379,12 @@
+ 
+     *d = b->d;
+ 
+-    for (int i = 0; i < QK8_0; ++i) {
+-        q[i] = b->qs[i];
+-    }
++    // Two unaligned 16-byte vector reads replace thirty-two byte copies.
++    // Q8_0 blocks start at a 34-byte stride; vload16 handles that alignment.
++    const char16 lo = vload16(0, b->qs);
++    const char16 hi = vload16(1, b->qs);
++    vstore16(lo, 0, (global char *)q);
++    vstore16(hi, 1, (global char *)q);
+ }
+ 
+ kernel void kernel_restore_block_q8_0(
+@@ -394,9 +397,10 @@
+     global half       * d = (global half *) src_d + get_global_id(0);
+ 
+     b->d = *d;
+-    for (int i = 0; i < QK8_0; ++i) {
+-        b->qs[i] = q[i];
+-    }
++    const char16 lo = vload16(0, (global char *)q);
++    const char16 hi = vload16(1, (global char *)q);
++    vstore16(lo, 0, b->qs);
++    vstore16(hi, 1, b->qs);
+ }
+ 
+ kernel void kernel_restore_block_q8_0_trans(
+diff --git a/ggml/src/ggml-opencl/kernels/mul_mv_q8_0_f32_flat_rows.cl b/ggml/src/ggml-opencl/kernels/mul_mv_q8_0_f32_flat_rows.cl
+new file mode 100644
+--- /dev/null
++++ b/ggml/src/ggml-opencl/kernels/mul_mv_q8_0_f32_flat_rows.cl
+@@ -0,0 +1,93 @@
++#pragma OPENCL EXTENSION cl_khr_fp16 : enable
++#pragma OPENCL EXTENSION cl_intel_subgroups : enable
++#pragma OPENCL EXTENSION cl_intel_required_subgroup_size : enable
++
++#ifndef Q8_ROW_TILE
++#define Q8_ROW_TILE 8
++#endif
++
++#if Q8_ROW_TILE != 2 && Q8_ROW_TILE != 8
++#error Q8_ROW_TILE must be 2 or 8
++#endif
++
++// Candidate for Intel Arc: vary the number of output rows held by one SIMD16
++// subgroup while leaving the on-device Q8_0 SoA layout unchanged.
++__attribute__((intel_reqd_sub_group_size(16)))
++kernel void kernel_mul_mv_q8_0_f32_flat_rows(
++    global char * src0_q,
++    global half * src0_d,
++    global char * src1,
++    ulong         offset1,
++    global char * dst,
++    ulong         offsetd,
++    int           ne00,
++    int           ne01,
++    ulong         nb01,
++    ulong         nb02,
++    ulong         nb03,
++    int           ne12,
++    ulong         nb11,
++    ulong         nb12,
++    ulong         nb13,
++    int           ne0,
++    int           ne1,
++    int           r2,
++    int           r3
++) {
++    src1 += offset1;
++    dst  += offsetd;
++
++    const int subgroup = get_sub_group_id();
++    const int lane = get_sub_group_local_id();
++    const int first_row = (get_group_id(0)*2 + subgroup)*Q8_ROW_TILE;
++    const int r1 = get_group_id(1);
++    const int im = get_group_id(2);
++    const uint i12 = im%ne12;
++    const uint i13 = im/ne12;
++    const int nb = ne00/32;
++    const int ix = lane/4;
++    const int il = lane%4;
++
++    global float * y = (global float *)(src1 + (ulong)r1*nb11 +
++                                        (ulong)i12*nb12 + (ulong)i13*nb13);
++    global float * yb = y + ix*32 + il*8;
++
++    // Quantized rows are contiguous in blocks of 34 bytes on the source side.
++    const ulong block_base = ((ulong)first_row*nb01 +
++                              (ulong)(i12/r2)*nb02 +
++                              (ulong)(i13/r3)*nb03)/34;
++    const ulong block_row_stride = nb01/34;
++    global char * ax[Q8_ROW_TILE];
++    global half * ad[Q8_ROW_TILE];
++    float acc[Q8_ROW_TILE];
++
++#pragma unroll
++    for (int row = 0; row < Q8_ROW_TILE; ++row) {
++        const ulong block_offset = block_base + (ulong)row*block_row_stride;
++        ax[row] = src0_q + block_offset*32;
++        ad[row] = src0_d + block_offset;
++        acc[row] = 0.0f;
++    }
++
++    for (int ib = ix; ib < nb; ib += 4) {
++        const float8 yl = vload8(0, yb);
++#pragma unroll
++        for (int row = 0; row < Q8_ROW_TILE; ++row) {
++            const char8 q8 = vload8(0, ax[row] + (ulong)ib*32 + il*8);
++            const float8 q = convert_float8(q8);
++            const float dot8 = dot(q.lo, yl.lo) + dot(q.hi, yl.hi);
++            acc[row] = mad(dot8, (float)ad[row][ib], acc[row]);
++        }
++        yb += 128;
++    }
++
++    global float * dst_f32 = (global float *)dst +
++                             (ulong)im*ne0*ne1 + (ulong)r1*ne0;
++#pragma unroll
++    for (int row = 0; row < Q8_ROW_TILE; ++row) {
++        const float total = sub_group_reduce_add(acc[row]);
++        if (lane == 0 && first_row + row < ne01) {
++            dst_f32[first_row + row] = total;
++        }
++    }
++}

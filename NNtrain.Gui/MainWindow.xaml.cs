@@ -32,12 +32,16 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _idleTimer = new() { Interval = TimeSpan.FromSeconds(15) };
     private CancellationTokenSource? _activeCancellation;
     private Process? _serverProcess;
+    private int? _serverPort;
     private bool _serverReady, _isLoaded;
     private string? _loadedModelPath, _loadedAdapterPath;
     private int[]? _loadedDevices;
+    private string? _loadedGemmaBackend;
+    private string? _serverGemmaBackend;
     private double? _idleSecondsRemaining;
     private string? _modelsDirectory;
     private bool _busy, _refreshing, _pendingUnload, _closingFinished, _closingStarted;
+    private bool _selectedModelIsGemma;
     private int _streamingGeneration;
 
     internal MainWindow(GuiLaunchOptions launchOptions)
@@ -75,7 +79,7 @@ public partial class MainWindow : Window
         if (_launchOptions.TopK is { } k) TopKBox.Text = k;
         if (_launchOptions.Temperature is { } t) TemperatureBox.Text = t;
         if (_launchOptions.MaxTokens is { } max) MaxTokensBox.Text = max;
-        ThinkingCheckBox.IsChecked = _launchOptions.Think;
+        ThinkingCheckBox.IsChecked = !_selectedModelIsGemma && _launchOptions.Think;
         StreamCheckBox.IsChecked = _launchOptions.Stream;
     }
 
@@ -84,10 +88,17 @@ public partial class MainWindow : Window
         try
         {
             SetStatus("ローカル推論サーバーを起動しています…");
-            var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            listener.Stop();
+            int port;
+            if (_serverPort is { } existingPort) port = existingPort;
+            else
+            {
+                var listener = new TcpListener(IPAddress.Loopback, 0);
+                listener.Start();
+                port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                listener.Stop();
+                _serverPort = port;
+                _client.BaseAddress = new Uri($"http://127.0.0.1:{port}/");
+            }
             string executable = Environment.ProcessPath
                 ?? throw new InvalidOperationException("実行ファイルの場所を取得できません。");
             var start = new ProcessStartInfo(executable)
@@ -110,7 +121,6 @@ public partial class MainWindow : Window
             start.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
             _serverProcess = Process.Start(start)
                 ?? throw new InvalidOperationException("推論サーバーを起動できませんでした。");
-            _client.BaseAddress = new Uri($"http://127.0.0.1:{port}/");
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             while (!timeout.IsCancellationRequested)
             {
@@ -167,6 +177,7 @@ public partial class MainWindow : Window
             ModelComboBox.SelectedItem = FindChoice(_models, selectedModel) ?? _models.FirstOrDefault();
             AdapterComboBox.SelectedItem = FindChoice(_adapters, selectedAdapter) ?? _adapters[0];
             RefreshMmprojChoices();
+            UpdateSelectedModelBackend();
             if (_models.Count == 0)
                 SetStatus("models フォルダーに GGUF がありません。参照からモデルを選択してください。");
         }
@@ -180,7 +191,7 @@ public partial class MainWindow : Window
     {
         bool wasRefreshing = _refreshing;
         _refreshing = true;
-        int[]? selected = (GpuComboBox.SelectedItem as GpuChoice)?.DeviceIndices;
+        GpuChoice? selected = GpuComboBox.SelectedItem as GpuChoice;
         try
         {
             _gpus.Clear();
@@ -190,8 +201,18 @@ public partial class MainWindow : Window
                     _gpus.Add(new GpuChoice($"Arc {first} + Arc {second}（2台）", [first, second]));
             for (int index = 0; index < available.Count; index++)
                 _gpus.Add(new GpuChoice($"Arc {index}（1台）", [index]));
-            GpuComboBox.SelectedItem = _gpus.FirstOrDefault(choice =>
-                selected is not null && choice.DeviceIndices.SequenceEqual(selected)) ?? _gpus.FirstOrDefault();
+            if (available.Count != 0)
+                _gpus.Add(new GpuChoice("OpenCL GPU（自動 / Gemma 3）", [], IsGemmaOpenClAuto: true));
+            _gpus.Add(new GpuChoice("CPU（Gemma 3）", []));
+            GpuComboBox.SelectedItem = _selectedModelIsGemma
+                ? _gpus.FirstOrDefault(choice => selected is { DeviceIndices.Length: 0 }
+                    && choice.IsGemmaOpenClAuto == selected.IsGemmaOpenClAuto
+                    && choice.DeviceIndices.Length == 0)
+                    ?? _gpus.FirstOrDefault(choice => choice.IsGemmaOpenClAuto)
+                    ?? _gpus.Last()
+                : _gpus.FirstOrDefault(choice => choice.DeviceIndices.Length != 0
+                    && selected is not null && choice.DeviceIndices.SequenceEqual(selected.DeviceIndices))
+                    ?? _gpus.FirstOrDefault(choice => choice.DeviceIndices.Length != 0);
         }
         finally { _refreshing = wasRefreshing; }
     }
@@ -204,6 +225,7 @@ public partial class MainWindow : Window
         catch (UnauthorizedAccessException) { yield break; }
         foreach (string path in files.Order(StringComparer.OrdinalIgnoreCase))
             if (!Path.GetFileName(path).StartsWith("lora_", StringComparison.OrdinalIgnoreCase)
+                && !File.Exists(path + ".aria2")
                 && !HuggingFaceModelDownload.IsMmproj(path))
                 yield return path;
     }
@@ -257,6 +279,7 @@ public partial class MainWindow : Window
     private async void ModelOrAdapter_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_refreshing || _closingFinished) return;
+        if (ReferenceEquals(sender, ModelComboBox)) UpdateSelectedModelBackend();
         CancelAudio();
         CancelPendingImagePreparation();
         if (ReferenceEquals(sender, MmprojComboBox) && _isLoaded && SelectionMatchesLoadedBase())
@@ -272,6 +295,47 @@ public partial class MainWindow : Window
         UpdateControls();
     }
 
+    private void UpdateSelectedModelBackend()
+    {
+        bool wasGemma = _selectedModelIsGemma;
+        string? path = (ModelComboBox.SelectedItem as FileChoice)?.FilePath;
+        bool gemma = false;
+        if (path is not null && File.Exists(path))
+        {
+            try
+            {
+                using var reader = new GgufReader(path);
+                gemma = reader.Metadata.TryGetValue("general.architecture", out object? value)
+                    && value is "gemma3";
+            }
+            catch (IOException) { }
+            catch (InvalidDataException) { }
+            catch (NotSupportedException) { }
+        }
+        _selectedModelIsGemma = gemma;
+        bool wasRefreshing = _refreshing;
+        _refreshing = true;
+        try
+        {
+            if (gemma)
+            {
+                bool keepGemmaChoice = wasGemma && GpuComboBox.SelectedItem is GpuChoice
+                    { DeviceIndices.Length: 0 };
+                if (!keepGemmaChoice)
+                    GpuComboBox.SelectedItem = _gpus.FirstOrDefault(choice => choice.IsGemmaOpenClAuto)
+                        ?? _gpus.FirstOrDefault(choice => choice.DeviceIndices.Length == 0);
+                if (_adapters.Count != 0) AdapterComboBox.SelectedItem = _adapters[0];
+                if (_mmprojs.Count != 0) MmprojComboBox.SelectedItem = _mmprojs[0];
+                ThinkingCheckBox.IsChecked = false;
+                _pendingImage = null;
+                UpdateImageAttachment();
+            }
+            else if (GpuComboBox.SelectedItem is GpuChoice { DeviceIndices.Length: 0 })
+                GpuComboBox.SelectedItem = _gpus.FirstOrDefault(choice => choice.DeviceIndices.Length != 0);
+        }
+        finally { _refreshing = wasRefreshing; }
+    }
+
     private bool SelectionMatchesLoaded() =>
         SelectionMatchesLoadedBase() &&
         string.Equals(_loadedMmprojPath, SelectedMmprojPath, StringComparison.OrdinalIgnoreCase);
@@ -282,7 +346,9 @@ public partial class MainWindow : Window
         string.Equals(_loadedAdapterPath, (AdapterComboBox.SelectedItem as FileChoice)?.FilePath,
             StringComparison.OrdinalIgnoreCase) &&
         _loadedDevices is { } loadedDevices &&
-        GpuComboBox.SelectedItem is GpuChoice gpu && loadedDevices.SequenceEqual(gpu.DeviceIndices);
+        GpuComboBox.SelectedItem is GpuChoice gpu && loadedDevices.SequenceEqual(gpu.DeviceIndices) &&
+        string.Equals(_loadedGemmaBackend, _selectedModelIsGemma
+            ? (gpu.IsGemmaOpenClAuto ? "opencl" : "cpu") : null, StringComparison.Ordinal);
 
     private async Task ReleaseForSelectionChangeAsync()
     {
@@ -306,7 +372,7 @@ public partial class MainWindow : Window
         if (_busy) return;
         var dialog = new OpenFileDialog
         {
-            Title = "Qwen3.5 / Qwen3.8 GGUF モデルを選択",
+            Title = "GGUF モデルを選択",
             Filter = "GGUF モデル (*.gguf)|*.gguf",
             CheckFileExists = true,
             InitialDirectory = _modelsDirectory ?? Environment.CurrentDirectory
@@ -372,34 +438,57 @@ public partial class MainWindow : Window
         if (!TrySelectedFiles(out string? modelPath, out string? adapterPath, out GpuChoice? gpu)) return;
         await ExecuteAsync(async ct =>
         {
-            await EnsureLoadedAsync(modelPath!, adapterPath, gpu!.DeviceIndices, ct);
+            await EnsureLoadedAsync(modelPath!, adapterPath, gpu!.DeviceIndices, ct, gpu.IsGemmaOpenClAuto);
             await PreparePendingImageAsync(ct);
         });
     }
 
     private async Task EnsureLoadedAsync(string modelPath, string? adapterPath,
-        IReadOnlyList<int> deviceIndices, CancellationToken ct)
+        IReadOnlyList<int> deviceIndices, CancellationToken ct, bool gemmaOpenClAuto = false)
     {
         await RestartServerIfStoppedAsync(ct);
+        string? gemmaBackend = _selectedModelIsGemma ? gemmaOpenClAuto ? "opencl" : "cpu" : null;
+        if (gemmaBackend is not null && _serverGemmaBackend is { } prior
+            && !string.Equals(prior, gemmaBackend, StringComparison.Ordinal))
+            await RestartServerForGemmaBackendChangeAsync(ct);
         if (_isLoaded && string.Equals(_loadedModelPath, modelPath, StringComparison.OrdinalIgnoreCase)
             && string.Equals(_loadedAdapterPath, adapterPath, StringComparison.OrdinalIgnoreCase)
             && string.Equals(_loadedMmprojPath, SelectedMmprojPath, StringComparison.OrdinalIgnoreCase)
-            && _loadedDevices is { } loadedDevices && loadedDevices.SequenceEqual(deviceIndices))
+            && _loadedDevices is { } loadedDevices && loadedDevices.SequenceEqual(deviceIndices)
+            && string.Equals(_loadedGemmaBackend, gemmaBackend, StringComparison.Ordinal))
         {
-            await PostAsync("internal/load", new { model = modelPath, lora = adapterPath, mmproj = SelectedMmprojPath, devices = deviceIndices }, ct);
+            if (gemmaBackend is not null) _serverGemmaBackend = gemmaBackend;
+            await PostAsync("internal/load", new { model = modelPath, lora = adapterPath,
+                mmproj = SelectedMmprojPath, devices = deviceIndices, gemma_backend = gemmaBackend }, ct);
             await RefreshServerStateAsync(ct);
             SetStatus("選択中のモデルはプリロード済みです。");
             return;
         }
         ct.ThrowIfCancellationRequested();
         SetStatus($"読み込み中: {Path.GetFileName(modelPath)}");
-        await PostAsync("internal/load", new { model = modelPath, lora = adapterPath, mmproj = SelectedMmprojPath, devices = deviceIndices }, ct);
+        // Native backend initialization can succeed even when model loading later fails.
+        // Remember the attempted backend so the next backend switch restarts the server.
+        if (gemmaBackend is not null) _serverGemmaBackend = gemmaBackend;
+        await PostAsync("internal/load", new { model = modelPath, lora = adapterPath,
+            mmproj = SelectedMmprojPath, devices = deviceIndices, gemma_backend = gemmaBackend }, ct);
         ct.ThrowIfCancellationRequested();
         await RefreshServerStateAsync(ct);
-        string gpu = $"Arc {string.Join(",", deviceIndices)}";
+        string gpu = gemmaBackend == "opencl" ? "OpenCL GPU（自動）"
+            : deviceIndices.Count == 0 ? "CPU" : $"Arc {string.Join(",", deviceIndices)}";
         SetStatus(adapterPath is null
             ? $"プリロード完了。モデルを {gpu} に保持しています。"
             : $"プリロード完了。モデルと LoRA を {gpu} に保持しています。");
+    }
+
+    private async Task RestartServerForGemmaBackendChangeAsync(CancellationToken ct)
+    {
+        SetStatus("Gemma 3 の計算方式を切り替えるため、推論サーバーを再起動しています…");
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        await PostAsync("internal/shutdown", new { }, timeout.Token);
+        if (_serverProcess is { } server)
+            await server.WaitForExitAsync(timeout.Token);
+        await RestartServerIfStoppedAsync(ct);
     }
 
     private async Task RestartServerIfStoppedAsync(CancellationToken ct)
@@ -417,6 +506,8 @@ public partial class MainWindow : Window
         _loadedAdapterPath = null;
         _loadedMmprojPath = null;
         _loadedDevices = null;
+        _loadedGemmaBackend = null;
+        _serverGemmaBackend = null;
         _serverProcess?.Dispose();
         _serverProcess = null;
         SetStatus("推論サーバーが停止したため、再起動しています…");
@@ -456,6 +547,8 @@ public partial class MainWindow : Window
         _loadedMmprojPath = ReadString(state, "mmproj");
         _loadedDevices = state.TryGetProperty("devices", out JsonElement devices) && devices.ValueKind == JsonValueKind.Array
             ? devices.EnumerateArray().Select(value => value.GetInt32()).ToArray() : null;
+        _loadedGemmaBackend = ReadString(state, "gemma_backend");
+        if (_loadedGemmaBackend is not null) _serverGemmaBackend = _loadedGemmaBackend;
         _idleSecondsRemaining = state.TryGetProperty("idle_seconds_remaining", out JsonElement idle) && idle.ValueKind == JsonValueKind.Number
             ? idle.GetDouble() : null;
         UpdateMemoryStatus();
@@ -564,7 +657,7 @@ public partial class MainWindow : Window
         await ExecuteAsync(async ct =>
         {
             await WaitForPendingImagePreparationAsync(image, ct);
-            await EnsureLoadedAsync(modelPath!, adapterPath, gpu!.DeviceIndices, ct);
+            await EnsureLoadedAsync(modelPath!, adapterPath, gpu!.DeviceIndices, ct, gpu.IsGemmaOpenClAuto);
             ct.ThrowIfCancellationRequested();
             MessageBox.Clear();
             _pendingImage = null;
@@ -573,7 +666,7 @@ public partial class MainWindow : Window
             _conversation.Add(new ChatTurn("user", message, Image: image));
             var question = new ChatBubble("あなた", image is null ? message : $"[画像: {image.Name}]\n{message}");
             _messages.Add(question);
-            bool thinking = ThinkingCheckBox.IsChecked == true;
+            bool thinking = !_selectedModelIsGemma && ThinkingCheckBox.IsChecked == true;
             bool stream = StreamCheckBox.IsChecked == true;
             var answer = new ChatBubble("アシスタント", "", thinking);
             _messages.Add(answer);
@@ -593,7 +686,8 @@ public partial class MainWindow : Window
             try
             {
                 ServerGeneration first = await GenerateViaServerAsync(_conversation.ToArray(),
-                    modelPath!, adapterPath, gpu!.DeviceIndices, thinking, stream, maxNewTokens, sampling, chunk =>
+                    modelPath!, adapterPath, gpu!.DeviceIndices, gpu.IsGemmaOpenClAuto,
+                    thinking, stream, maxNewTokens, sampling, chunk =>
                     {
                         streamedRaw.Append(chunk);
                         if (firstGeneration != _streamingGeneration) return;
@@ -627,7 +721,8 @@ public partial class MainWindow : Window
                     var directParser = new ThinkingStreamParser(requestedThinking: false);
                     stopReason = null; // The first attempt's reason does not describe an interrupted retry.
                     ServerGeneration directResult = await GenerateViaServerAsync(_conversation.ToArray(),
-                        modelPath!, adapterPath, gpu!.DeviceIndices, false, stream, maxNewTokens, sampling, chunk =>
+                        modelPath!, adapterPath, gpu!.DeviceIndices, gpu.IsGemmaOpenClAuto,
+                        false, stream, maxNewTokens, sampling, chunk =>
                         {
                             directStreamedRaw.Append(chunk);
                             if (retryGeneration != _streamingGeneration) return;
@@ -712,7 +807,7 @@ public partial class MainWindow : Window
 
     private async Task<ServerGeneration> GenerateViaServerAsync(
         IReadOnlyList<ChatTurn> conversation, string modelPath, string? adapterPath,
-        IReadOnlyList<int> devices, bool thinking, bool stream, int maxNewTokens,
+        IReadOnlyList<int> devices, bool gemmaOpenClAuto, bool thinking, bool stream, int maxNewTokens,
         GenerationSampling sampling, Action<string> onText, CancellationToken ct)
     {
         EnsureServerReady();
@@ -734,7 +829,8 @@ public partial class MainWindow : Window
             think = thinking,
             lora = adapterPath,
             mmproj = SelectedMmprojPath,
-            devices
+            devices,
+            gemma_backend = _selectedModelIsGemma ? gemmaOpenClAuto ? "opencl" : "cpu" : null
         };
         using var request = new HttpRequestMessage(HttpMethod.Post, "v1/chat/completions")
         {
@@ -902,9 +998,24 @@ public partial class MainWindow : Window
             SetStatus("モデルと LoRA には別のファイルを選んでください。");
             return false;
         }
+        if (_selectedModelIsGemma && (adapterPath is not null || SelectedMmprojPath is not null))
+        {
+            SetStatus("Gemma 3 では現在 LoRA と画像 mmproj を使用できません。");
+            return false;
+        }
         if (gpu is null)
         {
-            SetStatus("使用する Arc GPU を選択してください。");
+            SetStatus("使用する計算デバイスを選択してください。");
+            return false;
+        }
+        if (!_selectedModelIsGemma && gpu.DeviceIndices.Length == 0)
+        {
+            SetStatus("Qwen には Arc GPU を選択してください。");
+            return false;
+        }
+        if (_selectedModelIsGemma && gpu.DeviceIndices.Length != 0)
+        {
+            SetStatus("Gemma 3 には OpenCL GPU（自動）または CPU を選択してください。");
             return false;
         }
         return true;
@@ -920,9 +1031,9 @@ public partial class MainWindow : Window
     {
         UpdateAudioControls();
         ModelComboBox.IsEnabled = !_busy;
-        AdapterComboBox.IsEnabled = !_busy;
-        MmprojComboBox.IsEnabled = !_busy;
-        AttachImageButton.IsEnabled = !_busy && !_asrActive;
+        AdapterComboBox.IsEnabled = !_busy && !_selectedModelIsGemma;
+        MmprojComboBox.IsEnabled = !_busy && !_selectedModelIsGemma;
+        AttachImageButton.IsEnabled = !_busy && !_asrActive && !_selectedModelIsGemma;
         NewConversationButton.IsEnabled = !_busy && !_asrActive;
         UpdateImageAttachment();
         GpuComboBox.IsEnabled = !_busy;
@@ -931,7 +1042,7 @@ public partial class MainWindow : Window
         TemperatureBox.IsEnabled = !_busy;
         TopPBox.IsEnabled = !_busy;
         TopKBox.IsEnabled = !_busy;
-        ThinkingCheckBox.IsEnabled = !_busy;
+        ThinkingCheckBox.IsEnabled = !_busy && !_selectedModelIsGemma;
         StreamCheckBox.IsEnabled = !_busy;
         PreloadButton.IsEnabled = _serverReady && !_busy && !_asrActive && ModelComboBox.SelectedItem is FileChoice
             && GpuComboBox.SelectedItem is GpuChoice;
@@ -945,13 +1056,16 @@ public partial class MainWindow : Window
     {
         if (_isLoaded)
         {
-            string gpu = _loadedDevices is { Length: > 0 } devices
+            string gpu = _loadedGemmaBackend == "opencl" ? "OpenCL GPU（自動）"
+                : _loadedDevices is { Length: 0 } ? "CPU" : _loadedDevices is { Length: > 0 } devices
                 ? $"Arc {string.Join(",", devices)}" : "GPU";
             string remaining = _idleSecondsRemaining is double seconds ?
                 $" · 約{Math.Max(0, (int)Math.Ceiling(seconds / 60))}分後に解放" : "";
             MemoryStatusText.Text = $"{gpu}{remaining}";
         }
-        else MemoryStatusText.Text = "GPU: 未読込・解放済み";
+        else MemoryStatusText.Text = _selectedModelIsGemma && GpuComboBox.SelectedItem is GpuChoice
+            { IsGemmaOpenClAuto: true } ? "OpenCL GPU: 未読込・解放済み"
+            : _selectedModelIsGemma ? "CPU: 未読込・解放済み" : "GPU: 未読込・解放済み";
     }
 
     private void ScrollToEnd() => Dispatcher.BeginInvoke(DispatcherPriority.Background,
@@ -1002,7 +1116,7 @@ public partial class MainWindow : Window
     }
 
     public sealed record FileChoice(string Label, string? FilePath, bool IsManual = false);
-    public sealed record GpuChoice(string Label, int[] DeviceIndices);
+    public sealed record GpuChoice(string Label, int[] DeviceIndices, bool IsGemmaOpenClAuto = false);
 
     public sealed class ChatBubble : INotifyPropertyChanged
     {

@@ -2,6 +2,7 @@ using System.IO;
 using System.Diagnostics;
 using System.Text;
 using NNtrain.Arc;
+using NNtrain.Gemma;
 
 namespace NNtrain.Gui;
 
@@ -41,6 +42,7 @@ public sealed class InferenceSession : IDisposable
     private readonly bool _inferenceSplitOutputHead;
     private readonly bool _preloadVisionEncoder;
     private Qwen35QuantizedModel? _model;
+    private Gemma3LocalModel? _gemmaModel;
     private Qwen2GgufTokenizer? _tokenizer;
     private string? _loadedModelPath;
     private string? _loadedAdapterPath;
@@ -48,6 +50,7 @@ public sealed class InferenceSession : IDisposable
     private Qwen35VisionEncoder? _vision;
     private readonly Dictionary<string, Qwen35VisionEmbedding> _imageEmbeddings = [];
     private int[]? _loadedDevices;
+    private string? _loadedGemmaBackend;
     private int _disposed;
 
     public InferenceSession(int inferencePrefillChunkTokens = 1024, bool useOptimizedVisionKernels = true,
@@ -83,11 +86,12 @@ public sealed class InferenceSession : IDisposable
         _preloadVisionEncoder = prepareVisionOnLoad;
     }
 
-    public bool IsLoaded => Volatile.Read(ref _model) is not null;
+    public bool IsLoaded => Volatile.Read(ref _model) is not null || Volatile.Read(ref _gemmaModel) is not null;
     public string? LoadedModelPath => Volatile.Read(ref _loadedModelPath);
     public string? LoadedAdapterPath => Volatile.Read(ref _loadedAdapterPath);
     public string? LoadedMmprojPath => Volatile.Read(ref _loadedMmprojPath);
     public IReadOnlyList<int>? LoadedDevices => Volatile.Read(ref _loadedDevices);
+    public string? LoadedGemmaBackend => Volatile.Read(ref _loadedGemmaBackend);
     public GenerationStats? LastGenerationStats { get; private set; }
     /// <summary>Decode, resize and encode work for the most recent generation or preparation; cache hits take zero.</summary>
     public double LastImagePreparationMilliseconds { get; private set; }
@@ -98,7 +102,7 @@ public sealed class InferenceSession : IDisposable
 
     public async Task LoadAsync(string modelPath, string? adapterPath,
         IProgress<string>? progress, CancellationToken ct, IReadOnlyList<int>? selectedDevices = null,
-        string? mmprojPath = null)
+        string? mmprojPath = null, string? gemmaBackend = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelPath);
         modelPath = Path.GetFullPath(modelPath);
@@ -113,6 +117,66 @@ public sealed class InferenceSession : IDisposable
                 throw new ArgumentException("The model and LoRA adapter must be different files.", nameof(adapterPath));
             if (!File.Exists(adapterPath)) throw new FileNotFoundException("LoRA adapter not found.", adapterPath);
         }
+        string architecture;
+        using (var gguf = new GgufReader(modelPath))
+            architecture = gguf.Metadata.TryGetValue("general.architecture", out object? value)
+                ? value as string ?? string.Empty : string.Empty;
+        if (architecture == "gemma3")
+        {
+            if (adapterPath is not null)
+                throw new NotSupportedException("Gemma 3 の LoRA は現在サポートしていません。");
+            if (mmprojPath is not null)
+                throw new NotSupportedException("Gemma 3 の画像入力は現在サポートしていません。");
+            gemmaBackend ??= "cpu";
+            if (gemmaBackend is not ("cpu" or "opencl"))
+                throw new ArgumentException("Gemma 3 backend must be cpu or opencl.", nameof(gemmaBackend));
+            if (selectedDevices is { Count: > 0 })
+                throw new NotSupportedException("Gemma 3 OpenCL のデバイス番号指定は未対応です。devices: [] と gemma_backend: opencl を指定してください。");
+            ThrowIfDisposed();
+            await _operation.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                ThrowIfDisposed();
+                if (_gemmaModel is not null && string.Equals(_loadedModelPath, modelPath,
+                        StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(_loadedGemmaBackend, gemmaBackend, StringComparison.Ordinal)) return;
+                await UnloadCoreAsync().ConfigureAwait(false);
+                Gemma3LocalModel loaded = await Task.Run(() =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    // The measured two-B580 profile balances the output layer's
+                    // extra memory with a 53:47 split and keeps 43 layers resident
+                    // at context 4096. Larger device sets retain automatic splitting.
+                    IReadOnlyList<ArcDeviceInfo> arcDevices = gemmaBackend == "opencl" ? ArcDevices.Enumerate() : [];
+                    bool dualB580 = gemmaBackend == "opencl" && arcDevices.Count(device =>
+                        device.Name.Contains("B580", StringComparison.OrdinalIgnoreCase) &&
+                        device.GlobalMemoryBytes >= 11UL * 1024 * 1024 * 1024) >= 2;
+                    bool balancedPair = dualB580 && arcDevices.Count == 2;
+                    string target = gemmaBackend == "opencl"
+                        ? dualB580 ? "OpenCL GPU 2 台" : "OpenCL GPU" : "CPU";
+                    progress?.Report($"Gemma 3 を {target} に読み込んでいます…");
+                    return gemmaBackend == "opencl"
+                        ? Gemma3LocalModel.Load(modelPath, gpuLayers: balancedPair ? 43 : dualB580 ? 40 : 20,
+                            backend: Gemma3Backend.OpenCl, allOpenClDevices: dualB580,
+                            tensorSplits: balancedPair ? [53f, 47f] : null)
+                        : Gemma3LocalModel.Load(modelPath);
+                }, ct).ConfigureAwait(false);
+                if (ct.IsCancellationRequested)
+                {
+                    loaded.Dispose();
+                    ct.ThrowIfCancellationRequested();
+                }
+                Volatile.Write(ref _gemmaModel, loaded);
+                Volatile.Write(ref _loadedModelPath, modelPath);
+                Volatile.Write(ref _loadedDevices, Array.Empty<int>());
+                Volatile.Write(ref _loadedGemmaBackend, gemmaBackend);
+                progress?.Report($"Gemma 3 を {(gemmaBackend == "opencl" ? "OpenCL GPU" : "CPU")} に読み込みました。");
+                return;
+            }
+            finally { _operation.Release(); }
+        }
+        if (gemmaBackend is not null)
+            throw new NotSupportedException("gemma_backend は Gemma 3 GGUF 専用です。");
         int[] devices = selectedDevices?.ToArray()
             ?? Enumerable.Range(0, Math.Min(2, ArcDevices.Enumerate().Count)).ToArray();
         if (devices.Length == 0)
@@ -211,15 +275,31 @@ public sealed class InferenceSession : IDisposable
         ArgumentOutOfRangeException.ThrowIfNegative(maxNewTokens);
         ChatTurn[] turns = conversation.ToArray();
         bool hasImages = turns.Any(turn => turn.Image is not null);
-        string? prompt = hasImages ? null : FormatPrompt(turns, thinking);
         ThrowIfDisposed();
         await _operation.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             ThrowIfDisposed();
             LastGenerationStats = null;
+            if (_gemmaModel is { } gemma)
+            {
+                if (hasImages)
+                    throw new NotSupportedException("Gemma 3 の画像入力は現在サポートしていません。");
+                Gemma3ChatTurn[] gemmaTurns = turns.Select(turn =>
+                    new Gemma3ChatTurn(turn.Role, turn.Content)).ToArray();
+                string gemmaPrompt = Gemma3LocalModel.FormatConversation(gemmaTurns);
+                Gemma3GenerationResult result = await gemma.GenerateAsync(gemmaPrompt,
+                    maxNewTokens, onText, ct, sampling?.Temperature ?? 0f,
+                    sampling?.TopP ?? 1f, sampling?.TopK ?? 1).ConfigureAwait(false);
+                LastGenerationStats = new GenerationStats(result.PromptTokens, result.CompletionTokens, 0,
+                    result.FirstTokenMilliseconds, null,
+                    result.EndedByStop
+                        ? GenerationStopReason.EndOfMessage : GenerationStopReason.MaximumTokens);
+                return result.Text;
+            }
             Qwen35QuantizedModel model = _model ?? throw new InvalidOperationException("Load a model before generating.");
             Qwen2GgufTokenizer tokenizer = _tokenizer!;
+            string? prompt = hasImages ? null : FormatPrompt(turns, thinking);
             return await Task.Run(() =>
             {
                 ct.ThrowIfCancellationRequested();
@@ -304,6 +384,8 @@ public sealed class InferenceSession : IDisposable
         IReadOnlyList<ChatTurn>? conversation, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(image);
+        if (_gemmaModel is not null)
+            throw new NotSupportedException("Gemma 3 の画像入力は現在サポートしていません。");
         ChatTurn[]? turns = conversation?.ToArray();
         if (turns is not null && (turns.Length == 0 || turns[^1].Role != "user"
             || turns[^1].Content.Length != 0 || turns[^1].Image?.Hash != image.Hash))
@@ -501,6 +583,7 @@ public sealed class InferenceSession : IDisposable
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(conversation);
+        if (_gemmaModel is not null) return new PromptPrimeStats(0, 0, false);
         if (conversation.Count == 0 || conversation[^1].Role != "assistant")
             throw new ArgumentException("History must end with an assistant turn.", nameof(conversation));
         if (conversation.Any(turn => turn.Image is not null)) return new PromptPrimeStats(0, 0, false);
@@ -549,6 +632,7 @@ public sealed class InferenceSession : IDisposable
     private void UnloadCore()
     {
         Qwen35QuantizedModel? model = Interlocked.Exchange(ref _model, null);
+        Gemma3LocalModel? gemma = Interlocked.Exchange(ref _gemmaModel, null);
         Volatile.Write(ref _tokenizer, null);
         Volatile.Write(ref _loadedModelPath, null);
         Volatile.Write(ref _loadedAdapterPath, null);
@@ -559,7 +643,9 @@ public sealed class InferenceSession : IDisposable
         LastImagePreparationMilliseconds = 0;
         VisionInitializationMilliseconds = 0;
         Volatile.Write(ref _loadedDevices, null);
+        Volatile.Write(ref _loadedGemmaBackend, null);
         model?.Dispose();
+        gemma?.Dispose();
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);

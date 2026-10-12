@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <NNtrainArchitectureLayer>Gemma</NNtrainArchitectureLayer>
+    <NNtrainAllowedProjectReferences>NNtrain.Core</NNtrainAllowedProjectReferences>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\NNtrain.Core\NNtrain.Core.csproj" />
+    <PackageReference Include="LLamaSharp" Version="0.27.0" />
+    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.27.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="gemma-opencl\*.dll" CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Update="gemma-opencl\LICENSE.llama.cpp;gemma-opencl\README.md"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,22 @@
+﻿{
+    "id":  "chatcmpl-82f5e9def0d94ed19c539a03113cbd4b",
+    "object":  "chat.completion",
+    "created":  1791785249,
+    "model":  "C:\\Users\\takos\\source\\repos\\NNtrain\\models\\huggingface\\ggml-org\\gemma-3-27b-it-GGUF\\gemma-3-27b-it-Q8_0.gguf",
+    "choices":  [
+                    {
+                        "index":  0,
+                        "message":  {
+                                        "role":  "assistant",
+                                        "content":  "5\n"
+                                    },
+                        "finish_reason":  "stop",
+                        "nntrain_stop_reason":  "end_of_message"
+                    }
+                ],
+    "usage":  {
+                  "prompt_tokens":  23,
+                  "completion_tokens":  3,
+                  "total_tokens":  26
+              }
+}

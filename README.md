@@ -8,8 +8,8 @@ C# / .NET 10 で実装した、ローカル推論・学習用のニューラル�
 
 | 用途 | 現在の対応 |
 | --- | --- |
-| GUI チャット | `general.architecture=qwen35` の GGUF、ストリーミング、Thinking、LoRA、Arc 1 台 / 2 台 |
-| CLI GGUF 推論 | Qwen3.5 と Qwen2 / Qwen2.5。Qwen2 系は単一 Arc |
+| GUI チャット | Qwen3.5 GGUF は Arc 1 台 / 2 台でストリーミング、Thinking、LoRA。Gemma 3 Q8_0 GGUF は CPU または OpenCL GPU でテキストチャット |
+| CLI GGUF 推論 | Qwen3.5 と Qwen2 / Qwen2.5 に加え、Gemma 3 Q8_0。Gemma 3 は CPU または OpenCL の層オフロード |
 | 画像入力 | Qwen3.5 用の対応 mmproj GGUF と PNG / JPEG の静止画 |
 | 日本語音声入力 | Nemotron 3.5 ASR のキャッシュ付き認識、Parakeet 日本語モデルの CTC 認識、確定文の編集・送信 |
 | 学習 | Transformer、ForgetMemory 系、ForgetScan、Hyena、CIFAR-100。CPU / CUDA / Arc の対応範囲は異なります |
@@ -38,7 +38,7 @@ dotnet build NNtrain.slnx -c Debug --no-restore
 dotnet run --project NNtrain.Gui -c Debug
 ```
 
-1. GGUF を選び、使用する Arc GPU を指定します。必要なら LoRA と mmproj を選びます。
+1. GGUF を選びます。Qwen では使用する Arc GPU を指定し、必要なら LoRA と mmproj を選びます。Gemma 3 では「OpenCL GPU（自動）」または CPU を選びます。
 2. 「プリロード」で読み込みます。モデルは後続の会話でも保持されます。
 3. 入力して送信します。Stream、Thinking、temperature、top-p、top-k、最大出力数を変更できます。
 4. 音声はチャット内の音声設定から ASR を読み込み、「録音」または PCM16 WAV の選択で入力します。確定後に編集して、通常の送信ボタンを押します。
@@ -70,6 +70,33 @@ dotnet run --project NNtrain.Cli -c Release -- qwen-gguf --model models/model.gg
 単一 GPU は `--device 0`、逐次出力を止める場合は `--no-stream`、Qwen3.5 のアダプターは `--adapter checkpoints/qwen35.adapter.bin` を指定します。このコマンドは greedy 生成です。
 
 Qwen3.5 の行列形式は Q4_K / Q5_K / Q6_K / IQ2_S / IQ3_S / BF16、Bonsai の PQ2_0 / PTQ1_0 に対応します。ファイル名の IQ2_M などは混合テンソル構成を表し、各テンソルの形式を検証します。分割 GGUF は事前に結合が必要です。Bonsai PQ2_0 / PTQ1_0 の LoRA はサポート対象外です。[GGUF の詳細](docs/gguf-qwen.md) と [Bonsai 推論](docs/ternary-bonsai-generation.md) を参照してください。
+
+### Gemma 3 27B Q8_0 を使う
+
+[Gemma 3 27B IT の Q8_0 GGUF](https://huggingface.co/ggml-org/gemma-3-27b-it-GGUF) を `models` 以下に取得してから実行します。`gemma-gguf` は Gemma 3 のチャットテンプレートを自動挿入します。既定では CPU 推論で、別の LLM サーバーは使いません。
+
+```powershell
+dotnet run --project NNtrain.Cli -c Release -- gemma-gguf --model 'models/huggingface/ggml-org/gemma-3-27b-it-GGUF/gemma-3-27b-it-Q8_0.gguf' --prompt '日本語で短く自己紹介してください。' --context 512 --max-new-tokens 32
+```
+
+必要なら `--threads N`、`--temperature`、`--top-p`、`--top-k` を指定できます。GPU 生成では `--backend opencl` と GPU 層数を指定します。Arc B580 を 1 台使う場合は 20 層、2 台とも使う場合は `--opencl-all-devices --gpu-layers 43 --tensor-split 53,47` で context 4096 の生成を確認しました。[最新の最適化と測定条件](docs/benchmarks/gemma3-opencl-aggressive-2026-10-12.md)を参照してください。
+
+```powershell
+$env:GGML_OPENCL_PLATFORM = 'Intel'
+$env:GGML_OPENCL_DEVICE = 'B580'
+dotnet run --project NNtrain.Cli -c Release -- gemma-gguf --model 'models/huggingface/ggml-org/gemma-3-27b-it-GGUF/gemma-3-27b-it-Q8_0.gguf' --prompt '2足す3はいくつですか。数字だけで答えてください。' --context 4096 --max-new-tokens 8 --backend opencl --gpu-layers 20 --threads 8
+```
+
+この PC の B580 2 台を使う場合:
+
+```powershell
+$env:GGML_OPENCL_PLATFORM = 'Intel'
+dotnet run --project NNtrain.Cli -c Release -- gemma-gguf --model 'models/huggingface/ggml-org/gemma-3-27b-it-GGUF/gemma-3-27b-it-Q8_0.gguf' --prompt '2足す3はいくつですか。数字だけで答えてください。' --context 4096 --max-new-tokens 8 --backend opencl --gpu-layers 43 --opencl-all-devices --tensor-split 53,47 --threads 8
+```
+
+同じ比率で 32 トークンの decode を各 2 回測ると、2 台・40 層は 2.527 ± 0.003、43 層は 2.800 ± 0.011 トークン/秒で、約 10.8% 改善しました。入力や VRAM の状態が変わると速度も変わります。GUI の「OpenCL GPU（自動）」は、総 VRAM 11 GiB 以上の B580 がちょうど 2 台の構成で 43 層と 53:47 の比率を選び、単一 GPU では 20 層を使います。
+
+Intel Arc 用の OpenCL ドライバーとリポジトリに含まれるネイティブ DLL が必要です。27B Q8_0 全体を GPU に載せるには、モデルファイル約 28.7 GB に加えて実行用メモリが必要です。GUI は Gemma 3 をテキストのみ生成できます。Gemma 3 の LoRA と画像 mmproj には対応していません。
 
 ## 日本語音声認識
 

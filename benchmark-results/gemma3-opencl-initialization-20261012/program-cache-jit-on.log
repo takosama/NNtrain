@@ -1,0 +1,38 @@
+ggml_opencl: selected platform: 'Intel(R) OpenCL Graphics'
+
+ggml_opencl: device: 'Intel(R) Arc(TM) B580 Graphics (OpenCL 3.0 NEO )'
+ggml_opencl: OpenCL driver: 32.0.101.9030
+ggml_opencl: vector subgroup broadcast support: false
+ggml_opencl: device FP16 support: true
+ggml_opencl: mem base addr align: 128
+ggml_opencl: max mem alloc size: 11875 MB
+ggml_opencl: device max image buffer size (pixels): 778281728
+ggml_opencl: device max workgroup size: 1024
+ggml_opencl: SVM coarse grain buffer support: true
+ggml_opencl: SVM fine grain buffer support: false
+ggml_opencl: SVM fine grain system support: false
+ggml_opencl: SVM atomics support: false
+ggml_opencl: flattening quantized weights representation as struct of arrays (GGML_OPENCL_SOA_Q)
+ggml_opencl: loading OpenCL kernels.........................................................................................
+ggml_opencl: program cache: 0 hits, 117 misses, 117 entries
+
+ggml_opencl: device: 'Intel(R) Arc(TM) B580 Graphics (OpenCL 3.0 NEO )'
+ggml_opencl: OpenCL driver: 32.0.101.9030
+ggml_opencl: vector subgroup broadcast support: false
+ggml_opencl: device FP16 support: true
+ggml_opencl: mem base addr align: 128
+ggml_opencl: max mem alloc size: 11875 MB
+ggml_opencl: device max image buffer size (pixels): 778281728
+ggml_opencl: device max workgroup size: 1024
+ggml_opencl: SVM coarse grain buffer support: true
+ggml_opencl: SVM fine grain buffer support: false
+ggml_opencl: SVM fine grain system support: false
+ggml_opencl: SVM atomics support: false
+ggml_opencl: flattening quantized weights representation as struct of arrays (GGML_OPENCL_SOA_Q)
+ggml_opencl: loading OpenCL kernels.........................................................................................
+ggml_opencl: program cache: 117 hits, 117 misses, 117 entries
+ggml_opencl: default device: 'Intel(R) Arc(TM) B580 Graphics (OpenCL 3.0 NEO )'
+Available devices:
+  GPUOpenCL: Intel(R) Arc(TM) B580 Graphics (11875 MiB, 11348 MiB free)
+  GPUOpenCL: Intel(R) Arc(TM) B580 Graphics (11875 MiB, 11348 MiB free)
+WALL_SECONDS=127.924

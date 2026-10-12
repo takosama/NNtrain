@@ -1,0 +1,12 @@
+DXGI OpenCL device-list excerpt (2026-10-12 JST)
+This file contains the exact final output lines captured by the tool transcript.
+The complete command output was not redirected to a raw log file.
+
+Command:
+  GGML_OPENCL_PLATFORM=Intel build-llama-opencl-dxgi/bin/Release/llama-cli.exe --list-devices
+Exit code: 0
+
+ggml_opencl: default device: 'Intel(R) Arc(TM) B580 Graphics (OpenCL 3.0 NEO )'
+Available devices:
+  GPUOpenCL: Intel(R) Arc(TM) B580 Graphics (11875 MiB, 11347 MiB free)
+  GPUOpenCL: Intel(R) Arc(TM) B580 Graphics (11875 MiB, 11347 MiB free)

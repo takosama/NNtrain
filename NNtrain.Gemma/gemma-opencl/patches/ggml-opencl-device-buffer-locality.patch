@@ -1,0 +1,27 @@
+diff --git a/ggml/src/ggml-opencl/ggml-opencl.cpp b/ggml/src/ggml-opencl/ggml-opencl.cpp
+index a581402..f4552d8 100644
+--- a/ggml/src/ggml-opencl/ggml-opencl.cpp
++++ b/ggml/src/ggml-opencl/ggml-opencl.cpp
+@@ -6193,17 +6252,17 @@ static bool ggml_backend_opencl_device_supports_buft(ggml_backend_dev_t dev, ggm
+     // Check 'dev' and 'buffer_type' are not objects belonging to this backend.
+     if (dev->iface.get_name != ggml_backend_opencl_device_get_name ||
+         buft->iface.get_name != ggml_backend_opencl_buffer_type_get_name) {
+         return false;
+     }
+ 
+-    // Check cl_context is the same. clEnqueue* commands may not use
+-    // buffers from another cl_context.
+-    ggml_backend_opencl_context * backend_ctx0 = ggml_cl2_init(dev);
+-    ggml_backend_opencl_context * backend_ctx1 = ggml_cl2_init(buft->device);
+-    return backend_ctx0->context == backend_ctx1->context;
++    // The OpenCL devices share a context, but a buffer allocated for one GPU
++    // must not make its weights appear local to another GPU. Otherwise the
++    // graph scheduler runs every layer on its highest-priority device and
++    // repeatedly reads remote weights over PCIe.
++    return dev == buft->device;
+ }
+ 
+ namespace /* anonymous */ {
+ struct ggml_backend_device_i ggml_backend_opencl_device_i = {
+     /* .get_name             = */ ggml_backend_opencl_device_get_name,
+     /* .get_description      = */ ggml_backend_opencl_device_get_description,

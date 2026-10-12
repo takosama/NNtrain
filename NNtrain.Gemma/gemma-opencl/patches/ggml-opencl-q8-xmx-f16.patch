@@ -1,0 +1,219 @@
+diff --git a/ggml/src/ggml-opencl/ggml-opencl.cpp b/ggml/src/ggml-opencl/ggml-opencl.cpp
+index 78e40bb..a02f4d4 100644
+--- a/ggml/src/ggml-opencl/ggml-opencl.cpp
++++ b/ggml/src/ggml-opencl/ggml-opencl.cpp
+@@ -28,6 +28,7 @@
+ 
+ #include <cstddef>
+ #include <cstdint>
++#include <algorithm>
+ #include <fstream>
+ #include <vector>
+ #include <string>
+@@ -403,6 +404,7 @@ struct ggml_backend_opencl_context {
+     bool fp16_support;
+     bool has_vector_subgroup_broadcast;
+     bool disable_fusion;
++    bool q8_xmx_f16;
+ 
+     bool adreno_has_large_buffer;
+     bool adreno_use_large_buffer;
+@@ -598,6 +600,7 @@ struct ggml_backend_opencl_context {
+     cl_kernel kernel_mul_mm_q4_0_f32_l4_lm;
+     cl_kernel kernel_mul_mm_q4_1_f32_l4_lm;
+     cl_kernel kernel_mul_mm_q8_0_f32_l4_lm;
++    cl_kernel kernel_mul_mm_q8_0_f32_xmx_f16;
+     cl_kernel kernel_mul_mm_q4_k_f32_l4_lm;
+     cl_kernel kernel_mul_mm_q5_k_f32_l4_lm;
+     cl_kernel kernel_mul_mm_q6_k_f32_l4_lm;
+@@ -1567,6 +1570,10 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
+             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+ 
+         CL_CHECK((backend_ctx->kernel_mul_mm_q8_0_f32_l4_lm = clCreateKernel(backend_ctx->program_mul_mm_q8_0_f32_l4_lm, "kernel_mul_mm_q8_0_f32_l4_lm", &err), err));
++        if (backend_ctx->q8_xmx_f16) {
++            CL_CHECK((backend_ctx->kernel_mul_mm_q8_0_f32_xmx_f16 = clCreateKernel(
++                backend_ctx->program_mul_mm_q8_0_f32_l4_lm, "kernel_mul_mm_q8_0_f32_xmx_f16", &err), err));
++        }
+         GGML_LOG_CONT(".");
+     }
+ 
+@@ -3140,6 +3147,27 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
+     // Check if ext_buffer contains cl_khr_fp16
+     backend_ctx->fp16_support = strstr(ext_buffer, "cl_khr_fp16") != NULL;
+     GGML_LOG_INFO("ggml_opencl: device FP16 support: %s\n", backend_ctx->fp16_support ? "true" : "false");
++    // The XMX experiment has an opt-in switch and requires the exact subgroup
++    // width specified by the Intel matrix-multiply extension for this kernel.
++    const char * xmx_env = getenv("GGML_OPENCL_Q8_XMX_F16");
++    backend_ctx->q8_xmx_f16 = false;
++    if (xmx_env != nullptr && xmx_env[0] == '1' && xmx_env[1] == '\0' &&
++        backend_ctx->gpu_family == GPU_FAMILY::INTEL &&
++        backend_ctx->fp16_support &&
++        strstr(ext_buffer, "cl_intel_subgroup_matrix_multiply_accumulate") != nullptr &&
++        strstr(ext_buffer, "cl_intel_required_subgroup_size") != nullptr) {
++        size_t subgroup_bytes = 0;
++        if (clGetDeviceInfo(device, CL_DEVICE_SUB_GROUP_SIZES_INTEL, 0, nullptr, &subgroup_bytes) == CL_SUCCESS &&
++            subgroup_bytes >= sizeof(size_t) && subgroup_bytes % sizeof(size_t) == 0) {
++            std::vector<size_t> subgroup_sizes(subgroup_bytes / sizeof(size_t));
++            if (clGetDeviceInfo(device, CL_DEVICE_SUB_GROUP_SIZES_INTEL, subgroup_bytes,
++                                subgroup_sizes.data(), nullptr) == CL_SUCCESS) {
++                backend_ctx->q8_xmx_f16 = *std::min_element(subgroup_sizes.begin(), subgroup_sizes.end()) == 16;
++            }
++        }
++    }
++    GGML_LOG_INFO("ggml_opencl: Q8_0 XMX F16 experiment: %s\n",
++                  backend_ctx->q8_xmx_f16 ? "enabled" : "disabled");
+     // check Adreno large buffer support
+     backend_ctx->adreno_has_large_buffer = strstr(ext_buffer, "cl_qcom_large_buffer") != NULL;
+ 
+@@ -11167,8 +11195,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
+                     break;
+                 }
+ 
+-                kernel = backend_ctx->kernel_mul_mm_q8_0_f32_l4_lm;
+-                nth0 = 128; // calculated as (BM*BN)/(TM*TN)
++                const bool xmx = backend_ctx->q8_xmx_f16 && ne00 % 32 == 0;
++                kernel = xmx ? backend_ctx->kernel_mul_mm_q8_0_f32_xmx_f16
++                             : backend_ctx->kernel_mul_mm_q8_0_f32_l4_lm;
++                nth0 = xmx ? 16 : 128;
+ 
+                 int batch_stride_a = ne00*ne01;
+                 int batch_stride_b = ne10*ne11;
+@@ -11194,8 +11224,11 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
+                 CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &r2));
+                 CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r3));
+ 
+-                // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
+-                size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
++                // XMX computes 8 output rows x 16 token columns per subgroup.
++                size_t global_work_size[] = {
++                    (size_t)(CEIL_DIV(ne01, xmx ? 8 : 64) * nth0),
++                    (size_t)(CEIL_DIV(ne11, xmx ? 16 : 64)),
++                    (size_t)ne12 * ne13};
+                 size_t local_work_size[] = {(size_t)nth0, 1, 1};
+ 
+                 backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+diff --git a/ggml/src/ggml-opencl/kernels/cvt.cl b/ggml/src/ggml-opencl/kernels/cvt.cl
+index 1bd83d2..bcf62bc 100644
+--- a/ggml/src/ggml-opencl/kernels/cvt.cl
++++ b/ggml/src/ggml-opencl/kernels/cvt.cl
+@@ -379,9 +379,11 @@ kernel void kernel_convert_block_q8_0(
+ 
+     *d = b->d;
+ 
+-    for (int i = 0; i < QK8_0; ++i) {
+-        q[i] = b->qs[i];
+-    }
++    // Q8_0's 32 payload bytes follow an unaligned 2-byte scale. vload16
++    // permits that byte alignment while emitting two wide stores to the
++    // packed destination, replacing 32 scalar copies per block.
++    vstore16(vload16(0, (global uchar *) b->qs), 0, q);
++    vstore16(vload16(1, (global uchar *) b->qs), 1, q);
+ }
+ 
+ kernel void kernel_restore_block_q8_0(
+@@ -394,9 +396,8 @@ kernel void kernel_restore_block_q8_0(
+     global half       * d = (global half *) src_d + get_global_id(0);
+ 
+     b->d = *d;
+-    for (int i = 0; i < QK8_0; ++i) {
+-        b->qs[i] = q[i];
+-    }
++    vstore16(vload16(0, q), 0, (global uchar *) b->qs);
++    vstore16(vload16(1, q), 1, (global uchar *) b->qs);
+ }
+ 
+ kernel void kernel_restore_block_q8_0_trans(
+diff --git a/ggml/src/ggml-opencl/kernels/mul_mm_q8_0_f32_l4_lm.cl b/ggml/src/ggml-opencl/kernels/mul_mm_q8_0_f32_l4_lm.cl
+index 147b66f..ce1a2b5 100644
+--- a/ggml/src/ggml-opencl/kernels/mul_mm_q8_0_f32_l4_lm.cl
++++ b/ggml/src/ggml-opencl/kernels/mul_mm_q8_0_f32_l4_lm.cl
+@@ -152,3 +152,89 @@ kernel void kernel_mul_mm_q8_0_f32_l4_lm(
+         }
+     }
+ }
++
++// Opt-in Intel XMX experiment.  A GGUF Q8_0 block has 32 signed bytes and a
++// half-precision scale.  Keep that compact representation resident in VRAM,
++// dequantize an 8-row x 16-K panel into subgroup registers, and feed the
++// hardware matrix instruction directly.  F32 activations are rounded to F16
++// in registers; the result is accumulated in F32.
++#if defined(cl_intel_subgroup_matrix_multiply_accumulate) && defined(cl_intel_required_subgroup_size)
++#pragma OPENCL EXTENSION cl_intel_subgroup_matrix_multiply_accumulate : enable
++#pragma OPENCL EXTENSION cl_intel_required_subgroup_size : enable
++
++inline short q8_xmx_weight(global const char * qs, global const half * ds,
++                           int batch_a, int row, int k, int ne00, int ne01) {
++    if (row >= ne01) {
++        return (short) 0;
++    }
++    const int qidx = batch_a * ne00 * ne01 + row * ne00 + k;
++    const float v = (float) qs[qidx] * (float) ds[qidx / 32];
++    return as_short(convert_half_rte(v));
++}
++
++__attribute__((intel_reqd_sub_group_size(16)))
++kernel void kernel_mul_mm_q8_0_f32_xmx_f16(
++    global const char * src0_q,
++    global const half * src0_d,
++    global const float * src1,
++    ulong offset1,
++    global float * dst,
++    ulong offsetd,
++    int ne00,
++    int ne01,
++    int ne02,
++    int ne11,
++    int ne12,
++    int stride_a,
++    int stride_b,
++    int stride_d,
++    int batch_stride_a,
++    int batch_stride_b,
++    int batch_stride_d,
++    int r2,
++    int r3) {
++    src1 = (global const float *) ((global const char *) src1 + offset1);
++    dst = (global float *) ((global char *) dst + offsetd);
++
++    const int lane = get_local_id(0);
++    const int row = get_group_id(0) * 8;
++    const int col = get_group_id(1) * 16 + lane;
++    const int batch = get_group_id(2);
++    const int i13 = batch / ne12;
++    const int i12 = batch % ne12;
++    const int batch_a = (i13 / r3) * ne02 + i12 / r2;
++    const global float * b = src1 + batch * batch_stride_b + col * stride_b;
++
++    float8 acc = (float8) (0.0f);
++    for (int k = 0; k < ne00; k += 16) {
++        int8 bp = (int8) (0);
++        if (col < ne11) {
++            bp = as_int8(convert_half16_rte(vload16(0, b + k)));
++        }
++
++        short8 ap = (short8) (
++            q8_xmx_weight(src0_q, src0_d, batch_a, row + 0, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row + 1, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row + 2, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row + 3, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row + 4, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row + 5, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row + 6, k + lane, ne00, ne01),
++            q8_xmx_weight(src0_q, src0_d, batch_a, row + 7, k + lane, ne00, ne01));
++
++        acc = intel_sub_group_f16_f16_matrix_mad_k16(ap, bp, acc);
++    }
++
++    if (col < ne11) {
++        const int out = batch * batch_stride_d + col * stride_d + row;
++        if (row + 0 < ne01) dst[out + 0] = acc.s0;
++        if (row + 1 < ne01) dst[out + 1] = acc.s1;
++        if (row + 2 < ne01) dst[out + 2] = acc.s2;
++        if (row + 3 < ne01) dst[out + 3] = acc.s3;
++        if (row + 4 < ne01) dst[out + 4] = acc.s4;
++        if (row + 5 < ne01) dst[out + 5] = acc.s5;
++        if (row + 6 < ne01) dst[out + 6] = acc.s6;
++        if (row + 7 < ne01) dst[out + 7] = acc.s7;
++    }
++}
++#endif

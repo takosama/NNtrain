@@ -1,0 +1,41 @@
+ggml_opencl: selected platform: 'Intel(R) OpenCL Graphics'
+
+ggml_opencl: device: 'Intel(R) Arc(TM) B580 Graphics (OpenCL 3.0 NEO )'
+ggml_opencl: OpenCL driver: 32.0.101.9030
+ggml_opencl: vector subgroup broadcast support: false
+ggml_opencl: device FP16 support: true
+ggml_opencl: Q8_0 XMX F16 experiment: disabled
+ggml_opencl: mem base addr align: 128
+ggml_opencl: max mem alloc size: 11875 MB
+ggml_opencl: device max image buffer size (pixels): 778281728
+ggml_opencl: device max workgroup size: 1024
+ggml_opencl: SVM coarse grain buffer support: true
+ggml_opencl: SVM fine grain buffer support: false
+ggml_opencl: SVM fine grain system support: false
+ggml_opencl: SVM atomics support: false
+ggml_opencl: flattening quantized weights representation as struct of arrays (GGML_OPENCL_SOA_Q)
+ggml_opencl: loading OpenCL kernels.........................................................................................
+ggml_opencl: program cache: 0 hits, 117 misses, 117 entries
+
+ggml_opencl: device: 'Intel(R) Arc(TM) B580 Graphics (OpenCL 3.0 NEO )'
+ggml_opencl: OpenCL driver: 32.0.101.9030
+ggml_opencl: vector subgroup broadcast support: false
+ggml_opencl: device FP16 support: true
+ggml_opencl: Q8_0 XMX F16 experiment: disabled
+ggml_opencl: mem base addr align: 128
+ggml_opencl: max mem alloc size: 11875 MB
+ggml_opencl: device max image buffer size (pixels): 778281728
+ggml_opencl: device max workgroup size: 1024
+ggml_opencl: SVM coarse grain buffer support: true
+ggml_opencl: SVM fine grain buffer support: false
+ggml_opencl: SVM fine grain system support: false
+ggml_opencl: SVM atomics support: false
+ggml_opencl: flattening quantized weights representation as struct of arrays (GGML_OPENCL_SOA_Q)
+ggml_opencl: loading OpenCL kernels.........................................................................................
+ggml_opencl: program cache: 117 hits, 117 misses, 117 entries
+ggml_opencl: program cache: released 117 entries after device initialization
+ggml_opencl: default device: 'Intel(R) Arc(TM) B580 Graphics (OpenCL 3.0 NEO )'
+{"build_commit": "3f7c29d", "build_number": 1, "cpu_info": "AMD Ryzen 7 5700X 8-Core Processor             ", "gpu_info": "Intel(R) Arc(TM) B580 Graphics, Intel(R) Arc(TM) B580 Graphics", "backends": "OpenCL", "model_filename": "models\\huggingface\\ggml-org\\gemma-3-27b-it-GGUF\\gemma-3-27b-it-Q8_0.gguf", "model_type": "gemma3 27B Q8_0", "model_size": 28701043712, "model_n_params": 27009002240, "n_batch": 2048, "n_ubatch": 512, "n_threads": 8, "cpu_mask": "0x0", "cpu_strict": false, "poll": 50, "type_k": "f16", "type_v": "f16", "n_gpu_layers": 40, "n_cpu_moe": 0, "split_mode": "layer", "main_gpu": 0, "no_kv_offload": false, "flash_attn": false, "devices": "auto", "tensor_split": "53.00/47.00", "tensor_buft_overrides": "none", "use_mmap": true, "use_direct_io": false, "embeddings": false, "no_op_offload": 0, "no_host": false, "fit_target": 0, "fit_min_ctx": 0, "n_prompt": 32, "n_gen": 0, "n_depth": 0, "test_time": "2026-10-12T10:00:45Z", "avg_ns": 2325047450, "stddev_ns": 200241256, "avg_ts": 13.814392, "stddev_ts": 1.189744, "samples_ns": [ 2183455500, 2466639400 ],"samples_ts": [ 14.6557, 12.9731 ]}
+{"build_commit": "3f7c29d", "build_number": 1, "cpu_info": "AMD Ryzen 7 5700X 8-Core Processor             ", "gpu_info": "Intel(R) Arc(TM) B580 Graphics, Intel(R) Arc(TM) B580 Graphics", "backends": "OpenCL", "model_filename": "models\\huggingface\\ggml-org\\gemma-3-27b-it-GGUF\\gemma-3-27b-it-Q8_0.gguf", "model_type": "gemma3 27B Q8_0", "model_size": 28701043712, "model_n_params": 27009002240, "n_batch": 2048, "n_ubatch": 512, "n_threads": 8, "cpu_mask": "0x0", "cpu_strict": false, "poll": 50, "type_k": "f16", "type_v": "f16", "n_gpu_layers": 40, "n_cpu_moe": 0, "split_mode": "layer", "main_gpu": 0, "no_kv_offload": false, "flash_attn": false, "devices": "auto", "tensor_split": "53.00/47.00", "tensor_buft_overrides": "none", "use_mmap": true, "use_direct_io": false, "embeddings": false, "no_op_offload": 0, "no_host": false, "fit_target": 0, "fit_min_ctx": 0, "n_prompt": 0, "n_gen": 32, "n_depth": 0, "test_time": "2026-10-12T10:00:52Z", "avg_ns": 12663852800, "stddev_ns": 14593411, "avg_ts": 2.526879, "stddev_ts": 0.002912, "samples_ns": [ 12674171900, 12653533700 ],"samples_ts": [ 2.52482, 2.52894 ]}
+{"build_commit": "3f7c29d", "build_number": 1, "cpu_info": "AMD Ryzen 7 5700X 8-Core Processor             ", "gpu_info": "Intel(R) Arc(TM) B580 Graphics, Intel(R) Arc(TM) B580 Graphics", "backends": "OpenCL", "model_filename": "models\\huggingface\\ggml-org\\gemma-3-27b-it-GGUF\\gemma-3-27b-it-Q8_0.gguf", "model_type": "gemma3 27B Q8_0", "model_size": 28701043712, "model_n_params": 27009002240, "n_batch": 2048, "n_ubatch": 512, "n_threads": 8, "cpu_mask": "0x0", "cpu_strict": false, "poll": 50, "type_k": "f16", "type_v": "f16", "n_gpu_layers": 43, "n_cpu_moe": 0, "split_mode": "layer", "main_gpu": 0, "no_kv_offload": false, "flash_attn": false, "devices": "auto", "tensor_split": "53.00/47.00", "tensor_buft_overrides": "none", "use_mmap": true, "use_direct_io": false, "embeddings": false, "no_op_offload": 0, "no_host": false, "fit_target": 0, "fit_min_ctx": 0, "n_prompt": 32, "n_gen": 0, "n_depth": 0, "test_time": "2026-10-12T10:01:32Z", "avg_ns": 2215901850, "stddev_ns": 162162848, "avg_ts": 14.479846, "stddev_ts": 1.059656, "samples_ns": [ 2330568300, 2101235400 ],"samples_ts": [ 13.7306, 15.2291 ]}
+{"build_commit": "3f7c29d", "build_number": 1, "cpu_info": "AMD Ryzen 7 5700X 8-Core Processor             ", "gpu_info": "Intel(R) Arc(TM) B580 Graphics, Intel(R) Arc(TM) B580 Graphics", "backends": "OpenCL", "model_filename": "models\\huggingface\\ggml-org\\gemma-3-27b-it-GGUF\\gemma-3-27b-it-Q8_0.gguf", "model_type": "gemma3 27B Q8_0", "model_size": 28701043712, "model_n_params": 27009002240, "n_batch": 2048, "n_ubatch": 512, "n_threads": 8, "cpu_mask": "0x0", "cpu_strict": false, "poll": 50, "type_k": "f16", "type_v": "f16", "n_gpu_layers": 43, "n_cpu_moe": 0, "split_mode": "layer", "main_gpu": 0, "no_kv_offload": false, "flash_attn": false, "devices": "auto", "tensor_split": "53.00/47.00", "tensor_buft_overrides": "none", "use_mmap": true, "use_direct_io": false, "embeddings": false, "no_op_offload": 0, "no_host": false, "fit_target": 0, "fit_min_ctx": 0, "n_prompt": 0, "n_gen": 32, "n_depth": 0, "test_time": "2026-10-12T10:01:39Z", "avg_ns": 11428152350, "stddev_ns": 45368890, "avg_ts": 2.800125, "stddev_ts": 0.011116, "samples_ns": [ 11396071700, 11460233000 ],"samples_ts": [ 2.80799, 2.79226 ]}

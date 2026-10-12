@@ -1,0 +1,98 @@
+diff --git a/ggml/src/ggml-opencl/CMakeLists.txt b/ggml/src/ggml-opencl/CMakeLists.txt
+index 112c2af..e893601 100644
+--- a/ggml/src/ggml-opencl/CMakeLists.txt
++++ b/ggml/src/ggml-opencl/CMakeLists.txt
+@@ -9,6 +9,10 @@ ggml_add_backend_library(${TARGET_NAME}
+ target_link_libraries(${TARGET_NAME} PRIVATE ${OpenCL_LIBRARIES})
+ target_include_directories(${TARGET_NAME} PRIVATE ${OpenCL_INCLUDE_DIRS})
+ 
++if (WIN32)
++    target_link_libraries(${TARGET_NAME} PRIVATE dxgi)
++endif ()
++
+ if (GGML_OPENCL_PROFILING)
+     message(STATUS "OpenCL profiling enabled (increases CPU overhead)")
+     add_compile_definitions(GGML_OPENCL_PROFILING)
+diff --git a/ggml/src/ggml-opencl/ggml-opencl.cpp b/ggml/src/ggml-opencl/ggml-opencl.cpp
+index a581402..ff73eb7 100644
+--- a/ggml/src/ggml-opencl/ggml-opencl.cpp
++++ b/ggml/src/ggml-opencl/ggml-opencl.cpp
+@@ -14,6 +14,14 @@
+ #include "ggml.h"
+ 
+ #include <CL/cl.h>
++#include <CL/cl_ext.h>
++
++#ifdef _WIN32
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#include <dxgi1_4.h>
++#endif
+ 
+ #include <inttypes.h>
+ #include <string.h>
+@@ -6122,11 +6130,62 @@ static const char * ggml_backend_opencl_device_get_description(ggml_backend_dev_
+ }
+ 
+ static void ggml_backend_opencl_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
+-    // no memory to report
+     *free  = 0;
+     *total = 0;
+ 
++#ifdef _WIN32
++    // OpenCL reports physical capacity but has no portable free-memory query.
++    // On Windows, the OpenCL LUID identifies the matching DXGI adapter, whose
++    // local-memory budget accounts for this process and competing GPU users.
++    auto * dev_ctx = static_cast<ggml_backend_opencl_device_context *>(dev->context);
++    cl_ulong global_mem = 0;
++    if (clGetDeviceInfo(dev_ctx->device, CL_DEVICE_GLOBAL_MEM_SIZE,
++                        sizeof(global_mem), &global_mem, nullptr) != CL_SUCCESS || global_mem == 0) {
++        return;
++    }
++
++    cl_bool luid_valid = CL_FALSE;
++    if (clGetDeviceInfo(dev_ctx->device, CL_DEVICE_LUID_VALID_KHR,
++                        sizeof(luid_valid), &luid_valid, nullptr) != CL_SUCCESS || luid_valid != CL_TRUE) {
++        return;
++    }
++
++    static_assert(sizeof(LUID) == CL_LUID_SIZE_KHR, "OpenCL and DXGI LUID sizes differ");
++    LUID luid = {};
++    if (clGetDeviceInfo(dev_ctx->device, CL_DEVICE_LUID_KHR,
++                        sizeof(luid), &luid, nullptr) != CL_SUCCESS) {
++        return;
++    }
++
++    IDXGIFactory4 * factory = nullptr;
++    if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory4), reinterpret_cast<void **>(&factory)))) {
++        return;
++    }
++
++    IDXGIAdapter3 * adapter = nullptr;
++    const HRESULT adapter_result = factory->EnumAdapterByLuid(
++        luid, __uuidof(IDXGIAdapter3), reinterpret_cast<void **>(&adapter));
++    factory->Release();
++    if (FAILED(adapter_result)) {
++        return;
++    }
++
++    DXGI_QUERY_VIDEO_MEMORY_INFO info = {};
++    const HRESULT memory_result = adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info);
++    adapter->Release();
++    if (FAILED(memory_result)) {
++        return;
++    }
++
++    const uint64_t budget_free = info.Budget > info.CurrentUsage ? info.Budget - info.CurrentUsage : 0;
++    const uint64_t usable_free = MIN(budget_free, static_cast<uint64_t>(global_mem));
++    *total = static_cast<size_t>(global_mem);
++    // The model's default split divides by the sum of free bytes; retain a
++    // nonzero weight even when a device's available budget is exhausted.
++    *free = static_cast<size_t>(MAX(usable_free, uint64_t{1}));
++#else
+     GGML_UNUSED(dev);
++#endif
+ }
+ 
+ static enum ggml_backend_dev_type ggml_backend_opencl_device_get_type(ggml_backend_dev_t dev) {

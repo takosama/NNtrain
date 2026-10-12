@@ -1,0 +1,67 @@
+ggml_opencl: selected platform: 'Intel(R) OpenCL Graphics'
+
+ggml_opencl: device: 'Intel(R) Arc(TM) B580 Graphics (OpenCL 3.0 NEO )'
+ggml_opencl: OpenCL driver: 32.0.101.9030
+ggml_opencl: vector subgroup broadcast support: false
+ggml_opencl: device FP16 support: true
+ggml_opencl: Q8_0 XMX F16 experiment: enabled
+ggml_opencl: Q8_0 XMX F16 M16xN32 tile: enabled
+ggml_opencl: mem base addr align: 128
+ggml_opencl: max mem alloc size: 11875 MB
+ggml_opencl: device max image buffer size (pixels): 778281728
+ggml_opencl: device max workgroup size: 1024
+ggml_opencl: SVM coarse grain buffer support: true
+ggml_opencl: SVM fine grain buffer support: false
+ggml_opencl: SVM fine grain system support: false
+ggml_opencl: SVM atomics support: false
+ggml_opencl: flattening quantized weights representation as struct of arrays (GGML_OPENCL_SOA_Q)
+ggml_opencl: loading OpenCL kernels.........................................................................................
+ggml_opencl: program cache: 0 hits, 117 misses, 117 entries
+
+ggml_opencl: device: 'Intel(R) Arc(TM) B580 Graphics (OpenCL 3.0 NEO )'
+ggml_opencl: OpenCL driver: 32.0.101.9030
+ggml_opencl: vector subgroup broadcast support: false
+ggml_opencl: device FP16 support: true
+ggml_opencl: Q8_0 XMX F16 experiment: enabled
+ggml_opencl: Q8_0 XMX F16 M16xN32 tile: enabled
+ggml_opencl: mem base addr align: 128
+ggml_opencl: max mem alloc size: 11875 MB
+ggml_opencl: device max image buffer size (pixels): 778281728
+ggml_opencl: device max workgroup size: 1024
+ggml_opencl: SVM coarse grain buffer support: true
+ggml_opencl: SVM fine grain buffer support: false
+ggml_opencl: SVM fine grain system support: false
+ggml_opencl: SVM atomics support: false
+ggml_opencl: flattening quantized weights representation as struct of arrays (GGML_OPENCL_SOA_Q)
+ggml_opencl: loading OpenCL kernels.........................................................................................
+ggml_opencl: program cache: 117 hits, 117 misses, 117 entries
+ggml_opencl: program cache: released 117 entries after device initialization
+ggml_opencl: default device: 'Intel(R) Arc(TM) B580 Graphics (OpenCL 3.0 NEO )'
+Testing 3 devices
+
+Backend 1/3: GPUOpenCL
+  Device description: Intel(R) Arc(TM) B580 Graphics
+  Device memory: 11875 MB (11348 MB free)
+
+  MUL_MAT(type_a=q8_0,type_b=f32,m=97,n=33,k=256,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1): [1;32mOK[0m
+  MUL_MAT(type_a=q8_0,type_b=f32,m=512,n=64,k=512,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1): [1;32mOK[0m
+  MUL_MAT(type_a=q8_0,type_b=f32,m=5376,n=32,k=5376,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1): [1;32mOK[0m
+  MUL_MAT(type_a=q8_0,type_b=f32,m=21504,n=32,k=5376,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1): [1;32mOK[0m
+  MUL_MAT(type_a=q8_0,type_b=f32,m=5376,n=33,k=21504,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1): [1;32mOK[0m
+  5/5 tests passed
+  Backend OpenCL: [1;32mOK[0m
+Backend 2/3: GPUOpenCL
+  Device description: Intel(R) Arc(TM) B580 Graphics
+  Device memory: 11875 MB (11275 MB free)
+
+  MUL_MAT(type_a=q8_0,type_b=f32,m=97,n=33,k=256,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1): [1;32mOK[0m
+  MUL_MAT(type_a=q8_0,type_b=f32,m=512,n=64,k=512,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1): [1;32mOK[0m
+  MUL_MAT(type_a=q8_0,type_b=f32,m=5376,n=32,k=5376,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1): [1;32mOK[0m
+  MUL_MAT(type_a=q8_0,type_b=f32,m=21504,n=32,k=5376,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1): [1;32mOK[0m
+  MUL_MAT(type_a=q8_0,type_b=f32,m=5376,n=33,k=21504,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1): [1;32mOK[0m
+  5/5 tests passed
+  Backend OpenCL: [1;32mOK[0m
+Backend 3/3: CPU
+  Skipping
+3/3 backends passed
+[1;32mOK[0m
