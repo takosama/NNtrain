@@ -14,8 +14,8 @@ namespace NNtrain.Gui.Tests;
 // Explicit opt-in, file-only integration check. Never shows/loads the window or opens a microphone.
 internal static class RealAudioGuiChecks
 {
-    private static object? Get(MainWindow w, string n) => typeof(MainWindow).GetField(n, BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(w);
-    private static void Set(MainWindow w, string n, object? v) => typeof(MainWindow).GetField(n, BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(w, v);
+    private static object? Get(MainWindow w, string n) => GuiWindowTestAccess.Get(w, n);
+    private static void Set(MainWindow w, string n, object? v) => GuiWindowTestAccess.Set(w, n, v);
     private static object? Call(MainWindow w, string n, params object[] args) => typeof(MainWindow).GetMethod(n, BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(w, args);
     public static void Run()
     {

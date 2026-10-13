@@ -2,7 +2,7 @@ using NNtrain.Training.Execution;
 
 namespace NNtrain;
 
-internal static partial class Program
+internal static partial class ClassificationTrainingCommand
 {
     /// <summary>
     /// Treats one gradient-accumulation update as one transaction. AcquireBatch
@@ -130,7 +130,7 @@ internal static partial class Program
                     samples.target,
                     label_smoothing: _labelSmoothing);
                 using CudaClassificationCorrectCountReadback?
-                    correctCountReadback = BeginCountCorrect(
+                    correctCountReadback = ClassificationMetrics.BeginCountCorrect(
                         logits,
                         samples.target,
                         _classCount);
@@ -141,7 +141,7 @@ internal static partial class Program
                     gradientWeight);
                 _pendingLoss += microBatchLoss * samplesInMicroBatch;
                 _pendingSamples += samplesInMicroBatch;
-                _pendingCorrect += CompleteCountCorrect(
+                _pendingCorrect += ClassificationMetrics.CompleteCountCorrect(
                     logits,
                     samples.target,
                     _classCount,

@@ -693,7 +693,8 @@ def main(argv=None):
                                               if key in ("NNtrain.Arc.dll", "NNtrain.Core.dll")
                                               or key.endswith(("qwen35_iq2_tiles.cl", "qwen35_prefill_xmx.cl", "qwen35_attention.cl",
                                                                "ArcExecutionLane.Iq2.cs", "Qwen35ExecutionOptions.cs",
-                                                               "Qwen35QuantizedModel.cs", "Qwen35QuantizedModel.Prefill.cs"))}}
+                                                               "Qwen35LogitSampler.cs"))
+                                              or Path(key).name.startswith(("Qwen35QuantizedModel", "ArcExecutionLane"))}}
     output = args.output.resolve()
     for target in (output / "summary.json", output / "report.ja.md"):
         require(target not in paths and target != (args.model_results.resolve() if args.model_results else None),

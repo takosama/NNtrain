@@ -14,8 +14,8 @@ namespace NNtrain.Gui.Tests;
 // The window is never shown and no microphone/server is constructed.
 internal static class RealtimeAudioGuiChecks
 {
-    private static object? Get(MainWindow w, string n) => typeof(MainWindow).GetField(n, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(w);
-    private static void Set(MainWindow w, string n, object? value) => typeof(MainWindow).GetField(n, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(w, value);
+    private static object? Get(MainWindow w, string n) => GuiWindowTestAccess.Get(w, n);
+    private static void Set(MainWindow w, string n, object? value) => GuiWindowTestAccess.Set(w, n, value);
     private static object? Call(MainWindow w, string n, params object[] args) => typeof(MainWindow).GetMethod(n, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(w, args);
 
     public static void Run()

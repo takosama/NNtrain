@@ -100,7 +100,7 @@ public static class AsrLoadingGuiChecks
         if (!allowTimeout) Assert.True(completed(), "ASR GUI operation did not reach its expected state.");
     }
     private static object? Field(MainWindow window, string name)
-        => typeof(MainWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window);
+        => GuiWindowTestAccess.Get(window, name);
     private static void Invoke(MainWindow window, string name, params object[] args)
         => typeof(MainWindow).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, args);
 }
