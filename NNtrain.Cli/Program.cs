@@ -1,8 +1,5 @@
 using System.Diagnostics;
-using System.Globalization;
-using System.Text;
 using System.Text.Json;
-using NNtrain.Gemma;
 using NNtrain.Runtime.Execution;
 using NNtrain.Training.Execution;
 using NNtrain.Training.Optimization;
@@ -39,7 +36,7 @@ internal static partial class Program
         if (args.Length > 0 && string.Equals(args[0], "qwen-gguf", StringComparison.OrdinalIgnoreCase))
             return QwenGgufCommand.Run(args, output, error);
         if (args.Length > 0 && string.Equals(args[0], "gemma-gguf", StringComparison.OrdinalIgnoreCase))
-            return RunGemmaGguf(args, output, error);
+            return GemmaGgufCommand.Run(args, output, error);
         if (args.Length > 0 && string.Equals(args[0], "qwen-lora", StringComparison.OrdinalIgnoreCase))
             return QwenLoraCommand.Run(args, output, error);
         if (args.Length > 0 && string.Equals(args[0], "qwen-lora-prepare", StringComparison.OrdinalIgnoreCase))
@@ -837,115 +834,16 @@ internal static partial class Program
     internal static OptimizerBundle CreateOptimizerBundle(
         TransformerClassifier model,
         TrainingConfiguration configuration)
-    {
-        ArgumentNullException.ThrowIfNull(model);
-        ArgumentNullException.ThrowIfNull(configuration);
-
-        if (configuration.IsOptimizer(
-            TrainingConfiguration.GainShareAdamWOptimizer))
-        {
-            IOptimizer optimizer = optim.GainShareAdamW(
-                model.make_gainshare_parameter_groups(
-                    configuration.GainShareBlockDepth),
-                lr: configuration.LearningRate,
-                beta1: configuration.GainShareBeta1,
-                beta2: configuration.GainShareBeta2,
-                eps: configuration.GainShareEpsilon,
-                rho: configuration.GainShareRho,
-                gamma: configuration.GainShareGamma,
-                min_scale: configuration.GainShareMinScale,
-                max_scale: configuration.GainShareMaxScale,
-                weight_decay: configuration.WeightDecay);
-            return OptimizerBundle.Wrap(optimizer, ["all"]);
-        }
-
-        if (configuration.IsOptimizer(TrainingConfiguration.MuonOptimizer))
-        {
-            var muon = (NekoMuon)optim.Muon(
-                model.HiddenWeightParameters,
-                lr: configuration.LearningRate,
-                momentum: 0.95f,
-                weight_decay: configuration.WeightDecay);
-            IOptimizer auxiliaryAdamW = optim.AdamW(
-                model.AuxiliaryParameters,
-                lr: configuration.AuxiliaryLearningRate,
-                beta1: 0.9f,
-                beta2: 0.95f,
-                eps: 1e-8f,
-                weight_decay: configuration.WeightDecay);
-            return new OptimizerBundle(
-            [
-                new OptimizerGroup("hidden", muon),
-                new OptimizerGroup("auxiliary", auxiliaryAdamW),
-            ]);
-        }
-
-        if (configuration.IsOptimizer(
-            TrainingConfiguration.NekoMuonOptimizer))
-        {
-            IOptimizer nekoMuon = optim.NekoMuon(
-                model.HiddenWeightParameters,
-                lr: configuration.LearningRate,
-                weight_decay: configuration.WeightDecay);
-            IOptimizer auxiliaryAdamW = optim.AdamW(
-                model.AuxiliaryParameters,
-                lr: configuration.AuxiliaryLearningRate,
-                beta1: 0.9f,
-                beta2: 0.95f,
-                eps: 1e-8f,
-                weight_decay: configuration.WeightDecay);
-            return new OptimizerBundle(
-            [
-                new OptimizerGroup("hidden", nekoMuon),
-                new OptimizerGroup("auxiliary", auxiliaryAdamW),
-            ]);
-        }
-
-        if (configuration.IsOptimizer(TrainingConfiguration.LionOptimizer))
-        {
-            IOptimizer optimizer = optim.Lion(
-                model.parameters(),
-                lr: configuration.LearningRate,
-                weight_decay: configuration.WeightDecay);
-            return OptimizerBundle.Wrap(optimizer, ["all"]);
-        }
-
-        IOptimizer adamW = optim.AdamW(
-            model.parameters(),
-            lr: configuration.LearningRate,
-            weight_decay: configuration.WeightDecay);
-        return OptimizerBundle.Wrap(adamW, ["all"]);
-    }
+        => ClassificationOptimizerFactory.CreateBundle(model, configuration);
 
     internal static void ApplyClassificationMuonPolicyAfterResume(
         TrainingConfiguration configuration,
         IOptimizer optimizer,
         TextWriter output)
-    {
-        ArgumentNullException.ThrowIfNull(configuration);
-        ArgumentNullException.ThrowIfNull(optimizer);
-        ArgumentNullException.ThrowIfNull(output);
-        if (!configuration.IsOptimizer(TrainingConfiguration.MuonOptimizer))
-            return;
-
-        int applied = 0;
-        foreach (NekoMuon muon in OptimizerBundle
-            .GetCheckpointLeafOptimizers(optimizer)
-            .OfType<NekoMuon>())
-        {
-            muon.SetOrdinaryMuonPolicy();
-            applied++;
-        }
-        if (applied == 0)
-        {
-            throw new InvalidDataException(
-                "Muon was configured, but the restored optimizer has no " +
-                "compatible matrix-optimizer state.");
-        }
-        output.WriteLine(
-            "resume Muon policy = momentum 0.95, Nesterov, " +
-            "fixed NS5 every step (runtime override)");
-    }
+        => ClassificationOptimizerFactory.ApplyMuonPolicyAfterResume(
+            configuration,
+            optimizer,
+            output);
 
     private static void SaveModelCheckpoint(
         string path,
@@ -1027,176 +925,6 @@ internal static partial class Program
             ? fileName[..^defaultSuffix.Length]
             : Path.GetFileNameWithoutExtension(fileName);
         return Path.Combine(directory, $"{stem}.best-model.json");
-    }
-
-    private static int RunGemmaGguf(string[] args, TextWriter output, TextWriter error)
-    {
-        const string usage = "Usage: NNtrain.Cli gemma-gguf --model <gemma3-Q8_0.gguf> " +
-            "--prompt <text> [--max-new-tokens 128] [--context 4096] " +
-            "[--threads N] [--backend cpu|opencl] [--gpu-layers N] [--opencl-all-devices] [--tensor-split 53,47] " +
-            "[--temperature 0] [--top-p 1] " +
-            "[--top-k 1] [--no-stream]";
-        try
-        {
-            string? modelPath = null;
-            string? prompt = null;
-            int maxNewTokens = 128;
-            int contextSize = 4096;
-            int? threads = null;
-            int gpuLayers = 0;
-            Gemma3Backend? backend = null;
-            int topK = 1;
-            float temperature = 0f;
-            float topP = 1f;
-            bool stream = true;
-            bool allOpenClDevices = false;
-            float[]? tensorSplits = null;
-
-            for (int i = 1; i < args.Length; i++)
-            {
-                string option = args[i];
-                if (option is "--help" or "-h")
-                {
-                    output.WriteLine(usage);
-                    return 0;
-                }
-                if (option == "--no-stream")
-                {
-                    stream = false;
-                    continue;
-                }
-                if (option == "--opencl-all-devices")
-                {
-                    allOpenClDevices = true;
-                    continue;
-                }
-                if (i + 1 >= args.Length)
-                    throw new ArgumentException($"Missing value for {option}.");
-                string value = args[++i];
-                switch (option)
-                {
-                    case "--model": modelPath = Path.GetFullPath(value); break;
-                    case "--prompt": prompt = value; break;
-                    case "--max-new-tokens": maxNewTokens = ParseGemmaInteger(value, option, allowZero: true); break;
-                    case "--context": contextSize = ParseGemmaInteger(value, option); break;
-                    case "--threads": threads = ParseGemmaInteger(value, option); break;
-                    case "--gpu-layers": gpuLayers = ParseGemmaInteger(value, option, allowZero: true); break;
-                    case "--tensor-split":
-                        tensorSplits = value.Split(',').Select(part =>
-                        {
-                            if (!float.TryParse(part, NumberStyles.Float, CultureInfo.InvariantCulture, out float split)
-                                || !float.IsFinite(split) || split <= 0)
-                                throw new ArgumentException("--tensor-split requires comma-separated positive finite values.");
-                            return split;
-                        }).ToArray();
-                        break;
-                    case "--backend":
-                        backend = value.ToLowerInvariant() switch
-                        {
-                            "cpu" => Gemma3Backend.Cpu,
-                            "opencl" => Gemma3Backend.OpenCl,
-                            _ => throw new ArgumentException("--backend must be cpu or opencl.")
-                        };
-                        break;
-                    case "--top-k": topK = ParseGemmaInteger(value, option); break;
-                    case "--temperature": temperature = ParseGemmaFloat(value, option, minExclusive: false); break;
-                    case "--top-p": topP = ParseGemmaFloat(value, option, minExclusive: true); break;
-                    default: throw new ArgumentException($"Unknown gemma-gguf option: {option}");
-                }
-            }
-            if (modelPath is null || string.IsNullOrWhiteSpace(prompt))
-                throw new ArgumentException(usage);
-            if (topP > 1f)
-                throw new ArgumentException("--top-p must be at most 1.");
-            // An explicit GPU layer count uses OpenCL unless the caller requests CPU.
-            Gemma3Backend selectedBackend = backend ??
-                (gpuLayers > 0 ? Gemma3Backend.OpenCl : Gemma3Backend.Cpu);
-            if (selectedBackend == Gemma3Backend.Cpu && gpuLayers > 0)
-                throw new ArgumentException("--backend cpu requires --gpu-layers 0.");
-            if (selectedBackend == Gemma3Backend.OpenCl && gpuLayers == 0)
-                throw new ArgumentException("--backend opencl requires --gpu-layers N where N is positive.");
-            if (allOpenClDevices && selectedBackend != Gemma3Backend.OpenCl)
-                throw new ArgumentException("--opencl-all-devices requires the OpenCL backend.");
-            if (tensorSplits is not null && (!allOpenClDevices || tensorSplits.Length < 2))
-                throw new ArgumentException("--tensor-split requires --opencl-all-devices and at least two values.");
-
-            var loadTimer = Stopwatch.StartNew();
-            using Gemma3LocalModel model = Gemma3LocalModel.Load(
-                modelPath, contextSize, gpuLayers, threads, selectedBackend, allOpenClDevices, tensorSplits);
-            loadTimer.Stop();
-            string formattedPrompt = Gemma3LocalModel.FormatConversation(
-                [new Gemma3ChatTurn("user", prompt)]);
-            output.WriteLine($"Gemma 3 Q8_0 GGUF: {modelPath}");
-            string deviceSelection = selectedBackend == Gemma3Backend.Cpu ? "none"
-                : allOpenClDevices ? "all Intel" : "selected";
-            output.WriteLine($"backend: {(selectedBackend == Gemma3Backend.OpenCl ? "OpenCL" : "CPU")}, GPU layers: {gpuLayers}, OpenCL devices: {deviceSelection}");
-            if (tensorSplits is not null)
-                output.WriteLine($"tensor split: {string.Join(",", tensorSplits.Select(value => value.ToString(CultureInfo.InvariantCulture)))}");
-            if (stream)
-            {
-                output.WriteLine("generated:");
-                output.Flush();
-            }
-            var generationTimer = Stopwatch.StartNew();
-            Gemma3GenerationResult result = model.GenerateAsync(
-                formattedPrompt, maxNewTokens,
-                chunk =>
-                {
-                    if (!stream) return;
-                    output.Write(chunk);
-                    output.Flush();
-                }, CancellationToken.None, temperature, topP, topK)
-                .GetAwaiter().GetResult();
-            generationTimer.Stop();
-            if (stream) output.WriteLine();
-            else
-            {
-                output.WriteLine("generated:");
-                output.WriteLine(result.Text);
-            }
-            output.Flush();
-
-            double? decodeTokensPerSecond = result.CompletionTokens > 1
-                && result.FirstTokenMilliseconds is double first
-                && generationTimer.Elapsed.TotalMilliseconds > first
-                    ? (result.CompletionTokens - 1) * 1000.0 /
-                      (generationTimer.Elapsed.TotalMilliseconds - first)
-                    : null;
-            string firstToken = result.FirstTokenMilliseconds is double firstMs
-                ? firstMs.ToString("F1", CultureInfo.InvariantCulture) + " ms"
-                : "n/a";
-            string decode = decodeTokensPerSecond is double rate
-                ? rate.ToString("F2", CultureInfo.InvariantCulture) + " tok/s"
-                : "n/a";
-            error.WriteLine(FormattableString.Invariant(
-                $"timing: load={loadTimer.Elapsed.TotalSeconds:F3} s, prompt={result.PromptTokens} tokens, prefill/first-token={firstToken}, decode={decode}, generated={result.CompletionTokens}, generation={generationTimer.Elapsed.TotalSeconds:F3} s"));
-            error.Flush();
-            return 0;
-        }
-        catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
-        {
-            error.WriteLine($"Error: {exception.Message}");
-            return exception is ArgumentException ? 1 : 2;
-        }
-    }
-
-    private static int ParseGemmaInteger(string value, string option, bool allowZero = false)
-    {
-        if (!int.TryParse(value.Normalize(NormalizationForm.FormKC),
-                NumberStyles.Integer, CultureInfo.InvariantCulture, out int number)
-            || (allowZero ? number < 0 : number <= 0))
-            throw new ArgumentException($"{option} must be a {(allowZero ? "nonnegative" : "positive")} integer.");
-        return number;
-    }
-
-    private static float ParseGemmaFloat(string value, string option, bool minExclusive)
-    {
-        if (!float.TryParse(value.Normalize(NormalizationForm.FormKC),
-                NumberStyles.Float, CultureInfo.InvariantCulture, out float number)
-            || !float.IsFinite(number)
-            || (minExclusive ? number <= 0f : number < 0f))
-            throw new ArgumentException($"{option} must be a finite {(minExclusive ? "positive" : "nonnegative")} number.");
-        return number;
     }
 
     internal static string FindDefaultConfiguration()
