@@ -2,7 +2,6 @@
 
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.Json;
 
 namespace NNtrain;
@@ -333,65 +332,26 @@ internal static partial class SafeTensorFile
         return entries;
     }
     private static byte[] CreateHeader(ModuleState state)
-    {
-        using var buffer = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(buffer))
-        {
-            writer.WriteStartObject();
-            writer.WritePropertyName("__metadata__");
-            writer.WriteStartObject();
-            writer.WriteString(
-                "format",
-                state.Parameters.Any(
-                    parameter => parameter.DType != TensorDType.Float32)
-                    ? MixedFormatMetadata
-                    : Float32FormatMetadata);
-            writer.WriteString(
-                "module_state_format_version",
-                state.FormatVersion.ToString(
-                    System.Globalization.CultureInfo.InvariantCulture));
-            writer.WriteEndObject();
-
-            long offset = 0;
-            foreach (ModuleParameterState parameter in
-                state.Parameters.OrderBy(parameter => parameter.Index))
+        => CreateHeader(
+            state.FormatVersion,
+            state.Parameters.Any(
+                parameter => parameter.DType != TensorDType.Float32),
+            writer =>
             {
-                writer.WritePropertyName(
-                    $"{parameter.Index:D8}:{parameter.Name}");
-                writer.WriteStartObject();
-                writer.WriteString("dtype", parameter.DType switch
+                long offset = 0;
+                foreach (ModuleParameterState parameter in
+                    state.Parameters.OrderBy(parameter => parameter.Index))
                 {
-                    TensorDType.Float16 => "F16",
-                    TensorDType.BFloat16 => "BF16",
-                    _ => "F32",
-                });
-                writer.WritePropertyName("shape");
-                writer.WriteStartArray();
-                foreach (int dimension in parameter.Shape)
-                    writer.WriteNumberValue(dimension);
-                writer.WriteEndArray();
-                long end = checked(
-                    offset
-                    + (long)parameter.Values.Length
-                        * GetElementSize(parameter.DType));
-                writer.WritePropertyName("data_offsets");
-                writer.WriteStartArray();
-                writer.WriteNumberValue(offset);
-                writer.WriteNumberValue(end);
-                writer.WriteEndArray();
-                writer.WriteEndObject();
-                offset = end;
-            }
-            writer.WriteEndObject();
-        }
-
-        byte[] json = buffer.ToArray();
-        int paddedLength = checked((json.Length + 7) & ~7);
-        var header = new byte[paddedLength];
-        json.CopyTo(header, 0);
-        header.AsSpan(json.Length).Fill((byte)' ');
-        return header;
-    }
+                    offset = WriteParameterHeader(
+                        writer,
+                        parameter.Index,
+                        parameter.Name,
+                        parameter.Shape,
+                        parameter.Values.Length,
+                        SafeTensorDTypeCodecs.Get(parameter.DType),
+                        offset);
+                }
+            });
 
     private static JsonDocument ParseHeader(byte[] header)
     {
@@ -477,36 +437,11 @@ internal static partial class SafeTensorFile
     private static InvalidDataException InvalidOffsets(string name)
         => new($"SafeTensors parameter '{name}' has invalid data offsets.");
 
-    private static int GetElementSize(TensorDType dtype)
-        => dtype switch
-        {
-            TensorDType.Float32 => Float32Size,
-            TensorDType.Float16 => Float16Size,
-            TensorDType.BFloat16 => Float16Size,
-            _ => throw new ArgumentOutOfRangeException(
-                nameof(dtype),
-                dtype,
-                "SafeTensors supports only Float32, Float16, and BFloat16 states."),
-        };
-
     private static void WriteValues(
         Stream stream,
-        float[] values,
+        ReadOnlySpan<float> values,
         TensorDType dtype)
-    {
-        if (dtype == TensorDType.Float16)
-        {
-            WriteFloat16Values(stream, values);
-            return;
-        }
-        if (dtype == TensorDType.BFloat16)
-        {
-            WriteBFloat16Values(stream, values);
-            return;
-        }
-
-        WriteFloat32Values(stream, values);
-    }
+        => SafeTensorDTypeCodecs.Get(dtype).Write(stream, values);
 
     private static void ReadValues(
         Stream stream,
@@ -527,21 +462,6 @@ internal static partial class SafeTensorFile
         ReadFloat32Values(stream, values);
     }
 
-    private static void WriteFloat32Values(Stream stream, float[] values)
-    {
-        if (BitConverter.IsLittleEndian)
-        {
-            stream.Write(MemoryMarshal.AsBytes(values.AsSpan()));
-            return;
-        }
-        Span<byte> bytes = stackalloc byte[Float32Size];
-        foreach (float value in values)
-        {
-            BinaryPrimitives.WriteSingleLittleEndian(bytes, value);
-            stream.Write(bytes);
-        }
-    }
-
     private static void ReadFloat32Values(Stream stream, float[] values)
     {
         if (BitConverter.IsLittleEndian)
@@ -554,27 +474,6 @@ internal static partial class SafeTensorFile
         {
             ReadExactly(stream, bytes);
             values[index] = BinaryPrimitives.ReadSingleLittleEndian(bytes);
-        }
-    }
-
-    private static void WriteFloat16Values(Stream stream, float[] values)
-    {
-        const int ValuesPerChunk = 4096;
-        Span<byte> bytes = stackalloc byte[ValuesPerChunk * Float16Size];
-        int offset = 0;
-        while (offset < values.Length)
-        {
-            int count = Math.Min(ValuesPerChunk, values.Length - offset);
-            for (int index = 0; index < count; index++)
-            {
-                ushort bits = BitConverter.HalfToUInt16Bits(
-                    (Half)values[offset + index]);
-                BinaryPrimitives.WriteUInt16LittleEndian(
-                    bytes.Slice(index * Float16Size, Float16Size),
-                    bits);
-            }
-            stream.Write(bytes[..(count * Float16Size)]);
-            offset += count;
         }
     }
 
@@ -595,27 +494,6 @@ internal static partial class SafeTensorFile
                 values[offset + index] =
                     (float)BitConverter.UInt16BitsToHalf(bits);
             }
-            offset += count;
-        }
-    }
-
-    private static void WriteBFloat16Values(Stream stream, float[] values)
-    {
-        const int ValuesPerChunk = 4096;
-        Span<byte> bytes = stackalloc byte[ValuesPerChunk * Float16Size];
-        int offset = 0;
-        while (offset < values.Length)
-        {
-            int count = Math.Min(ValuesPerChunk, values.Length - offset);
-            for (int index = 0; index < count; index++)
-            {
-                ushort bits = TensorStorageCodec.EncodeBFloat16(
-                    values[offset + index]);
-                BinaryPrimitives.WriteUInt16LittleEndian(
-                    bytes.Slice(index * Float16Size, Float16Size),
-                    bits);
-            }
-            stream.Write(bytes[..(count * Float16Size)]);
             offset += count;
         }
     }

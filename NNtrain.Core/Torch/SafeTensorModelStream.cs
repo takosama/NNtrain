@@ -179,7 +179,7 @@ internal static partial class SafeTensorFile
                                 preferMaster: true);
                         stagingChunkObserved?.Invoke(
                             checked(count * sizeof(float)));
-                        WriteStreamedValues(
+                        WriteValues(
                             stream,
                             values,
                             artifactDType);
@@ -649,68 +649,29 @@ internal static partial class SafeTensorFile
     private static byte[] CreateModelHeader(
         IReadOnlyList<Parameter> parameters,
         TensorDType? artifactDTypeOverride)
-    {
-        using var buffer = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(buffer))
-        {
-            writer.WriteStartObject();
-            writer.WritePropertyName("__metadata__");
-            writer.WriteStartObject();
-            writer.WriteString(
-                "format",
-                parameters.Any(parameter =>
-                    (artifactDTypeOverride ?? parameter.T.DType)
-                        != TensorDType.Float32)
-                        ? "nntrain.module_state.mixed.v1"
-                        : "nntrain.module_state.f32.v1");
-            writer.WriteString(
-                "module_state_format_version",
-                ModuleState.CurrentFormatVersion.ToString(
-                    System.Globalization.CultureInfo.InvariantCulture));
-            writer.WriteEndObject();
-
-            long offset = 0;
-            for (int index = 0; index < parameters.Count; index++)
+        => CreateHeader(
+            ModuleState.CurrentFormatVersion,
+            parameters.Any(parameter =>
+                (artifactDTypeOverride ?? parameter.T.DType)
+                    != TensorDType.Float32),
+            writer =>
             {
-                Parameter parameter = parameters[index];
-                Tensor tensor = parameter.T;
-                TensorDType artifactDType =
-                    artifactDTypeOverride ?? tensor.DType;
-                SafeTensorDTypeCodec codec =
-                    SafeTensorDTypeCodecs.Get(artifactDType);
-                writer.WritePropertyName($"{index:D8}:{parameter.Name}");
-                writer.WriteStartObject();
-                writer.WriteString("dtype", codec.DescriptorName);
-                writer.WritePropertyName("shape");
-                writer.WriteStartArray();
-                foreach (int dimension in tensor.Shape)
-                    writer.WriteNumberValue(dimension);
-                writer.WriteEndArray();
-                long end = checked(
-                    offset
-                    + (long)tensor.Numel * codec.EncodedElementSize);
-                writer.WritePropertyName("data_offsets");
-                writer.WriteStartArray();
-                writer.WriteNumberValue(offset);
-                writer.WriteNumberValue(end);
-                writer.WriteEndArray();
-                writer.WriteEndObject();
-                offset = end;
-            }
-            writer.WriteEndObject();
-        }
+                long offset = 0;
+                for (int index = 0; index < parameters.Count; index++)
+                {
+                    Parameter parameter = parameters[index];
+                    Tensor tensor = parameter.T;
+                    TensorDType artifactDType =
+                        artifactDTypeOverride ?? tensor.DType;
+                    offset = WriteParameterHeader(
+                        writer,
+                        index,
+                        parameter.Name,
+                        tensor.Shape,
+                        tensor.Numel,
+                        SafeTensorDTypeCodecs.Get(artifactDType),
+                        offset);
+                }
+            });
 
-        byte[] json = buffer.ToArray();
-        int paddedLength = checked((json.Length + 7) & ~7);
-        var header = new byte[paddedLength];
-        json.CopyTo(header, 0);
-        header.AsSpan(json.Length).Fill((byte)' ');
-        return header;
-    }
-
-    private static void WriteStreamedValues(
-        Stream stream,
-        ReadOnlySpan<float> values,
-        TensorDType dtype)
-        => SafeTensorDTypeCodecs.Get(dtype).Write(stream, values);
 }

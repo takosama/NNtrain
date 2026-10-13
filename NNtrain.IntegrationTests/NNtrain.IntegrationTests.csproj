@@ -23,11 +23,24 @@
   </ItemGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <Compile Include="..\NNtrain.Gui\HuggingFaceModelDownload.cs" Link="Gui\HuggingFaceModelDownload.cs" />
     <Compile Include="..\NNtrain.Gui\ThinkingStreamParser.cs" Link="Gui\ThinkingStreamParser.cs" />
     <Compile Include="..\NNtrain.Gui\ChatImage.cs" Link="Gui\ChatImage.cs" />
     <Compile Include="..\NNtrain.Gui\ChatTurn.cs" Link="Gui\ChatTurn.cs" />
     <Compile Include="..\NNtrain.Gui\MultimodalPrompt.cs" Link="Gui\MultimodalPrompt.cs" />
+    <Compile Include="..\NNtrain.Gui\GuiInferenceContracts.cs" Link="Gui\GuiInferenceContracts.cs" />
+    <Compile Include="..\NNtrain.Gui\LocalInferenceClient.cs" Link="Gui\LocalInferenceClient.cs" />
+    <Compile Include="..\NNtrain.Gui\LocalInferenceServerProcess.cs" Link="Gui\LocalInferenceServerProcess.cs" />
+    <Compile Include="..\NNtrain.Gui\ChatGenerationSession.cs" Link="Gui\ChatGenerationSession.cs" />
+    <Compile Include="..\NNtrain.Gui\GenerationInput.cs" Link="Gui\GenerationInput.cs" />
+    <Compile Include="..\NNtrain.Gui\AudioRecognitionRunner.cs" Link="Gui\AudioRecognitionRunner.cs" />
+    <Compile Include="..\NNtrain.Gui\ChatPromptFormatter.cs" Link="Gui\ChatPromptFormatter.cs" />
+    <Compile Include="..\NNtrain.Gui\LocalApiRequests.cs" Link="Gui\LocalApiRequests.cs" />
+    <Compile Include="..\NNtrain.Gui\LocalApiResponses.cs" Link="Gui\LocalApiResponses.cs" />
+    <Compile Include="..\NNtrain.Gui\LocalApiAccessPolicy.cs" Link="Gui\LocalApiAccessPolicy.cs" />
+    <Compile Include="..\NNtrain.Gui\InferenceSessionOptions.cs" Link="Gui\InferenceSessionOptions.cs" />
+    <Compile Include="..\NNtrain.Gui\InferenceMemoryBudget.cs" Link="Gui\InferenceMemoryBudget.cs" />
   </ItemGroup>
 
 </Project>

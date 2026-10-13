@@ -1,4 +1,4 @@
-﻿namespace NNtrain;
+namespace NNtrain;
 
 public class Mnist : IImageClassificationDataset
 {
@@ -34,21 +34,7 @@ public class Mnist : IImageClassificationDataset
 
     public int ReadSample(int index, Span<float> destination)
     {
-        if ((uint)index >= (uint)Count)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(index),
-                index,
-                $"Sample index must be between 0 and {Count - 1}.");
-        }
-
-        if (destination.Length < ImageSize)
-        {
-            throw new ArgumentException(
-                $"Image destination must contain at least {ImageSize} " +
-                "elements.",
-                nameof(destination));
-        }
+        ImageSampleReadArguments.Validate(index, Count, ImageSize, destination);
 
         int offset = ImageOffset + index * ImageSize;
         for (int i = 0; i < ImageSize; i++)

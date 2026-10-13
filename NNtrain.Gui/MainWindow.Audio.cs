@@ -53,21 +53,7 @@ public partial class MainWindow
         await RunAudioAsync(async (epoch, ct) =>
         {
             AsrStatusText.Text = "FP16重みを読み込み中…";
-            var model = await Task.Run(() =>
-            {
-                if (parakeet)
-                {
-                    string archive = Path.Combine(directory, "parakeet-tdt_ctc-0.6b-ja.nemo");
-                    if (File.Exists(archive) && (!File.Exists(Path.Combine(directory, "model_config.yaml")) ||
-                        !File.Exists(Path.Combine(directory, "tokenizer.vocab"))))
-                        NemoCheckpointConverter.ExtractModelAssets(archive, directory, ct);
-                    if (!File.Exists(Path.Combine(directory, "model.safetensors")))
-                        NemoCheckpointConverter.ConvertToFp16(archive, Path.Combine(directory, "model.safetensors"), ct);
-                }
-                ILocalAsrModel loaded = parakeet ? ParakeetCtcModel.Load(directory, ct) : NemotronAsrModel.Load(directory, ct);
-                try { if (device is >= 0) loaded.EnableArc(device.Value, ct); return loaded; }
-                catch { loaded.Dispose(); throw; }
-            }, ct);
+            var model = await Task.Run(() => AudioModelLoader.Load(directory, parakeet, device, ct), ct);
             if (epoch != _asrEpoch) { model.Dispose(); return; }
             _asrModel = model;
             AsrStatusText.Text = $"FP16重み {model.HostWeightBytes / (1024d * 1024):N1} MiB (RAM)。{model.ExecutionDevice}。総VRAMは未測定。";
@@ -82,19 +68,9 @@ public partial class MainWindow
         await RunAudioAsync((epoch, ct) =>
         {
             BeginAudioChatInput();
-            return Task.Run(async () =>
-            {
-                using var file = File.OpenRead(dialog.FileName);
-                float[] samples = Pcm16Wave.Read(file).To16Khz(ct);
-                var stream = model.CreateStream();
-                using var streamLifetime = stream as IDisposable;
-                for (int offset = 0; offset < samples.Length; offset += 5120)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    stream.Append(samples.AsSpan(offset, Math.Min(5120, samples.Length - offset)), partial: text => ShowAudioPartial(epoch, text), ct: ct);
-                }
-                await CompleteAudio(epoch, stream.Append([], final: true, ct: ct), stream.CacheBytes);
-            }, ct);
+            return AudioRecognitionRunner.RecognizeFileAsync(model, dialog.FileName,
+                text => ShowAudioPartial(epoch, text),
+                (text, cacheBytes) => CompleteAudio(epoch, text, cacheBytes), ct);
         });
     }
     private async void AsrRecord_Click(object sender, RoutedEventArgs e)
@@ -117,38 +93,13 @@ public partial class MainWindow
         BeginAudioChatInput(); _asrProcessedSamples = 0;
         AsrStatusText.Text = "録音中：認識文を逐次更新します。停止で確定、キャンセルで破棄します。";
         if (_microphone is { } mic) AsrStatusText.Text += $" PCM16 {mic.CaptureSampleRate} Hz / {mic.CaptureChannels} ch -> 16000 Hz / mono";
-        return Task.Run(async () =>
+        return AudioRecognitionRunner.RecognizeAsync(model, audio, control =>
         {
-            var stream = model.CreateStream();
-            using var streamLifetime = stream as IDisposable;
-            Volatile.Write(ref _asrPreviewControl, stream as ILocalAsrPreviewControl);
-            if (Volatile.Read(ref _asrStopRequested)) _asrPreviewControl?.RequestFinalization();
-            long samples = 0;
-            await foreach (float[] chunk in audio.ReadAllAsync(ct))
-            {
-                float[] input = chunk;
-                if (model is ParakeetCtcModel && audio.TryRead(out float[]? queued))
-                {
-                    // Keep every sample, but compute one preview of the newest
-                    // prefix instead of replaying snapshots that are already old.
-                    var pending = new List<float[]> { chunk, queued };
-                    while (pending.Count < 17 && audio.TryRead(out queued)) pending.Add(queued);
-                    input = new float[pending.Sum(part => part.Length)];
-                    int offset = 0;
-                    foreach (float[] part in pending) { part.CopyTo(input, offset); offset += part.Length; }
-                }
-                samples += input.Length;
-                if (samples > 16000L * 300) throw new InvalidOperationException("録音は5分までです。");
-                // A successfully completed, empty source contains no future tail.
-                // Treat its last batch as final directly rather than an optional preview.
-                bool finalInput = model is ParakeetCtcModel && audio.Completion.IsCompletedSuccessfully;
-                string text = stream.Append(input, finalInput,
-                    partial: finalInput ? null : text => ShowAudioPartial(epoch, text), ct: ct);
-                Interlocked.Exchange(ref _asrProcessedSamples, samples);
-                if (finalInput) { await CompleteAudio(epoch, text, stream.CacheBytes); return; }
-            }
-            await CompleteAudio(epoch, stream.Append([], true, ct: ct), stream.CacheBytes);
-        }, ct);
+            Volatile.Write(ref _asrPreviewControl, control);
+            if (Volatile.Read(ref _asrStopRequested)) control?.RequestFinalization();
+        }, text => ShowAudioPartial(epoch, text),
+            samples => Interlocked.Exchange(ref _asrProcessedSamples, samples),
+            (text, cacheBytes) => CompleteAudio(epoch, text, cacheBytes), ct);
     }
     private async Task RunAudioAsync(Func<long, CancellationToken, Task> operation)
     {

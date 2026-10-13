@@ -184,23 +184,7 @@ public class Cifar100 : IImageClassificationDataset
     }
 
     private void ValidateReadArguments(int index, Span<float> destination)
-    {
-        if ((uint)index >= (uint)Count)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(index),
-                index,
-                $"Sample index must be between 0 and {Count - 1}.");
-        }
-
-        if (destination.Length < ImageSize)
-        {
-            throw new ArgumentException(
-                $"Image destination must contain at least {ImageSize} " +
-                "elements.",
-                nameof(destination));
-        }
-    }
+        => ImageSampleReadArguments.Validate(index, Count, ImageSize, destination);
 
     private int ReadFineLabel(int index, int recordOffset)
     {

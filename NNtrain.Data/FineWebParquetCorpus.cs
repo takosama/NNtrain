@@ -10,7 +10,7 @@ public static class FineWebParquetCorpus
     public static Task<long> CountRowsAsync(
         string directoryPath,
         CancellationToken cancellationToken = default)
-        => WikiParquetCorpus.CountRowsAsync(
+        => ParquetTextCorpus.CountRowsAsync(
             directoryPath,
             cancellationToken);
 
@@ -20,7 +20,7 @@ public static class FineWebParquetCorpus
         int? maxDocuments = null,
         CancellationToken cancellationToken = default,
         int? shuffleSeed = null)
-        => WikiParquetCorpus.ReadTextsAsync(
+        => ParquetTextCorpus.ReadTextsAsync(
             directoryPath,
             textColumn,
             maxDocuments,

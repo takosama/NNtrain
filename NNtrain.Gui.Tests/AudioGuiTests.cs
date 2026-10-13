@@ -216,7 +216,7 @@ public sealed class AudioGuiTests
     }
 
     private static void Set(MainWindow window, string name, object? value)
-        => typeof(MainWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, value);
+        => GuiWindowTestAccess.Set(window, name, value);
     [Fact]
     public void EditedTranscriptMovesIntoExistingChatInputWithoutRecording()
         => OnSta(window =>
@@ -276,7 +276,7 @@ public sealed class AudioGuiTests
         });
 
     private static TextBox Box(MainWindow window, string name) => (TextBox)window.FindName(name);
-    private static object? Field(MainWindow window, string name) => typeof(MainWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window);
+    private static object? Field(MainWindow window, string name) => GuiWindowTestAccess.Get(window, name);
     private static object? Invoke(MainWindow window, string name, params object[] arguments)
         => typeof(MainWindow).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, arguments);
     private static void OnSta(Action<MainWindow> action)

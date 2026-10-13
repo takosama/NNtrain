@@ -63,11 +63,11 @@ string? modelSha256 = null;
 Dictionary<string, string> measuredFiles = Fingerprints();
 Dictionary<string, string> sourceFiles = Directory.Exists(Path.Combine(repo, "NNtrain.Arc"))
     ? Directory.GetFiles(Path.Combine(repo, "NNtrain.Arc", "Kernels"), "qwen35*.cl")
-        .Concat(Directory.GetFiles(Path.Combine(repo, "NNtrain.Arc"), "*Iq2*.cs"))
+        .Concat(Directory.GetFiles(Path.Combine(repo, "NNtrain.Arc"), "ArcExecutionLane*.cs"))
         .Concat(Directory.GetFiles(Path.Combine(repo, "NNtrain.Core", "Modules"), "Qwen35Gpu*.cs"))
+        .Concat(Directory.GetFiles(Path.Combine(repo, "NNtrain.Core", "Modules"), "Qwen35QuantizedModel*.cs"))
         .Concat(new[] { Path.Combine(repo, "NNtrain.Core", "Modules", "Qwen35ExecutionOptions.cs"),
-            Path.Combine(repo, "NNtrain.Core", "Modules", "Qwen35QuantizedModel.cs"),
-            Path.Combine(repo, "NNtrain.Core", "Modules", "Qwen35QuantizedModel.Prefill.cs") })
+            Path.Combine(repo, "NNtrain.Core", "Modules", "Qwen35LogitSampler.cs") })
         .Concat(Directory.GetFiles(Path.Combine(repo, "tools", "iq2s-production-bench"), "*.cs"))
         .ToDictionary(path => Path.GetRelativePath(repo, path), HashFile) : [];
 

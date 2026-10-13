@@ -13,8 +13,8 @@ namespace NNtrain.Gui.Tests;
 // No window Loaded event, microphone or LLM server is started.
 internal static class RealComposerChecks
 {
-    private static object? Get(MainWindow w, string name) => typeof(MainWindow).GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(w);
-    private static void Set(MainWindow w, string name, object? value) => typeof(MainWindow).GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(w, value);
+    private static object? Get(MainWindow w, string name) => GuiWindowTestAccess.Get(w, name);
+    private static void Set(MainWindow w, string name, object? value) => GuiWindowTestAccess.Set(w, name, value);
     private static object? Call(MainWindow w, string name, params object[] values) => typeof(MainWindow).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(w, values);
     public static void Run()
     {

@@ -30,8 +30,7 @@ internal sealed record MultimodalPrompt(IReadOnlyList<Qwen35PromptToken> Tokens,
             ChatTurn turn = turns[turnIndex];
             if (turn.Role is not ("system" or "user" or "assistant"))
                 throw new ArgumentException("未対応の会話ロールです。");
-            text.Append("<|im_start|>").Append(turn.Role).Append('\n')
-                .Append(turn.Role == "assistant" ? turn.AssistantPrefix : null);
+            ChatPromptFormatter.AppendTurnStart(text, turn);
             if (turn.Image is { } image)
             {
                 if (turn.Role != "user") throw new ArgumentException("画像はユーザー入力に添付してください。");
@@ -59,10 +58,9 @@ internal sealed record MultimodalPrompt(IReadOnlyList<Qwen35PromptToken> Tokens,
                     return new MultimodalPrompt(tokens, position);
                 text.Append("<|vision_end|>");
             }
-            text.Append(Escape(turn.Content)).Append("<|im_end|>\n");
+            text.Append(ChatPromptFormatter.EscapeContent(turn.Content)).Append("<|im_end|>\n");
         }
-        text.Append("<|im_start|>assistant\n<think>\n");
-        if (!thinking) text.Append("\n</think>\n\n");
+        ChatPromptFormatter.AppendGenerationPrefix(text, thinking);
         FlushText();
         return new MultimodalPrompt(tokens, position);
 
@@ -83,7 +81,4 @@ internal sealed record MultimodalPrompt(IReadOnlyList<Qwen35PromptToken> Tokens,
         }
     }
 
-    private static string Escape(string text) => text.Replace("<|", "<\u200b|", StringComparison.Ordinal)
-        .Replace("<think>", "<\u200bthink>", StringComparison.Ordinal)
-        .Replace("</think>", "<\u200b/think>", StringComparison.Ordinal);
 }

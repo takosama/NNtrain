@@ -120,19 +120,9 @@ public partial class MainWindow
             // Prime only known history and projected image rows. Text being
             // typed in the input box is deliberately absent from this prefix.
             ChatTurn[] preparation = _conversation.Append(new ChatTurn("user", "", Image: image)).ToArray();
-            await PostAsync("internal/prepare-image", new
-            {
-                model = _loadedModelPath,
-                lora = _loadedAdapterPath,
-                mmproj = SelectedMmprojPath,
-                devices = _loadedDevices,
-                messages = preparation.Select(turn => new
-                {
-                    role = turn.Role,
-                    content = MessageContent(turn),
-                    assistant_prefix = turn.AssistantPrefix
-                }).ToArray()
-            }, cancellation.Token);
+            EnsureServerReady();
+            await _api.PrepareImageAsync(_loadedModelPath, _loadedAdapterPath,
+                SelectedMmprojPath, _loadedDevices, preparation, cancellation.Token);
             if (ReferenceEquals(_imagePreparationCancellation, cancellation)
                 && _pendingImage?.Hash == image.Hash)
                 _preparedImageHash = image.Hash;
@@ -154,11 +144,4 @@ public partial class MainWindow
             }
         }
     }
-
-    private static object MessageContent(ChatTurn turn) => turn.Image is null ? turn.Content
-        : new object[]
-        {
-            new { type = "image_url", image_url = new { url = turn.Image.ToDataUrl() } },
-            new { type = "text", text = turn.Content }
-        };
 }

@@ -62,6 +62,11 @@ paths = [Path("NNtrain.Gui/InferenceSession.cs"), Path("NNtrain.Core/Modules/Qwe
          Path("NNtrain.Arc/ArcExecutionLane.ExternalMemory.cs"), Path("NNtrain.Gui/MultimodalPrompt.cs"),
          Path("NNtrain.Arc/ArcExecutionLane.cs"), Path("NNtrain.Arc/ArcExecutionOptions.cs"),
          Path("tools/vision-bench/Program.cs"), Path("tools/vision-bench/RealPrefillParity.cs")]
+paths = sorted(set(paths)
+               | set(Path("NNtrain.Gui").glob("*.cs"))
+               | set(Path("NNtrain.Core/Modules").glob("Qwen35QuantizedModel*.cs"))
+               | {Path("NNtrain.Core/Modules/Qwen35LogitSampler.cs")}
+               | set(Path("NNtrain.Arc").glob("ArcExecutionLane*.cs")))
 test_artifacts = {}
 for name in ("prefill-xmx-gguf-bslm", "arc-external-reservation-20261005", "delta-rows-20261005",
              "delta-subgroup-rms-20261005", "vision-attention-xmx-20261005"):
